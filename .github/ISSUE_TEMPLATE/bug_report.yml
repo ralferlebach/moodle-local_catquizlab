@@ -1,0 +1,66 @@
+name: Bug report / Fehlermeldung
+description: Report a problem in the CAT experiment suite (local_catquizlab).
+labels: ["bug", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Danke für die Rückmeldung! Bitte beschreibe möglichst konkret, was
+        passiert ist. Auch „das war verwirrend" ist eine gültige Meldung.
+  - type: textarea
+    id: expected
+    attributes:
+      label: Erwartetes Verhalten / Expected
+      description: Was hast du erwartet?
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Tatsächliches Verhalten / Actual
+      description: Was ist stattdessen passiert?
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Schritte zum Reproduzieren / Steps to reproduce
+      placeholder: |
+        1. Öffne die Seite ...
+        2. Klicke auf ...
+        3. Beobachte ...
+  - type: input
+    id: moodle
+    attributes:
+      label: Moodle-Version
+      placeholder: "4.5.x"
+    validations:
+      required: true
+  - type: input
+    id: browser
+    attributes:
+      label: Browser
+      placeholder: "Firefox 130 / Chrome 128 / Safari 17"
+  - type: dropdown
+    id: role
+    attributes:
+      label: Rolle / Role
+      options:
+        - "Lernende:r / Student"
+        - "Lehrende:r / Teacher"
+        - "Administrator:in / Admin"
+    validations:
+      required: true
+  - type: dropdown
+    id: mode
+    attributes:
+      label: Arbeitsmodus / Working mode
+      options:
+        - "Einzel / Individual"
+        - "Gruppe / Group"
+        - "Kurs / Course"
+        - "Weiß nicht / Unsure"
+  - type: textarea
+    id: extra
+    attributes:
+      label: Screenshot, URL, Konsolenausgabe (optional)

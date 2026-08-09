@@ -1,0 +1,35 @@
+##############################################################################
+# Worker E2E – local_catquizlab (placeholder)
+#
+# Replaces the Playwright workflow of the mod_vimipad ancestor. Once the
+# attempt runner exists (backlog E3), this workflow will spin up a Moodle
+# site with local_catquiz + mod_adaptivequiz, provision a minimal experiment
+# and let the Puppeteer worker play one full attempt through the real UI.
+#
+# Until then it is manual-only and merely proves the worker toolchain
+# installs (npm ci resolves Puppeteer incl. Chromium download).
+##############################################################################
+
+name: Worker E2E (placeholder)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  toolchain:
+    name: "Worker toolchain installs"
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install worker dependencies (Puppeteer + Chromium)
+        working-directory: worker
+        run: npm install --no-audit --no-fund
+
+      - name: Invoke worker stub
+        working-directory: worker
+        run: node run_attempt.js --base-url=https://example.invalid --run-id=0 --token=dummy

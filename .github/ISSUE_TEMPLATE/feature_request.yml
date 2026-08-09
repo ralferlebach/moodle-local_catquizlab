@@ -1,0 +1,32 @@
+name: Feature / change request / Änderungswunsch
+description: Suggest an improvement or change to CAT experiment suite (local_catquizlab).
+labels: ["enhancement", "triage"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem / Bedarf
+      description: Welches Problem soll gelöst werden? Wen betrifft es?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Vorschlag / Proposed change
+      description: Was soll sich ändern? Wie stellst du es dir vor?
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternativen (optional)
+      description: Andere Wege, die du erwogen hast.
+  - type: dropdown
+    id: audience
+    attributes:
+      label: Wen betrifft es vor allem?
+      options:
+        - "Lernende / Students"
+        - "Lehrende / Teachers"
+        - "Administration / Admins"
+        - "Alle / Everyone"

@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Architektur & Backlog
+    url: https://github.com/ralferlebach/moodle-local_catquizlab/blob/development/docs/design/backlog.md
+    about: Architektur der Experimenten-Suite, Epics E0–E7 und Meilensteine M1–M5.

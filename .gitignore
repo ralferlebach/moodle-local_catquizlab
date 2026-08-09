@@ -1,0 +1,44 @@
+# OS artefacts
+.DS_Store
+Thumbs.db
+desktop.ini
+*Zone.Identifier
+
+# IDE
+.idea/
+.vscode/
+*.iml
+*.iws
+
+# Node (Puppeteer worker)
+node_modules/
+npm-debug.log*
+yarn-error.log*
+yarn.lock
+
+# PHP / Composer
+vendor/
+composer.lock
+
+# moodle-plugin-ci working directories
+ci/
+moodle/
+
+# PHPUnit / coverage
+.phpunit.result.cache
+.phpunit.cache/
+coverage/
+*.clover
+
+# Behat screenshots
+behatfaildumps/
+
+# Temporary / backup files
+*.bak
+*.tmp
+*.swp
+*~
+
+# Local developer overrides
+.env
+.env.local

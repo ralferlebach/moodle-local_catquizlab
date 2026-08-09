@@ -1,0 +1,8 @@
+<?xml version="1.0"?>
+<ruleset name="local_catquizlab">
+    <description>PHPCS configuration for local_catquizlab.</description>
+    <rule ref="moodle"/>
+    <exclude-pattern>*/worker/*</exclude-pattern>
+    <exclude-pattern>*/vendor/*</exclude-pattern>
+    <exclude-pattern>*/node_modules/*</exclude-pattern>
+</ruleset>

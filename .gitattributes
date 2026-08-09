@@ -1,0 +1,23 @@
+# Distribution rules for `git archive` (the GitHub release tarball/zip).
+#
+# Principle: the released package is a reproducible source release of the
+# plugin — everything Moodle runs — but none of the development or CI
+# machinery. The Puppeteer worker under /worker DOES ship: it is a runtime
+# component of the suite (started by the plugin's ad-hoc tasks), not a dev
+# tool. Its node_modules are ignored via .gitignore and never committed.
+
+# --- Never distribute: repository and CI plumbing -------------------------
+/.github            export-ignore
+/.gitattributes     export-ignore
+/.gitignore         export-ignore
+/makefile           export-ignore
+/phpcs.xml          export-ignore
+/.phpcsignore       export-ignore
+
+# --- Never distribute: internal documentation -----------------------------
+# Working notes, session logs and planning material are not product
+# documentation. README.md and CHANGELOG.md ship (they are top level).
+/docs               export-ignore
+
+# Everything not listed above ships — in particular /worker, /tests and
+# /lang, so distribution QA and maintainers can run the Moodle-native tests.

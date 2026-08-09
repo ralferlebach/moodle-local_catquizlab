@@ -1,0 +1,354 @@
+##############################################################################
+# GitHub Actions CI – local_catquizlab
+#
+# Triggered on push / PR to any branch EXCEPT main — i.e. the integration
+# branch "development" and all feature branches (dev workflow).
+#
+# Matrix: Moodle 4.5 · 5.0 · 5.2  ×  PHP 8.1–8.3  ×  mariadb · pgsql
+#
+# The stub declares NO hard plugin dependencies: local_catquiz and
+# mod_adaptivequiz are detected at runtime (classes/local/environment.php),
+# so nothing extra is installed here. Once the attempt runner lands and the
+# dependencies become hard (see version.php), add
+#   --add-plugin Wunderbyte-GmbH/moodle-local_catquiz
+#   --add-plugin Wunderbyte-GmbH/moodle-mod_adaptivequiz
+# (plus local_wunderbyte_table) to every `moodle-plugin-ci install` call.
+#
+# Removed vs. the mod_vimipad ancestor: the bundle-reproducibility job, all
+# Grunt/AMD steps and the Mustache lint (this plugin ships no JS bundle, no
+# AMD modules and no templates yet), and the jMeter/k6 load workflow. The
+# Playwright workflow was replaced by worker-check (Puppeteer worker stub).
+##############################################################################
+
+name: Moodle Plugin CI
+
+on:
+  push:
+    branches-ignore:
+      - main
+  pull_request:
+    branches-ignore:
+      - main
+
+env:
+  MOODLE_CI: '^4'
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  PGPASSWORD: moodle
+
+jobs:
+
+  # ── 0. Worker stub ──────────────────────────────────────────────────────
+  # The Puppeteer worker is plain Node (no AMD, no bundle). Until real E2E
+  # runs exist (backlog E3), CI only guards its syntax and manifest.
+  worker-check:
+    name: "Worker syntax check"
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Syntax-check worker scripts
+        working-directory: worker
+        run: |
+          node --check run_attempt.js
+          node -e "JSON.parse(require('fs').readFileSync('package.json','utf8')); console.log('package.json OK')"
+
+  # ── 1a. PHP Lint ────────────────────────────────────────────────────────
+  lint-php:
+    name: "PHP Lint – ${{ matrix.php }}"
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        php: ['8.1', '8.2', '8.3']
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: plugin
+
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ matrix.php }}
+          ini-values: max_input_vars=5000
+          coverage: none
+
+      - name: Install moodle-plugin-ci
+        run: |
+          composer create-project -n --no-dev moodlehq/moodle-plugin-ci ci ${{ env.MOODLE_CI }}
+          echo "$GITHUB_WORKSPACE/ci/bin"        >> "$GITHUB_PATH"
+          echo "$GITHUB_WORKSPACE/ci/vendor/bin" >> "$GITHUB_PATH"
+
+      - name: PHP CodeSniffer (Moodle coding standard)
+        run: moodle-plugin-ci phpcs plugin --max-warnings 0
+
+      - name: PHP Mess Detector
+        run: moodle-plugin-ci phpmd plugin || true
+
+  # ── 1b. Structure / PHPDoc Lint ─────────────────────────────────────────
+  lint-structure:
+    name: "Structure / PHPDoc Lint"
+    runs-on: ubuntu-24.04
+
+    services:
+      mariadb:
+        image: mariadb:10.11
+        env:
+          MYSQL_ROOT_PASSWORD: root
+        ports: ['3306:3306']
+        options: >-
+          --health-cmd="mysqladmin ping --silent"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=10
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: plugin
+
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.2'
+          extensions: mbstring, pdo, pdo_mysql, gd, xml, zip, intl
+          ini-values: max_input_vars=5000
+          coverage: none
+
+      - name: Install en_AU.UTF-8 locale
+        run: sudo locale-gen en_AU.UTF-8 && sudo update-locale
+
+      - name: Set TRAVIS_BRANCH
+        run: |
+          BRANCH=${GITHUB_HEAD_REF:-$GITHUB_REF_NAME}
+          echo "TRAVIS_BRANCH=${BRANCH:-main}" >> "$GITHUB_ENV"
+
+      - name: Install moodle-plugin-ci
+        run: |
+          composer create-project -n --no-dev moodlehq/moodle-plugin-ci ci ${{ env.MOODLE_CI }}
+          echo "$GITHUB_WORKSPACE/ci/bin"        >> "$GITHUB_PATH"
+          echo "$GITHUB_WORKSPACE/ci/vendor/bin" >> "$GITHUB_PATH"
+
+      - name: Install Moodle 4.5 baseline (no test init)
+        run: |
+          moodle-plugin-ci install \
+            --plugin ./plugin \
+            --branch MOODLE_405_STABLE \
+            --db-type mariadb \
+            --db-host 127.0.0.1 \
+            --db-port 3306 \
+            --db-user root \
+            --db-pass root \
+            --db-name moodle \
+            --no-init
+        env:
+          DB: mariadb
+          MOODLE_BRANCH: MOODLE_405_STABLE
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      # --no-init skips moodle-plugin-ci's own npm install; grunt needs it.
+      - name: Install Node dependencies
+        run: npm install
+        working-directory: ${{ github.workspace }}/moodle
+
+      - name: Grunt – Gherkin lint
+        run: |
+          moodle-plugin-ci grunt \
+            --tasks gherkinlint \
+            --max-lint-warnings 0
+
+      - name: PHPDoc check
+        run: moodle-plugin-ci phpdoc --max-warnings 0
+
+      - name: Validate plugin structure
+        run: moodle-plugin-ci validate
+
+      - name: Check upgrade savepoints
+        run: moodle-plugin-ci savepoints
+
+  # ── 2. PHPUnit ───────────────────────────────────────────────────────────
+  phpunit:
+    name: "PHPUnit (${{ matrix.moodle }} / PHP ${{ matrix.php }} / ${{ matrix.db.engine }})"
+    runs-on: ubuntu-24.04
+    needs: [lint-php]
+    strategy:
+      fail-fast: false
+      matrix:
+        # MOODLE_503_STABLE is not yet cut upstream; re-add it once the branch exists.
+        moodle: [MOODLE_405_STABLE, MOODLE_500_STABLE, MOODLE_502_STABLE]
+        php: ['8.1', '8.2', '8.3']
+        db:
+          - { engine: mariadb, type: mariadb, port: 3306, user: root,   pass: root   }
+          - { engine: pgsql,   type: pgsql,   port: 5432, user: moodle, pass: moodle }
+        exclude:
+          # Moodle 5.0 requires PHP 8.2+.
+          - { moodle: MOODLE_500_STABLE, php: '8.1' }
+          # Moodle 5.2 requires PHP 8.3+.
+          - { moodle: MOODLE_502_STABLE, php: '8.1' }
+          - { moodle: MOODLE_502_STABLE, php: '8.2' }
+
+    services:
+      mariadb:
+        image: mariadb:10.11
+        env:
+          MYSQL_ROOT_PASSWORD: root
+        ports: ['3306:3306']
+        options: >-
+          --health-cmd="mysqladmin ping --silent"
+          --health-interval=10s --health-retries=10
+      pgsql:
+        image: postgres:16
+        env:
+          POSTGRES_USER:     moodle
+          POSTGRES_PASSWORD: moodle
+          POSTGRES_DB:       postgres
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd="pg_isready -U moodle"
+          --health-interval=10s --health-retries=5
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: plugin
+
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ matrix.php }}
+          extensions: mbstring, pdo, pdo_mysql, pdo_pgsql, gd, xml, zip, intl
+          ini-values: max_input_vars=5000
+          coverage: none
+
+      - name: Install en_AU.UTF-8 locale
+        run: sudo locale-gen en_AU.UTF-8 && sudo update-locale
+
+      - name: Set TRAVIS_BRANCH
+        run: |
+          BRANCH=${GITHUB_HEAD_REF:-$GITHUB_REF_NAME}
+          echo "TRAVIS_BRANCH=${BRANCH:-main}" >> "$GITHUB_ENV"
+
+      - name: Install moodle-plugin-ci
+        run: |
+          composer create-project -n --no-dev moodlehq/moodle-plugin-ci ci ${{ env.MOODLE_CI }}
+          echo "$GITHUB_WORKSPACE/ci/bin"        >> "$GITHUB_PATH"
+          echo "$GITHUB_WORKSPACE/ci/vendor/bin" >> "$GITHUB_PATH"
+
+      - name: Install Moodle and plugin
+        run: |
+          moodle-plugin-ci install \
+            --plugin ./plugin \
+            --db-host 127.0.0.1 \
+            --db-port ${{ matrix.db.port }} \
+            --db-user ${{ matrix.db.user }} \
+            --db-pass ${{ matrix.db.pass }} \
+            --db-name moodle
+        env:
+          DB: ${{ matrix.db.type }}
+          MOODLE_BRANCH: ${{ matrix.moodle }}
+
+      - name: PHPUnit – all tests
+        run: moodle-plugin-ci phpunit --fail-on-warning
+
+  # ── 3. Behat ─────────────────────────────────────────────────────────────
+  behat:
+    name: "Behat (${{ matrix.moodle }} / PHP ${{ matrix.php }} / Chrome)"
+    runs-on: ubuntu-24.04
+    needs: [lint-php, lint-structure]
+    strategy:
+      fail-fast: false
+      # PHP must satisfy each Moodle core's minimum: 4.5/5.0 run on 8.2,
+      # 5.2 requires PHP 8.3+.
+      matrix:
+        include:
+          - { moodle: MOODLE_405_STABLE, php: '8.2' }
+          - { moodle: MOODLE_500_STABLE, php: '8.2' }
+          - { moodle: MOODLE_502_STABLE, php: '8.3' }
+          # MOODLE_503_STABLE: re-add once the branch is cut upstream.
+
+    services:
+      mariadb:
+        image: mariadb:10.11
+        env:
+          MYSQL_ROOT_PASSWORD: root
+        ports: ['3306:3306']
+        options: >-
+          --health-cmd="mysqladmin ping --silent"
+          --health-interval=10s --health-retries=10
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: plugin
+
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ matrix.php }}
+          extensions: mbstring, pdo, pdo_mysql, gd, xml, zip, intl
+          ini-values: max_input_vars=5000
+          coverage: none
+
+      - name: Install en_AU.UTF-8 locale
+        run: sudo locale-gen en_AU.UTF-8 && sudo update-locale
+
+      - name: Set TRAVIS_BRANCH
+        run: |
+          BRANCH=${GITHUB_HEAD_REF:-$GITHUB_REF_NAME}
+          echo "TRAVIS_BRANCH=${BRANCH:-main}" >> "$GITHUB_ENV"
+
+      - name: Install moodle-plugin-ci
+        run: |
+          composer create-project -n --no-dev moodlehq/moodle-plugin-ci ci ${{ env.MOODLE_CI }}
+          echo "$GITHUB_WORKSPACE/ci/bin"        >> "$GITHUB_PATH"
+          echo "$GITHUB_WORKSPACE/ci/vendor/bin" >> "$GITHUB_PATH"
+
+      - name: Install Moodle and plugin
+        run: |
+          moodle-plugin-ci install \
+            --plugin ./plugin \
+            --branch ${{ matrix.moodle }} \
+            --db-type mariadb \
+            --db-host 127.0.0.1 \
+            --db-port 3306 \
+            --db-user root \
+            --db-pass root \
+            --db-name moodle
+        env:
+          DB: mariadb
+          MOODLE_BRANCH: ${{ matrix.moodle }}
+
+      - name: Behat – plugin scenarios
+        run: |
+          moodle-plugin-ci behat \
+            --profile chrome \
+            --tags "@local_catquizlab&&~@broken" \
+            --start-servers
+
+      - name: Upload failure screenshots
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: behat-screenshots-${{ matrix.moodle }}
+          path: ${{ github.workspace }}/moodle/behatfaildumps/
+          retention-days: 7
+
+  # ── Gate ─────────────────────────────────────────────────────────────────
+  ci-complete:
+    name: CI complete
+    needs: [worker-check, phpunit, behat]
+    runs-on: ubuntu-24.04
+    if: always()
+    steps:
+      - name: All matrix jobs must have succeeded
+        run: |
+          result="${{ needs.worker-check.result }}-${{ needs.phpunit.result }}-${{ needs.behat.result }}"
+          if [[ "$result" == "success-success-success" ]]; then
+            echo "All CI jobs passed."
+          else
+            echo "CI result: $result – one or more jobs failed or were cancelled."
+            exit 1
+          fi

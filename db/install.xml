@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<XMLDB PATH="local/catquizlab/db" VERSION="20260809" COMMENT="XMLDB file for local_catquizlab"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:noNamespaceSchemaLocation="../../../lib/xmldb/xmldb.xsd"
+>
+  <TABLES>
+    <TABLE NAME="local_catquizlab_experiment" COMMENT="Experiment definitions of the CAT experiment suite. Stub scope: definition record only; run/cohort/trace/result tables follow in later milestones (backlog E0.2).">
+      <FIELDS>
+        <FIELD NAME="id" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="true"/>
+        <FIELD NAME="name" TYPE="char" LENGTH="255" NOTNULL="true" SEQUENCE="false" COMMENT="Human-readable experiment name."/>
+        <FIELD NAME="tier" TYPE="char" LENGTH="32" NOTNULL="true" DEFAULT="baseline" SEQUENCE="false" COMMENT="Tier per experimental design: baseline, main, robustness, operational."/>
+        <FIELD NAME="configjson" TYPE="text" NOTNULL="false" SEQUENCE="false" COMMENT="Declarative experiment configuration (JSON): model, pool variant, stratum, strategy, budgets, replications, seeds."/>
+        <FIELD NAME="status" TYPE="int" LENGTH="2" NOTNULL="true" DEFAULT="0" SEQUENCE="false" COMMENT="0=draft, 10=scheduled, 20=running, 30=finished, 40=failed."/>
+        <FIELD NAME="usermodified" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
+        <FIELD NAME="timecreated" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
+        <FIELD NAME="timemodified" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
+      </FIELDS>
+      <KEYS>
+        <KEY NAME="primary" TYPE="primary" FIELDS="id"/>
+        <KEY NAME="usermodified" TYPE="foreign" FIELDS="usermodified" REFTABLE="user" REFFIELDS="id"/>
+      </KEYS>
+      <INDEXES>
+        <INDEX NAME="tier-status" UNIQUE="false" FIELDS="tier, status"/>
+      </INDEXES>
+    </TABLE>
+  </TABLES>
+</XMLDB>
