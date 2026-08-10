@@ -110,6 +110,9 @@ as above.
     classes/local/manifest.php      run reproducibility manifest builder
     classes/local/experiment_definition.php  declarative experiment format + validator (E1.1)
     classes/local/sweep.php         sweep expansion: spec -> runs (E1.2)
+    classes/local/registry.php      persist expansions; read runs for the UI (E1.3)
+    classes/local/naming.php        name-pattern expansion (requirement 2.6.D)
+    cli/sweep.php                   CLI: expand a sweep spec, persist or list runs
     classes/external/*.php          five web-service functions (oracle, jobs, hub)
     classes/privacy/provider.php    null provider (stub stores no personal data)
     db/install.xml                  lab-store schema (eight tables)

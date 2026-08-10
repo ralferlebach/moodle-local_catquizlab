@@ -34,7 +34,6 @@
  * @return string HTML for the navbar, or an empty string when the button must not appear.
  */
 function local_catquizlab_render_navbar_output(\renderer_base $renderer): string {
-    global $CFG;
     unset($renderer);
 
     if (!isloggedin() || isguestuser()) {
@@ -47,13 +46,21 @@ function local_catquizlab_render_navbar_output(\renderer_base $renderer): string
     $url = new moodle_url('/local/catquizlab/index.php');
     $label = get_string('navbarbutton', 'local_catquizlab');
 
+    // Icon-only button: a cat glyph. The label is kept as the accessible name
+    // (title + aria-label) so the control stays usable without visible text.
+    $icon = \html_writer::tag('i', '', [
+        'class'       => 'icon fa fa-cat fa-fw',
+        'aria-hidden' => 'true',
+    ]);
+
     return \html_writer::div(
-        \html_writer::link($url, $label, [
-            'class'        => 'btn btn-secondary',
-            'role'         => 'button',
-            'id'           => 'local-catquizlab-navbarbutton',
-            'title'        => get_string('pluginname', 'local_catquizlab'),
+        \html_writer::link($url, $icon, [
+            'class'      => 'nav-link',
+            'role'       => 'button',
+            'id'         => 'local-catquizlab-navbarbutton',
+            'title'      => $label,
+            'aria-label' => $label,
         ]),
-        'popover-region nav-link icon-no-margin'
+        'popover-region icon-no-margin'
     );
 }

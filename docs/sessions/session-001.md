@@ -70,13 +70,43 @@ liefert eine Kapazitätsschätzung (Attempts und erwartete Dauer). Rein logisch,
 keine DB-Schreibzugriffe (Persistenz folgt in E1.3/E2). Tests
 `sweep_test.php`. Versionsbump → 2026081003 / 0.1.4.
 
+## Phase 8 — E1.3 Run-Registry (Release 0.1.5)
+`classes/local/registry.php` persistiert eine Sweep-Expansion als ein
+Experiment plus einen Run je Replikation (Status draft) und speichert die
+Sweep-Spezifikation am Experiment (Reproduzierbarkeit); Lesehelfer für
+Run-Zahl, globale Status-Zusammenfassung und jüngste Runs. Die
+Verwaltungsseite zeigt nun einen **Runs**-Abschnitt (Run-Zahl-Spalte,
+Status-Zusammenfassung, Run-Tabelle). Bewusst mit Core-Tabelle statt
+`local_wunderbyte_table`, damit das Plugin ohne Engine installierbar und
+CI-grün bleibt; wunderbyte_table ist die spätere Aufwertung bei vorhandener
+Engine. CLI-Pendant `cli/sweep.php` (expandieren/persistieren/auflisten mit
+Kapazitätsausgabe). Tests `registry_test.php`. Keine DB-Provisionierung
+(Nutzer/Kurse/Fragen bleiben E2). Versionsbump → 2026081004 / 0.1.5.
+
+## Phase 9 — CI-Fixes, Icon-Button, Naming-Engine (Release 0.1.6)
+CI-Analyse (logs_85063334088): Install läuft nun, aber (a) ein PHPUnit-Fail
+(`assertSame(int, $DB->get_field())` — DB liefert String; auf `(int)` gecastet)
+und (b) PHPDoc-Fehler in sweep.php, weil der Moodle-PHPDoc-Checker generische
+`array<K, V>`-Typen ablehnt — alle `array<...>` plugin-weit auf `array`
+vereinfacht. Zusätzlich PHPMD-Hinweise (nicht blockierend) beseitigt: ungenutztes
+`global $CFG` im Navbar-Callback entfernt, `validate()` und `expand()` per
+Hilfsmethoden entzerrt (Komplexität unter Schwelle) — Verhalten unverändert,
+durch Tests und Harness bestätigt.
+Navbar-Button auf **reines Symbol** umgestellt (`fa-cat`); Label bleibt als
+Accessible-Name (title/aria-label). Neu: Naming-Engine
+`classes/local/naming.php` (Anforderung 2.6.D) — Muster mit `{key}` und
+`{key:0Nd}` sowie `sequence()`; deterministisch, seiteneffektfrei; Tests
+`naming_test.php`. Versionsbump → 2026081005 / 0.1.6.
+
 ## Verifikationsstand
 Container: PHP-Syntax, install.xml, YAML, Worker-JS grün; PHPCS (Moodle) 0/0
-über alle PHP-Dateien; höchster Upgrade-Savepoint ≤ Plugin-Version. PHPUnit/
-Behat laufen in der CI (kein Moodle im Container); Validator- und Sweep-Logik
-zusätzlich per CLI-Harness geprüft.
+**und PHPMD ohne Verstöße** über alle PHP-Dateien; höchster Upgrade-Savepoint ≤
+Plugin-Version. PHPUnit/Behat laufen in der CI (kein Moodle im Container);
+Validator-, Sweep- und Naming-Logik zusätzlich per CLI-Harness geprüft.
 
 ## Next
-E1.3 Run-Tabelle (wunderbyte_table) in der Verwaltungsseite mit Status/
-Fortschritt; danach E2.1 Pool-Generator (Templates→Items, Skalenbaum),
-E2.3/E2.4 (Personen als Nutzer, Kurse/Tests, Einschreibung) Richtung M1.
+E2.1 Pool-Generator (Templates→Items, Skalenbaum, seed-deterministisch),
+E2.3 Personen als Nutzer (+ Namensregeln), E2.4 Kurse/CAT-Tests + Einschreibung;
+parallel E3.1 Adhoc-Task „schedule_attempt" — Richtung Meilenstein M1. Die
+Run-Registry aus E1.3 liefert die Runs, auf denen Provisionierung und
+Orchestrierung aufsetzen.

@@ -87,7 +87,7 @@ final class experiment_definition_test extends \advanced_testcase {
     /**
      * One-defect mutations of the baseline, each of which must fail validation.
      *
-     * @return array<string, array{0: callable}>
+     * @return array
      */
     public static function defect_provider(): array {
         return [

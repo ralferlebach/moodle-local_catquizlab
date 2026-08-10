@@ -118,8 +118,8 @@ final class stub_test extends \advanced_testcase {
         $person = $generator->create_person(['runid' => $run->id, 'stratum' => 'chaotic']);
         $pool = $generator->create_pool(['experimentid' => $experiment->id, 'variant' => 'shifted']);
 
-        $this->assertSame($experiment->id, $DB->get_field('local_catquizlab_run', 'experimentid', ['id' => $run->id]));
-        $this->assertSame($run->id, $DB->get_field('local_catquizlab_person', 'runid', ['id' => $person->id]));
+        $this->assertSame($experiment->id, (int) $DB->get_field('local_catquizlab_run', 'experimentid', ['id' => $run->id]));
+        $this->assertSame($run->id, (int) $DB->get_field('local_catquizlab_person', 'runid', ['id' => $person->id]));
         $this->assertSame('chaotic', $DB->get_field('local_catquizlab_person', 'stratum', ['id' => $person->id]));
         $this->assertSame('shifted', $DB->get_field('local_catquizlab_pool', 'variant', ['id' => $pool->id]));
     }

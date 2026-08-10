@@ -67,21 +67,23 @@ if (!get_config($component, 'enabled')) {
 echo $OUTPUT->heading(get_string('manage:experiments', $component), 4);
 
 $experiments = $DB->get_records('local_catquizlab_experiment', null, 'timemodified DESC');
+$statusmap = [
+    \local_catquizlab\local\registry::STATUS_DRAFT     => get_string('status:draft', $component),
+    \local_catquizlab\local\registry::STATUS_SCHEDULED => get_string('status:scheduled', $component),
+    \local_catquizlab\local\registry::STATUS_RUNNING   => get_string('status:running', $component),
+    \local_catquizlab\local\registry::STATUS_FINISHED  => get_string('status:finished', $component),
+    \local_catquizlab\local\registry::STATUS_FAILED    => get_string('status:failed', $component),
+];
+
 if (!$experiments) {
     echo $OUTPUT->notification(get_string('manage:noexperiments', $component), 'info');
 } else {
-    $statusmap = [
-        0  => get_string('status:draft', $component),
-        10 => get_string('status:scheduled', $component),
-        20 => get_string('status:running', $component),
-        30 => get_string('status:finished', $component),
-        40 => get_string('status:failed', $component),
-    ];
     $table = new html_table();
     $table->head = [
         get_string('manage:col_name', $component),
         get_string('manage:col_tier', $component),
         get_string('manage:col_status', $component),
+        get_string('manage:col_runs', $component),
     ];
     $table->attributes['class'] = 'generaltable';
     foreach ($experiments as $experiment) {
@@ -89,9 +91,49 @@ if (!$experiments) {
             format_string($experiment->name),
             s($experiment->tier),
             $statusmap[$experiment->status] ?? (string) $experiment->status,
+            \local_catquizlab\local\registry::count_runs($experiment->id),
         ];
     }
     echo html_writer::table($table);
+}
+
+// Run registry: the runs the expanded sweeps produced, newest first.
+echo $OUTPUT->heading(get_string('manage:runs', $component), 4);
+
+$statussummary = \local_catquizlab\local\registry::global_status_summary();
+if ($statussummary !== []) {
+    $parts = [];
+    foreach ($statussummary as $status => $count) {
+        $parts[] = ($statusmap[$status] ?? (string) $status) . ': ' . $count;
+    }
+    echo html_writer::div(implode(' · ', $parts), 'text-muted mb-2');
+}
+
+$runs = \local_catquizlab\local\registry::recent_runs(100);
+if (!$runs) {
+    echo $OUTPUT->notification(get_string('manage:noruns', $component), 'info');
+} else {
+    $runtable = new html_table();
+    $runtable->head = [
+        get_string('manage:col_experiment', $component),
+        get_string('manage:col_tier', $component),
+        get_string('manage:col_cell', $component),
+        get_string('manage:col_replication', $component),
+        get_string('manage:col_seed', $component),
+        get_string('manage:col_status', $component),
+    ];
+    $runtable->attributes['class'] = 'generaltable';
+    foreach ($runs as $run) {
+        $runtable->data[] = [
+            format_string($run->experimentname),
+            s($run->tier),
+            s($run->cellkey),
+            $run->replication,
+            $run->seed,
+            $statusmap[$run->status] ?? (string) $run->status,
+        ];
+    }
+    echo html_writer::table($runtable);
 }
 
 // The create/edit surface is not wired yet; be explicit about it rather than

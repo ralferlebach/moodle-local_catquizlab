@@ -115,60 +115,90 @@ class experiment_definition {
         self::require_positive_int($def, 'replications', $errors);
         self::require_int($def, 'seed', $errors);
 
-        // Pool block: item variants are realised via scales, never contexts (2.6.A).
-        if (!isset($def['pool']) || !is_array($def['pool'])) {
-            $errors[] = self::msg('def:missingblock', 'pool');
-        } else {
-            $pool = $def['pool'];
-            self::require_enum($pool, 'variant', self::VARIANTS, $errors, 'pool.variant');
-            if (isset($pool['scales']) && is_array($pool['scales'])) {
-                self::require_positive_int($pool['scales'], 'categories', $errors, 'pool.scales.categories');
-                self::require_positive_int($pool['scales'], 'subcategories', $errors, 'pool.scales.subcategories');
-                self::require_positive_int($pool['scales'], 'itemspersubscale', $errors, 'pool.scales.itemspersubscale');
-            } else {
-                $errors[] = self::msg('def:missingblock', 'pool.scales');
-            }
-            // Question template with blanks (2.6.D).
-            if (!isset($pool['questiontemplate']) || !is_array($pool['questiontemplate'])) {
-                $errors[] = self::msg('def:missingblock', 'pool.questiontemplate');
-            } else {
-                self::require_nonempty_string($pool['questiontemplate'], 'type', $errors, 'pool.questiontemplate.type');
-            }
-            // Item naming rule (2.6.D).
-            self::require_naming($pool, 'itemnaming', $errors, 'pool.itemnaming');
-        }
-
-        // Persons block: each person becomes its own Moodle user (2.6.B).
-        if (!isset($def['persons']) || !is_array($def['persons'])) {
-            $errors[] = self::msg('def:missingblock', 'persons');
-        } else {
-            $persons = $def['persons'];
-            self::require_enum($persons, 'stratum', self::STRATA, $errors, 'persons.stratum');
-            self::require_positive_int($persons, 'count', $errors, 'persons.count');
-            self::require_naming($persons, 'naming', $errors, 'persons.naming');
-        }
-
-        // Budgets: a valid, non-degenerate item window and a positive SE target.
-        if (isset($def['budgets']) && is_array($def['budgets'])) {
-            $budgets = $def['budgets'];
-            self::require_positive_int($budgets, 'minitems', $errors, 'budgets.minitems');
-            self::require_positive_int($budgets, 'maxitems', $errors, 'budgets.maxitems');
-            if (
-                isset($budgets['minitems'], $budgets['maxitems'])
-                    && is_numeric($budgets['minitems']) && is_numeric($budgets['maxitems'])
-                    && (int) $budgets['minitems'] > (int) $budgets['maxitems']
-            ) {
-                $errors[] = self::msg('def:mingtmax', 'budgets');
-            }
-        } else {
-            $errors[] = self::msg('def:missingblock', 'budgets');
-        }
+        self::validate_pool($def, $errors);
+        self::validate_persons($def, $errors);
+        self::validate_budgets($def, $errors);
 
         // Courses and CAT tests are specifiable per run (2.6.C): at least one each.
         self::require_nonempty_list($def, 'courses', $errors);
         self::require_nonempty_list($def, 'tests', $errors);
 
         return ['valid' => count($errors) === 0, 'errors' => $errors];
+    }
+
+    /**
+     * Validate the pool block: variant via scales (2.6.A), template and item naming (2.6.D).
+     *
+     * @param array $def The full definition.
+     * @param string[] $errors Error accumulator (by reference).
+     * @return void
+     */
+    protected static function validate_pool(array $def, array &$errors): void {
+        if (!isset($def['pool']) || !is_array($def['pool'])) {
+            $errors[] = self::msg('def:missingblock', 'pool');
+            return;
+        }
+        $pool = $def['pool'];
+        self::require_enum($pool, 'variant', self::VARIANTS, $errors, 'pool.variant');
+
+        if (isset($pool['scales']) && is_array($pool['scales'])) {
+            self::require_positive_int($pool['scales'], 'categories', $errors, 'pool.scales.categories');
+            self::require_positive_int($pool['scales'], 'subcategories', $errors, 'pool.scales.subcategories');
+            self::require_positive_int($pool['scales'], 'itemspersubscale', $errors, 'pool.scales.itemspersubscale');
+        } else {
+            $errors[] = self::msg('def:missingblock', 'pool.scales');
+        }
+
+        if (!isset($pool['questiontemplate']) || !is_array($pool['questiontemplate'])) {
+            $errors[] = self::msg('def:missingblock', 'pool.questiontemplate');
+        } else {
+            self::require_nonempty_string($pool['questiontemplate'], 'type', $errors, 'pool.questiontemplate.type');
+        }
+
+        self::require_naming($pool, 'itemnaming', $errors, 'pool.itemnaming');
+    }
+
+    /**
+     * Validate the persons block: each person becomes its own Moodle user (2.6.B).
+     *
+     * @param array $def The full definition.
+     * @param string[] $errors Error accumulator (by reference).
+     * @return void
+     */
+    protected static function validate_persons(array $def, array &$errors): void {
+        if (!isset($def['persons']) || !is_array($def['persons'])) {
+            $errors[] = self::msg('def:missingblock', 'persons');
+            return;
+        }
+        $persons = $def['persons'];
+        self::require_enum($persons, 'stratum', self::STRATA, $errors, 'persons.stratum');
+        self::require_positive_int($persons, 'count', $errors, 'persons.count');
+        self::require_naming($persons, 'naming', $errors, 'persons.naming');
+    }
+
+    /**
+     * Validate the budgets block: a valid, non-degenerate item window.
+     *
+     * @param array $def The full definition.
+     * @param string[] $errors Error accumulator (by reference).
+     * @return void
+     */
+    protected static function validate_budgets(array $def, array &$errors): void {
+        if (!isset($def['budgets']) || !is_array($def['budgets'])) {
+            $errors[] = self::msg('def:missingblock', 'budgets');
+            return;
+        }
+        $budgets = $def['budgets'];
+        self::require_positive_int($budgets, 'minitems', $errors, 'budgets.minitems');
+        self::require_positive_int($budgets, 'maxitems', $errors, 'budgets.maxitems');
+
+        if (
+            isset($budgets['minitems'], $budgets['maxitems'])
+                && is_numeric($budgets['minitems']) && is_numeric($budgets['maxitems'])
+                && (int) $budgets['minitems'] > (int) $budgets['maxitems']
+        ) {
+            $errors[] = self::msg('def:mingtmax', 'budgets');
+        }
     }
 
     /**

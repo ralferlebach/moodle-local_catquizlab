@@ -6,7 +6,65 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
-## [0.1.4] — 2026-08-10
+## [0.1.6] — 2026-08-10
+
+CI fixes, an icon-only navbar button, and the naming engine (E2 groundwork).
+
+### Fixed
+- **PHPUnit failure** (`stub_test::test_generator_creates_related_records`):
+  compared an `int` id with `$DB->get_field()`, which returns a `string`, under
+  `assertSame`. The integer DB values are now cast to `int` before comparison.
+- **PHPDoc check errors** in `sweep.php`: the Moodle PHPDoc checker rejects
+  generic `array<K, V>` type syntax ("incomplete parameters list"). All generic
+  `array<...>` annotations across the plugin were simplified to plain `array`
+  with the structure described in words.
+- **PHPMD advisories** cleared as well: unused `global $CFG` removed from the
+  navbar callback, and `experiment_definition::validate()` and `sweep::expand()`
+  refactored (extracted `validate_pool/persons/budgets` and
+  `select_combinations`) to bring cyclomatic/NPath complexity under threshold.
+  Behaviour is unchanged and covered by the existing tests.
+
+### Changed
+- **Navbar button is now icon-only** — a `fa-cat` glyph instead of the text
+  label. The label is kept as the accessible name (title + aria-label), so the
+  Reports entry and Behat coverage still work.
+
+### Added
+- **Naming engine** `classes/local/naming.php` (requirement 2.6.D): expands name
+  patterns with `{key}` and zero-padded `{key:0Nd}` placeholders, plus a
+  `sequence()` helper for numbered series (e.g. `P-{stratum}-{index:04d}`).
+  Deterministic and side-effect-free; provisioning (E2) will use it to name
+  simulated persons and generated items. Covered by `naming_test.php`.
+
+- `version.php`: 2026081004 → **2026081005**, release 0.1.5 → **0.1.6**. No new
+  upgrade step (code-only round).
+
+---
+
+Run registry (E1.3): expanded sweeps become persisted runs, shown in the
+management page and reachable from the CLI.
+
+### Added
+- `classes/local/registry.php`: persists a sweep expansion as one experiment
+  plus one run per replication (all at status draft), stores the sweep spec on
+  the experiment for reproducibility, and provides read helpers (run count per
+  experiment, global status summary, recent runs joined with their experiment).
+  No Moodle users/courses/questions are created here — that is provisioning
+  (E2). Covered by `registry_test.php`.
+- Management page (`index.php`) now shows a **Runs** section: a run-count column
+  on the experiments table, a status summary, and a table of recent runs
+  (experiment, tier, cell, replication, seed, status). Rendered with a core
+  table so the plugin stays installable and CI-green without the engine;
+  `local_wunderbyte_table` remains a later enhancement when the engine is
+  present.
+- `cli/sweep.php`: expands a JSON sweep spec and either reports it (`--dry-run`),
+  persists it, or lists existing runs (`--list`); prints the capacity estimate.
+
+### Changed
+- `version.php`: 2026081003 → **2026081004**, release 0.1.4 → **0.1.5**. No new
+  upgrade step (code-only round; existing schema already covers runs).
+
+---
 
 Sweep expansion (E1.2) and a documentation convention.
 

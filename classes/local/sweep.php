@@ -44,7 +44,7 @@ class sweep {
     /**
      * Swept factor name => dotted path into the experiment definition it sets.
      *
-     * @var array<string, string[]>
+     * @var array
      */
     protected const FACTOR_PATHS = [
         'variant'  => ['pool', 'variant'],
@@ -85,32 +85,9 @@ class sweep {
         $replications = max(1, (int) ($spec['replications'] ?? 1));
         $masterseed = (int) ($spec['seed'] ?? 0);
         $secondsperattempt = max(0, (int) ($spec['estimatedsecondsperattempt'] ?? 120));
-        $excluderules = $spec['exclude'] ?? [];
         $maxcells = isset($spec['maxcells']) ? (int) $spec['maxcells'] : null;
 
-        // Cartesian product of the factor levels, in a stable factor order.
-        $factornames = array_keys($factors);
-        sort($factornames);
-        $combinations = self::product($factors, $factornames);
-
-        // Apply exclusion rules.
-        $excluded = 0;
-        $kept = [];
-        foreach ($combinations as $combo) {
-            if (self::is_excluded($combo, $excluderules)) {
-                $excluded++;
-                continue;
-            }
-            $kept[] = $combo;
-        }
-
-        // Deterministic fractionation: keep the first N cells by cell key.
-        usort($kept, static function (array $a, array $b): int {
-            return strcmp(self::cellkey($a), self::cellkey($b));
-        });
-        if ($maxcells !== null && $maxcells >= 0 && count($kept) > $maxcells) {
-            $kept = array_slice($kept, 0, $maxcells);
-        }
+        [$kept, $excluded] = self::select_combinations($factors, $spec['exclude'] ?? [], $maxcells);
 
         // Build cells and their runs.
         $cells = [];
@@ -148,11 +125,45 @@ class sweep {
     }
 
     /**
+     * Form the factor product, drop excluded combinations and apply the cell cap.
+     *
+     * @param array $factors Factor name => levels.
+     * @param array $excluderules Exclusion rules.
+     * @param int|null $maxcells Optional deterministic cap on the number of cells.
+     * @return array A pair: the kept combinations (sorted by cell key) and the excluded count.
+     */
+    protected static function select_combinations(array $factors, array $excluderules, ?int $maxcells): array {
+        $factornames = array_keys($factors);
+        sort($factornames);
+        $combinations = self::product($factors, $factornames);
+
+        $excluded = 0;
+        $kept = [];
+        foreach ($combinations as $combo) {
+            if (self::is_excluded($combo, $excluderules)) {
+                $excluded++;
+                continue;
+            }
+            $kept[] = $combo;
+        }
+
+        usort($kept, static function (array $a, array $b): int {
+            return strcmp(self::cellkey($a), self::cellkey($b));
+        });
+
+        if ($maxcells !== null && $maxcells >= 0 && count($kept) > $maxcells) {
+            $kept = array_slice($kept, 0, $maxcells);
+        }
+
+        return [$kept, $excluded];
+    }
+
+    /**
      * Cartesian product of factor levels.
      *
-     * @param array<string, array> $factors Factor name => levels.
+     * @param array $factors Factor name => levels.
      * @param string[] $factornames Factor names in the desired iteration order.
-     * @return array<int, array<string, mixed>> List of combinations (factorname => level).
+     * @return array List of combinations (factorname => level).
      */
     protected static function product(array $factors, array $factornames): array {
         $result = [[]];
@@ -173,8 +184,8 @@ class sweep {
      *
      * A rule matches when every key it specifies equals the combination's value.
      *
-     * @param array<string, mixed> $combo The combination.
-     * @param array<int, array<string, mixed>> $rules Exclusion rules.
+     * @param array $combo The combination.
+     * @param array $rules Exclusion rules.
      * @return bool
      */
     protected static function is_excluded(array $combo, array $rules): bool {
@@ -199,7 +210,7 @@ class sweep {
     /**
      * Stable, canonical key for a combination (sorted factorname=level pairs).
      *
-     * @param array<string, mixed> $combo The combination.
+     * @param array $combo The combination.
      * @return string
      */
     protected static function cellkey(array $combo): string {
@@ -215,7 +226,7 @@ class sweep {
      * Merge a combination's factor levels into the base definition.
      *
      * @param array $base The base experiment definition.
-     * @param array<string, mixed> $combo The combination.
+     * @param array $combo The combination.
      * @return array The per-cell experiment definition.
      */
     protected static function apply_factors(array $base, array $combo): array {
