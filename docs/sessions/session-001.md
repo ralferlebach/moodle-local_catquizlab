@@ -285,6 +285,21 @@ der E2.4-Spaltenanlage in `local_catquizlab_upgrade_add_run_course_columns()`
 entschärft; der Savepoint bleibt inline, der Savepoints-Check unverändert.
 Versionsbump → 2026081018 / 0.1.19 (Fix-Runde, kein Upgrade-Schritt).
 
+## Phase 23 — CI-Fix: int-vs-String-Id im Privacy-Test (Release 0.1.20)
+CI-Analyse (logs_85246370323): Risky-Test weg, aber `privacy_test::
+test_contexts_and_userlist` weiter rot („array contains 1", Zeile 77). Wahre
+Ursache war die Assertion, nicht der Provider: `get_contextids()`/`get_userids()`
+liefern Ids als String (aus der DB), `context_system::instance()->id` und die
+User-Id sind int, und PHPUnits `assertContains` vergleicht strikt (===), also
+schlägt `assertContains(1, ['1'])` fehl. `test_delete_for_user` bestand, weil es
+`record_exists` statt eines strikten Array-Checks nutzt — daher wirkte der
+Provider korrekt. Test jetzt typ-tolerant (`assertCount` + `(int)`-Cast der Id,
+`array_map('intval', ...)` für die Userlist). Die `add_from_sql`-Implementierung
+aus 0.1.19 bleibt (Standardmuster). Zusätzlich das gesamte Test-Set auf weitere
+int-vs-DB-String-Vergleiche geprüft — keine offen (verbleibende assertSame gegen
+DB-Werte vergleichen String↔String). Versionsbump → 2026081019 / 0.1.20 (reine
+Test-Fix-Runde).
+
 ## Verifikationsstand
 Container: PHP-Syntax, install.xml, YAML, Worker-JS grün; PHPCS (Moodle) 0/0
 **und PHPMD ohne Verstöße** über alle PHP-Dateien; höchster Upgrade-Savepoint ≤

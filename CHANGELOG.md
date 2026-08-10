@@ -6,7 +6,26 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
-## [0.1.19] — 2026-08-10
+## [0.1.20] — 2026-08-10
+
+CI fix (privacy test: int-vs-string id comparison).
+
+### Fixed
+- **`privacy_test::test_contexts_and_userlist` failure (persisted).** The real
+  cause was the assertion, not the provider: `get_contextids()` / `get_userids()`
+  return ids as **strings** (from the DB), while `context_system::instance()->id`
+  and the user id are **ints**, and PHPUnit's `assertContains` compares strictly,
+  so `assertContains(1, ['1'])` failed. (`test_delete_for_user` passed because it
+  uses `record_exists`, not a strict array check — which is why the provider
+  looked correct.) The test now compares type-tolerantly (`assertCount` + an
+  `(int)`-cast id, and `array_map('intval', …)` for the userlist). The
+  `add_from_sql` provider implementation from 0.1.19 is kept — it is the standard
+  pattern.
+
+- `version.php`: 2026081018 → **2026081019**, release 0.1.19 → **0.1.20**. No new
+  upgrade step (test-only fix round).
+
+---
 
 CI fixes (PHPUnit failure and risky test).
 

@@ -73,12 +73,16 @@ final class privacy_test extends \core_privacy\tests\provider_testcase {
         $user = $this->getDataGenerator()->create_user();
         $this->link_person($user);
 
-        $contextids = provider::get_contexts_for_userid($user->id)->get_contextids();
-        $this->assertContains(\context_system::instance()->id, $contextids);
+        $contextlist = provider::get_contexts_for_userid($user->id);
+        $this->assertCount(1, $contextlist);
+        $this->assertSame(
+            \context_system::instance()->id,
+            (int) $contextlist->get_contextids()[0]
+        );
 
         $userlist = new userlist(\context_system::instance(), 'local_catquizlab');
         provider::get_users_in_context($userlist);
-        $this->assertContains((int) $user->id, $userlist->get_userids());
+        $this->assertContains((int) $user->id, array_map('intval', $userlist->get_userids()));
     }
 
     /**
