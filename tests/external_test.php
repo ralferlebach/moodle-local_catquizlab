@@ -42,7 +42,9 @@ use local_catquizlab\external\hub_fetch_results;
  */
 final class external_test extends \advanced_testcase {
     /**
-     * The oracle returns a well-formed, not-ready response for an admin caller.
+     * The oracle returns a well-formed not-ready response when the engine or the
+     * bound test is unavailable (as in CI); the assertion holds regardless of the
+     * engine because run 1 does not exist here.
      *
      * @return void
      */

@@ -6,7 +6,35 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
-## [0.1.24] — 2026-08-10
+## [0.1.25] — 2026-08-10
+
+Item repository and a live response oracle (E2.1 / E3.4 wiring).
+
+### Added
+- **Item repository** `classes/local/item_repository.php`: reads the engine's
+  active item parameters — `for_question()` for one presented item and
+  `for_scale()` for a whole scale subtree (a recursive walk over
+  local_catquiz_catscales joined to local_catquiz_items and its active
+  local_catquiz_itemparams), following the Wunderbyte schema. `shape_params()`
+  casts fields and applies the 1PL defaults (discrimination 1.0, guessing 0.0)
+  and is pure/tested; the reads return null / [] without the engine (CI stays
+  green). Covered by `item_repository_test.php`.
+
+### Changed
+- **Oracle web service** `classes/external/oracle_answer.php` is now wired: when
+  the engine and a bound CAT test are present, it identifies the person from the
+  logged-in simulated user, resolves the presented item's parameters via the item
+  repository, and returns a **seed-deterministic, model-consistent** response
+  (`response_oracle`, matching the engine's raschbirnbaum likelihood) with
+  `ready = true`. Without the engine / bound test / person / item it returns the
+  well-formed not-ready response as before. New string `oracle:computed`. The
+  ability used is currently the global one; per-subscale resolution follows once
+  materialisation records the catscale↔subscale mapping.
+
+- `version.php`: 2026081023 → **2026081024**, release 0.1.24 → **0.1.25**. No new
+  upgrade step (code-only round).
+
+---
 
 Test binder (E2.4, reference path) — bind a run to an adaptivequiz CAT test.
 

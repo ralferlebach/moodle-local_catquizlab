@@ -128,6 +128,7 @@ as above.
     classes/task/aggregate_results.php   async aggregation task (E4.4)
     classes/local/attempt_collector.php  engine attempt -> lab trace (E3.5)
     classes/local/test_binder.php        bind run to an adaptivequiz CAT test (E2.4)
+    classes/local/item_repository.php    read active item parameters (E2.1/E3.4)
     cli/sweep.php                   CLI: expand a sweep spec, persist or list runs
     classes/external/*.php          five web-service functions (oracle, jobs, hub)
     classes/privacy/provider.php    null provider (stub stores no personal data)

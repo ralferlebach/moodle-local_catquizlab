@@ -68,6 +68,7 @@ $string['manage:runs'] = 'Runs';
 $string['mutator:unknownvariant'] = 'Unbekannte Pool-Variante: {$a}.';
 $string['naming:unknownplaceholder'] = 'Namensmuster verweist auf einen unbekannten Platzhalter: {$a}.';
 $string['navbarbutton'] = 'CATQUIZ-Lab';
+$string['oracle:computed'] = 'Das Orakel hat eine modellkonforme Antwort berechnet.';
 $string['oracle:notready'] = 'Das Response-Oracle ist noch nicht implementiert (Stub); es wurde keine Antwort berechnet.';
 $string['pluginname'] = 'CAT-Experimenten-Suite';
 $string['privacy:metadata:local_catquizlab_person'] = 'Simulierte Personen der CAT-Experimenten-Suite: jede Zeile verknüpft ein Ground-Truth-Fähigkeitsprofil mit dem dafür angelegten Moodle-Nutzer.';

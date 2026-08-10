@@ -28,6 +28,10 @@ use core_external\external_api;
 use core_external\external_function_parameters;
 use core_external\external_single_structure;
 use core_external\external_value;
+use local_catquizlab\local\environment;
+use local_catquizlab\local\item_repository;
+use local_catquizlab\local\response_oracle;
+use local_catquizlab\local\test_binder;
 
 /**
  * Returns the answer a simulated person gives to a presented item.
@@ -64,6 +68,8 @@ class oracle_answer extends external_api {
      * @return array The oracle response.
      */
     public static function execute(int $runid, int $questionid): array {
+        global $DB, $USER;
+
         $params = self::validate_parameters(self::execute_parameters(), [
             'runid'      => $runid,
             'questionid' => $questionid,
@@ -74,17 +80,59 @@ class oracle_answer extends external_api {
         self::validate_context($context);
         require_capability('local/catquizlab:worker', $context);
 
-        // The IRT computation now lives in \local_catquizlab\local\response_oracle
-        // (probability + seed-deterministic draw + hierarchical ability). This
-        // endpoint will call it once the presented question can be mapped to its
-        // ground-truth item parameters, which happens after pool materialisation
-        // (the engine-side importer step). Until then the worker receives a clear
-        // "not ready" signal rather than a fabricated answer.
+        if (!environment::engine_available() || !environment::adaptivequiz_available()) {
+            return self::not_ready(get_string('oracle:notready', 'local_catquizlab'));
+        }
+
+        // The caller is the simulated test-taker driving their own attempt through
+        // the UI, so identify the person by the logged-in user. Resolve the run's
+        // bound CAT test for the engine context, then the presented item's
+        // parameters, and answer with the seed-deterministic response oracle.
+        $run = $DB->get_record('local_catquizlab_run', ['id' => $runid]);
+        if (!$run || empty($run->testcmid)) {
+            return self::not_ready(get_string('oracle:notready', 'local_catquizlab'));
+        }
+        $config = test_binder::read_test_config((int) $run->testcmid);
+        $person = $DB->get_record('local_catquizlab_person', ['runid' => $runid, 'moodleuserid' => $USER->id]);
+        if ($config === null || !$person) {
+            return self::not_ready(get_string('oracle:notready', 'local_catquizlab'));
+        }
+        $item = item_repository::for_question((int) $config['contextid'], $questionid);
+        if ($item === null) {
+            return self::not_ready(get_string('oracle:notready', 'local_catquizlab'));
+        }
+
+        $profile = json_decode((string) $person->profilejson, true) ?: [];
+        $ability = response_oracle::ability_for($profile);
+        $seed = crc32("{$runid}:{$person->id}:{$questionid}") & 0x7fffffff;
+        $correct = response_oracle::respond(
+            $ability,
+            $item['difficulty'],
+            $seed,
+            $item['discrimination'],
+            $item['guessing']
+        );
+
+        return [
+            'ready'    => true,
+            'fraction' => $correct ? 1.0 : 0.0,
+            'choice'   => -1,
+            'message'  => get_string('oracle:computed', 'local_catquizlab'),
+        ];
+    }
+
+    /**
+     * Build a well-formed "not ready" response.
+     *
+     * @param string $message The status message.
+     * @return array The response.
+     */
+    protected static function not_ready(string $message): array {
         return [
             'ready'    => false,
             'fraction' => 0.0,
             'choice'   => -1,
-            'message'  => get_string('oracle:notready', 'local_catquizlab'),
+            'message'  => $message,
         ];
     }
 

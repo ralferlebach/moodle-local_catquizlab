@@ -351,6 +351,22 @@ quizsettings-JSON — genau die Zeilen, die go-clara/getit-horst lesen.
 bleibt offen (braucht die Formularfelder der catquiz-Erweiterung). Versionsbump →
 2026081023 / 0.1.24 (reiner Code, kein Upgrade-Schritt).
 
+## Phase 28 — Item-Repository + Oracle-Verdrahtung E2.1/E3.4 (Release 0.1.25)
+Aus `go-clara.php` die Item-Parameter-Query umgesetzt: `classes/local/item_repository.php`.
+`for_question()` liest die aktiven Parameter eines präsentierten Items,
+`for_scale()` alle Items eines Skalen-Teilbaums (rekursiver Walk über
+local_catquiz_catscales + local_catquiz_items + aktive local_catquiz_itemparams).
+`shape_params()` castet und setzt 1PL-Defaults (Diskrimination 1.0, Rateparameter
+0.0), rein/testbar; Reads liefern null/[] ohne Engine (CI grün).
+`oracle_answer` verdrahtet: mit Engine + gebundenem Test identifiziert es die
+Person über den eingeloggten Simulanten, löst die Item-Parameter über das
+Repository auf und liefert eine seed-deterministische, modellkonforme Antwort
+(`response_oracle`, entspricht raschbirnbaum::likelihood), ready=true; sonst
+weiterhin sauberes not-ready. Neuer String `oracle:computed`. Aktuell globale
+Fähigkeit; Subskalen-Auflösung folgt mit der Materialisierung (catscale↔subscale-
+Mapping). Tests `item_repository_test.php` + external-Test aktualisiert.
+Versionsbump → 2026081024 / 0.1.25 (reiner Code, kein Upgrade-Schritt).
+
 ## Verifikationsstand
 Container: PHP-Syntax, install.xml, YAML, Worker-JS grün; PHPCS (Moodle) 0/0
 **und PHPMD ohne Verstöße** über alle PHP-Dateien; höchster Upgrade-Savepoint ≤
