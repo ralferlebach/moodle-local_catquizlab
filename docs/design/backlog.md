@@ -48,17 +48,17 @@ Gegenüber Rev. 1 entfallen: externe Analyse-Workbench (Python/R), Driver A (In-
 | 3.1 ⏳ teilweise | Adhoc-Task „schedule_attempt": Payload, nextruntime-Staffelung, Retry/faildelay, Abbruch-Handling | ein Task = ein Attempt-Auftrag. **Erledigt (Warteschlange):** `attempt_scheduler` + Adhoc-Task `schedule_attempts` materialisieren je Run die queued Attempts (idempotent, respektiert Hauptschalter). Offen: Per-Attempt-Staffelung (nextruntime), Retry/faildelay, Abbruch — verzahnt mit dem Worker-Trigger (engine-/worker-seitig) |
 | 3.2 | Worker-Anbindung, Variante exec (gleicher Host) und Variante Queue-Polling per WS (getrennter Worker-Host) | konfigurierbar; beide tasks-getriggert |
 | 3.3 | Puppeteer-Skript: Login, Attempt-Start, DOM-Erkennung von Frage/Slot, Oracle-Abfrage, Antwort setzen, Submit-Loop bis Engine-Stopp; Screenshot-Option für Dokumentation | Worker enthält keine Simulationslogik |
-| 3.4 | Oracle-Webservice: modellkonforme Antworten (1PL/2PL/3PL, später GPCM/GRM) über die `catmodel_*`-Likelihoods, seed-deterministisch je (run, person, item); deviante Muster (Stärke/Anzahl/Position) für DPF-Sensitivität | polytome Antwortauswahl klären (Kategorienwahl statt richtig/falsch) |
+| 3.4 ⏳ teilweise | Oracle-Webservice: modellkonforme Antworten (1PL/2PL/3PL, später GPCM/GRM) über die `catmodel_*`-Likelihoods, seed-deterministisch je (run, person, item); deviante Muster (Stärke/Anzahl/Position) für DPF-Sensitivität | polytome Antwortauswahl klären (Kategorienwahl statt richtig/falsch) |
 | 3.5 | Abschluss-Task „collect_attempt": Validierung, Übernahme der Verlaufsdaten aus Engine-Tabellen/Debug-Info in `attempt_trace`, Laufzeit-/Query-Messung | prüfen, ob Debug-Info alle Score-Komponenten liefert; sonst minimaler upstream-fähiger Trace-Hook in der Engine (offener Punkt) |
 | 3.6 | Parallelisierung & Kapazität: mehrere Worker/Browser-Kontexte, Messlauf Attempts/Stunde, daraus Feinplanung des Rasters | früh durchführen (Meilenstein M1) |
 
 ### E4 – Auswertung im Plugin
 | # | Arbeitspaket | Hinweise |
 | --- | --- | --- |
-| 4.1 | Metrik-Interface + Basissatz: Bias, RMSE, Korrelation, SE-Vergleich, Testlängen-Statistik, je Stratum/Tier | |
-| 4.2 | Ranking-/Diagnostik-Maße: Defizit-Übereinstimmung (absolut, 1·SE/2·SE, Top-3/5/10), Precision@k, Recall, nDCG@k, Spearman-ρ, Konfusionsmatrix „detektiert vs. wahr" | |
+| 4.1 ⏳ teilweise | Metrik-Interface + Basissatz: Bias, RMSE, Korrelation, SE-Vergleich, Testlängen-Statistik, je Stratum/Tier | **Basissatz erledigt:** `classes/local/metrics.php` (Bias/RMSE/MAE/Korrelation, Testlänge, mittlerer SE, Item-Exposure), rein/testbar; offen: Gruppierung je Stratum/Tier |
+| 4.2 ⏳ teilweise | Ranking-/Diagnostik-Maße: Defizit-Übereinstimmung (absolut, 1·SE/2·SE, Top-3/5/10), Precision@k, Recall, nDCG@k, Spearman-ρ, Konfusionsmatrix „detektiert vs. wahr" | **Kernmaße erledigt:** `classes/local/diagnostics.php` (Spearman-ρ, Top-k-Übereinstimmung, nDCG@k, Konfusionsmatrix mit Precision/Recall/F1/Accuracy/Specificity), rein/testbar; offen: SE-tolerante Defizitdefinition (1·SE/2·SE), Precision@k mit variabler Relevanzmenge |
 | 4.3 | Verlaufs-/Stabilitätsanalysen: Skalen-An-/Abschaltung, Stoppgründe, intra-personale Vergleiche über R Replikationen, Robustheit (Kalibrier-/Taggingfehler, Depleted), Exposure-Profile | |
-| 4.4 | Asynchrone Berechnungs-Tasks mit ergebnisweiser Persistierung; Ergebnis-Cache | keine Web-Timeouts |
+| 4.4 ⏳ teilweise | Asynchrone Berechnungs-Tasks mit ergebnisweiser Persistierung; Ergebnis-Cache | keine Web-Timeouts. **Persistierung erledigt:** `classes/local/result_aggregator.php` (Traces→metrics→`result`-Zeilen, idempotent) + Reader; offen: Ausführung als Adhoc-Task, Diagnostik je Subskala/Stratum |
 | 4.5 | Report-UI: Run-Report, Vergleichsreport (Strategie × Pool × Stratum), Tier-Report; Charts via Moodle-Charts-API; strukturierter Trace-Report je auffälligem Attempt (Basis für spätere LLM-Zusammenfassung) | |
 
 ### E5 – Zentrale Berechnungsinstanz (Hub-Modus)
@@ -71,7 +71,7 @@ Gegenüber Rev. 1 entfallen: externe Analyse-Workbench (Python/R), Driver A (In-
 ### E6 – Export
 | # | Arbeitspaket | Hinweise |
 | --- | --- | --- |
-| 6.1 | Export-Modul auf Dataformat-API: xlsx, ods, csv, json; eigener XML-Writer; Auswahl von Ebene (Rohdaten/Ground Truth/Metriken/Aggregation) und Umfang (Run/Experiment/Tier) | |
+| 6.1 ⏳ teilweise | Export-Modul auf Dataformat-API: xlsx, ods, csv, json; eigener XML-Writer; Auswahl von Ebene (Rohdaten/Ground Truth/Metriken/Aggregation) und Umfang (Run/Experiment/Tier) | **Kernformate erledigt:** `classes/local/exporter.php` (csv, json, XML-Writer), rein/testbar; offen: xlsx/ods über Dataformat-/Workbook-API, Ebenen-/Umfangsauswahl + Datenaufsammlung aus der Registry |
 | 6.2 | Antwortmatrix-Export (Nachfolger getit-horst) als eine von mehreren Rohdaten-Sichten; Schema-/Spaltenkatalog je Export beilegen | |
 | 6.3 | Export per Task für große Datensätze + Download-Ablage/Dateibereich | |
 

@@ -202,6 +202,74 @@ den erzeugten Zeilen auf. Idempotent. Tests `attempt_scheduler_test.php` (inkl.
 Master-Switch und Task-Enqueue). Versionsbump → 2026081012 / 0.1.13 (reiner
 Code, kein Upgrade-Schritt).
 
+## Phase 17 — Response-Oracle: IRT-Antwortmodell (Release 0.1.14)
+E3.4, rechnerischer Kern: `classes/local/response_oracle.php` bestimmt, wie eine
+simulierte Person ein Item beantwortet. `probability()` ist das logistische
+IRT-Modell in 3-Parameter-Form — c + (1 - c) / (1 + exp(-a * (theta - b))) —
+mit Defaults für Rasch/1PL; `respond()` zieht daraus eine seed-deterministische
+Richtig/Falsch-Antwort; `ability_for()` löst die relevante Fähigkeit aus dem
+hierarchischen Ground-Truth-Profil auf (global/Kategorie/Subskala, mit
+Fallbacks) — die Grundlage der DPF-Bedingungen. Rein und seiteneffektfrei,
+rechnet gegen die bereits gespeicherte Ground Truth, keine Engine nötig. Tests
+`response_oracle_test.php` (0.5 bei theta=b, Monotonie, Guessing-Floor,
+Diskriminations-Steilheit, Clamping, Determinismus, empirische Trefferquote,
+Hierarchie-Auflösung). Der `oracle_answer`-Webservice bleibt Stub, verweist im
+Kommentar aber nun auf `response_oracle` als Rechenkern (Aufruf, sobald die
+Frage→Item-Parameter-Zuordnung nach der Pool-Materialisierung vorliegt).
+Versionsbump → 2026081013 / 0.1.14 (reiner Code, kein Upgrade-Schritt).
+
+## Phase 18 — Metriken (Release 0.1.15)
+E4, rechnerischer Kern: `classes/local/metrics.php` wertet die eingesammelten
+Attempts eines Runs gegen die Ground Truth aus. `ability_recovery()` liefert
+Bias, RMSE, MAE und die Korrelation wahr↔geschätzt; `efficiency()` Testlänge
+(Mittel/Min/Max) und mittleren Standardfehler; `exposure()` Item-Häufigkeiten
+und -Raten, die maximale Exposure-Rate und (mit Poolgröße) die Zahl ungenutzter
+Items; `summarise()` fasst alle drei zusammen. Rein und seiteneffektfrei,
+rechnet gegen die bereits gespeicherte Ground Truth — keine Engine nötig, voll
+testbar mit synthetischen Traces; leere/degenerierte Eingaben sicher behandelt
+(Korrelation null, wenn undefiniert). Tests `metrics_test.php`. Versionsbump →
+2026081014 / 0.1.15 (reiner Code, kein Upgrade-Schritt).
+
+## Phase 19 — Diagnostik-/Ranking-Maße (Release 0.1.16)
+E4.2: `classes/local/diagnostics.php` misst, wie gut der Algorithmus die wahren
+Fähigkeitsdefizite einer Person wiederfindet (ausgerichtete wahr/geschätzt-
+Profile je Subskala, niedriger = größeres Defizit). `spearman()` liefert die
+Rangkorrelation, `topk_agreement()` die Überlappung der k defizitärsten
+Subskalen, `ndcg_at_k()` die gradierte Ranking-Güte der Defizitreihenfolge,
+`confusion()` (mit `deficit_labels()` an einem Schwellwert) die
+Detektiert-vs-wahr-Matrix samt Precision/Recall/F1/Accuracy/Specificity;
+`evaluate()` fasst zusammen. Bindungen erhalten gemittelte Ränge, undefinierte
+Fälle null. Rein/seiteneffektfrei, keine Engine. Tests `diagnostics_test.php`
+(Spearman ±1, Top-k, nDCG 1 vs. reversed, Konfusionsmatrix). Versionsbump →
+2026081015 / 0.1.16 (reiner Code, kein Upgrade-Schritt).
+
+## Phase 20 — Export CSV/JSON/XML (Release 0.1.17)
+E6, Kernformate: `classes/local/exporter.php` serialisiert die Zeilen-Daten aus
+Registry, Metriken und Diagnostik. `to_csv()` schreibt Header plus RFC-4180-
+Quoting (Kommata, Anführungszeichen, Zeilenumbrüche) mit optionaler
+Spaltenauswahl; `to_json()` gibt hübsch formatiertes JSON (Slashes/Unicode
+unescaped); `to_xml()` baut über DOMDocument ein wohlgeformtes Dokument,
+escaped Werte und säubert Elementnamen. Booleans, null und verschachtelte
+Arrays werden formatübergreifend einheitlich dargestellt. Reiner,
+seiteneffektfreier Serialisierer — kein DB-/Dateizugriff, daher bleibt das
+Einsammeln der Zeilen und das Schreiben von Dateien getrennt und testbar. Die
+Tabellenformate (xlsx/ods über Moodles Workbook-Writer) folgen später. Tests
+`exporter_test.php`. Versionsbump → 2026081016 / 0.1.17 (reiner Code, kein
+Upgrade-Schritt).
+
+## Phase 21 — Ergebnis-Aggregation: Traces -> gespeicherte Metriken (Release 0.1.18)
+Brücke zwischen E4 (Metriken) und E6 (Export): `classes/local/result_aggregator.php`
+liest die Attempts eines Runs mit Trace, paart jeden mit der Ground-Truth-
+Fähigkeit seiner Person, rechnet die metrics-Zusammenfassung und schreibt je
+Skalarmetrik (n, bias, rmse, mae, correlation, mittlere/min/max Testlänge,
+mittlerer SE) eine `result`-Zeile plus eine Exposure-Detailzeile, Scope „run".
+Neuberechnung idempotent (run-Zeilen werden ersetzt). `results()` liest sie als
+flache, export-fertige Zeilen zurück. Parst die Trace-JSON des Collect-Schritts
+(erwartet finaltheta/finalse/items) — keine Engine nötig, mit synthetischen
+Traces testbar. Tests `result_aggregator_test.php` (konstanter Offset → bias,
+Testlänge, n, Exposure-Detail, Idempotenz, Reader). Versionsbump →
+2026081017 / 0.1.18 (reiner Code, kein Upgrade-Schritt).
+
 ## Verifikationsstand
 Container: PHP-Syntax, install.xml, YAML, Worker-JS grün; PHPCS (Moodle) 0/0
 **und PHPMD ohne Verstöße** über alle PHP-Dateien; höchster Upgrade-Savepoint ≤

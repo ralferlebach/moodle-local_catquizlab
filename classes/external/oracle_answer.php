@@ -74,10 +74,12 @@ class oracle_answer extends external_api {
         self::validate_context($context);
         require_capability('local/catquizlab:worker', $context);
 
-        // E3.4 will resolve the person's ground truth for the run, compute the
-        // model likelihood for the question and draw a seed-deterministic
-        // response. Until then the worker receives a clear "not ready" signal
-        // rather than a fabricated answer.
+        // The IRT computation now lives in \local_catquizlab\local\response_oracle
+        // (probability + seed-deterministic draw + hierarchical ability). This
+        // endpoint will call it once the presented question can be mapped to its
+        // ground-truth item parameters, which happens after pool materialisation
+        // (the engine-side importer step). Until then the worker receives a clear
+        // "not ready" signal rather than a fabricated answer.
         return [
             'ready'    => false,
             'fraction' => 0.0,

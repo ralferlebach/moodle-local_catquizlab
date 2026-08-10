@@ -119,6 +119,11 @@ as above.
     classes/local/course_provisioner.php  course + enrolment per run (E2.4)
     classes/local/attempt_scheduler.php  queue a run's attempts (E3.1)
     classes/task/schedule_attempts.php   ad-hoc task wrapping the scheduler
+    classes/local/response_oracle.php    IRT answer model (E3.4)
+    classes/local/metrics.php            evaluation metrics vs ground truth (E4)
+    classes/local/diagnostics.php        deficit ranking + detection measures (E4.2)
+    classes/local/exporter.php           serialise data to CSV/JSON/XML (E6)
+    classes/local/result_aggregator.php  traces -> stored metric rows (E4/E6 bridge)
     cli/sweep.php                   CLI: expand a sweep spec, persist or list runs
     classes/external/*.php          five web-service functions (oracle, jobs, hub)
     classes/privacy/provider.php    null provider (stub stores no personal data)

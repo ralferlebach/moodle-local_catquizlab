@@ -6,7 +6,105 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
-## [0.1.13] — 2026-08-10
+## [0.1.18] — 2026-08-10
+
+Result aggregation — the bridge from traces to stored results (E4/E6).
+
+### Added
+- **Result aggregator** `classes/local/result_aggregator.php`: reads a run's
+  attempts that carry a trace, pairs each with its person's ground-truth ability,
+  computes the metrics summary and writes one `local_catquizlab_result` row per
+  scalar metric (n, bias, rmse, mae, correlation, mean/min/max test length, mean
+  SE) plus an exposure detail row, at run scope. Recompute is idempotent
+  (run-scope rows are replaced). `results()` reads them back as flat, export-ready
+  rows for the exporter. It parses the trace JSON the collect step stores, so it
+  needs no engine and is fully testable with synthetic traces (expected trace
+  shape: `finaltheta`, `finalse`, `items`). Covered by
+  `result_aggregator_test.php`. This wires evaluation (E4) to export (E6).
+
+- `version.php`: 2026081016 → **2026081017**, release 0.1.17 → **0.1.18**. No new
+  upgrade step (the attempt and result tables already exist).
+
+---
+
+Data export to CSV, JSON and XML (E6, core formats).
+
+### Added
+- **Exporter** `classes/local/exporter.php` (E6): serialises the tabular data the
+  registry, metrics and diagnostics produce. `to_csv()` writes a header plus
+  RFC 4180 quoting (commas, quotes, newlines) with an optional column selection;
+  `to_json()` pretty-prints with unescaped slashes/unicode; `to_xml()` builds a
+  well-formed document via DOMDocument, escaping values and sanitising element
+  names. Booleans, null and nested arrays render consistently across formats.
+  A pure, side-effect-free serialiser — no database or filesystem access — so
+  gathering rows and writing files stay separate and testable. The spreadsheet
+  formats (xlsx/ods) are a later step using Moodle's workbook writer. Covered by
+  `exporter_test.php`.
+
+- `version.php`: 2026081015 → **2026081016**, release 0.1.16 → **0.1.17**. No new
+  upgrade step (code-only round).
+
+---
+
+Diagnostic / ranking measures for deficit recovery (E4.2).
+
+### Added
+- **Diagnostics** `classes/local/diagnostics.php` (E4.2): measures how well the
+  algorithm recovers a person's true ability deficits from aligned true/estimated
+  per-subscale profiles. `spearman()` gives the rank correlation; `topk_agreement()`
+  the overlap of the k most-deficient subscales; `ndcg_at_k()` the graded ranking
+  quality of the deficit order; `confusion()` (with `deficit_labels()` at a
+  threshold) the detected-vs-true matrix with precision, recall, F1, accuracy and
+  specificity; `evaluate()` composes them. Ties get averaged ranks; undefined
+  cases return null. Pure and side-effect-free — no engine — and covered by
+  `diagnostics_test.php`.
+
+- `version.php`: 2026081014 → **2026081015**, release 0.1.15 → **0.1.16**. No new
+  upgrade step (code-only round).
+
+---
+
+Evaluation metrics (E4, computational core).
+
+### Added
+- **Metrics** `classes/local/metrics.php` (E4): evaluates a run's collected
+  attempts against the ground truth. `ability_recovery()` gives bias, RMSE, MAE
+  and the true-vs-estimate correlation; `efficiency()` gives test length (mean/
+  min/max) and mean standard error; `exposure()` gives per-item counts and rates,
+  the maximum exposure rate and (with a pool size) the number of unused items;
+  `summarise()` composes all three. Pure and side-effect-free — it evaluates
+  against the ground truth the plugin already holds, so it needs no engine and is
+  fully testable with synthetic traces. Empty and degenerate inputs are handled
+  safely (correlation is null when undefined). Covered by `metrics_test.php`.
+
+- `version.php`: 2026081013 → **2026081014**, release 0.1.14 → **0.1.15**. No new
+  upgrade step (code-only round).
+
+---
+
+Response oracle: the IRT answer model (E3.4, computational core).
+
+### Added
+- **Response oracle** `classes/local/response_oracle.php` (E3.4): computes how a
+  simulated person answers an item. `probability()` is the logistic IRT model in
+  its three-parameter form — `c + (1 - c) / (1 + exp(-a * (theta - b)))` — with
+  defaults giving the Rasch/1PL model; `respond()` draws a seed-deterministic
+  correct/incorrect answer from it; `ability_for()` resolves the relevant ability
+  from a person's hierarchical ground-truth profile (global / category /
+  subscale, with fallbacks), which is what lets the DPF conditions probe local
+  deviations. Pure and side-effect-free — it computes against the ground truth
+  the plugin already stores, no engine needed. Covered by
+  `response_oracle_test.php`.
+
+### Changed
+- `oracle_answer` external function: note updated — its IRT computation now lives
+  in `response_oracle`; the endpoint will call it once a presented question can be
+  mapped to its ground-truth item parameters (after pool materialisation). The
+  stub's "not ready" behaviour is unchanged until that mapping exists.
+- `version.php`: 2026081012 → **2026081013**, release 0.1.13 → **0.1.14**. No new
+  upgrade step (code-only round).
+
+---
 
 Attempt scheduling (E3.1).
 
