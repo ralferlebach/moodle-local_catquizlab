@@ -146,6 +146,62 @@ Item-Satz; die wahre Schwierigkeit bleibt Ground Truth (Set-/Schwierigkeits-
 Varianten ändern Items, Import-Fehler-Varianten fügen nur Annotationen hinzu).
 Tests `pool_mutator_test.php`. Versionsbump → 2026081008 / 0.1.9.
 
+## Phase 13 — makefile-Fix (clear + PHPUnit) + Nutzer-Provisionierung (Release 0.1.10)
+Zwei Meldungen aus dem lokalen `make check`: (a) Der Bildschirm wurde nicht
+mehr geleert — `clear` war beim Neuaufbau nicht mehr erste Abhängigkeit von
+`all/fix/check`; nach Original-Vorbild wiederhergestellt (mit Abschluss-Echo).
+(b) PHPUnit brach ab, weil die Testumgebung für eine andere Moodle-Version
+initialisiert war; die `phpunit`-Regel übernimmt jetzt die robuste Original-
+Logik: Skip bei fehlendem `phpunit_dataroot` und **automatische
+Reinitialisierung** (`admin/tool/phpunit/cli/init.php`) bei „initialised for
+different version". Die vimipad-Warnungen stammen aus Restregistrierungen im
+Moodle des Nutzers (fehlende qtype_vimipad/datafield_vimipad version.php), nicht
+aus diesem Plugin.
+Weiter (E2.3, Teil 2): `classes/local/user_provisioner.php` legt für die
+Personen eines Runs echte Moodle-Nutzer über die Core-User-API an (2.6.B),
+setzt `person.moodleuserid`, optional Kohorte; Namen aus dem Naming-Label,
+idempotent, core-only (Einschreibung/CAT-Test-Bindung und Login-Zugangsdaten
+bleiben spätere Schritte). Weil nun echte Nutzer verknüpft werden, wurde der
+**Privacy-Provider vom Null- auf einen vollen Metadaten-/Request-Provider**
+gehoben (Tabelle `local_catquizlab_person`, get_contexts/users_in_context/
+export/delete im System-Kontext). Tests `user_provisioner_test.php`,
+`privacy_test.php` neu. Versionsbump → 2026081009 / 0.1.10.
+
+## Phase 14 — Verwaltungsseite als Mustache mit ausklappbaren Einheiten (Release 0.1.11)
+Vorschlag des Nutzers aufgegriffen: Die Einzelabschnitte der Verwaltungsseite
+sind jetzt **ausklappbare Einheiten** in **einer Mustache-Vorlage**
+(`templates/manage.mustache`). `index.php` baut nur noch den Template-Kontext,
+das Markup liegt in der Vorlage. Umsetzung mit nativem `<details>`/`<summary>`
+(standardmäßig offen) — barrierefrei, ohne JS und ohne die Bootstrap-4-vs-5-
+Unterschiede zwischen Moodle 4.5 und 5.x. Tabellenzellen werden von Mustache
+escaped, Labels über `{{#str}}`. Die Vorlage wurde lokal per mustache.php mit
+dem eingebetteten Beispiel-Kontext gerendert (3 Sektionen, 2 Tabellen, keine
+offenen Tags). CI um einen `moodle-plugin-ci mustache`-Schritt ergänzt; lokal
+deckt `make mustache` das ab. Versionsbump → 2026081010 / 0.1.11.
+
+## Phase 15 — Kurs-Provisionierung + Einschreibung (Release 0.1.12)
+E2.4, core-Hälfte: `classes/local/course_provisioner.php` löst je Run den Kurs
+auf (vorhandenen referenzieren oder neuen, versteckten Kurs anlegen), schreibt
+die provisionierten Nutzer als Teilnehmer ein (2.6.C) und vermerkt den Kurs am
+Run. Nur Core-APIs (Kurs/Enrol), daher CI-tauglich und idempotent; das Anlegen
+des adaptivequiz-CAT-Tests im Kurs braucht die Host-Aktivität und bleibt der
+engine-seitige Folgeschritt (füllt später `run.testcmid`). Schema: `run` erhält
+`courseid` (FK auf course) und `testcmid`; `db/upgrade.php` ergänzt beide mit
+Savepoint 2026081011. Tests `course_provisioner_test.php`. Versionsbump →
+2026081011 / 0.1.12 (wegen Schemaänderung erforderlich).
+
+## Phase 16 — Attempt-Scheduling (Release 0.1.13)
+E3.1: `classes/local/attempt_scheduler.php` legt je Run einen queued
+`attempt`-Datensatz pro provisionierter Person an (Personen ohne Moodle-Nutzer
+und bereits geplante werden übersprungen) und setzt den Run auf „geplant". Der
+Adhoc-Task `classes/task/schedule_attempts.php` trägt die Run-ID in den
+Custom-Data, respektiert den Hauptschalter (tut nichts, solange Läufe
+deaktiviert sind) und ruft den Scheduler beim Cron-Lauf. Reine Lab-Store-/
+Core-Task-Logik — keine Engine, kein Worker-Start; Collect/Execute setzen auf
+den erzeugten Zeilen auf. Idempotent. Tests `attempt_scheduler_test.php` (inkl.
+Master-Switch und Task-Enqueue). Versionsbump → 2026081012 / 0.1.13 (reiner
+Code, kein Upgrade-Schritt).
+
 ## Verifikationsstand
 Container: PHP-Syntax, install.xml, YAML, Worker-JS grün; PHPCS (Moodle) 0/0
 **und PHPMD ohne Verstöße** über alle PHP-Dateien; höchster Upgrade-Savepoint ≤

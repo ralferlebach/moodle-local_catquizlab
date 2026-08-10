@@ -57,21 +57,27 @@ MPCI        := $(shell command -v moodle-plugin-ci 2>/dev/null)
         phpcs fix-lint-php phpmd mustache grunt phpdoc validate savepoints \
         phpunit behat lint-cpd
 
-all: fix check
+all: clear fix check
+	@echo ""
+	@echo "=== All done. Review the output above for errors. ==="
 
-fix: fix-lint-php
+fix: clear fix-lint-php
+	@echo ""
+	@echo "=== Auto-fix complete. ==="
 
 # Full suite (mirrors CI, minus Behat).
-check: check-static phpunit
+check: clear check-static phpunit
+	@echo ""
+	@echo "=== Full check complete. Review the output above for errors. ==="
 
 # Static suite only (no PHPUnit/Behat) — fast pre-commit gate.
-check-static: worker-check phpcs phpmd mustache grunt phpdoc validate savepoints
+check-static: clear worker-check phpcs phpmd mustache grunt phpdoc validate savepoints
 
 # Everything, including Behat.
-ci: check behat
+ci: clear check behat
 
 clear:
-	clear
+	@clear || true
 
 # --- Puppeteer worker --------------------------------------------------------
 worker-check:
@@ -144,8 +150,26 @@ lint-cpd:
 # docs/dev/testsystem-setup.md): composer install in MOODLE_ROOT, then
 #   php admin/tool/phpunit/cli/init.php   resp.   php admin/tool/behat/cli/init.php
 phpunit:
-	@if [ -n "$(MPCI)" ]; then cd $(MOODLE_ROOT) && moodle-plugin-ci phpunit --fail-on-warning; \
-	else cd $(MOODLE_ROOT) && vendor/bin/phpunit --testsuite $(PLUGIN_NAME)_testsuite; fi
+	@if [ -n "$(MPCI)" ]; then \
+		cd $(MOODLE_ROOT) && moodle-plugin-ci phpunit --fail-on-warning; \
+	elif [ ! -f "$(MOODLE_ROOT)/config.php" ]; then \
+		echo "phpunit: no Moodle config.php under $(MOODLE_ROOT) - skipped."; \
+	elif ! $(PHP) -r "define('CLI_SCRIPT',1); require '$(MOODLE_ROOT)/config.php'; exit(empty(\$$CFG->phpunit_dataroot) ? 1 : 0);" 2>/dev/null; then \
+		echo "phpunit: \$$CFG->phpunit_dataroot is not configured in config.php - skipped."; \
+		echo "         Configure it, then run once: php admin/tool/phpunit/cli/init.php"; \
+	else \
+		tmp=`mktemp`; \
+		cd $(MOODLE_ROOT) && $(PHP) vendor/bin/phpunit --testsuite $(PLUGIN_NAME)_testsuite > "$$tmp" 2>&1; code=$$?; \
+		if grep -q "initialised for different version" "$$tmp"; then \
+			echo "phpunit: environment outdated - reinitialising (php admin/tool/phpunit/cli/init.php)..."; \
+			cd $(MOODLE_ROOT) && $(PHP) admin/tool/phpunit/cli/init.php; \
+			cd $(MOODLE_ROOT) && $(PHP) vendor/bin/phpunit --testsuite $(PLUGIN_NAME)_testsuite; code=$$?; \
+		else \
+			cat "$$tmp"; \
+		fi; \
+		rm -f "$$tmp"; \
+		exit $$code; \
+	fi
 
 behat:
 	@if [ -n "$(MPCI)" ]; then cd $(MOODLE_ROOT) && moodle-plugin-ci behat --profile chrome; \

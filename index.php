@@ -17,11 +17,11 @@
 /**
  * Management page for the CAT experiment suite.
  *
- * Entry point of the plugin's UI, reachable from the navbar button (next to
- * the engine's CATQUIZ button) and from Site administration > Reports. In this
- * release it is the registry landing page: environment status and the list of
- * defined experiments. The create/edit forms and the run registry table follow
- * with E1.
+ * Entry point of the plugin's UI, reachable from the navbar button (next to the
+ * engine's CATQUIZ button) and from Site administration > Reports. It is the
+ * registry landing page: environment status, experiments and runs, each in a
+ * collapsible section rendered from the local_catquizlab/manage template. The
+ * create/edit forms follow with a later milestone.
  *
  * @package    local_catquizlab
  * @copyright  2026 Ralf Erlebach
@@ -31,113 +31,79 @@
 require(__DIR__ . '/../../config.php');
 require_once($CFG->libdir . '/adminlib.php');
 
-// Registers the page in the admin/reports tree, sets the system context and
-// the admin report layout, and enforces the page capability defined in
-// settings.php (local/catquizlab:manage).
+use local_catquizlab\local\environment;
+use local_catquizlab\local\registry;
+
+// Registers the page in the admin/reports tree, sets the system context and the
+// admin report layout, and enforces the page capability from settings.php
+// (local/catquizlab:manage).
 admin_externalpage_setup('local_catquizlab_manage');
 
 $component = 'local_catquizlab';
 
-echo $OUTPUT->header();
-echo $OUTPUT->heading(get_string('manage:heading', $component));
-echo html_writer::div(get_string('manage:intro', $component), 'text-muted mb-4');
+$statusmap = [
+    registry::STATUS_DRAFT     => get_string('status:draft', $component),
+    registry::STATUS_SCHEDULED => get_string('status:scheduled', $component),
+    registry::STATUS_RUNNING   => get_string('status:running', $component),
+    registry::STATUS_FINISHED  => get_string('status:finished', $component),
+    registry::STATUS_FAILED    => get_string('status:failed', $component),
+];
 
 // Environment status: can experiments actually run on this site?
 $envitems = [
-    \local_catquizlab\local\environment::catquiz_available()
-        ? [get_string('env:catquizfound', $component), 'text-success']
-        : [get_string('env:catquizmissing', $component), 'text-danger'],
-    \local_catquizlab\local\environment::adaptivequiz_available()
-        ? [get_string('env:adaptivequizfound', $component), 'text-success']
-        : [get_string('env:adaptivequizmissing', $component), 'text-danger'],
-];
-$envhtml = '';
-foreach ($envitems as [$text, $class]) {
-    $envhtml .= html_writer::div(s($text), $class);
-}
-echo $OUTPUT->heading(get_string('manage:environment', $component), 4);
-echo html_writer::div($envhtml, 'mb-4');
-
-// Whether the master switch is on. Provisioning and runs stay inert while off.
-if (!get_config($component, 'enabled')) {
-    echo $OUTPUT->notification(get_string('manage:disabled', $component), 'warning');
-}
-
-// The experiments defined so far.
-echo $OUTPUT->heading(get_string('manage:experiments', $component), 4);
-
-$experiments = $DB->get_records('local_catquizlab_experiment', null, 'timemodified DESC');
-$statusmap = [
-    \local_catquizlab\local\registry::STATUS_DRAFT     => get_string('status:draft', $component),
-    \local_catquizlab\local\registry::STATUS_SCHEDULED => get_string('status:scheduled', $component),
-    \local_catquizlab\local\registry::STATUS_RUNNING   => get_string('status:running', $component),
-    \local_catquizlab\local\registry::STATUS_FINISHED  => get_string('status:finished', $component),
-    \local_catquizlab\local\registry::STATUS_FAILED    => get_string('status:failed', $component),
+    environment::catquiz_available()
+        ? ['text' => get_string('env:catquizfound', $component), 'class' => 'text-success']
+        : ['text' => get_string('env:catquizmissing', $component), 'class' => 'text-danger'],
+    environment::adaptivequiz_available()
+        ? ['text' => get_string('env:adaptivequizfound', $component), 'class' => 'text-success']
+        : ['text' => get_string('env:adaptivequizmissing', $component), 'class' => 'text-danger'],
 ];
 
-if (!$experiments) {
-    echo $OUTPUT->notification(get_string('manage:noexperiments', $component), 'info');
-} else {
-    $table = new html_table();
-    $table->head = [
-        get_string('manage:col_name', $component),
-        get_string('manage:col_tier', $component),
-        get_string('manage:col_status', $component),
-        get_string('manage:col_runs', $component),
+// Experiments defined so far, with their run counts.
+$experimentrows = [];
+foreach ($DB->get_records('local_catquizlab_experiment', null, 'timemodified DESC') as $experiment) {
+    $experimentrows[] = [
+        'name'   => $experiment->name,
+        'tier'   => $experiment->tier,
+        'status' => $statusmap[$experiment->status] ?? (string) $experiment->status,
+        'runs'   => registry::count_runs($experiment->id),
     ];
-    $table->attributes['class'] = 'generaltable';
-    foreach ($experiments as $experiment) {
-        $table->data[] = [
-            format_string($experiment->name),
-            s($experiment->tier),
-            $statusmap[$experiment->status] ?? (string) $experiment->status,
-            \local_catquizlab\local\registry::count_runs($experiment->id),
-        ];
-    }
-    echo html_writer::table($table);
 }
 
-// Run registry: the runs the expanded sweeps produced, newest first.
-echo $OUTPUT->heading(get_string('manage:runs', $component), 4);
-
-$statussummary = \local_catquizlab\local\registry::global_status_summary();
-if ($statussummary !== []) {
-    $parts = [];
-    foreach ($statussummary as $status => $count) {
-        $parts[] = ($statusmap[$status] ?? (string) $status) . ': ' . $count;
-    }
-    echo html_writer::div(implode(' · ', $parts), 'text-muted mb-2');
+// Run registry: a status summary plus the most recent runs.
+$summaryparts = [];
+foreach (registry::global_status_summary() as $status => $count) {
+    $summaryparts[] = ($statusmap[$status] ?? (string) $status) . ': ' . $count;
 }
-
-$runs = \local_catquizlab\local\registry::recent_runs(100);
-if (!$runs) {
-    echo $OUTPUT->notification(get_string('manage:noruns', $component), 'info');
-} else {
-    $runtable = new html_table();
-    $runtable->head = [
-        get_string('manage:col_experiment', $component),
-        get_string('manage:col_tier', $component),
-        get_string('manage:col_cell', $component),
-        get_string('manage:col_replication', $component),
-        get_string('manage:col_seed', $component),
-        get_string('manage:col_status', $component),
+$runrows = [];
+foreach (registry::recent_runs(100) as $run) {
+    $runrows[] = [
+        'experiment'  => $run->experimentname,
+        'tier'        => $run->tier,
+        'cell'        => $run->cellkey,
+        'replication' => $run->replication,
+        'seed'        => $run->seed,
+        'status'      => $statusmap[$run->status] ?? (string) $run->status,
     ];
-    $runtable->attributes['class'] = 'generaltable';
-    foreach ($runs as $run) {
-        $runtable->data[] = [
-            format_string($run->experimentname),
-            s($run->tier),
-            s($run->cellkey),
-            $run->replication,
-            $run->seed,
-            $statusmap[$run->status] ?? (string) $run->status,
-        ];
-    }
-    echo html_writer::table($runtable);
 }
 
-// The create/edit surface is not wired yet; be explicit about it rather than
-// showing a dead button.
-echo html_writer::div(get_string('manage:createhint', $component), 'alert alert-secondary mt-3');
+$templatecontext = [
+    'intro'       => get_string('manage:intro', $component),
+    'disabled'    => !get_config($component, 'enabled'),
+    'environment' => ['items' => $envitems],
+    'experiments' => [
+        'hasany' => $experimentrows !== [],
+        'rows'   => $experimentrows,
+    ],
+    'runs'        => [
+        'hasany'     => $runrows !== [],
+        'hassummary' => $summaryparts !== [],
+        'summary'    => implode(' · ', $summaryparts),
+        'rows'       => $runrows,
+    ],
+];
 
+echo $OUTPUT->header();
+echo $OUTPUT->heading(get_string('manage:heading', $component));
+echo $OUTPUT->render_from_template('local_catquizlab/manage', $templatecontext);
 echo $OUTPUT->footer();

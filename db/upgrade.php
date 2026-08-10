@@ -88,5 +88,25 @@ function xmldb_local_catquizlab_upgrade($oldversion): bool {
         upgrade_plugin_savepoint(true, 2026081001, 'local', 'catquizlab');
     }
 
+    if ($oldversion < 2026081011) {
+        // E2.4: a run records the course its simulated users are enrolled in and
+        // the adaptivequiz CAT test's course-module id.
+        $table = new xmldb_table('local_catquizlab_run');
+
+        $courseid = new xmldb_field('courseid', XMLDB_TYPE_INTEGER, '10', null, null, null, null, 'manifestjson');
+        if (!$dbman->field_exists($table, $courseid)) {
+            $dbman->add_field($table, $courseid);
+        }
+        $testcmid = new xmldb_field('testcmid', XMLDB_TYPE_INTEGER, '10', null, null, null, null, 'courseid');
+        if (!$dbman->field_exists($table, $testcmid)) {
+            $dbman->add_field($table, $testcmid);
+        }
+
+        $key = new xmldb_key('courseid', XMLDB_KEY_FOREIGN, ['courseid'], 'course', ['id']);
+        $dbman->add_key($table, $key);
+
+        upgrade_plugin_savepoint(true, 2026081011, 'local', 'catquizlab');
+    }
+
     return true;
 }

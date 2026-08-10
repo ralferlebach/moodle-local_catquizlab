@@ -165,6 +165,9 @@ jobs:
       - name: PHPDoc check
         run: moodle-plugin-ci phpdoc --max-warnings 0
 
+      - name: Mustache templates
+        run: moodle-plugin-ci mustache
+
       - name: Validate plugin structure
         run: moodle-plugin-ci validate
 

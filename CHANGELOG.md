@@ -6,7 +6,98 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
-## [0.1.9] — 2026-08-10
+## [0.1.13] — 2026-08-10
+
+Attempt scheduling (E3.1).
+
+### Added
+- **Attempt scheduler** `classes/local/attempt_scheduler.php` and its ad-hoc task
+  `classes/task/schedule_attempts.php` (E3.1): for a run, the scheduler inserts
+  one queued attempt row per provisioned person (skipping persons without a
+  Moodle user and any already scheduled) and marks the run "scheduled". The timed
+  ad-hoc task carries the run id in its custom data, respects the master switch
+  (does nothing while runs are disabled), and calls the scheduler when cron runs.
+  Pure lab-store/core-task work — no engine, no worker started here; the
+  collect/execute steps act on the queued rows. Idempotent. Covered by
+  `attempt_scheduler_test.php`.
+
+- `version.php`: 2026081011 → **2026081012**, release 0.1.12 → **0.1.13**. No new
+  upgrade step (code-only round; the attempt table already exists).
+
+---
+
+Course provisioning and enrolment (E2.4, core half).
+
+### Added
+- **Course provisioner** `classes/local/course_provisioner.php` (E2.4): for a run
+  it resolves the course — an existing one when specified, otherwise a new hidden
+  course — enrols the run's provisioned users as students, and records the course
+  on the run (2.6.C). Core-only (course + enrolment APIs), so it runs on any
+  Moodle; creating the adaptivequiz CAT test in that course needs the host
+  activity and is the engine-side follow-up (it will fill `run.testcmid`).
+  Idempotent. Covered by `course_provisioner_test.php`.
+
+### Changed
+- **Schema:** `local_catquizlab_run` gains `courseid` (foreign key to course, the
+  course the run's users are enrolled in) and `testcmid` (the adaptivequiz test's
+  course-module id, filled later). `db/upgrade.php` adds both with a savepoint.
+- `version.php`: 2026081010 → **2026081011**, release 0.1.11 → **0.1.12**. The
+  bump and upgrade step are required by the schema change.
+
+---
+
+Management page moved to a Mustache template with collapsible sections.
+
+### Changed
+- **`index.php` now renders from a Mustache template** instead of building HTML
+  in PHP. The new `templates/manage.mustache` presents the environment,
+  experiments and runs as **collapsible sections** using native
+  `<details>`/`<summary>` (open by default) — accessible, no JavaScript, and
+  free of the Bootstrap 4-vs-5 differences between Moodle 4.5 and 5.x. `index.php`
+  now only assembles a template context; markup lives in the template. Table
+  cells are Mustache-escaped, and labels come from `{{#str}}`.
+- CI: added a `moodle-plugin-ci mustache` lint step, so the template is checked
+  on every run. Locally it is covered by `make mustache` (via moodle-plugin-ci
+  when present).
+
+- `version.php`: 2026081009 → **2026081010**, release 0.1.10 → **0.1.11**. No new
+  upgrade step (code/template-only round).
+
+---
+
+Makefile fixes (screen clear + resilient PHPUnit), user provisioning (E2.3
+part 2), and the privacy provider upgrade that goes with it.
+
+### Fixed
+- **`makefile`: `make check` no longer clears the screen / PHPUnit aborted on a
+  stale env.** Restored `clear` as the first prerequisite of `all/fix/check/
+  check-static/ci` (with completion echoes) like the mod_vimipad original, so
+  the terminal is cleared first again. The `phpunit` target now mirrors the
+  original's resilience: it skips cleanly when `phpunit_dataroot` is not
+  configured, and **auto-reinitialises** the test environment
+  (`php admin/tool/phpunit/cli/init.php`) when it detects
+  "initialised for different version" instead of failing.
+
+### Added
+- **User provisioner** `classes/local/user_provisioner.php` (E2.3, part 2): for
+  a run's persons without a linked user it creates a real Moodle user via the
+  core user API (2.6.B), records `person.moodleuserid`, and optionally gathers
+  them into a system cohort. Usernames and names derive from the naming-engine
+  label, so users trace back to their ground truth. Core-only (no engine); course
+  enrolment / CAT-test binding and login credentials are separate later steps.
+  Idempotent. Covered by `user_provisioner_test.php`.
+
+### Changed
+- **Privacy provider upgraded from null to a full metadata/request provider.**
+  Now that person rows link to real users, the provider declares the
+  `local_catquizlab_person` table and its user link, and implements
+  get_contexts_for_userid, get_users_in_context, export, and delete (per user,
+  per userlist, and for the whole system context) at the system context.
+  `privacy_test.php` rewritten accordingly; metadata language strings added.
+- `version.php`: 2026081008 → **2026081009**, release 0.1.9 → **0.1.10**. No new
+  upgrade step (code-only round).
+
+---
 
 Restored the full local check suite, and the pool mutator (E2.2).
 

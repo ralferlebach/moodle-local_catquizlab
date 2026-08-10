@@ -1,0 +1,153 @@
+{{!
+    This file is part of Moodle - http://moodle.org/
+
+    Moodle is free software: you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+    the Free Software Foundation, either version 3 of the License, or
+    (at your option) any later version.
+
+    Moodle is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+    GNU General Public License for more details.
+
+    You should have received a copy of the GNU General Public License
+    along with Moodle.  If not, see <http://www.gnu.org/licenses/>.
+}}
+{{!
+    @template local_catquizlab/manage
+
+    Management landing page of the CAT experiment suite. Renders the environment
+    status, the experiments and the runs, each in its own collapsible section
+    (native details/summary, open by default).
+
+    Context variables required for this template:
+    * intro string - introductory paragraph
+    * environment object - has items array of { text string, class string }
+    * disabled bool - true when the master switch is off
+    * experiments object - has hasany bool and rows array of { name, tier, status, runs }
+    * runs object - has hasany bool, hassummary bool, summary string and rows array of
+      { experiment, tier, cell, replication, seed, status }
+
+    Example context (json):
+    {
+        "intro": "Prepare, run and evaluate DPF-based adaptive tests.",
+        "environment": {
+            "items": [
+                { "text": "CAT engine local_catquiz: installed.", "class": "text-success" },
+                { "text": "Host activity mod_adaptivequiz: installed.", "class": "text-success" }
+            ]
+        },
+        "disabled": true,
+        "experiments": {
+            "hasany": true,
+            "rows": [
+                { "name": "Baseline", "tier": "baseline", "status": "Draft", "runs": 8 }
+            ]
+        },
+        "runs": {
+            "hasany": true,
+            "hassummary": true,
+            "summary": "Draft: 8",
+            "rows": [
+                {
+                    "experiment": "Baseline", "tier": "baseline",
+                    "cell": "variant=ideal", "replication": 1, "seed": 12345, "status": "Draft"
+                }
+            ]
+        }
+    }
+}}
+<div class="local-catquizlab-manage">
+    <p class="text-muted mb-4">{{intro}}</p>
+
+    {{#environment}}
+        <details open class="local-catquizlab-section mb-3">
+            <summary class="local-catquizlab-summary"><span class="h4 mb-0">{{#str}}manage:environment, local_catquizlab{{/str}}</span></summary>
+            <div class="mt-2">
+                {{#items}}
+                    <div class="{{class}}">{{text}}</div>
+                {{/items}}
+            </div>
+        </details>
+    {{/environment}}
+
+    {{#disabled}}
+        <div class="alert alert-warning">{{#str}}manage:disabled, local_catquizlab{{/str}}</div>
+    {{/disabled}}
+
+    {{#experiments}}
+        <details open class="local-catquizlab-section mb-3">
+            <summary class="local-catquizlab-summary"><span class="h4 mb-0">{{#str}}manage:experiments, local_catquizlab{{/str}}</span></summary>
+            <div class="mt-2">
+                {{#hasany}}
+                    <table class="generaltable">
+                        <thead>
+                            <tr>
+                                <th scope="col">{{#str}}manage:col_name, local_catquizlab{{/str}}</th>
+                                <th scope="col">{{#str}}manage:col_tier, local_catquizlab{{/str}}</th>
+                                <th scope="col">{{#str}}manage:col_status, local_catquizlab{{/str}}</th>
+                                <th scope="col">{{#str}}manage:col_runs, local_catquizlab{{/str}}</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {{#rows}}
+                                <tr>
+                                    <td>{{name}}</td>
+                                    <td>{{tier}}</td>
+                                    <td>{{status}}</td>
+                                    <td>{{runs}}</td>
+                                </tr>
+                            {{/rows}}
+                        </tbody>
+                    </table>
+                {{/hasany}}
+                {{^hasany}}
+                    <div class="alert alert-info">{{#str}}manage:noexperiments, local_catquizlab{{/str}}</div>
+                {{/hasany}}
+            </div>
+        </details>
+    {{/experiments}}
+
+    {{#runs}}
+        <details open class="local-catquizlab-section mb-3">
+            <summary class="local-catquizlab-summary"><span class="h4 mb-0">{{#str}}manage:runs, local_catquizlab{{/str}}</span></summary>
+            <div class="mt-2">
+                {{#hassummary}}
+                    <div class="text-muted mb-2">{{summary}}</div>
+                {{/hassummary}}
+                {{#hasany}}
+                    <table class="generaltable">
+                        <thead>
+                            <tr>
+                                <th scope="col">{{#str}}manage:col_experiment, local_catquizlab{{/str}}</th>
+                                <th scope="col">{{#str}}manage:col_tier, local_catquizlab{{/str}}</th>
+                                <th scope="col">{{#str}}manage:col_cell, local_catquizlab{{/str}}</th>
+                                <th scope="col">{{#str}}manage:col_replication, local_catquizlab{{/str}}</th>
+                                <th scope="col">{{#str}}manage:col_seed, local_catquizlab{{/str}}</th>
+                                <th scope="col">{{#str}}manage:col_status, local_catquizlab{{/str}}</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {{#rows}}
+                                <tr>
+                                    <td>{{experiment}}</td>
+                                    <td>{{tier}}</td>
+                                    <td>{{cell}}</td>
+                                    <td>{{replication}}</td>
+                                    <td>{{seed}}</td>
+                                    <td>{{status}}</td>
+                                </tr>
+                            {{/rows}}
+                        </tbody>
+                    </table>
+                {{/hasany}}
+                {{^hasany}}
+                    <div class="alert alert-info">{{#str}}manage:noruns, local_catquizlab{{/str}}</div>
+                {{/hasany}}
+            </div>
+        </details>
+    {{/runs}}
+
+    <div class="alert alert-secondary mt-3">{{#str}}manage:createhint, local_catquizlab{{/str}}</div>
+</div>

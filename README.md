@@ -115,6 +115,10 @@ as above.
     classes/local/person_generator.php  seed-deterministic ground-truth profiles (E2.3)
     classes/local/pool_planner.php  ideal-pool item blueprint (E2.1)
     classes/local/pool_mutator.php  deterministic pool variants (E2.2)
+    classes/local/user_provisioner.php  create Moodle users from profiles (E2.3)
+    classes/local/course_provisioner.php  course + enrolment per run (E2.4)
+    classes/local/attempt_scheduler.php  queue a run's attempts (E3.1)
+    classes/task/schedule_attempts.php   ad-hoc task wrapping the scheduler
     cli/sweep.php                   CLI: expand a sweep spec, persist or list runs
     classes/external/*.php          five web-service functions (oracle, jobs, hub)
     classes/privacy/provider.php    null provider (stub stores no personal data)
@@ -123,6 +127,7 @@ as above.
     db/services.php                 worker and hub web services
     db/access.php                   manage/view/worker/hubtransfer capabilities
     settings.php                    settings page + Reports entry registration
+    templates/manage.mustache       management page (collapsible sections)
     worker/                         Puppeteer worker (stub) — ships with the plugin
     tests/                          PHPUnit, generator, Behat
     docs/design/                    architecture (Rev. 2) and backlog E0–E7

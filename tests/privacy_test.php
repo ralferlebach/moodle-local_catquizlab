@@ -25,26 +25,96 @@
 namespace local_catquizlab;
 
 use local_catquizlab\privacy\provider;
+use core_privacy\local\metadata\collection;
+use core_privacy\local\request\approved_contextlist;
+use core_privacy\local\request\userlist;
+use core_privacy\local\request\writer;
 
 /**
  * Privacy provider tests.
  *
  * @covers \local_catquizlab\privacy\provider
  */
-final class privacy_test extends \advanced_testcase {
+final class privacy_test extends \core_privacy\tests\provider_testcase {
     /**
-     * The provider is a null provider and its reason resolves to a real string.
+     * Create a run with one person linked to the given user.
+     *
+     * @param \stdClass $user The Moodle user to link.
+     * @return void
+     */
+    protected function link_person(\stdClass $user): void {
+        /** @var \local_catquizlab_generator $generator */
+        $generator = $this->getDataGenerator()->get_plugin_generator('local_catquizlab');
+        $run = $generator->create_run();
+        $generator->create_person([
+            'runid'        => $run->id,
+            'moodleuserid' => $user->id,
+            'stratum'      => 'conforming',
+        ]);
+    }
+
+    /**
+     * The metadata declares the person table.
      *
      * @return void
      */
-    public function test_null_provider_reason(): void {
-        $this->assertInstanceOf(\core_privacy\local\metadata\null_provider::class, new provider());
+    public function test_get_metadata(): void {
+        $collection = provider::get_metadata(new collection('local_catquizlab'));
+        $this->assertNotEmpty($collection->get_collection());
+    }
 
-        $reason = provider::get_reason();
-        $this->assertSame('privacy:metadata', $reason);
+    /**
+     * A linked user has data in the system context, and appears in the userlist.
+     *
+     * @return void
+     */
+    public function test_contexts_and_userlist(): void {
+        $this->resetAfterTest();
+        $user = $this->getDataGenerator()->create_user();
+        $this->link_person($user);
 
-        $resolved = get_string($reason, 'local_catquizlab');
-        $this->assertNotEmpty($resolved);
-        $this->assertStringNotContainsString('[[', $resolved, 'The privacy reason string must exist in the language pack.');
+        $contextids = provider::get_contexts_for_userid($user->id)->get_contextids();
+        $this->assertContains(\context_system::instance()->id, $contextids);
+
+        $userlist = new userlist(\context_system::instance(), 'local_catquizlab');
+        provider::get_users_in_context($userlist);
+        $this->assertContains((int) $user->id, $userlist->get_userids());
+    }
+
+    /**
+     * Export writes the person data for the user.
+     *
+     * @return void
+     */
+    public function test_export(): void {
+        $this->resetAfterTest();
+        $user = $this->getDataGenerator()->create_user();
+        $this->link_person($user);
+
+        $approved = new approved_contextlist($user, 'local_catquizlab', [\context_system::instance()->id]);
+        provider::export_user_data($approved);
+
+        $this->assertTrue(writer::with_context(\context_system::instance())->has_any_data());
+    }
+
+    /**
+     * Deleting for a user removes that user's person rows only.
+     *
+     * @return void
+     */
+    public function test_delete_for_user(): void {
+        global $DB;
+        $this->resetAfterTest();
+
+        $user = $this->getDataGenerator()->create_user();
+        $other = $this->getDataGenerator()->create_user();
+        $this->link_person($user);
+        $this->link_person($other);
+
+        $approved = new approved_contextlist($user, 'local_catquizlab', [\context_system::instance()->id]);
+        provider::delete_data_for_user($approved);
+
+        $this->assertFalse($DB->record_exists('local_catquizlab_person', ['moodleuserid' => $user->id]));
+        $this->assertTrue($DB->record_exists('local_catquizlab_person', ['moodleuserid' => $other->id]));
     }
 }
