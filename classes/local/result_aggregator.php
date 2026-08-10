@@ -49,9 +49,8 @@ class result_aggregator {
      */
     public static function aggregate(int $runid, ?int $poolsize = null): int {
         $attempts = self::collect_attempts($runid);
-        $summary = metrics::summarise($attempts, $poolsize);
 
-        return self::persist_results($runid, $summary);
+        return self::persist_results($runid, $attempts, $poolsize);
     }
 
     /**
@@ -77,15 +76,28 @@ class result_aggregator {
     }
 
     /**
+     * Queue the ad-hoc task that aggregates a run's results.
+     *
+     * @param int $runid The run to aggregate.
+     * @param int|null $poolsize Total pool items, for exposure (optional).
+     * @return void
+     */
+    public static function queue(int $runid, ?int $poolsize = null): void {
+        $task = new \local_catquizlab\task\aggregate_results();
+        $task->set_custom_data(['runid' => $runid, 'poolsize' => $poolsize]);
+        \core\task\manager::queue_adhoc_task($task, true);
+    }
+
+    /**
      * Build the metrics-ready attempt list from a run's traces.
      *
      * @param int $runid The run.
-     * @return array Attempts with truetheta, esttheta, se, nitems and items.
+     * @return array Attempts with truetheta, esttheta, se, nitems, items and stratum.
      */
     protected static function collect_attempts(int $runid): array {
         global $DB;
 
-        $sql = "SELECT a.id, a.tracejson, p.profilejson
+        $sql = "SELECT a.id, a.tracejson, p.profilejson, p.stratum
                   FROM {local_catquizlab_attempt} a
                   JOIN {local_catquizlab_person} p ON p.id = a.personid
                  WHERE a.runid = :runid AND a.tracejson IS NOT NULL";
@@ -106,24 +118,49 @@ class result_aggregator {
                 'se'        => isset($trace['finalse']) ? (float) $trace['finalse'] : null,
                 'nitems'    => count($items),
                 'items'     => $items,
+                'stratum'   => (string) $row->stratum,
             ];
         }
         return $attempts;
     }
 
     /**
-     * Replace the run-scope result rows with the given metric summary.
+     * Replace a run's result rows with run-scope and per-stratum-scope metrics.
      *
      * @param int $runid The run.
-     * @param array $summary The {@see metrics::summarise()} output.
+     * @param array $attempts The run's attempts (each carrying a 'stratum').
+     * @param int|null $poolsize Total pool items, for exposure.
      * @return int The number of rows written.
      */
-    protected static function persist_results(int $runid, array $summary): int {
+    protected static function persist_results(int $runid, array $attempts, ?int $poolsize): int {
         global $DB;
 
         $now = time();
-        $DB->delete_records('local_catquizlab_result', ['runid' => $runid, 'scope' => 'run']);
+        $DB->delete_records('local_catquizlab_result', ['runid' => $runid]);
 
+        $count = self::write_scope($runid, 'run', metrics::summarise($attempts, $poolsize), $now);
+
+        $bystratum = [];
+        foreach ($attempts as $attempt) {
+            $bystratum[$attempt['stratum'] ?? 'unknown'][] = $attempt;
+        }
+        foreach ($bystratum as $stratum => $group) {
+            $count += self::write_scope($runid, 'stratum:' . $stratum, metrics::summarise($group, $poolsize), $now);
+        }
+
+        return $count;
+    }
+
+    /**
+     * Write the scalar metric rows (plus an exposure detail row) for one scope.
+     *
+     * @param int $runid The run.
+     * @param string $scope The aggregation scope (run, stratum:name).
+     * @param array $summary The {@see metrics::summarise()} output.
+     * @param int $now Timestamp.
+     * @return int The number of rows written.
+     */
+    protected static function write_scope(int $runid, string $scope, array $summary, int $now): int {
         $recovery = $summary['abilityrecovery'];
         $efficiency = $summary['efficiency'];
         $scalars = [
@@ -140,21 +177,19 @@ class result_aggregator {
 
         $count = 0;
         foreach ($scalars as $metric => $value) {
-            self::write_result($runid, $metric, $value, null, $now);
+            self::write_result($runid, $metric, $scope, $value, null, $now);
             $count++;
         }
-
-        // Exposure is a structure; keep the max rate as the scalar value.
         self::write_result(
             $runid,
             'exposure',
+            $scope,
             $summary['exposure']['maxrate'],
             json_encode($summary['exposure'], JSON_UNESCAPED_SLASHES),
             $now
         );
-        $count++;
 
-        return $count;
+        return $count + 1;
     }
 
     /**
@@ -162,20 +197,28 @@ class result_aggregator {
      *
      * @param int $runid The run.
      * @param string $metric The metric key.
+     * @param string $scope The aggregation scope.
      * @param float|int|null $value The scalar value.
      * @param string|null $detailjson Optional structured detail.
      * @param int $now Timestamp.
      * @return void
      */
-    protected static function write_result(int $runid, string $metric, $value, ?string $detailjson, int $now): void {
+    protected static function write_result(
+        int $runid,
+        string $metric,
+        string $scope,
+        $value,
+        ?string $detailjson,
+        int $now
+    ): void {
         global $DB;
 
         $DB->insert_record('local_catquizlab_result', (object) [
-            'runid'      => $runid,
-            'metric'     => $metric,
-            'scope'      => 'run',
-            'value'      => $value === null ? null : $value,
-            'detailjson' => $detailjson,
+            'runid'       => $runid,
+            'metric'      => $metric,
+            'scope'       => $scope,
+            'value'       => $value === null ? null : $value,
+            'detailjson'  => $detailjson,
             'timecreated' => $now,
         ]);
     }

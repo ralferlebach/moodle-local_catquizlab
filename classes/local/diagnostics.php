@@ -154,6 +154,88 @@ class diagnostics {
     }
 
     /**
+     * SE-aware deficit labels: a subscale is a deficit when its value lies more
+     * than `tolerance` standard errors below the reference.
+     *
+     * @param array $values The per-subscale values.
+     * @param float $reference The reference ability (e.g. the person's global level or 0).
+     * @param array $ses The standard error per subscale, aligned with $values.
+     * @param float $tolerance The tolerance in standard errors (1.0, 2.0, ...).
+     * @return array Boolean deficit labels aligned with $values.
+     */
+    public static function deficit_labels_se(array $values, float $reference, array $ses, float $tolerance = 1.0): array {
+        $labels = [];
+        foreach ($values as $key => $value) {
+            $se = (float) ($ses[$key] ?? 0.0);
+            $labels[$key] = ((float) $value) < ($reference - $tolerance * $se);
+        }
+        return $labels;
+    }
+
+    /**
+     * Share of subscales whose estimate lies within `tolerance` standard errors of the truth.
+     *
+     * @param array $truevalues True values.
+     * @param array $estvalues Estimated values, aligned.
+     * @param array $ses Standard errors, aligned.
+     * @param float $tolerance The tolerance in standard errors.
+     * @return array n, within (count) and the fraction.
+     */
+    public static function agreement_within_se(array $truevalues, array $estvalues, array $ses, float $tolerance = 1.0): array {
+        $truevalues = array_values($truevalues);
+        $estvalues = array_values($estvalues);
+        $ses = array_values($ses);
+        $n = min(count($truevalues), count($estvalues), count($ses));
+
+        $within = 0;
+        for ($i = 0; $i < $n; $i++) {
+            if (abs((float) $estvalues[$i] - (float) $truevalues[$i]) <= $tolerance * (float) $ses[$i]) {
+                $within++;
+            }
+        }
+
+        return [
+            'n'         => $n,
+            'within'    => $within,
+            'fraction'  => $n > 0 ? round($within / $n, 6) : 0.0,
+            'tolerance' => $tolerance,
+        ];
+    }
+
+    /**
+     * Precision@k and recall@k of the estimated deficit ranking against a
+     * variable relevant set (the true deficit labels).
+     *
+     * @param array $relevantlabels Boolean true-deficit labels per subscale.
+     * @param array $estvalues Estimated values, aligned; lower = more deficient.
+     * @param int $k The cut-off for the retrieved set.
+     * @return array k, hits, relevant, retrieved, precision, recall.
+     */
+    public static function precision_recall_at_k(array $relevantlabels, array $estvalues, int $k): array {
+        $relevantlabels = array_values($relevantlabels);
+        $relevant = [];
+        foreach ($relevantlabels as $position => $flag) {
+            if (!empty($flag)) {
+                $relevant[] = $position;
+            }
+        }
+        $retrieved = array_slice(self::ascending_indices($estvalues), 0, max(0, $k));
+        $hits = count(array_intersect($relevant, $retrieved));
+
+        $r = count($relevant);
+        $kk = count($retrieved);
+
+        return [
+            'k'         => $k,
+            'hits'      => $hits,
+            'relevant'  => $r,
+            'retrieved' => $kk,
+            'precision' => $kk > 0 ? round($hits / $kk, 6) : null,
+            'recall'    => $r > 0 ? round($hits / $r, 6) : null,
+        ];
+    }
+
+    /**
      * Count true/false positives and negatives.
      *
      * @param array $truedeficit True labels.

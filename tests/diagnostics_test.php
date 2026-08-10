@@ -99,6 +99,57 @@ final class diagnostics_test extends \advanced_testcase {
     }
 
     /**
+     * SE-aware deficit labels only flag values beyond the standard-error band.
+     *
+     * @return void
+     */
+    public function test_deficit_labels_se(): void {
+        $values = [-1.0, -0.2, 0.5];
+        $ses = [0.3, 0.3, 0.3];
+
+        // At 1 SE only the clear deficit (-1.0 < -0.3) is flagged.
+        $this->assertSame([true, false, false], diagnostics::deficit_labels_se($values, 0.0, $ses, 1.0));
+        // At 0.5 SE the borderline case (-0.2 < -0.15) is flagged too.
+        $this->assertSame([true, true, false], diagnostics::deficit_labels_se($values, 0.0, $ses, 0.5));
+    }
+
+    /**
+     * Agreement counts subscales recovered within the SE tolerance.
+     *
+     * @return void
+     */
+    public function test_agreement_within_se(): void {
+        $true = [-1.0, 0.0, 1.0];
+        $est = [-1.2, 0.1, 1.5];
+        $ses = [0.3, 0.3, 0.3];
+
+        $one = diagnostics::agreement_within_se($true, $est, $ses, 1.0);
+        $this->assertSame(2, $one['within']);
+        $this->assertEqualsWithDelta(2 / 3, $one['fraction'], 1e-6);
+
+        $two = diagnostics::agreement_within_se($true, $est, $ses, 2.0);
+        $this->assertSame(3, $two['within']);
+    }
+
+    /**
+     * Precision@k and recall@k use a variable relevant set.
+     *
+     * @return void
+     */
+    public function test_precision_recall_at_k(): void {
+        $relevant = [true, true, false, false];
+        $est = [-2.0, 0.5, -1.5, 0.9];
+
+        $atk2 = diagnostics::precision_recall_at_k($relevant, $est, 2);
+        $this->assertSame(1, $atk2['hits']);
+        $this->assertEqualsWithDelta(0.5, $atk2['precision'], 1e-9);
+        $this->assertEqualsWithDelta(0.5, $atk2['recall'], 1e-9);
+
+        $atk3 = diagnostics::precision_recall_at_k($relevant, $est, 3);
+        $this->assertEqualsWithDelta(1.0, $atk3['recall'], 1e-9);
+    }
+
+    /**
      * Deficit labels apply the threshold, and a clean detector scores perfectly.
      *
      * @return void

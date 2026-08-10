@@ -88,4 +88,5 @@ $string['status:running'] = 'Läuft';
 $string['status:scheduled'] = 'Geplant';
 $string['sweep:emptyfactor'] = 'Sweep-Faktor „{$a}" hat keine Stufen.';
 $string['sweep:unknownfactor'] = 'Unbekannter Sweep-Faktor „{$a}".';
+$string['task:aggregateresults'] = 'Ergebnisse eines CAT-Experimentlaufs aggregieren';
 $string['task:scheduleattempts'] = 'Attempts eines CAT-Experimentlaufs planen';

@@ -123,7 +123,8 @@ as above.
     classes/local/metrics.php            evaluation metrics vs ground truth (E4)
     classes/local/diagnostics.php        deficit ranking + detection measures (E4.2)
     classes/local/exporter.php           serialise data to CSV/JSON/XML (E6)
-    classes/local/result_aggregator.php  traces -> stored metric rows (E4/E6 bridge)
+    classes/local/result_aggregator.php  traces -> stored metric rows, run+stratum (E4.4)
+    classes/task/aggregate_results.php   async aggregation task (E4.4)
     cli/sweep.php                   CLI: expand a sweep spec, persist or list runs
     classes/external/*.php          five web-service functions (oracle, jobs, hub)
     classes/privacy/provider.php    null provider (stub stores no personal data)

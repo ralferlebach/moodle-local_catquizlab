@@ -300,6 +300,18 @@ int-vs-DB-String-Vergleiche geprüft — keine offen (verbleibende assertSame ge
 DB-Werte vergleichen String↔String). Versionsbump → 2026081019 / 0.1.20 (reine
 Test-Fix-Runde).
 
+## Phase 24 — E4.2 & E4.4 vervollständigt + Statusübersicht (Release 0.1.21)
+E4.2 abgeschlossen (`diagnostics.php`): `deficit_labels_se` (Defizit erst jenseits
+des k·SE-Bandes → 1·SE/2·SE), `agreement_within_se` (Anteil je k·SE
+wiedergewonnener Subskalen), `precision_recall_at_k` (Precision@k/Recall@k gegen
+variable Relevanzmenge). E4.4 abgeschlossen: `result_aggregator.php` schreibt
+zusätzlich Stratum-Scopes (`stratum:<name>`), neuer Adhoc-Task
+`task/aggregate_results` + `queue()` hält große Auswertungen vom Web-Request fern;
+die `result`-Tabelle ist der persistente Ergebnis-Cache. Neu: `docs/design/status.md`
+(Erledigt/Offen je Epic, Meilensteine, CI-tauglich vs. engine-abhängig). Tests
+erweitert (`diagnostics_test.php`, `result_aggregator_test.php`). Backlog 4.1/4.2/4.4
+auf ✅. Versionsbump → 2026081020 / 0.1.21 (reiner Code, kein Upgrade-Schritt).
+
 ## Verifikationsstand
 Container: PHP-Syntax, install.xml, YAML, Worker-JS grün; PHPCS (Moodle) 0/0
 **und PHPMD ohne Verstöße** über alle PHP-Dateien; höchster Upgrade-Savepoint ≤

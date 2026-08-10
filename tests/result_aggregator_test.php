@@ -27,6 +27,7 @@ namespace local_catquizlab;
 use local_catquizlab\local\result_aggregator;
 use local_catquizlab\local\person_generator;
 use local_catquizlab\local\attempt_scheduler;
+use local_catquizlab\task\aggregate_results;
 
 /**
  * Result aggregator tests.
@@ -142,6 +143,88 @@ final class result_aggregator_test extends \advanced_testcase {
 
         $this->assertSame($first, $second);
         $this->assertSame($after1, $after2);
+    }
+
+    /**
+     * Aggregation also writes per-stratum scopes alongside the run scope.
+     *
+     * @return void
+     */
+    public function test_aggregate_per_stratum(): void {
+        global $DB;
+        $this->resetAfterTest();
+        $this->setAdminUser();
+
+        /** @var \local_catquizlab_generator $generator */
+        $generator = $this->getDataGenerator()->get_plugin_generator('local_catquizlab');
+        $run = $generator->create_run();
+        $now = time();
+
+        foreach (['conforming' => 0.0, 'chaotic' => 1.0] as $stratum => $global) {
+            $person = $generator->create_person([
+                'runid'       => $run->id,
+                'stratum'     => $stratum,
+                'profilejson' => json_encode(['global' => $global]),
+            ]);
+            $DB->insert_record('local_catquizlab_attempt', (object) [
+                'runid'        => $run->id,
+                'personid'     => $person->id,
+                'status'       => attempt_scheduler::STATUS_COLLECTED,
+                'tracejson'    => json_encode(['finaltheta' => $global, 'finalse' => 0.3, 'items' => ['q1', 'q2']]),
+                'timecreated'  => $now,
+                'timemodified' => $now,
+            ]);
+        }
+
+        result_aggregator::aggregate($run->id);
+
+        $this->assertTrue($DB->record_exists(
+            'local_catquizlab_result',
+            ['runid' => $run->id, 'scope' => 'run', 'metric' => 'bias']
+        ));
+        $this->assertTrue($DB->record_exists(
+            'local_catquizlab_result',
+            ['runid' => $run->id, 'scope' => 'stratum:conforming', 'metric' => 'bias']
+        ));
+        $this->assertTrue($DB->record_exists(
+            'local_catquizlab_result',
+            ['runid' => $run->id, 'scope' => 'stratum:chaotic', 'metric' => 'bias']
+        ));
+
+        // Each stratum aggregates exactly its own attempt.
+        $n = $DB->get_field(
+            'local_catquizlab_result',
+            'value',
+            ['runid' => $run->id, 'scope' => 'stratum:chaotic', 'metric' => 'n']
+        );
+        $this->assertSame(1, (int) $n);
+    }
+
+    /**
+     * The ad-hoc task aggregates when queued and run.
+     *
+     * @return void
+     */
+    public function test_task_aggregates(): void {
+        global $DB;
+        $this->resetAfterTest();
+        $this->setAdminUser();
+
+        $runid = $this->run_with_traces(0.5);
+        result_aggregator::queue($runid);
+
+        $tasks = \core\task\manager::get_adhoc_tasks(aggregate_results::class);
+        $this->assertCount(1, $tasks);
+
+        $task = reset($tasks);
+        ob_start();
+        $task->execute();
+        ob_end_clean();
+
+        $this->assertTrue($DB->record_exists(
+            'local_catquizlab_result',
+            ['runid' => $runid, 'scope' => 'run', 'metric' => 'rmse']
+        ));
     }
 
     /**

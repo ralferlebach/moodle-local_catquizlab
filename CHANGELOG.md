@@ -6,7 +6,30 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
-## [0.1.20] — 2026-08-10
+## [0.1.21] — 2026-08-10
+
+Completed E4.2 (diagnostics) and E4.4 (async aggregation), plus a status overview.
+
+### Added
+- **E4.2 completed** in `classes/local/diagnostics.php`: `deficit_labels_se()`
+  (a subscale is a deficit only when it lies more than *k* standard errors below
+  the reference — the 1·SE/2·SE definition), `agreement_within_se()` (share of
+  subscales recovered within *k* SE), and `precision_recall_at_k()` (precision@k
+  and recall@k against a variable relevant set of true deficits). Covered by new
+  `diagnostics_test.php` cases.
+- **E4.4 completed**: `classes/local/result_aggregator.php` now writes **per-stratum**
+  result rows (`scope = stratum:<name>`) alongside the run scope, and a new ad-hoc
+  task `classes/task/aggregate_results.php` (with `result_aggregator::queue()`)
+  runs the aggregation off the web request so large evaluations cannot time out.
+  The `result` table serves as the persistent result cache. Covered by new
+  `result_aggregator_test.php` cases.
+- **`docs/design/status.md`**: a project status overview (done vs. open per epic,
+  milestones, and the CI-safe vs. engine-dependent split).
+
+- `version.php`: 2026081019 → **2026081020**, release 0.1.20 → **0.1.21**. No new
+  upgrade step (code-only round; the result table already exists).
+
+---
 
 CI fix (privacy test: int-vs-string id comparison).
 
