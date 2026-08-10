@@ -126,6 +126,7 @@ as above.
     classes/local/exporter.php           serialise data to CSV/JSON/XML (E6)
     classes/local/result_aggregator.php  traces -> stored metric rows, run+stratum (E4.4)
     classes/task/aggregate_results.php   async aggregation task (E4.4)
+    classes/local/attempt_collector.php  engine attempt -> lab trace (E3.5)
     cli/sweep.php                   CLI: expand a sweep spec, persist or list runs
     classes/external/*.php          five web-service functions (oracle, jobs, hub)
     classes/privacy/provider.php    null provider (stub stores no personal data)

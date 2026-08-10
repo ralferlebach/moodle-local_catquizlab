@@ -6,7 +6,28 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
-## [0.1.22] — 2026-08-10
+## [0.1.23] — 2026-08-10
+
+Attempt collector (E3.5) — engine trace into a lab trace.
+
+### Added
+- **Attempt collector** `classes/local/attempt_collector.php` (E3.5): after a
+  worker has played an attempt, `collect()` reads the finished attempt from the
+  engine tables — the adaptivequiz_attempt's question usage
+  (question_attempts / question_attempt_steps) for the played items and their
+  response fractions, and local_catquiz_attempts / local_catquiz_personparams for
+  the final ability estimate and standard error — and stores a compact
+  `attempt.tracejson` (finaltheta, finalse, items, responses, nitems, stopreason),
+  marking the attempt collected. The schema follows the Wunderbyte simulation
+  scripts. Reading engine tables needs the engine and the host activity, so
+  `collect()` returns null when either is absent (CI and stand-alone stay green);
+  the trace assembly `build_trace()` is pure and unit-tested. Covered by
+  `attempt_collector_test.php`.
+
+- `version.php`: 2026081021 → **2026081022**, release 0.1.22 → **0.1.23**. No new
+  upgrade step (the attempt table already carries tracejson/engineattemptid).
+
+---
 
 E2.5 run cleanup, and an outdated management-page hint fixed.
 

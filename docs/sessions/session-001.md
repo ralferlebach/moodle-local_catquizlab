@@ -324,6 +324,21 @@ Tests `run_cleanup_test.php` (Reset, Idempotenz, referenzierter Kurs bleibt,
 Run-Löschung; delete_course-Ausgabe gekapselt). Backlog E2.5 ✅. Versionsbump →
 2026081021 / 0.1.22 (reiner Code, kein Upgrade-Schritt).
 
+## Phase 26 — Attempt-Collector E3.5 (Release 0.1.23)
+Nutzer hat `go-clara.php`/`getit-horst.php` geliefert → echtes Engine-Schema.
+Daraus E3.5 schema-genau umgesetzt: `classes/local/attempt_collector.php`.
+`collect()` liest nach einem echten Attempt die Engine-Tabellen aus — die
+Question-Usage des adaptivequiz_attempt (question_attempts/question_attempt_steps
+für gespielte Items + Antwort-Fraktionen) sowie local_catquiz_attempts/
+local_catquiz_personparams (finale Fähigkeit + Standardfehler) — und speichert
+eine kompakte `attempt.tracejson` (finaltheta/finalse/items/responses/nitems/
+stopreason), Status→collected. Engine-Reads erfordern Engine + Host-Aktivität,
+daher liefert `collect()` null, wenn eine davon fehlt (CI/Stand-alone bleiben
+grün); die reine Trace-Zusammenstellung `build_trace()` ist testbar. Bestätigt
+nebenbei, dass `response_oracle` modellkonform ist (raschbirnbaum::likelihood).
+Tests `attempt_collector_test.php` (build_trace + Engine-Guard). Versionsbump →
+2026081022 / 0.1.23 (reiner Code, kein Upgrade-Schritt).
+
 ## Verifikationsstand
 Container: PHP-Syntax, install.xml, YAML, Worker-JS grün; PHPCS (Moodle) 0/0
 **und PHPMD ohne Verstöße** über alle PHP-Dateien; höchster Upgrade-Savepoint ≤
