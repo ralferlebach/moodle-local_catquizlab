@@ -109,6 +109,7 @@ as above.
     classes/local/environment.php   runtime detection of the CAT engine
     classes/local/manifest.php      run reproducibility manifest builder
     classes/local/experiment_definition.php  declarative experiment format + validator (E1.1)
+    classes/local/sweep.php         sweep expansion: spec -> runs (E1.2)
     classes/external/*.php          five web-service functions (oracle, jobs, hub)
     classes/privacy/provider.php    null provider (stub stores no personal data)
     db/install.xml                  lab-store schema (eight tables)

@@ -29,7 +29,7 @@ Gegenüber Rev. 1 entfallen: externe Analyse-Workbench (Python/R), Driver A (In-
 | # | Arbeitspaket | Hinweise |
 | --- | --- | --- |
 | 1.1 ✅ | Deklaratives Experimentformat (JSON) + Validierung: Modell, Pool-Variante, Stratum, Strategie, Budgets/SE-Ziele, R, Seeds, Timing-Profil der Tasks, **Kurs-/CAT-Test-Spezifikation** (referenzieren oder neu anlegen), **Namensregeln** (Personen, Items/Questions) und **Fragen-Templates** (Blanks + Zielparameter) | Timing-Profil neu wegen getimter Adhoc-Tasks; Kurse/Tests/Namen/Templates gem. Architektur 2.6 |
-| 1.2 | Sweep-Expansion mit Ausschlussregeln und fraktioniertem Design; Tier-Zuordnung (Baseline/Haupt/Robustheit/operativ) | Kapazitätsschätzung je Zelle (Attempts × erwartete Dauer) einblenden |
+| 1.2 ✅ | Sweep-Expansion mit Ausschlussregeln und fraktioniertem Design; Tier-Zuordnung (Baseline/Haupt/Robustheit/operativ) | Kapazitätsschätzung je Zelle (Attempts × erwartete Dauer) einblenden |
 | 1.3 ⏳ teilweise | Registry-UI: Verwaltungs-/Bearbeitungsseite `index.php` als Einstieg (Navbar-Button neben CATQUIZ via `*_render_navbar_output` **und** Website-Administration › Berichte › „CAT-Experimenten-Suite" via `admin_externalpage` unter `reports`), Umgebungs- und Experimentliste. Offen: Run-Tabelle (wunderbyte_table) mit Status/Fortschritt/Task-Warteschlange, CLI-Pendant | Landing-Seite steht; Tabelle folgt mit Runs aus E1.1/1.2 |
 
 ### E2 – Provisionierung über Moodle-APIs

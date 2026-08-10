@@ -6,7 +6,30 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
-## [0.1.3] — 2026-08-10
+## [0.1.4] — 2026-08-10
+
+Sweep expansion (E1.2) and a documentation convention.
+
+### Added
+- **E1.2 sweep expansion:** `classes/local/sweep.php` turns a factorial sweep
+  spec (base definition + swept factors `variant`/`stratum`/`strategy`) into
+  concrete runs: cartesian product, exclusion rules, optional deterministic
+  cell cap (coarse fractionation), R replications per cell with a seed derived
+  deterministically per (cell, replication), per-cell validation against the
+  experiment definition, and a capacity estimate (cells, runs, attempts,
+  expected duration). Pure logic, no database writes. Covered by
+  `sweep_test.php`; input documented in `docs/design/experiment-format.md`.
+
+### Changed
+- **Documentation convention "1 session = 1 chat"** recorded in
+  `docs/sessions/README.md`: each chat maps to exactly one session log, appended
+  to over the chat rather than split into per-round files. The previous
+  per-round logs (session-002…005) were consolidated into a single
+  `session-001.md` for this chat.
+- `version.php`: 2026081002 → **2026081003**, release 0.1.3 → **0.1.4**. No new
+  upgrade step (code-only round).
+
+---
 
 CI fixes and the declarative experiment format (E1.1).
 

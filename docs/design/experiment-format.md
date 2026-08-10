@@ -39,3 +39,18 @@ je Lauf spezifizierbar (2.6.C), Namensmuster und Fragen-Templates (2.6.D).
 `experiment_definition::example_baseline()` liefert eine gültige Baseline-
 Definition (Ideal-Pool 10×10×25, klassische Strategie, 50 Personen, ein Kurs,
 ein CAT-Test) als Vorlage und Testfixture.
+
+## Sweep-Expansion (E1.2)
+
+Für einen Sweep wird eine **Sweep-Spezifikation** an
+`local_catquizlab\local\sweep::expand()` übergeben: eine Basis-Definition
+(`base`, ohne die gesweepten Felder) plus `factors` (Faktorname → Stufenliste)
+für `variant`, `stratum` und `strategy`, dazu `exclude` (Ausschlussregeln),
+`replications`, `seed`, `estimatedsecondsperattempt` und optional `maxcells`.
+Die Expansion bildet das kartesische Produkt, entfernt ausgeschlossene
+Kombinationen, deckelt optional deterministisch die Zellzahl (grobe
+Fraktionierung), erzeugt je Zelle R Runs mit deterministisch abgeleitetem Seed
+je (Zelle, Replikation), validiert jede Zelle als vollständige Definition und
+liefert eine Kapazitätsschätzung (Zellen, Runs, Attempts, erwartete Dauer).
+Rein logisch, ohne DB-Schreibzugriffe; das Persistieren der Runs folgt in
+E1.3/E2.

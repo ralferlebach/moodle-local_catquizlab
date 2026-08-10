@@ -72,3 +72,5 @@ $string['status:failed'] = 'Failed';
 $string['status:finished'] = 'Finished';
 $string['status:running'] = 'Running';
 $string['status:scheduled'] = 'Scheduled';
+$string['sweep:emptyfactor'] = 'Sweep factor "{$a}" has no levels.';
+$string['sweep:unknownfactor'] = 'Unknown sweep factor "{$a}".';
