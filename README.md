@@ -113,6 +113,8 @@ as above.
     classes/local/registry.php      persist expansions; read runs for the UI (E1.3)
     classes/local/naming.php        name-pattern expansion (requirement 2.6.D)
     classes/local/person_generator.php  seed-deterministic ground-truth profiles (E2.3)
+    classes/local/pool_planner.php  ideal-pool item blueprint (E2.1)
+    classes/local/pool_mutator.php  deterministic pool variants (E2.2)
     cli/sweep.php                   CLI: expand a sweep spec, persist or list runs
     classes/external/*.php          five web-service functions (oracle, jobs, hub)
     classes/privacy/provider.php    null provider (stub stores no personal data)

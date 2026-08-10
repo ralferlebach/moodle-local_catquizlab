@@ -65,6 +65,7 @@ $string['manage:noexperiments'] = 'Noch keine Experimente definiert.';
 $string['manage:noruns'] = 'Noch keine Runs definiert. Mit dem CLI (cli/sweep.php) einen Sweep expandieren, um die Registry zu füllen.';
 $string['manage:pagetitle'] = 'CAT-Experimenten-Suite';
 $string['manage:runs'] = 'Runs';
+$string['mutator:unknownvariant'] = 'Unbekannte Pool-Variante: {$a}.';
 $string['naming:unknownplaceholder'] = 'Namensmuster verweist auf einen unbekannten Platzhalter: {$a}.';
 $string['navbarbutton'] = 'CATQUIZ-Lab';
 $string['oracle:notready'] = 'Das Response-Oracle ist noch nicht implementiert (Stub); es wurde keine Antwort berechnet.';

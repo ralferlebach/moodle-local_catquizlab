@@ -6,7 +6,56 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
-## [0.1.7] — 2026-08-10
+## [0.1.9] — 2026-08-10
+
+Restored the full local check suite, and the pool mutator (E2.2).
+
+### Changed
+- **`makefile`: full functional suite restored.** `make check` had been trimmed
+  to PHP lint + worker only; it now mirrors CI (moodle-ci.yml): worker syntax,
+  PHPCS, PHPMD, Mustache, Grunt/Gherkin, PHPDoc, structure `validate` and
+  upgrade `savepoints`, plus PHPUnit. `make check-static` is the fast static
+  subset, `make ci` adds Behat. The moodle-plugin-ci-only checks run through
+  `moodle-plugin-ci` when present (exact CI parity) and fall back to a
+  direct-tool equivalent or a clear skip note otherwise, so `make check` is
+  meaningful with or without it. Compared against the mod_vimipad ancestor:
+  every still-applicable check it ran (PHP style, PHPDoc, Mustache, PHPUnit) is
+  back, plus the checks CI added (PHPMD, Gherkin lint, validate, savepoints);
+  only the React/AMD and jMeter/k6 targets remain removed.
+
+### Added
+- **Pool mutator** `classes/local/pool_mutator.php` (E2.2): derives the design's
+  pool variants from the ideal blueprint — shifted, stretched, gappy, depleted,
+  calibrationerror, taggingerror and combined — as pure, seed-deterministic
+  transformations that never touch the question bank. Per 2.6.A a variant is a
+  genuinely different item set; the true difficulty stays ground truth
+  (set/difficulty variants change items, import-error variants only add
+  annotations). Covered by `pool_mutator_test.php`.
+
+- `version.php`: 2026081007 → **2026081008**, release 0.1.8 → **0.1.9**. No new
+  upgrade step (code-only round).
+
+---
+
+Pool planner: the item ground-truth blueprint (E2.1, part 1).
+
+### Added
+- **Pool planner** `classes/local/pool_planner.php`: lays out the scale tree
+  (categories × subcategories × items) and draws item difficulties from the
+  design's nested distributions — category mean ~ N(0, 2), subscale mean ~
+  N(category mean, 0.75), item difficulty ~ N(subscale mean, 0.5). Item names
+  come from the naming engine (2.6.D). Seed-deterministic and side-effect-free;
+  the default full ideal pool is 10 × 10 × 25 = 2500 items. The item counterpart
+  to the person generator — it fixes the item ground truth as pure data.
+  Materialising it into real questions via the engine importer and deriving the
+  mutated variants (2.6.A, E2.2) are engine-dependent follow-ups that do not
+  touch the question bank here. Distribution parameters are read from the
+  definition with design defaults. Covered by `pool_planner_test.php`.
+
+- `version.php`: 2026081006 → **2026081007**, release 0.1.7 → **0.1.8**. No new
+  upgrade step (code-only round).
+
+---
 
 Language-file ordering fix and the person ground-truth generator (E2.3, part 1).
 

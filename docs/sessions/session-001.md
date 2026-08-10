@@ -113,6 +113,39 @@ Definition (dokumentierte First-Cut-Defaults), damit das statistische Design in
 der Definition bleibt. Tests `person_generator_test.php`. Versionsbump →
 2026081006 / 0.1.7.
 
+## Phase 11 — Pool-Planner: Item-Ground-Truth (Release 0.1.8)
+`classes/local/pool_planner.php` (E2.1, Teil 1) legt den Skalenbaum
+(Kategorien × Subskalen × Items) an und zieht Item-Schwierigkeiten aus den
+genesteten Verteilungen des Designs — Kategorie-Mittel ~ N(0, 2),
+Subskalen-Mittel ~ N(Kategorie-Mittel, 0,75), Item-Schwierigkeit ~
+N(Subskalen-Mittel, 0,5). Item-Namen aus der Naming-Engine (2.6.D),
+seed-deterministisch, seiteneffektfrei; der volle Ideal-Pool ergibt
+10 × 10 × 25 = 2500 Items. Das ist das Item-Gegenstück zum Personen-Generator
+(fixiert die Item-Ground-Truth als reine Daten). Materialisierung als echte
+Fragen über den Engine-Importer und die mutierten Varianten (2.6.A, E2.2)
+sind engine-abhängige Folgeschritte und werden hier nicht berührt. Parameter
+kommen aus der Definition (Design-Defaults). Tests `pool_planner_test.php`.
+Versionsbump → 2026081007 / 0.1.8.
+
+## Phase 12 — Prüf-Suite wiederhergestellt + Pool-Mutator (Release 0.1.9)
+`make check` lief nur noch PHP-Lint + Worker. Abgleich mit dem vimipad-Original
+und der CI (moodle-ci.yml): `makefile` neu aufgesetzt, `make check` spiegelt
+jetzt die volle CI-Suite (Worker, PHPCS, PHPMD, Mustache, Grunt/Gherkin,
+PHPDoc, validate, savepoints, PHPUnit); `make check-static` als schnelle
+statische Teilmenge, `make ci` inkl. Behat. Die moodle-plugin-ci-Checks laufen
+über `moodle-plugin-ci`, wenn vorhanden (exakte CI-Parität), sonst
+Direkt-Tool-Fallback bzw. klarer Skip-Hinweis. Gegenüber dem vimipad-Ahnen
+sind nur React/AMD- und jMeter/k6-Ziele entfernt; alle sonst zutreffenden
+Prüfungen sind zurück, plus die von CI ergänzten (PHPMD, Gherkin, validate,
+savepoints).
+Weiter (E2.2): `classes/local/pool_mutator.php` leitet aus der Ideal-Blaupause
+die Pool-Varianten ab — shifted, stretched, gappy, depleted, calibrationerror,
+taggingerror, combined — als reine, seed-deterministische Transformationen
+ohne Fragenbank-Zugriff. Gemäß 2.6.A ist jede Variante ein echt anderer
+Item-Satz; die wahre Schwierigkeit bleibt Ground Truth (Set-/Schwierigkeits-
+Varianten ändern Items, Import-Fehler-Varianten fügen nur Annotationen hinzu).
+Tests `pool_mutator_test.php`. Versionsbump → 2026081008 / 0.1.9.
+
 ## Verifikationsstand
 Container: PHP-Syntax, install.xml, YAML, Worker-JS grün; PHPCS (Moodle) 0/0
 **und PHPMD ohne Verstöße** über alle PHP-Dateien; höchster Upgrade-Savepoint ≤
