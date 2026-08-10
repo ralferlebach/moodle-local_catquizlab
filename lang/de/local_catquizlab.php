@@ -24,16 +24,24 @@
 
 defined('MOODLE_INTERNAL') || die();
 
+$string['catquizlab:hubtransfer'] = 'Run-Pakete zwischen Node und zentralem Hub übertragen';
 $string['catquizlab:manage'] = 'CAT-Experimenten-Suite verwalten (Experimente anlegen, ausführen und löschen)';
 $string['catquizlab:view'] = 'Ergebnisse der CAT-Experimente ansehen';
+$string['catquizlab:worker'] = 'Oracle-Anfragen beantworten und Attempt-Jobs übernehmen (Puppeteer-Worker)';
 $string['env:adaptivequizfound'] = 'Trägeraktivität mod_adaptivequiz: installiert.';
 $string['env:adaptivequizmissing'] = 'Trägeraktivität mod_adaptivequiz: NICHT installiert — Experimente können auf dieser Instanz nicht laufen.';
 $string['env:catquizfound'] = 'CAT-Engine local_catquiz: installiert.';
 $string['env:catquizmissing'] = 'CAT-Engine local_catquiz: NICHT installiert — Experimente können auf dieser Instanz nicht laufen.';
+$string['hub:hashmismatch'] = 'Payload-Hash stimmt nicht überein; das Paket wurde abgelehnt.';
+$string['hub:noresults'] = 'Für diesen Run liegen noch keine nachberechneten Ergebnisse vor.';
+$string['hub:verifiednotstored'] = 'Payload-Integrität bestätigt. Die Hub-Speicherung ist noch nicht implementiert (Stub).';
 $string['instancerole:hub'] = 'Hub (zentrale Nachberechnung)';
 $string['instancerole:node'] = 'Node (führt Experimente aus)';
+$string['job:acknowledged'] = 'Attempt-Meldung angenommen.';
+$string['job:none'] = 'Derzeit ist kein Attempt-Job verfügbar.';
+$string['oracle:notready'] = 'Das Response-Oracle ist noch nicht implementiert (Stub); es wurde keine Antwort berechnet.';
 $string['pluginname'] = 'CAT-Experimenten-Suite';
-$string['privacy:metadata'] = 'Der Stub der CAT-Experimenten-Suite speichert ausschließlich Experiment-Definitionen (Name, Tier, Konfiguration) und keine personenbezogenen Daten. Das ändert sich, sobald der Lab-Store Simulanten-Kohorten und Attempt-Traces erhält; der Privacy-Provider wird dann entsprechend erweitert.';
+$string['privacy:metadata'] = 'Der Stub der CAT-Experimenten-Suite speichert ausschließlich Experiment-Definitionen und die noch leere Lab-Store-Struktur, keine personenbezogenen Daten. Das ändert sich, sobald die Provisionierung Simulanten-Kohorten und Attempt-Traces schreibt; der Privacy-Provider wird dann entsprechend erweitert.';
 $string['setting:enabled'] = 'Experimentläufe aktivieren';
 $string['setting:enabled_desc'] = 'Hauptschalter. Solange deaktiviert, finden weder Provisionierung noch Task-Planung oder Worker-Ansteuerung statt. Auf allen Instanzen, die kein dediziertes Testsystem sind, deaktiviert lassen.';
 $string['setting:environment'] = 'Umgebungsstatus';

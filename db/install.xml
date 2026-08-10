@@ -1,10 +1,10 @@
 <?xml version="1.0" encoding="UTF-8" ?>
-<XMLDB PATH="local/catquizlab/db" VERSION="20260809" COMMENT="XMLDB file for local_catquizlab"
+<XMLDB PATH="local/catquizlab/db" VERSION="20260810" COMMENT="XMLDB file for local_catquizlab — the lab store of the CAT experiment suite."
     xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
     xsi:noNamespaceSchemaLocation="../../../lib/xmldb/xmldb.xsd"
 >
   <TABLES>
-    <TABLE NAME="local_catquizlab_experiment" COMMENT="Experiment definitions of the CAT experiment suite. Stub scope: definition record only; run/cohort/trace/result tables follow in later milestones (backlog E0.2).">
+    <TABLE NAME="local_catquizlab_experiment" COMMENT="Experiment definitions: the declarative description a sweep expands into runs.">
       <FIELDS>
         <FIELD NAME="id" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="true"/>
         <FIELD NAME="name" TYPE="char" LENGTH="255" NOTNULL="true" SEQUENCE="false" COMMENT="Human-readable experiment name."/>
@@ -21,6 +21,149 @@
       </KEYS>
       <INDEXES>
         <INDEX NAME="tier-status" UNIQUE="false" FIELDS="tier, status"/>
+      </INDEXES>
+    </TABLE>
+
+    <TABLE NAME="local_catquizlab_run" COMMENT="One sweep cell: a concrete, seeded, reproducible run derived from an experiment.">
+      <FIELDS>
+        <FIELD NAME="id" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="true"/>
+        <FIELD NAME="experimentid" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="false" COMMENT="Parent experiment."/>
+        <FIELD NAME="cellkey" TYPE="char" LENGTH="255" NOTNULL="true" DEFAULT="" SEQUENCE="false" COMMENT="Stable identifier of this sweep cell within the experiment (factor combination)."/>
+        <FIELD NAME="seed" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false" COMMENT="Master seed making the run reproducible."/>
+        <FIELD NAME="replication" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="1" SEQUENCE="false" COMMENT="Replication index (1..R) of this cell."/>
+        <FIELD NAME="status" TYPE="int" LENGTH="2" NOTNULL="true" DEFAULT="0" SEQUENCE="false" COMMENT="0=draft, 10=scheduled, 20=running, 30=finished, 40=failed."/>
+        <FIELD NAME="manifestjson" TYPE="text" NOTNULL="false" SEQUENCE="false" COMMENT="Reproducibility manifest (plugin/engine versions, engine git hash, environment, seeds) — see classes/local/manifest.php."/>
+        <FIELD NAME="usermodified" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
+        <FIELD NAME="timecreated" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
+        <FIELD NAME="timemodified" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
+      </FIELDS>
+      <KEYS>
+        <KEY NAME="primary" TYPE="primary" FIELDS="id"/>
+        <KEY NAME="experimentid" TYPE="foreign" FIELDS="experimentid" REFTABLE="local_catquizlab_experiment" REFFIELDS="id"/>
+        <KEY NAME="usermodified" TYPE="foreign" FIELDS="usermodified" REFTABLE="user" REFFIELDS="id"/>
+      </KEYS>
+      <INDEXES>
+        <INDEX NAME="experimentid-status" UNIQUE="false" FIELDS="experimentid, status"/>
+      </INDEXES>
+    </TABLE>
+
+    <TABLE NAME="local_catquizlab_pool" COMMENT="An item-pool variant used by a run: the ideal pool or a deterministic mutation of it, mapped to a CAT engine context.">
+      <FIELDS>
+        <FIELD NAME="id" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="true"/>
+        <FIELD NAME="experimentid" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="false" COMMENT="Owning experiment."/>
+        <FIELD NAME="variant" TYPE="char" LENGTH="64" NOTNULL="true" DEFAULT="ideal" SEQUENCE="false" COMMENT="Variant type: ideal, shifted, stretched, gappy, calibrationerror, taggingerror, depleted, combined."/>
+        <FIELD NAME="recipejson" TYPE="text" NOTNULL="false" SEQUENCE="false" COMMENT="Deterministic mutation recipe (JSON): parameters and seed used to derive this variant from the ideal pool."/>
+        <FIELD NAME="contextid" TYPE="int" LENGTH="10" NOTNULL="false" SEQUENCE="false" COMMENT="CAT engine context id (local_catquiz) this variant was materialised into. Null until provisioned (E2)."/>
+        <FIELD NAME="timecreated" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
+        <FIELD NAME="timemodified" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
+      </FIELDS>
+      <KEYS>
+        <KEY NAME="primary" TYPE="primary" FIELDS="id"/>
+        <KEY NAME="experimentid" TYPE="foreign" FIELDS="experimentid" REFTABLE="local_catquizlab_experiment" REFFIELDS="id"/>
+      </KEYS>
+      <INDEXES>
+        <INDEX NAME="experimentid-variant" UNIQUE="false" FIELDS="experimentid, variant"/>
+      </INDEXES>
+    </TABLE>
+
+    <TABLE NAME="local_catquizlab_person" COMMENT="A simulated person (digital twin) of a run: ground-truth ability profile plus the Moodle user later provisioned to embody it.">
+      <FIELDS>
+        <FIELD NAME="id" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="true"/>
+        <FIELD NAME="runid" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="false" COMMENT="Owning run."/>
+        <FIELD NAME="stratum" TYPE="char" LENGTH="64" NOTNULL="true" DEFAULT="" SEQUENCE="false" COMMENT="Person stratum: conforming, categoryvariation, subscalevariation, chaotic."/>
+        <FIELD NAME="abilityglobal" TYPE="number" LENGTH="10" DECIMALS="5" NOTNULL="false" SEQUENCE="false" COMMENT="Ground-truth global ability (theta)."/>
+        <FIELD NAME="profilejson" TYPE="text" NOTNULL="false" SEQUENCE="false" COMMENT="Full hierarchical ground-truth profile (JSON): theta per category and subscale."/>
+        <FIELD NAME="moodleuserid" TYPE="int" LENGTH="10" NOTNULL="false" SEQUENCE="false" COMMENT="Id of the simulated Moodle user embodying this person (created via the user API in E2). Plain int, not a user foreign key: the lifecycle of these throwaway test users is owned by provisioning, not by core."/>
+        <FIELD NAME="timecreated" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
+        <FIELD NAME="timemodified" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
+      </FIELDS>
+      <KEYS>
+        <KEY NAME="primary" TYPE="primary" FIELDS="id"/>
+        <KEY NAME="runid" TYPE="foreign" FIELDS="runid" REFTABLE="local_catquizlab_run" REFFIELDS="id"/>
+      </KEYS>
+      <INDEXES>
+        <INDEX NAME="runid-stratum" UNIQUE="false" FIELDS="runid, stratum"/>
+        <INDEX NAME="moodleuserid" UNIQUE="false" FIELDS="moodleuserid"/>
+      </INDEXES>
+    </TABLE>
+
+    <TABLE NAME="local_catquizlab_attempt" COMMENT="One simulated CAT attempt played through the real mod_adaptivequiz UI: link to the engine attempt plus the collected trace.">
+      <FIELDS>
+        <FIELD NAME="id" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="true"/>
+        <FIELD NAME="runid" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="false" COMMENT="Owning run."/>
+        <FIELD NAME="personid" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="false" COMMENT="Simulated person who sat this attempt."/>
+        <FIELD NAME="engineattemptid" TYPE="int" LENGTH="10" NOTNULL="false" SEQUENCE="false" COMMENT="Id of the adaptivequiz_attempt row in the engine (the black-box source of truth). Null until the attempt has started."/>
+        <FIELD NAME="status" TYPE="int" LENGTH="2" NOTNULL="true" DEFAULT="0" SEQUENCE="false" COMMENT="0=queued, 10=running, 20=collected, 30=validated, 40=failed."/>
+        <FIELD NAME="tracejson" TYPE="text" NOTNULL="false" SEQUENCE="false" COMMENT="Analysis-friendly trace copied from the engine tables/debug info: item sequence, score components, theta/SE path, activations, stop reason."/>
+        <FIELD NAME="runtimems" TYPE="int" LENGTH="10" NOTNULL="false" SEQUENCE="false" COMMENT="Wall-clock runtime of the attempt in milliseconds, reported by the worker."/>
+        <FIELD NAME="timecreated" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
+        <FIELD NAME="timemodified" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
+      </FIELDS>
+      <KEYS>
+        <KEY NAME="primary" TYPE="primary" FIELDS="id"/>
+        <KEY NAME="runid" TYPE="foreign" FIELDS="runid" REFTABLE="local_catquizlab_run" REFFIELDS="id"/>
+        <KEY NAME="personid" TYPE="foreign" FIELDS="personid" REFTABLE="local_catquizlab_person" REFFIELDS="id"/>
+      </KEYS>
+      <INDEXES>
+        <INDEX NAME="runid-status" UNIQUE="false" FIELDS="runid, status"/>
+      </INDEXES>
+    </TABLE>
+
+    <TABLE NAME="local_catquizlab_result" COMMENT="A computed evaluation metric value at a given aggregation scope (run, stratum, tier).">
+      <FIELDS>
+        <FIELD NAME="id" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="true"/>
+        <FIELD NAME="runid" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="false" COMMENT="Run the metric was computed for."/>
+        <FIELD NAME="metric" TYPE="char" LENGTH="64" NOTNULL="true" SEQUENCE="false" COMMENT="Metric key: rmse, correlation, bias, spearman, precisionatk, recall, ndcgatk, testlength, etc."/>
+        <FIELD NAME="scope" TYPE="char" LENGTH="64" NOTNULL="true" DEFAULT="run" SEQUENCE="false" COMMENT="Aggregation scope: run, stratum:name, tier:name."/>
+        <FIELD NAME="value" TYPE="number" LENGTH="20" DECIMALS="10" NOTNULL="false" SEQUENCE="false" COMMENT="Scalar metric value."/>
+        <FIELD NAME="detailjson" TYPE="text" NOTNULL="false" SEQUENCE="false" COMMENT="Optional structured detail (e.g. confusion matrix, per-k values)."/>
+        <FIELD NAME="timecreated" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
+      </FIELDS>
+      <KEYS>
+        <KEY NAME="primary" TYPE="primary" FIELDS="id"/>
+        <KEY NAME="runid" TYPE="foreign" FIELDS="runid" REFTABLE="local_catquizlab_run" REFFIELDS="id"/>
+      </KEYS>
+      <INDEXES>
+        <INDEX NAME="runid-metric-scope" UNIQUE="false" FIELDS="runid, metric, scope"/>
+      </INDEXES>
+    </TABLE>
+
+    <TABLE NAME="local_catquizlab_exportlog" COMMENT="Record of a produced export (xlsx, ods, csv, xml, json) for a run or experiment.">
+      <FIELDS>
+        <FIELD NAME="id" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="true"/>
+        <FIELD NAME="runid" TYPE="int" LENGTH="10" NOTNULL="false" SEQUENCE="false" COMMENT="Run exported (null when the export spans a whole experiment)."/>
+        <FIELD NAME="experimentid" TYPE="int" LENGTH="10" NOTNULL="false" SEQUENCE="false" COMMENT="Experiment exported (set for experiment-level exports)."/>
+        <FIELD NAME="format" TYPE="char" LENGTH="16" NOTNULL="true" SEQUENCE="false" COMMENT="Export format: xlsx, ods, csv, xml, json."/>
+        <FIELD NAME="dataset" TYPE="char" LENGTH="64" NOTNULL="true" DEFAULT="results" SEQUENCE="false" COMMENT="Dataset level: rawmatrix, traces, groundtruth, results, aggregation, manifest."/>
+        <FIELD NAME="itemid" TYPE="int" LENGTH="10" NOTNULL="false" SEQUENCE="false" COMMENT="File API item id of the stored export file, when persisted."/>
+        <FIELD NAME="usermodified" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
+        <FIELD NAME="timecreated" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
+      </FIELDS>
+      <KEYS>
+        <KEY NAME="primary" TYPE="primary" FIELDS="id"/>
+        <KEY NAME="runid" TYPE="foreign" FIELDS="runid" REFTABLE="local_catquizlab_run" REFFIELDS="id"/>
+        <KEY NAME="experimentid" TYPE="foreign" FIELDS="experimentid" REFTABLE="local_catquizlab_experiment" REFFIELDS="id"/>
+        <KEY NAME="usermodified" TYPE="foreign" FIELDS="usermodified" REFTABLE="user" REFFIELDS="id"/>
+      </KEYS>
+    </TABLE>
+
+    <TABLE NAME="local_catquizlab_transfer" COMMENT="Log of run-package transfers between a node and the central hub (submit/fetch), with integrity hash and status.">
+      <FIELDS>
+        <FIELD NAME="id" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="true"/>
+        <FIELD NAME="runid" TYPE="int" LENGTH="10" NOTNULL="false" SEQUENCE="false" COMMENT="Local run involved in the transfer (null on the hub side before mapping)."/>
+        <FIELD NAME="direction" TYPE="char" LENGTH="16" NOTNULL="true" SEQUENCE="false" COMMENT="submit (node to hub) or fetch (hub to node)."/>
+        <FIELD NAME="remotehost" TYPE="char" LENGTH="255" NOTNULL="true" DEFAULT="" SEQUENCE="false" COMMENT="Counterpart host URL."/>
+        <FIELD NAME="payloadhash" TYPE="char" LENGTH="64" NOTNULL="true" DEFAULT="" SEQUENCE="false" COMMENT="Integrity hash of the run package (SHA-256)."/>
+        <FIELD NAME="status" TYPE="int" LENGTH="2" NOTNULL="true" DEFAULT="0" SEQUENCE="false" COMMENT="0=pending, 10=sent, 20=acknowledged, 40=failed."/>
+        <FIELD NAME="timecreated" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
+        <FIELD NAME="timemodified" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
+      </FIELDS>
+      <KEYS>
+        <KEY NAME="primary" TYPE="primary" FIELDS="id"/>
+        <KEY NAME="runid" TYPE="foreign" FIELDS="runid" REFTABLE="local_catquizlab_run" REFFIELDS="id"/>
+      </KEYS>
+      <INDEXES>
+        <INDEX NAME="direction-status" UNIQUE="false" FIELDS="direction, status"/>
       </INDEXES>
     </TABLE>
   </TABLES>

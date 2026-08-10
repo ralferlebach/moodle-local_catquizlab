@@ -50,4 +50,86 @@ class local_catquizlab_generator extends component_generator_base {
 
         return $experiment;
     }
+
+    /**
+     * Create a run belonging to an experiment.
+     *
+     * @param array $record Field overrides; 'experimentid' is created on the fly when omitted.
+     * @return \stdClass The inserted run record including its id.
+     */
+    public function create_run(array $record = []): \stdClass {
+        global $DB, $USER;
+
+        if (empty($record['experimentid'])) {
+            $record['experimentid'] = $this->create_experiment()->id;
+        }
+
+        $defaults = [
+            'cellkey'      => 'cell-' . ($DB->count_records('local_catquizlab_run') + 1),
+            'seed'         => 42,
+            'replication'  => 1,
+            'status'       => 0,
+            'manifestjson' => null,
+            'usermodified' => $USER->id ?? 0,
+            'timecreated'  => time(),
+            'timemodified' => time(),
+        ];
+        $run = (object) array_merge($defaults, $record);
+        $run->id = $DB->insert_record('local_catquizlab_run', $run);
+
+        return $run;
+    }
+
+    /**
+     * Create a pool variant for an experiment.
+     *
+     * @param array $record Field overrides; 'experimentid' is created on the fly when omitted.
+     * @return \stdClass The inserted pool record including its id.
+     */
+    public function create_pool(array $record = []): \stdClass {
+        global $DB;
+
+        if (empty($record['experimentid'])) {
+            $record['experimentid'] = $this->create_experiment()->id;
+        }
+
+        $defaults = [
+            'variant'      => 'ideal',
+            'recipejson'   => json_encode(['seed' => 42]),
+            'contextid'    => null,
+            'timecreated'  => time(),
+            'timemodified' => time(),
+        ];
+        $pool = (object) array_merge($defaults, $record);
+        $pool->id = $DB->insert_record('local_catquizlab_pool', $pool);
+
+        return $pool;
+    }
+
+    /**
+     * Create a simulated person belonging to a run.
+     *
+     * @param array $record Field overrides; 'runid' is created on the fly when omitted.
+     * @return \stdClass The inserted person record including its id.
+     */
+    public function create_person(array $record = []): \stdClass {
+        global $DB;
+
+        if (empty($record['runid'])) {
+            $record['runid'] = $this->create_run()->id;
+        }
+
+        $defaults = [
+            'stratum'       => 'conforming',
+            'abilityglobal' => 0.0,
+            'profilejson'   => json_encode(['global' => 0.0, 'categories' => []]),
+            'moodleuserid'  => null,
+            'timecreated'   => time(),
+            'timemodified'  => time(),
+        ];
+        $person = (object) array_merge($defaults, $record);
+        $person->id = $DB->insert_record('local_catquizlab_person', $person);
+
+        return $person;
+    }
 }

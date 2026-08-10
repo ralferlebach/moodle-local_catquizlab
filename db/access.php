@@ -44,4 +44,22 @@ $capabilities = [
             'manager' => CAP_ALLOW,
         ],
     ],
+
+    // Granted to the dedicated web-service user whose token the Puppeteer
+    // worker uses. It answers item requests from the oracle and claims/reports
+    // attempt jobs — no configuration or data-loss risk of its own.
+    'local/catquizlab:worker' => [
+        'captype'      => 'read',
+        'contextlevel' => CONTEXT_SYSTEM,
+        'archetypes'   => [],
+    ],
+
+    // Granted to the web-service user a node authenticates as when submitting
+    // run packages to, or fetching recalculated results from, the central hub.
+    'local/catquizlab:hubtransfer' => [
+        'riskbitmask'  => RISK_CONFIG,
+        'captype'      => 'write',
+        'contextlevel' => CONTEXT_SYSTEM,
+        'archetypes'   => [],
+    ],
 ];

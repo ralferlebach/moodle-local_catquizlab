@@ -49,6 +49,33 @@ final class stub_test extends \advanced_testcase {
     }
 
     /**
+     * All lab-store tables from db/install.xml exist after installation.
+     *
+     * @return void
+     */
+    public function test_lab_store_tables_exist(): void {
+        global $DB;
+
+        $dbman = $DB->get_manager();
+        $tables = [
+            'local_catquizlab_experiment',
+            'local_catquizlab_run',
+            'local_catquizlab_pool',
+            'local_catquizlab_person',
+            'local_catquizlab_attempt',
+            'local_catquizlab_result',
+            'local_catquizlab_exportlog',
+            'local_catquizlab_transfer',
+        ];
+        foreach ($tables as $table) {
+            $this->assertTrue(
+                $dbman->table_exists($table),
+                "Table {$table} must be created by db/install.xml."
+            );
+        }
+    }
+
+    /**
      * The plugin generator creates a retrievable experiment record.
      *
      * @return void
@@ -71,6 +98,30 @@ final class stub_test extends \advanced_testcase {
         $config = json_decode($stored->configjson, true);
         $this->assertIsArray($config);
         $this->assertArrayHasKey('seed', $config);
+    }
+
+    /**
+     * The generator wires a person to a run to an experiment.
+     *
+     * @return void
+     */
+    public function test_generator_creates_related_records(): void {
+        global $DB;
+
+        $this->resetAfterTest();
+
+        /** @var \local_catquizlab_generator $generator */
+        $generator = $this->getDataGenerator()->get_plugin_generator('local_catquizlab');
+
+        $experiment = $generator->create_experiment();
+        $run = $generator->create_run(['experimentid' => $experiment->id, 'seed' => 7]);
+        $person = $generator->create_person(['runid' => $run->id, 'stratum' => 'chaotic']);
+        $pool = $generator->create_pool(['experimentid' => $experiment->id, 'variant' => 'shifted']);
+
+        $this->assertSame($experiment->id, $DB->get_field('local_catquizlab_run', 'experimentid', ['id' => $run->id]));
+        $this->assertSame($run->id, $DB->get_field('local_catquizlab_person', 'runid', ['id' => $person->id]));
+        $this->assertSame('chaotic', $DB->get_field('local_catquizlab_person', 'stratum', ['id' => $person->id]));
+        $this->assertSame('shifted', $DB->get_field('local_catquizlab_pool', 'variant', ['id' => $pool->id]));
     }
 
     /**

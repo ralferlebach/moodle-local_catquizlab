@@ -6,6 +6,51 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.1.1] — 2026-08-10
+
+Round E0 — plugin foundation completed. Turns the single-table stub into the
+full lab-store skeleton with web services and the reproducibility manifest.
+Still does nothing at runtime beyond installing and exposing (disabled)
+services; provisioning, orchestration, oracle logic, metrics and export
+remain open (E1–E7).
+
+### Added
+- Full lab-store schema in `db/install.xml`: the seven tables `run`, `pool`,
+  `person`, `attempt`, `result`, `exportlog`, `transfer` alongside the
+  existing `experiment`, with foreign keys and indexes.
+- `db/upgrade.php` creating those seven tables from the plugin's own
+  install.xml (via `xmldb_file`, no duplicated definitions) with an upgrade
+  savepoint, so the already-installed test system migrates cleanly.
+- Five web-service external functions under `classes/external/`:
+  `oracle_answer`, `job_claim`, `job_complete`, `hub_submit_run`,
+  `hub_fetch_results`. Each authenticates, validates and returns a
+  well-formed stub response; `hub_submit_run` already performs the real
+  SHA-256 integrity check. Defined in `db/services.php` and grouped into two
+  pre-built, disabled, restricted-user services (worker, hub).
+- Two capabilities for the service users: `local/catquizlab:worker` and
+  `local/catquizlab:hubtransfer`.
+- Run manifest builder `classes/local/manifest.php` (plugin/engine versions,
+  best-effort engine git hash, Moodle/PHP/DB environment, seeds/config) with
+  `manifestjson` columns ready to receive it on `run`.
+- Tests: `manifest_test.php`, `external_test.php` (stub responses plus
+  capability enforcement), extended `stub_test.php` (all eight tables,
+  related-record round-trip), and generator methods `create_run`,
+  `create_pool`, `create_person`.
+- Language strings for the new capabilities and service status messages
+  (en/de).
+
+### Changed
+- `version.php`: version 2026080900 → **2026081000**, release 0.1.0 →
+  **0.1.1**. The bump is required because schema and services changed and the
+  plugin is already installed on the test system — without it the new tables
+  would not be created on existing installs.
+- Privacy `privacy:metadata` string reworded to mention the (still empty)
+  lab-store scaffolding; the provider stays a null provider because no rows
+  are written yet, with the upgrade-to-full-provider trigger unchanged
+  (backlog E2.3).
+
+---
+
 ## [0.1.0] — 2026-08-09
 
 Initial stub (milestone M0). The plugin installs cleanly and does nothing

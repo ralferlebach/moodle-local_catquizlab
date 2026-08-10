@@ -4,11 +4,14 @@ Stand: 09.08.2026 · Architektur siehe `architektur.md` · Status-Legende: ✅ e
 
 ## Stub-Abdeckung (Release 0.1.0)
 
-Der ausgelieferte Stub deckt aus E0 bereits ab: Plugin-Gerüst mit Settings
-(Hauptschalter, Node/Hub-Rolle, Umgebungsstatus), Capabilities, erste
-Lab-Store-Tabelle `local_catquizlab_experiment` inkl. Generator und Tests,
-Worker-Grundgerüst (Argument-Validierung), CI-Pipeline und Makefile. Alles
-Weitere ist offen.
+**Epic E0 (Plugin-Fundament) ist mit Release 0.1.1 vollständig abgeschlossen.**
+Der Stub deckt ab: Plugin-Gerüst mit Settings (Hauptschalter, Node/Hub-Rolle,
+Umgebungsstatus), Capabilities (inkl. `worker` und `hubtransfer`), das
+vollständige Lab-Store-Datenmodell (8 Tabellen) mit `db/upgrade.php`, die fünf
+Webservices (Oracle-Answer, Job-Queue claim/complete, Hub submit_run/
+fetch_results) samt zwei vordefinierten Services, den Run-Manifest-Builder
+(`classes/local/manifest.php`), Generator und Tests dazu, Worker-Grundgerüst,
+CI-Pipeline und Makefile. Alles Weitere (E1–E7) ist offen.
 
 ## Epics
 
@@ -18,9 +21,9 @@ Gegenüber Rev. 1 entfallen: externe Analyse-Workbench (Python/R), Driver A (In-
 | # | Arbeitspaket | Hinweise |
 | --- | --- | --- |
 | 0.1 ✅ | Plugin-Gerüst `local_catquizlab`: version.php, Abhängigkeiten (local_catquiz, mod_adaptivequiz, local_wunderbyte_table), Capabilities, Settings | Hub/Node-Rollenschalter in den Settings |
-| 0.2 ⏳ teilweise | Datenmodell in `db/install.xml`: experiment, run, cohort/person (Ground-Truth-Profile), pool_variant, attempt_trace, result, export_log, transfer_log | Ablösung der ad-hoc-Tabelle `local_catquiz_ppsimulation` |
-| 0.3 | Webservices in `db/services.php`: Oracle-Answer, Job-Queue (claim/complete), Hub-Transfer (submit_run, fetch_results) | Token-/Capability-Konzept für Worker und Nodes |
-| 0.4 | Run-Manifest: Engine-Git-Hash, Plugin-Versionen, Konfiguration, Seeds, Umgebung | Reproduzierbarkeits-Grundlage für den Artikel |
+| 0.2 ✅ | Datenmodell in `db/install.xml`: experiment, run, cohort/person (Ground-Truth-Profile), pool_variant, attempt_trace, result, export_log, transfer_log | Ablösung der ad-hoc-Tabelle `local_catquiz_ppsimulation` |
+| 0.3 ✅ | Webservices in `db/services.php`: Oracle-Answer, Job-Queue (claim/complete), Hub-Transfer (submit_run, fetch_results) | Token-/Capability-Konzept für Worker und Nodes |
+| 0.4 ✅ | Run-Manifest: Engine-Git-Hash, Plugin-Versionen, Konfiguration, Seeds, Umgebung | Reproduzierbarkeits-Grundlage für den Artikel |
 
 ### E1 – Experiment-Definition & Sweep
 | # | Arbeitspaket | Hinweise |

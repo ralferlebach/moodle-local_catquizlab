@@ -43,14 +43,17 @@ The full architecture and the epic/milestone backlog live in
 
 ## Status
 
-**0.1.0 — stub** (`MATURITY_ALPHA`). The current release is the installable
-skeleton (milestone M0): plugin structure, settings page (master switch,
-node/hub instance role, engine environment status), capability definitions,
-the first lab-store table (`local_catquizlab_experiment`), a test data
-generator, PHPUnit and Behat coverage of exactly that scope, the Puppeteer
-worker stub under `worker/`, and the CI pipeline. **It intentionally does
-nothing beyond installing cleanly** — provisioning, orchestration, oracle,
-metrics and export follow per the backlog (E1–E7).
+**0.1.1 — stub** (`MATURITY_ALPHA`). Round **E0 (plugin foundation) is
+complete**: plugin structure, settings page (master switch, node/hub
+instance role, engine environment status), the four base plus worker/hub
+capabilities, the **full lab-store schema** (eight tables) with an upgrade
+path, the **five web services** (response oracle, job queue claim/complete,
+hub submit/fetch) grouped into two disabled restricted-user services, the
+**run-manifest builder**, a test data generator and PHPUnit/Behat coverage
+of exactly that scope, the Puppeteer worker stub under `worker/`, and the CI
+pipeline. **It still does nothing at runtime beyond installing cleanly and
+exposing the (disabled) services** — provisioning, orchestration, oracle
+logic, metrics and export follow per the backlog (E1–E7).
 
 ## Requirements
 
@@ -88,9 +91,13 @@ role defaults to **Node**.
 ## Repository layout
 
     classes/local/environment.php   runtime detection of the CAT engine
+    classes/local/manifest.php      run reproducibility manifest builder
+    classes/external/*.php          five web-service functions (oracle, jobs, hub)
     classes/privacy/provider.php    null provider (stub stores no personal data)
-    db/install.xml                  first lab-store table (experiment definitions)
-    db/access.php                   manage/view capabilities
+    db/install.xml                  lab-store schema (eight tables)
+    db/upgrade.php                  upgrade path for existing installs
+    db/services.php                 worker and hub web services
+    db/access.php                   manage/view/worker/hubtransfer capabilities
     settings.php                    master switch, instance role, environment status
     worker/                         Puppeteer worker (stub) — ships with the plugin
     tests/                          PHPUnit, generator, Behat
