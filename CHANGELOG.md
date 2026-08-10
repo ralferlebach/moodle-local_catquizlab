@@ -6,7 +6,27 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
-## [0.1.23] — 2026-08-10
+## [0.1.24] — 2026-08-10
+
+Test binder (E2.4, reference path) — bind a run to an adaptivequiz CAT test.
+
+### Added
+- **Test binder** `classes/local/test_binder.php` (E2.4): `read_test_config()`
+  resolves an adaptivequiz activity by course-module id (course_modules → modules
+  → adaptivequiz) and reads its CAT configuration from `local_catquiz_tests`
+  (component `mod_adaptivequiz`): scale id, engine context id and the quiz
+  settings JSON — the same rows the Wunderbyte scripts read. `bind_existing()`
+  records the test on the run (`run.testcmid`). This completes the "reference an
+  existing CAT test" half of E2.4. Resolving the config needs the engine and host
+  activity, so both methods return null when either is absent (CI and stand-alone
+  stay green). Covered by `test_binder_test.php` (guard path). Creating a new
+  adaptivequiz+catquiz test from a definition is the remaining half and needs the
+  activity form fields.
+
+- `version.php`: 2026081022 → **2026081023**, release 0.1.23 → **0.1.24**. No new
+  upgrade step (run.testcmid already exists).
+
+---
 
 Attempt collector (E3.5) — engine trace into a lab trace.
 

@@ -339,6 +339,18 @@ nebenbei, dass `response_oracle` modellkonform ist (raschbirnbaum::likelihood).
 Tests `attempt_collector_test.php` (build_trace + Engine-Guard). Versionsbump →
 2026081022 / 0.1.23 (reiner Code, kein Upgrade-Schritt).
 
+## Phase 27 — Test-Binder E2.4 (Referenz-Pfad) (Release 0.1.24)
+E2.4-Rest, „vorhandenen Test referenzieren": `classes/local/test_binder.php`.
+`read_test_config()` löst eine adaptivequiz-Aktivität über die Course-Module-Id
+auf (course_modules→modules→adaptivequiz) und liest die CAT-Konfiguration aus
+`local_catquiz_tests` (component mod_adaptivequiz): catscaleid, contextid,
+quizsettings-JSON — genau die Zeilen, die go-clara/getit-horst lesen.
+`bind_existing()` vermerkt den Test am Run (`run.testcmid`). Engine-gekapselt
+(null ohne Engine/Host-Aktivität → CI grün). Tests `test_binder_test.php`
+(Guard). Das Neu-Anlegen einer adaptivequiz+catquiz-Instanz aus einer Definition
+bleibt offen (braucht die Formularfelder der catquiz-Erweiterung). Versionsbump →
+2026081023 / 0.1.24 (reiner Code, kein Upgrade-Schritt).
+
 ## Verifikationsstand
 Container: PHP-Syntax, install.xml, YAML, Worker-JS grün; PHPCS (Moodle) 0/0
 **und PHPMD ohne Verstöße** über alle PHP-Dateien; höchster Upgrade-Savepoint ≤
