@@ -28,7 +28,7 @@
       <FIELDS>
         <FIELD NAME="id" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="true"/>
         <FIELD NAME="experimentid" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="false" COMMENT="Parent experiment."/>
-        <FIELD NAME="cellkey" TYPE="char" LENGTH="255" NOTNULL="true" DEFAULT="" SEQUENCE="false" COMMENT="Stable identifier of this sweep cell within the experiment (factor combination)."/>
+        <FIELD NAME="cellkey" TYPE="char" LENGTH="255" NOTNULL="true" SEQUENCE="false" COMMENT="Stable identifier of this sweep cell within the experiment (factor combination)."/>
         <FIELD NAME="seed" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false" COMMENT="Master seed making the run reproducible."/>
         <FIELD NAME="replication" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="1" SEQUENCE="false" COMMENT="Replication index (1..R) of this cell."/>
         <FIELD NAME="status" TYPE="int" LENGTH="2" NOTNULL="true" DEFAULT="0" SEQUENCE="false" COMMENT="0=draft, 10=scheduled, 20=running, 30=finished, 40=failed."/>
@@ -47,13 +47,14 @@
       </INDEXES>
     </TABLE>
 
-    <TABLE NAME="local_catquizlab_pool" COMMENT="An item-pool variant used by a run: the ideal pool or a deterministic mutation of it, mapped to a CAT engine context.">
+    <TABLE NAME="local_catquizlab_pool" COMMENT="An item-pool variant used by a run: the ideal pool or a deterministic mutation, realised as its own set of questions and item scales (not as a CAT context — see architektur.md 2.6.A).">
       <FIELDS>
         <FIELD NAME="id" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="true"/>
         <FIELD NAME="experimentid" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="false" COMMENT="Owning experiment."/>
         <FIELD NAME="variant" TYPE="char" LENGTH="64" NOTNULL="true" DEFAULT="ideal" SEQUENCE="false" COMMENT="Variant type: ideal, shifted, stretched, gappy, calibrationerror, taggingerror, depleted, combined."/>
         <FIELD NAME="recipejson" TYPE="text" NOTNULL="false" SEQUENCE="false" COMMENT="Deterministic mutation recipe (JSON): parameters and seed used to derive this variant from the ideal pool."/>
-        <FIELD NAME="contextid" TYPE="int" LENGTH="10" NOTNULL="false" SEQUENCE="false" COMMENT="CAT engine context id (local_catquiz) this variant was materialised into. Null until provisioned (E2)."/>
+        <FIELD NAME="scaleid" TYPE="int" LENGTH="10" NOTNULL="false" SEQUENCE="false" COMMENT="Root item scale (local_catquiz catscale) of this variant. Variants differ by their items and scales, not by CAT context. Null until provisioned (E2)."/>
+        <FIELD NAME="questioncategoryid" TYPE="int" LENGTH="10" NOTNULL="false" SEQUENCE="false" COMMENT="Question-bank category holding this variant's generated question objects. Null until provisioned (E2)."/>
         <FIELD NAME="timecreated" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
         <FIELD NAME="timemodified" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
       </FIELDS>
@@ -70,7 +71,7 @@
       <FIELDS>
         <FIELD NAME="id" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="true"/>
         <FIELD NAME="runid" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="false" COMMENT="Owning run."/>
-        <FIELD NAME="stratum" TYPE="char" LENGTH="64" NOTNULL="true" DEFAULT="" SEQUENCE="false" COMMENT="Person stratum: conforming, categoryvariation, subscalevariation, chaotic."/>
+        <FIELD NAME="stratum" TYPE="char" LENGTH="64" NOTNULL="true" SEQUENCE="false" COMMENT="Person stratum: conforming, categoryvariation, subscalevariation, chaotic."/>
         <FIELD NAME="abilityglobal" TYPE="number" LENGTH="10" DECIMALS="5" NOTNULL="false" SEQUENCE="false" COMMENT="Ground-truth global ability (theta)."/>
         <FIELD NAME="profilejson" TYPE="text" NOTNULL="false" SEQUENCE="false" COMMENT="Full hierarchical ground-truth profile (JSON): theta per category and subscale."/>
         <FIELD NAME="moodleuserid" TYPE="int" LENGTH="10" NOTNULL="false" SEQUENCE="false" COMMENT="Id of the simulated Moodle user embodying this person (created via the user API in E2). Plain int, not a user foreign key: the lifecycle of these throwaway test users is owned by provisioning, not by core."/>
@@ -152,8 +153,8 @@
         <FIELD NAME="id" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="true"/>
         <FIELD NAME="runid" TYPE="int" LENGTH="10" NOTNULL="false" SEQUENCE="false" COMMENT="Local run involved in the transfer (null on the hub side before mapping)."/>
         <FIELD NAME="direction" TYPE="char" LENGTH="16" NOTNULL="true" SEQUENCE="false" COMMENT="submit (node to hub) or fetch (hub to node)."/>
-        <FIELD NAME="remotehost" TYPE="char" LENGTH="255" NOTNULL="true" DEFAULT="" SEQUENCE="false" COMMENT="Counterpart host URL."/>
-        <FIELD NAME="payloadhash" TYPE="char" LENGTH="64" NOTNULL="true" DEFAULT="" SEQUENCE="false" COMMENT="Integrity hash of the run package (SHA-256)."/>
+        <FIELD NAME="remotehost" TYPE="char" LENGTH="255" NOTNULL="true" SEQUENCE="false" COMMENT="Counterpart host URL."/>
+        <FIELD NAME="payloadhash" TYPE="char" LENGTH="64" NOTNULL="true" SEQUENCE="false" COMMENT="Integrity hash of the run package (SHA-256)."/>
         <FIELD NAME="status" TYPE="int" LENGTH="2" NOTNULL="true" DEFAULT="0" SEQUENCE="false" COMMENT="0=pending, 10=sent, 20=acknowledged, 40=failed."/>
         <FIELD NAME="timecreated" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
         <FIELD NAME="timemodified" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>

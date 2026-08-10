@@ -68,15 +68,16 @@ class oracle_answer extends external_api {
             'runid'      => $runid,
             'questionid' => $questionid,
         ]);
+        unset($params);
 
         $context = \context_system::instance();
         self::validate_context($context);
         require_capability('local/catquizlab:worker', $context);
 
-        // E3.4 will resolve the person's ground truth for $params['runid'],
-        // compute the model likelihood for $params['questionid'] and draw a
-        // seed-deterministic response. Until then the worker receives a clear
-        // "not ready" signal rather than a fabricated answer.
+        // E3.4 will resolve the person's ground truth for the run, compute the
+        // model likelihood for the question and draw a seed-deterministic
+        // response. Until then the worker receives a clear "not ready" signal
+        // rather than a fabricated answer.
         return [
             'ready'    => false,
             'fraction' => 0.0,

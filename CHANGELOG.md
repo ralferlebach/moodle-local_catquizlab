@@ -6,6 +6,72 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.1.3] — 2026-08-10
+
+CI fixes and the declarative experiment format (E1.1).
+
+### Fixed
+- **Install failure on all PHPUnit and Behat jobs:** four CHAR NOT NULL columns
+  (`run.cellkey`, `person.stratum`, `transfer.remotehost`, `transfer.payloadhash`)
+  declared `DEFAULT=""`. Moodle rejects empty-string defaults on NOT NULL char
+  columns during install (debugging output, which fails the CI install step).
+  Removed the empty-string defaults; the columns stay NOT NULL with no default
+  and are always set on insert. Existing installs are unaffected (the physical
+  columns were already created).
+- **PHP Mess Detector:** unused `$params` in `oracle_answer::execute` — now
+  unset like the sibling stubs.
+
+### Added
+- **E1.1 declarative experiment format:** `classes/local/experiment_definition.php`
+  parses a definition (from array or JSON), validates it (structure,
+  enumerations, ranges, and the architektur.md 2.6 requirements — pool variant
+  via scales, persons with count and naming rule, question template, specifiable
+  courses and tests), fills defaults and reports all problems at once. Includes
+  a bundled `example_baseline()`. Covered by `experiment_definition_test.php`
+  (valid baseline, JSON round-trip, garbage rejection, one test per defect,
+  defaults). Format documented in `docs/design/experiment-format.md`.
+
+### Changed
+- `version.php`: 2026081001 → **2026081002**, release 0.1.2 → **0.1.3**. No new
+  upgrade step: the schema fix changes only install metadata, and E1.1 is
+  code-only.
+
+---
+
+Two things: the UI entry point (management page + navigation), and a design
+correction to how item-pool variants are realised. The correction changes the
+`pool` schema, so a version bump and an upgrade step are required.
+
+### Added
+- Management/edit page `index.php`: the plugin's UI landing page, rendered as an
+  admin report page. Shows the engine environment status, the master-switch
+  state and the list of defined experiments (empty-state notice for now).
+- `lib.php` with the `local_catquizlab_render_navbar_output` callback: places a
+  **CATQUIZ-Lab** button in the navbar directly next to the engine's CATQUIZ
+  button, shown only to users with `local/catquizlab:manage`.
+- Registration of the page under **Site administration › Reports** via an
+  `admin_externalpage` (id `local_catquizlab_manage`) in `settings.php`, gated
+  on `local/catquizlab:manage`.
+- Behat coverage (`tests/behat/navigation.feature`) for both entry points.
+- Language strings for the page, the navbar button and run status labels (en/de).
+
+### Changed
+- **Requirements clarification (architektur.md 2.6, normative):** different item
+  parameterisations are realised as physically different questions grouped by
+  **item scales, not CAT contexts**; each simulated person is a **distinct
+  Moodle user**; **courses and CAT tests are specifiable per run** and persons
+  are enrolled into them; **person and item/question names follow specifiable
+  rules**, and questions are storable as **templates with blanks**. Threaded
+  through backlog E1.1 and E2.1–E2.4.
+- **Schema:** `local_catquizlab_pool` drops `contextid` and gains `scaleid`
+  (root item scale of the variant) and `questioncategoryid` (question-bank
+  category with the variant's questions), realising the correction above.
+  `db/upgrade.php` performs the field changes; the generator is updated to
+  match.
+- `version.php`: 2026081000 → **2026081001**, release 0.1.1 → **0.1.2**.
+
+---
+
 ## [0.1.1] — 2026-08-10
 
 Round E0 — plugin foundation completed. Turns the single-table stub into the

@@ -62,5 +62,31 @@ function xmldb_local_catquizlab_upgrade($oldversion): bool {
         upgrade_plugin_savepoint(true, 2026081000, 'local', 'catquizlab');
     }
 
+    if ($oldversion < 2026081001) {
+        // Correction (architektur.md 2.6.A): different item parameterisations are
+        // realised as physically different questions grouped by item scales, not
+        // as CAT contexts (which model calibration scopes of the same items and
+        // would blur ground truth, tagging and depletion). The pool table drops
+        // contextid in favour of scaleid + questioncategoryid.
+        $table = new xmldb_table('local_catquizlab_pool');
+
+        $contextid = new xmldb_field('contextid');
+        if ($dbman->field_exists($table, $contextid)) {
+            $dbman->drop_field($table, $contextid);
+        }
+
+        $scaleid = new xmldb_field('scaleid', XMLDB_TYPE_INTEGER, '10', null, null, null, null, 'recipejson');
+        if (!$dbman->field_exists($table, $scaleid)) {
+            $dbman->add_field($table, $scaleid);
+        }
+
+        $questioncategoryid = new xmldb_field('questioncategoryid', XMLDB_TYPE_INTEGER, '10', null, null, null, null, 'scaleid');
+        if (!$dbman->field_exists($table, $questioncategoryid)) {
+            $dbman->add_field($table, $questioncategoryid);
+        }
+
+        upgrade_plugin_savepoint(true, 2026081001, 'local', 'catquizlab');
+    }
+
     return true;
 }

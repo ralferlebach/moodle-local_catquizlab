@@ -88,17 +88,34 @@ CAT experiment suite*: the environment status shows whether the CAT engine
 is present, experiment runs are **disabled by default**, and the instance
 role defaults to **Node**.
 
+## Where to find it
+
+Once installed (and after a cache purge), the management page is reachable in
+two places, for any user with the `local/catquizlab:manage` capability:
+
+- a **CATQUIZ-Lab** button in the navbar, directly next to the engine's
+  **CATQUIZ** button; and
+- **Site administration → Reports → CAT experiment suite**.
+
+Both open the same page (`local/catquizlab/index.php`). Plugin *settings*
+(master switch, instance role, environment status) stay under *Local plugins*
+as above.
+
 ## Repository layout
 
+    version.php                     component, version, dependencies
+    lib.php                         navbar button callback (next to CATQUIZ)
+    index.php                       management/edit page (report layout)
     classes/local/environment.php   runtime detection of the CAT engine
     classes/local/manifest.php      run reproducibility manifest builder
+    classes/local/experiment_definition.php  declarative experiment format + validator (E1.1)
     classes/external/*.php          five web-service functions (oracle, jobs, hub)
     classes/privacy/provider.php    null provider (stub stores no personal data)
     db/install.xml                  lab-store schema (eight tables)
     db/upgrade.php                  upgrade path for existing installs
     db/services.php                 worker and hub web services
     db/access.php                   manage/view/worker/hubtransfer capabilities
-    settings.php                    master switch, instance role, environment status
+    settings.php                    settings page + Reports entry registration
     worker/                         Puppeteer worker (stub) — ships with the plugin
     tests/                          PHPUnit, generator, Behat
     docs/design/                    architecture (Rev. 2) and backlog E0–E7

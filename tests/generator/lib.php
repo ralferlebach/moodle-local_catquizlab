@@ -94,11 +94,12 @@ class local_catquizlab_generator extends component_generator_base {
         }
 
         $defaults = [
-            'variant'      => 'ideal',
-            'recipejson'   => json_encode(['seed' => 42]),
-            'contextid'    => null,
-            'timecreated'  => time(),
-            'timemodified' => time(),
+            'variant'            => 'ideal',
+            'recipejson'         => json_encode(['seed' => 42]),
+            'scaleid'            => null,
+            'questioncategoryid' => null,
+            'timecreated'        => time(),
+            'timemodified'       => time(),
         ];
         $pool = (object) array_merge($defaults, $record);
         $pool->id = $DB->insert_record('local_catquizlab_pool', $pool);

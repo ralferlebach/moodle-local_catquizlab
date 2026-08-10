@@ -1,4 +1,4 @@
-# Architektur der CAT-Experimenten-Suite (Rev. 2)
+# Architektur der CAT-Experimenten-Suite (Rev. 2.1)
 
 Stand: 09.08.2026 · Diese Fassung ist die maßgebliche Architekturbeschreibung des Plugins `local_catquizlab`; das zugehörige Backlog liegt in `backlog.md`. Eingearbeitete Vorgaben:
 Vorbereitung **und** Auswertung vollständig in einem Local-Plugin · Vorbereitung über interne Routinen und Moodle-APIs · Auswertung wahlweise in derselben Instanz oder nachberechnet in einer zentralen Berechnungsinstanz · vollständiger Export (Excel, OpenDocument, CSV, XML, JSON) für optionale externe Berechnung · **keine** notwendigen externen Berechnungen · Testdurchführung **nicht** intern/in-process, sondern extern per Puppeteer, getriggert durch getimte Adhoc-Tasks
@@ -18,7 +18,7 @@ Für die Auswertung gibt es zwei gleichwertige Betriebsmodi:
 
 ---
 
-## 2. Architektur (Rev. 2)
+## 2. Architektur (Rev. 2.1)
 
 ```
 ┌────────────────────────────────────────────────────────────────────┐
@@ -59,9 +59,10 @@ Für die Auswertung gibt es zwei gleichwertige Betriebsmodi:
 
 Die in `go-clara.php` verwendeten direkten `insert_record`-Ketten auf `question_usages` / `question_attempts` entfallen für die Durchführung komplett (das erledigt jetzt der echte UI-Durchlauf) und werden für die Vorbereitung durch offizielle Routinen ersetzt:
 
-- **Simulanten:** `user_create_user()` / User-API, Kohorten-Zuordnung, Einschreibung über die Enrol-API; Login-Fähigkeit für Puppeteer über generierte Zugangsdaten oder Webservice-Token.
-- **Kurs & Aktivität:** Kurs- und Course-Module-APIs zum Anlegen der `adaptivequiz`-Instanzen je Sweep-Zelle; die CAT-Einstellungen (Strategie, Budgets, SE-Ziele) über die Formular-/Settings-Strukturen von `local_catquiz` (`local_catquiz_tests`), nicht per Hand-SQL.
-- **Item-Pool:** Fragenerzeugung über die Question-Bank-API (generierte MC-Fragen als Träger), Item-Parameter, Skalenbaum und Pool-Varianten über den vorhandenen CSV-Importer bzw. die Importer-Klassen von `local_catquiz`; jede Pool-Variante = eigener CAT-Kontext (vorhandenes Kontext-Konzept).
+- **Simulanten:** `user_create_user()` / User-API, Kohorten-Zuordnung, Einschreibung über die Enrol-API; **jede Person ist ein eigener Nutzer** (siehe 2.6.B), Namensvergabe nach spezifizierbaren Regeln (siehe 2.6.D); Login-Fähigkeit für Puppeteer über generierte Zugangsdaten oder Webservice-Token.
+- **Kurs & Aktivität:** Kurs- und Course-Module-APIs zum Anlegen (oder Referenzieren vorhandener) `adaptivequiz`-Instanzen je Sweep-Zelle; **welche Kurse und CAT-Tests ein Lauf nutzt, ist in der Experiment-/Run-Definition spezifizierbar** (siehe 2.6.C). Die CAT-Einstellungen (Strategie, Budgets, SE-Ziele) über die Formular-/Settings-Strukturen von `local_catquiz` (`local_catquiz_tests`), nicht per Hand-SQL.
+- **Item-Pool:** Fragenerzeugung über die Question-Bank-API (generierte MC-Fragen als Träger), Item-Parameter und Skalenbaum über den vorhandenen CSV-Importer bzw. die Importer-Klassen von `local_catquiz`. **Unterschiedliche Item-Parametrisierungen werden als physisch verschiedene Fragen mit je eigenen Parametern realisiert, organisiert über Item-/Skalen (catscales) – nicht über CAT-Kontexte** (siehe 2.6.A). Fragen sind als **Templates mit Blanks** hinterlegbar und werden nach spezifizierbaren Regeln zu konkreten, systematisch benannten Items instanziiert.
+- **Kurse & CAT-Tests:** je Testlauf spezifizierbar (vorhandene referenzieren oder per Kurs-/Course-Module-API neu anlegen); die zugehörigen Simulanten werden in die jeweiligen Kurse eingeschrieben, bevor Attempts geplant werden (siehe 2.6.C).
 - **Ground Truth:** eigene Lab-Tabellen per `db/install.xml` (Ablösung der ad-hoc erzeugten `local_catquiz_ppsimulation`), mit Profilstruktur je Skalenebene, Stratum, Seed, Run-ID.
 
 ### 2.2 Durchführung: Adhoc-Tasks + Puppeteer
@@ -86,6 +87,22 @@ Gleiches Plugin, per Einstellung in der Rolle „Hub". Erhebende Instanzen („N
 ### 2.5 Export
 
 Ein Export-Modul auf Basis der Moodle-**Dataformat-API**, die xlsx, ods, csv und json bereits mitbringt; XML wird als eigener Writer ergänzt. Exportierbar auf jeder Ebene: Rohdaten (Antwortmatrix im getit-horst-Format, Item-Sequenzen, θ/SE-Verläufe, Score-Komponenten), Ground Truth, Baseline-Referenzen, Metrik-Ergebnisse, Aggregationen sowie das vollständige Run-Manifest (Seeds, Konfiguration, Engine-Version). Jeder Export ist selbstbeschreibend (Spaltenkatalog/Schema im Paket), sodass externe Berechnungen möglich, aber nie nötig sind.
+
+### 2.6 Präzisierungen (Rev. 2.1) — Item-/Personen-Realisierung
+
+Vier Festlegungen konkretisieren die Provisionierung. Sie sind normativ (MUSS) und Bestandteil des Lasten-/Pflichtenhefts.
+
+**A. Item-Parametrisierung über echte Items/Questions und Item-Skalen — nicht über Kontexte.**
+Unterschiedliche Item-Parametrisierungen (Ideal-Pool wie alle Mutationen: shifted, stretched, gappy, Kalibrierfehler, Taggingfehler, depleted, kombiniert) werden als **physisch verschiedene Fragen** in der Fragensammlung mit je eigenen Item-Parametern realisiert und über den **Item-/Skalenbaum (catscales)** organisiert. CAT-Kontexte (`local_catquiz`-catcontext) sind dafür **nicht geeignet** und werden **nicht als Variantenträger** verwendet: Ein catcontext modelliert einen Kalibrier-/Auswertungs-Scope *derselben* Items, nicht getrennte Pools; ihn als Varianten-Container zu missbrauchen würde Ground Truth, Tagging, Expositions- und Depletion-Effekte vermischen und die Fragen-Wiederverwendung über Varianten hinweg erzwingen. Ein Lauf arbeitet in einem einzigen Arbeits-Kontext; die Varianten unterscheiden sich durch ihre **Items und Skalen**. *Schema-Konsequenz:* In `local_catquizlab_pool` entfällt `contextid` zugunsten von `scaleid` (Wurzel-Item-Skala der Variante) und `questioncategoryid` (Fragen-Kategorie mit den erzeugten Item-Objekten).
+
+**B. Personen als verschiedene Nutzer.**
+Jede simulierte Person ist ein **eigener Moodle-Nutzer** (User-API), kein bloßer Datensatz. Die Ground Truth (hierarchisches θ-Profil) verbleibt im Lab-Store und ist über `local_catquizlab_person.moodleuserid` mit dem Nutzer verknüpft. Anlage, Kohortenbildung und Aufräumen laufen über offizielle APIs.
+
+**C. Kurse und CAT-Tests je Testlauf spezifizierbar; Personen kursweise einschreiben.**
+Die Experiment-/Run-Definition gibt an, **welche Kurse** und **welche adaptivequiz-Instanzen (CAT-Tests)** ein Lauf verwendet — entweder vorhandene referenzieren oder per API neu anlegen. Die zu einem Lauf gehörenden Simulanten werden vor der Attempt-Planung in die jeweiligen Kurse **eingeschrieben** (Enrol-API). Damit sind mehrere Kurse/Tests je Experiment und die saubere Zuordnung Person→Kurs→Test abgedeckt.
+
+**D. Systematische Namensvergabe und Fragen-Templates.**
+Personen- und Item/Question-Namen werden nach **spezifizierbaren Regeln** vergeben: Muster mit Platzhaltern (z. B. Stratum, Kategorie, Subskala, laufender Index), seed-stabil, kollisionsfrei und rekonstruierbar. Fragen sind als **Templates mit Blanks** hinterlegbar — ein Template (Fragetext und Optionen mit Platzhaltern samt Ziel-Parametern) wird nach Regeln instanziiert, um viele konkrete, systematisch benannte Items zu erzeugen. Die Namens- und Template-Regeln sind Teil des deklarativen Experimentformats (Backlog E1.1) und werden bei der Provisionierung (E2) angewandt.
 
 ---
 

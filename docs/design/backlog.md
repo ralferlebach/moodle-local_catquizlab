@@ -28,17 +28,17 @@ Gegenüber Rev. 1 entfallen: externe Analyse-Workbench (Python/R), Driver A (In-
 ### E1 – Experiment-Definition & Sweep
 | # | Arbeitspaket | Hinweise |
 | --- | --- | --- |
-| 1.1 | Deklaratives Experimentformat (JSON) + Validierung: Modell, Pool-Variante, Stratum, Strategie, Budgets/SE-Ziele, R, Seeds, Timing-Profil der Tasks | Timing-Profil neu wegen getimter Adhoc-Tasks |
+| 1.1 ✅ | Deklaratives Experimentformat (JSON) + Validierung: Modell, Pool-Variante, Stratum, Strategie, Budgets/SE-Ziele, R, Seeds, Timing-Profil der Tasks, **Kurs-/CAT-Test-Spezifikation** (referenzieren oder neu anlegen), **Namensregeln** (Personen, Items/Questions) und **Fragen-Templates** (Blanks + Zielparameter) | Timing-Profil neu wegen getimter Adhoc-Tasks; Kurse/Tests/Namen/Templates gem. Architektur 2.6 |
 | 1.2 | Sweep-Expansion mit Ausschlussregeln und fraktioniertem Design; Tier-Zuordnung (Baseline/Haupt/Robustheit/operativ) | Kapazitätsschätzung je Zelle (Attempts × erwartete Dauer) einblenden |
-| 1.3 | Registry-UI (wunderbyte_table): Runs mit Status, Fortschritt, Fehlläufen, Task-Warteschlange; CLI-Pendant | |
+| 1.3 ⏳ teilweise | Registry-UI: Verwaltungs-/Bearbeitungsseite `index.php` als Einstieg (Navbar-Button neben CATQUIZ via `*_render_navbar_output` **und** Website-Administration › Berichte › „CAT-Experimenten-Suite" via `admin_externalpage` unter `reports`), Umgebungs- und Experimentliste. Offen: Run-Tabelle (wunderbyte_table) mit Status/Fortschritt/Task-Warteschlange, CLI-Pendant | Landing-Seite steht; Tabelle folgt mit Runs aus E1.1/1.2 |
 
 ### E2 – Provisionierung über Moodle-APIs
 | # | Arbeitspaket | Hinweise |
 | --- | --- | --- |
-| 2.1 | Pool-Generator: Skalenbaum 10×10, 25 Items/Subskala, genestete Schwierigkeitsverteilungen (parametrisierbar), Fragenerzeugung via Question-Bank-API, Parameter/Skalen via Engine-Importer, eigener CAT-Kontext | seed-deterministisch |
-| 2.2 | Pool-Mutator: shifted/stretched/kombiniert, gappy, Kalibrierungsfehler 5–20 %, Taggingfehler 5–20 %, Depleted −25/50/75 % – je als abgeleiteter Kontext mit protokolliertem Mutationsrezept | |
-| 2.3 | Personen-Generator: 4 Strata, hierarchische Profile (θ_global/Kategorie/Subskala) orientiert an der Testinformation des Ideal-Pools; Anlage als echte Nutzer (User-/Enrol-API), Kohortenverwaltung, Zugangsdaten fürs Worker-Login | Ground Truth in Lab-Store |
-| 2.4 | Test-Setup-Automat: adaptivequiz-Instanzen + `local_catquiz_tests`-Settings je Sweep-Zelle über Course-Module- und Engine-Routinen | ersetzt manuelle Formularpflege |
+| 2.1 | Pool-Generator: Skalenbaum 10×10, 25 Items/Subskala, genestete Schwierigkeitsverteilungen (parametrisierbar), Fragenerzeugung via Question-Bank-API aus **Templates mit Blanks**, Parameter/Skalen via Engine-Importer. **Realisierung über echte Items + Item-Skalen, NICHT über CAT-Kontexte** (Architektur 2.6.A). **Systematische Item/Question-Namen** nach Regeln | seed-deterministisch; ein Arbeits-Kontext je Lauf |
+| 2.2 | Pool-Mutator: shifted/stretched/kombiniert, gappy, Kalibrierungsfehler 5–20 %, Taggingfehler 5–20 %, Depleted −25/50/75 % – je als **eigener Item-/Skalensatz (verschiedene Fragen)** mit protokolliertem Mutationsrezept, **nicht als abgeleiteter Kontext** (Architektur 2.6.A) | Depletion = Items entfernen, kein Kontext-Trick |
+| 2.3 | Personen-Generator: 4 Strata, hierarchische Profile (θ_global/Kategorie/Subskala) orientiert an der Testinformation des Ideal-Pools; **Anlage je Person als eigener Moodle-Nutzer** (User-API, Architektur 2.6.B), **Namensvergabe nach Regeln** (2.6.D), Kohortenverwaltung, Zugangsdaten fürs Worker-Login | Ground Truth in Lab-Store, verknüpft über person.moodleuserid |
+| 2.4 | Test-Setup-Automat: **spezifizierbare Kurse und adaptivequiz-Instanzen (CAT-Tests) je Lauf** – vorhandene referenzieren oder per API anlegen; `local_catquiz_tests`-Settings je Sweep-Zelle über Course-Module- und Engine-Routinen; **Einschreibung der Simulanten in die jeweiligen Kurse** (Enrol-API) vor der Attempt-Planung (Architektur 2.6.C) | ersetzt manuelle Formularpflege |
 | 2.5 | Reset-/Aufräum-Routinen: Runs rückstandsfrei entfernen bzw. Instanz in definierten Ausgangszustand bringen | wichtig für PF(t)=1-Phase vs. spätere PF(t)-Phase |
 
 ### E3 – Orchestrierung & Puppeteer-Durchführung

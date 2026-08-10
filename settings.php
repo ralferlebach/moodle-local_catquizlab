@@ -32,6 +32,17 @@ defined('MOODLE_INTERNAL') || die();
 
 use local_catquizlab\local\environment;
 
+// Management/registry page under Site administration > Reports. Added outside
+// the $hassiteconfig gate so a manager with local/catquizlab:manage sees it in
+// the Reports list even without full site-config rights; the capability on the
+// page controls access. The same URL backs the navbar button (see lib.php).
+$ADMIN->add('reports', new admin_externalpage(
+    'local_catquizlab_manage',
+    get_string('manage:pagetitle', 'local_catquizlab'),
+    new moodle_url('/local/catquizlab/index.php'),
+    'local/catquizlab:manage'
+));
+
 if ($hassiteconfig) {
     $component = 'local_catquizlab';
 
