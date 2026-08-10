@@ -98,6 +98,21 @@ Accessible-Name (title/aria-label). Neu: Naming-Engine
 `{key:0Nd}` sowie `sequence()`; deterministisch, seiteneffektfrei; Tests
 `naming_test.php`. Versionsbump → 2026081005 / 0.1.6.
 
+## Phase 10 — Lang-Order-Fix + Personen-Ground-Truth (Release 0.1.7)
+Lokaler `make check` meldete eine PHPCS-Warnung: `naming:unknownplaceholder`
+stand hinter `navbarbutton`, der Moodle-Lang-Ordering-Sniff (moodle-cs ≥ 3.7)
+verlangt es davor. In en/de korrigiert; der Container-Sniff war älter, daher
+moodle-cs auf 3.7 aktualisiert, sodass die Prüfung nun dem lokalen Stand
+entspricht. Neu: `classes/local/person_generator.php` (E2.3, Teil 1) — zieht je
+Person eine globale Fähigkeit und, je Stratum, Kategorie-/Subskalen-Abweichungen
+zu einem hierarchischen θ-Profil (Namensvergabe über die Naming-Engine),
+seed-deterministisch und seiteneffektfrei; `persist()` schreibt in
+`local_catquizlab_person` (moodleuserid vorerst null — echte Nutzer und
+Einschreibung folgen mit Kursen/CAT-Test). Verteilungsparameter kommen aus der
+Definition (dokumentierte First-Cut-Defaults), damit das statistische Design in
+der Definition bleibt. Tests `person_generator_test.php`. Versionsbump →
+2026081006 / 0.1.7.
+
 ## Verifikationsstand
 Container: PHP-Syntax, install.xml, YAML, Worker-JS grün; PHPCS (Moodle) 0/0
 **und PHPMD ohne Verstöße** über alle PHP-Dateien; höchster Upgrade-Savepoint ≤

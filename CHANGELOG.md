@@ -6,7 +6,33 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
-## [0.1.6] — 2026-08-10
+## [0.1.7] — 2026-08-10
+
+Language-file ordering fix and the person ground-truth generator (E2.3, part 1).
+
+### Fixed
+- **`make check` (PHPCS) failure**: the `naming:unknownplaceholder` string was
+  ordered after `navbarbutton`; the Moodle lang-file ordering sniff (present in
+  moodle-cs ≥ 3.7) requires it before. Both `lang/en` and `lang/de` are now
+  correctly ordered. (The container used an older moodle-cs that lacked this
+  sniff; it has been updated so the check now matches the local `make check`.)
+
+### Added
+- **Person ground-truth generator** `classes/local/person_generator.php`
+  (E2.3, first part): for a run's persons it draws a global ability and, by
+  stratum, category/subscale deviations, producing the hierarchical θ profile
+  the oracle will answer against; names come from the naming engine.
+  Seed-deterministic and side-effect-free, with a `persist()` that writes the
+  profiles to `local_catquizlab_person` (moodleuserid stays null — turning
+  profiles into real Moodle users and enrolling them comes later, once courses
+  and the CAT test exist). Distribution parameters are read from the definition
+  with documented first-cut defaults, keeping the statistical design in the
+  definition rather than hard-coded. Covered by `person_generator_test.php`.
+
+- `version.php`: 2026081005 → **2026081006**, release 0.1.6 → **0.1.7**. No new
+  upgrade step (code-only round; the person table already exists).
+
+---
 
 CI fixes, an icon-only navbar button, and the naming engine (E2 groundwork).
 

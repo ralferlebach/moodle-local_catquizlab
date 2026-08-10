@@ -112,6 +112,7 @@ as above.
     classes/local/sweep.php         sweep expansion: spec -> runs (E1.2)
     classes/local/registry.php      persist expansions; read runs for the UI (E1.3)
     classes/local/naming.php        name-pattern expansion (requirement 2.6.D)
+    classes/local/person_generator.php  seed-deterministic ground-truth profiles (E2.3)
     cli/sweep.php                   CLI: expand a sweep spec, persist or list runs
     classes/external/*.php          five web-service functions (oracle, jobs, hub)
     classes/privacy/provider.php    null provider (stub stores no personal data)
