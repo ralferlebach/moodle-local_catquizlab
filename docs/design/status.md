@@ -29,6 +29,7 @@ die eigentliche Experiment-Durchführung.
   - 2.2 Pool-Mutator (alle Varianten, Blaupause-Ebene) — *komplett*
   - 2.3 Personen-Generator + Nutzer-Provisionierung + Privacy-Provider — *komplett*
   - 2.4 Kurs-Provisionierung + Einschreibung — *Core-Hälfte*
+  - 2.5 Reset-/Aufräum-Routinen (`run_cleanup`) — *komplett*
 - **E3 – Orchestrierung (Core-Teile):**
   - 3.1 Attempt-Scheduler + Adhoc-Task (Warteschlange) — *Teil 1*
   - 3.4 Response-Oracle (IRT 1PL/2PL/3PL, θ-Auflösung, deterministisch) — *Rechenkern*
@@ -47,7 +48,6 @@ die eigentliche Experiment-Durchführung.
   über den `local_catquiz`-Importer (engine-abhängig).
 - **E2.4 (Rest):** **adaptivequiz-Instanz** je Lauf + `local_catquiz_tests`-Settings
   (füllt `run.testcmid`; engine-/host-abhängig).
-- **E2.5:** Reset-/Aufräum-Routinen für Läufe.
 - **E3.1 (Rest):** Per-Attempt-Staffelung (nextruntime), Retry/faildelay, Abbruch.
 - **E3.2/3.3:** Worker-Anbindung (exec/Queue-Polling) + Puppeteer-Skript.
 - **E3.4 (Rest):** polytome Antwortauswahl (GPCM/GRM); Verdrahtung des Oracle-WS,

@@ -312,6 +312,18 @@ die `result`-Tabelle ist der persistente Ergebnis-Cache. Neu: `docs/design/statu
 erweitert (`diagnostics_test.php`, `result_aggregator_test.php`). Backlog 4.1/4.2/4.4
 auf ✅. Versionsbump → 2026081020 / 0.1.21 (reiner Code, kein Upgrade-Schritt).
 
+## Phase 25 — E2.5 Run-Cleanup + veralteten E1-Hinweis korrigiert (Release 0.1.22)
+Screenshot-Hinweis des Nutzers: Der „Runs"-Text verwies noch auf E1 als
+nächsten Meilenstein (E1 ist erledigt) — `manage:createhint` in en/de auf den
+aktuellen CLI/API-Workflow umgeschrieben. E2.5: `classes/local/run_cleanup.php` —
+`cleanup()` räumt den Lab-Store-Rest eines Runs (attempts, results, person),
+löscht die vom Run angelegten Moodle-Nutzer und setzt den Run auf Draft; Optionen
+löschen einen suite-erzeugten Kurs (erkannt am `catlab_run_`-Kürzel; referenzierte
+Kurse bleiben unangetastet) und/oder die Run-Zeile selbst. Core-only, idempotent.
+Tests `run_cleanup_test.php` (Reset, Idempotenz, referenzierter Kurs bleibt,
+Run-Löschung; delete_course-Ausgabe gekapselt). Backlog E2.5 ✅. Versionsbump →
+2026081021 / 0.1.22 (reiner Code, kein Upgrade-Schritt).
+
 ## Verifikationsstand
 Container: PHP-Syntax, install.xml, YAML, Worker-JS grün; PHPCS (Moodle) 0/0
 **und PHPMD ohne Verstöße** über alle PHP-Dateien; höchster Upgrade-Savepoint ≤

@@ -117,6 +117,7 @@ as above.
     classes/local/pool_mutator.php  deterministic pool variants (E2.2)
     classes/local/user_provisioner.php  create Moodle users from profiles (E2.3)
     classes/local/course_provisioner.php  course + enrolment per run (E2.4)
+    classes/local/run_cleanup.php        reset/remove a run's residue (E2.5)
     classes/local/attempt_scheduler.php  queue a run's attempts (E3.1)
     classes/task/schedule_attempts.php   ad-hoc task wrapping the scheduler
     classes/local/response_oracle.php    IRT answer model (E3.4)

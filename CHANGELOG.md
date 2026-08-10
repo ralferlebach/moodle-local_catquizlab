@@ -6,7 +6,27 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
-## [0.1.21] — 2026-08-10
+## [0.1.22] — 2026-08-10
+
+E2.5 run cleanup, and an outdated management-page hint fixed.
+
+### Added
+- **Run cleanup** `classes/local/run_cleanup.php` (E2.5): `cleanup()` clears a
+  run's lab-store residue (attempts, results, person rows), deletes the Moodle
+  users the run provisioned, and resets the run to draft. Options delete a
+  suite-created course (recognised by the `catlab_run_` short name — a referenced
+  existing course is left intact) and/or the run row itself. Core-only,
+  idempotent. Covered by `run_cleanup_test.php`.
+
+### Fixed
+- **Management page hint** wrongly said experiment editing "arrives with the next
+  milestone (E1)"; E1 is complete. The `manage:createhint` string now describes
+  the current CLI/API workflow (both languages).
+
+- `version.php`: 2026081020 → **2026081021**, release 0.1.21 → **0.1.22**. No new
+  upgrade step (code-only round).
+
+---
 
 Completed E4.2 (diagnostics) and E4.4 (async aggregation), plus a status overview.
 
