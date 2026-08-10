@@ -6,7 +6,29 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
-## [0.1.18] — 2026-08-10
+## [0.1.19] — 2026-08-10
+
+CI fixes (PHPUnit failure and risky test).
+
+### Fixed
+- **`privacy_test::test_contexts_and_userlist` failure.** `get_contexts_for_userid`
+  and `get_users_in_context` now use the canonical `add_from_sql` pattern to add
+  the system context / users, instead of `add_system_context()` / a fieldset plus
+  `add_users`. This resolves the empty context list and is the standard Moodle
+  privacy implementation.
+- **Risky test** `attempt_scheduler_test::test_task_respects_master_switch`: the
+  ad-hoc task's `mtrace()` output is now captured (`ob_start`/`ob_end_clean`) in
+  the test, so Moodle's strict "no output during tests" rule no longer flags it.
+- **PHPMD advisory**: `xmldb_local_catquizlab_upgrade()` exceeded the cyclomatic
+  threshold (11) after the E2.4 step; the run-column additions were extracted to
+  a documented helper (`local_catquizlab_upgrade_add_run_course_columns()`), with
+  the savepoint left inline so the savepoints check is unaffected. (The remaining
+  two boolean-flag advisories are non-blocking and kept for API clarity.)
+
+- `version.php`: 2026081017 → **2026081018**, release 0.1.18 → **0.1.19**. No new
+  upgrade step (fix-only round; the highest savepoint is unchanged).
+
+---
 
 Result aggregation — the bridge from traces to stored results (E4/E6).
 

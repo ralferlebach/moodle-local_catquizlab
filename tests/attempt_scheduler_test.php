@@ -136,14 +136,18 @@ final class attempt_scheduler_test extends \advanced_testcase {
         set_config('enabled', 0, 'local_catquizlab');
         $task = new schedule_attempts();
         $task->set_custom_data(['runid' => $runid]);
+        ob_start();
         $task->execute();
+        ob_end_clean();
         $this->assertSame(0, $DB->count_records('local_catquizlab_attempt', ['runid' => $runid]));
 
         // Master switch on: the task schedules.
         set_config('enabled', 1, 'local_catquizlab');
         $task = new schedule_attempts();
         $task->set_custom_data(['runid' => $runid]);
+        ob_start();
         $task->execute();
+        ob_end_clean();
         $this->assertSame(4, $DB->count_records('local_catquizlab_attempt', ['runid' => $runid]));
     }
 

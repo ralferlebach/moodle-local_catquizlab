@@ -270,6 +270,21 @@ Traces testbar. Tests `result_aggregator_test.php` (konstanter Offset → bias,
 Testlänge, n, Exposure-Detail, Idempotenz, Reader). Versionsbump →
 2026081017 / 0.1.18 (reiner Code, kein Upgrade-Schritt).
 
+## Phase 22 — CI-Fix: PHPUnit-Failure + Risky-Test (Release 0.1.19)
+CI-Analyse (logs_85231853475): Behat grün (4 Szenarien), PHP Lint grün (phpmd
+||true), aber alle PHPUnit-Jobs rot. Zwei Ursachen: (1) `privacy_test::
+test_contexts_and_userlist` scheiterte, weil `get_contexts_for_userid`/
+`get_users_in_context` `add_system_context()` bzw. Fieldset+`add_users`
+nutzten — auf das kanonische `add_from_sql`-Muster umgestellt (fügt System-
+Kontext bzw. Nutzer zuverlässig hinzu). (2) `attempt_scheduler_test::
+test_task_respects_master_switch` war „risky", weil die `mtrace()`-Ausgabe des
+Adhoc-Tasks unter Moodles strenger Output-Regel auffiel — im Test mit
+`ob_start`/`ob_end_clean` gekapselt. Zusätzlich die (nicht blockierende)
+PHPMD-Komplexität in `xmldb_local_catquizlab_upgrade()` (11) durch Auslagern
+der E2.4-Spaltenanlage in `local_catquizlab_upgrade_add_run_course_columns()`
+entschärft; der Savepoint bleibt inline, der Savepoints-Check unverändert.
+Versionsbump → 2026081018 / 0.1.19 (Fix-Runde, kein Upgrade-Schritt).
+
 ## Verifikationsstand
 Container: PHP-Syntax, install.xml, YAML, Worker-JS grün; PHPCS (Moodle) 0/0
 **und PHPMD ohne Verstöße** über alle PHP-Dateien; höchster Upgrade-Savepoint ≤

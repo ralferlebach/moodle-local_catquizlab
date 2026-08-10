@@ -91,22 +91,32 @@ function xmldb_local_catquizlab_upgrade($oldversion): bool {
     if ($oldversion < 2026081011) {
         // E2.4: a run records the course its simulated users are enrolled in and
         // the adaptivequiz CAT test's course-module id.
-        $table = new xmldb_table('local_catquizlab_run');
-
-        $courseid = new xmldb_field('courseid', XMLDB_TYPE_INTEGER, '10', null, null, null, null, 'manifestjson');
-        if (!$dbman->field_exists($table, $courseid)) {
-            $dbman->add_field($table, $courseid);
-        }
-        $testcmid = new xmldb_field('testcmid', XMLDB_TYPE_INTEGER, '10', null, null, null, null, 'courseid');
-        if (!$dbman->field_exists($table, $testcmid)) {
-            $dbman->add_field($table, $testcmid);
-        }
-
-        $key = new xmldb_key('courseid', XMLDB_KEY_FOREIGN, ['courseid'], 'course', ['id']);
-        $dbman->add_key($table, $key);
-
+        local_catquizlab_upgrade_add_run_course_columns($dbman);
         upgrade_plugin_savepoint(true, 2026081011, 'local', 'catquizlab');
     }
 
     return true;
+}
+
+/**
+ * Add the courseid and testcmid columns (and the course foreign key) to the run table.
+ *
+ * @param database_manager $dbman The database manager.
+ * @return void
+ */
+function local_catquizlab_upgrade_add_run_course_columns(database_manager $dbman): void {
+    $table = new xmldb_table('local_catquizlab_run');
+
+    $courseid = new xmldb_field('courseid', XMLDB_TYPE_INTEGER, '10', null, null, null, null, 'manifestjson');
+    if (!$dbman->field_exists($table, $courseid)) {
+        $dbman->add_field($table, $courseid);
+    }
+
+    $testcmid = new xmldb_field('testcmid', XMLDB_TYPE_INTEGER, '10', null, null, null, null, 'courseid');
+    if (!$dbman->field_exists($table, $testcmid)) {
+        $dbman->add_field($table, $testcmid);
+    }
+
+    $key = new xmldb_key('courseid', XMLDB_KEY_FOREIGN, ['courseid'], 'course', ['id']);
+    $dbman->add_key($table, $key);
 }

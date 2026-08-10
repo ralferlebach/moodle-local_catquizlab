@@ -73,12 +73,19 @@ class provider implements
      * @return contextlist The list of contexts.
      */
     public static function get_contexts_for_userid(int $userid): contextlist {
-        global $DB;
-
         $contextlist = new contextlist();
-        if ($DB->record_exists('local_catquizlab_person', ['moodleuserid' => $userid])) {
-            $contextlist->add_system_context();
-        }
+
+        // The person data lives at the system context; add it when this user has any.
+        $sql = "SELECT ctx.id
+                  FROM {context} ctx
+                 WHERE ctx.contextlevel = :level
+                   AND EXISTS (
+                       SELECT 1
+                         FROM {local_catquizlab_person} p
+                        WHERE p.moodleuserid = :userid
+                   )";
+        $contextlist->add_from_sql($sql, ['level' => CONTEXT_SYSTEM, 'userid' => $userid]);
+
         return $contextlist;
     }
 
@@ -89,20 +96,14 @@ class provider implements
      * @return void
      */
     public static function get_users_in_context(userlist $userlist): void {
-        global $DB;
-
         if (!$userlist->get_context() instanceof context_system) {
             return;
         }
 
-        $userids = $DB->get_fieldset_select(
-            'local_catquizlab_person',
-            'DISTINCT moodleuserid',
-            'moodleuserid IS NOT NULL'
-        );
-        if ($userids) {
-            $userlist->add_users($userids);
-        }
+        $sql = "SELECT moodleuserid
+                  FROM {local_catquizlab_person}
+                 WHERE moodleuserid IS NOT NULL";
+        $userlist->add_from_sql('moodleuserid', $sql, []);
     }
 
     /**
