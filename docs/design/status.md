@@ -54,7 +54,6 @@ die eigentliche Experiment-Durchführung.
   sobald Frage→Item-Parameter auflösbar sind.
 - **E3.5:** Collect-Task (Trace-Übernahme aus Engine-Tabellen/Debug-Info).
 - **E3.6:** Parallelisierung/Kapazitätsmessung (Meilenstein M1).
-- **E4.3/4.5:** Verlaufs-/Stabilitätsanalysen; Report-UI (Charts).
 - **E5:** Hub-Modus (Transferpaket, Endpunkte, instanzübergreifende Aggregation).
 - **E6 (Rest):** xlsx/ods über Dataformat-/Workbook-API; Ebenen-/Umfangsauswahl +
   Datenaufsammlung; Antwortmatrix-Export; Export-Task für große Datensätze.

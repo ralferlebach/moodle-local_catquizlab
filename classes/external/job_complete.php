@@ -28,6 +28,8 @@ use core_external\external_api;
 use core_external\external_function_parameters;
 use core_external\external_single_structure;
 use core_external\external_value;
+use local_catquizlab\local\attempt_scheduler;
+use local_catquizlab\local\attempt_collector;
 
 /**
  * Records the outcome the worker reports after playing an attempt.
@@ -50,6 +52,7 @@ class job_complete extends external_api {
             'attemptid' => new external_value(PARAM_INT, 'Lab attempt id that was played.'),
             'status'    => new external_value(PARAM_ALPHA, 'Reported outcome: finished or failed.'),
             'runtimems' => new external_value(PARAM_INT, 'Wall-clock runtime of the attempt in milliseconds.', VALUE_DEFAULT, 0),
+            'engineattemptid' => new external_value(PARAM_INT, 'The adaptivequiz_attempt id (0 when unknown).', VALUE_DEFAULT, 0),
         ]);
     }
 
@@ -59,19 +62,50 @@ class job_complete extends external_api {
      * @param int $attemptid Lab attempt id that was played.
      * @param string $status Reported outcome (finished or failed).
      * @param int $runtimems Wall-clock runtime in milliseconds.
+     * @param int $engineattemptid The adaptivequiz_attempt id, when known.
      * @return array The acknowledgement.
      */
-    public static function execute(int $attemptid, string $status, int $runtimems = 0): array {
+    public static function execute(int $attemptid, string $status, int $runtimems = 0, int $engineattemptid = 0): array {
+        global $DB;
+
         $params = self::validate_parameters(self::execute_parameters(), [
-            'attemptid' => $attemptid,
-            'status'    => $status,
-            'runtimems' => $runtimems,
+            'attemptid'       => $attemptid,
+            'status'          => $status,
+            'runtimems'       => $runtimems,
+            'engineattemptid' => $engineattemptid,
         ]);
         unset($params);
 
         $context = \context_system::instance();
         self::validate_context($context);
         require_capability('local/catquizlab:worker', $context);
+
+        $attempt = $DB->get_record('local_catquizlab_attempt', ['id' => $attemptid]);
+        if (!$attempt) {
+            return [
+                'acknowledged' => false,
+                'message'      => get_string('job:unknownattempt', 'local_catquizlab'),
+            ];
+        }
+
+        $finished = ($status === 'finished');
+        $update = (object) [
+            'id'           => $attemptid,
+            'status'       => $finished ? attempt_scheduler::STATUS_COLLECTED : attempt_scheduler::STATUS_FAILED,
+            'timemodified' => time(),
+        ];
+        if ($runtimems > 0) {
+            $update->runtimems = $runtimems;
+        }
+        if ($engineattemptid > 0) {
+            $update->engineattemptid = $engineattemptid;
+        }
+        $DB->update_record('local_catquizlab_attempt', $update);
+
+        // Pull the engine trace into the attempt when possible (no-op without the engine).
+        if ($finished && $engineattemptid > 0) {
+            attempt_collector::collect($attemptid);
+        }
 
         return [
             'acknowledged' => true,

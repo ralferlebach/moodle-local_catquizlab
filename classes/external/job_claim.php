@@ -28,6 +28,7 @@ use core_external\external_api;
 use core_external\external_function_parameters;
 use core_external\external_single_structure;
 use core_external\external_value;
+use local_catquizlab\local\attempt_scheduler;
 
 /**
  * Hands the calling worker the next attempt to play, if any.
@@ -59,6 +60,8 @@ class job_claim extends external_api {
      * @return array The claim result.
      */
     public static function execute(string $workerid): array {
+        global $DB;
+
         $params = self::validate_parameters(self::execute_parameters(), [
             'workerid' => $workerid,
         ]);
@@ -68,13 +71,51 @@ class job_claim extends external_api {
         self::validate_context($context);
         require_capability('local/catquizlab:worker', $context);
 
-        return [
+        $none = [
             'hasjob'    => false,
             'runid'     => 0,
             'attemptid' => 0,
             'quizcmid'  => 0,
             'userid'    => 0,
             'message'   => get_string('job:none', 'local_catquizlab'),
+        ];
+
+        // Claim the oldest queued attempt inside a transaction so two workers
+        // cannot pick up the same one.
+        $transaction = $DB->start_delegated_transaction();
+
+        $queued = $DB->get_records_select(
+            'local_catquizlab_attempt',
+            'status = :status',
+            ['status' => attempt_scheduler::STATUS_QUEUED],
+            'timecreated ASC, id ASC',
+            '*',
+            0,
+            1
+        );
+        $attempt = reset($queued);
+        if (!$attempt) {
+            $transaction->allow_commit();
+            return $none;
+        }
+
+        $DB->update_record('local_catquizlab_attempt', (object) [
+            'id'           => $attempt->id,
+            'status'       => attempt_scheduler::STATUS_RUNNING,
+            'timemodified' => time(),
+        ]);
+        $run = $DB->get_record('local_catquizlab_run', ['id' => $attempt->runid]);
+        $userid = (int) $DB->get_field('local_catquizlab_person', 'moodleuserid', ['id' => $attempt->personid]);
+
+        $transaction->allow_commit();
+
+        return [
+            'hasjob'    => true,
+            'runid'     => (int) $attempt->runid,
+            'attemptid' => (int) $attempt->id,
+            'quizcmid'  => $run ? (int) $run->testcmid : 0,
+            'userid'    => $userid,
+            'message'   => get_string('job:claimed', 'local_catquizlab'),
         ];
     }
 

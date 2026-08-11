@@ -27,6 +27,7 @@ namespace local_catquizlab;
 use local_catquizlab\local\attempt_collector;
 use local_catquizlab\local\environment;
 use local_catquizlab\local\attempt_scheduler;
+use local_catquizlab\task\collect_attempts;
 
 /**
  * Attempt collector tests.
@@ -34,6 +35,67 @@ use local_catquizlab\local\attempt_scheduler;
  * @covers \local_catquizlab\local\attempt_collector
  */
 final class attempt_collector_test extends \advanced_testcase {
+    /**
+     * collect_run counts candidates with an engine attempt id; without the engine
+     * nothing is collected, but it completes cleanly and reports timing.
+     *
+     * @return void
+     */
+    public function test_collect_run(): void {
+        global $DB;
+        $this->resetAfterTest();
+
+        /** @var \local_catquizlab_generator $generator */
+        $generator = $this->getDataGenerator()->get_plugin_generator('local_catquizlab');
+        $run = $generator->create_run();
+        $person = $generator->create_person(['runid' => $run->id]);
+        $now = time();
+        foreach ([111, 222] as $engineid) {
+            $DB->insert_record('local_catquizlab_attempt', (object) [
+                'runid' => $run->id, 'personid' => $person->id,
+                'engineattemptid' => $engineid,
+                'status' => attempt_scheduler::STATUS_RUNNING,
+                'timecreated' => $now, 'timemodified' => $now,
+            ]);
+        }
+        // An attempt without an engine id is not a candidate.
+        $DB->insert_record('local_catquizlab_attempt', (object) [
+            'runid' => $run->id, 'personid' => $person->id,
+            'status' => attempt_scheduler::STATUS_QUEUED,
+            'timecreated' => $now, 'timemodified' => $now,
+        ]);
+
+        $result = attempt_collector::collect_run($run->id);
+        $this->assertSame(2, $result['candidates']);
+        $this->assertGreaterThanOrEqual(0, $result['runtimems']);
+        if (!environment::engine_available() || !environment::adaptivequiz_available()) {
+            $this->assertSame(0, $result['collected']);
+        }
+    }
+
+    /**
+     * The collect task runs for a queued run id.
+     *
+     * @return void
+     */
+    public function test_collect_task(): void {
+        $this->resetAfterTest();
+
+        /** @var \local_catquizlab_generator $generator */
+        $generator = $this->getDataGenerator()->get_plugin_generator('local_catquizlab');
+        $run = $generator->create_run();
+        attempt_collector::queue($run->id);
+
+        $tasks = \core\task\manager::get_adhoc_tasks(collect_attempts::class);
+        $this->assertCount(1, $tasks);
+
+        $task = reset($tasks);
+        ob_start();
+        $task->execute();
+        ob_end_clean();
+        $this->assertTrue(true);
+    }
+
     /**
      * The pure trace assembly derives items, count and rounding from the responses.
      *

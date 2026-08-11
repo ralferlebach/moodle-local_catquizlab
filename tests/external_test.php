@@ -60,19 +60,61 @@ final class external_test extends \advanced_testcase {
     }
 
     /**
-     * The job queue endpoints acknowledge without handing out work yet.
+     * job_claim hands out queued attempts oldest-first and marks them running;
+     * job_complete records the outcome on the attempt.
      *
      * @return void
      */
-    public function test_job_queue_stub(): void {
+    public function test_job_queue(): void {
+        global $DB;
         $this->resetAfterTest();
         $this->setAdminUser();
 
-        $claim = job_claim::execute('worker-a');
-        $this->assertFalse($claim['hasjob']);
+        /** @var \local_catquizlab_generator $generator */
+        $generator = $this->getDataGenerator()->get_plugin_generator('local_catquizlab');
+        $run = $generator->create_run();
+        $person = $generator->create_person(['runid' => $run->id]);
+        $now = time();
+        $first = $DB->insert_record('local_catquizlab_attempt', (object) [
+            'runid' => $run->id, 'personid' => $person->id,
+            'status' => \local_catquizlab\local\attempt_scheduler::STATUS_QUEUED,
+            'timecreated' => $now, 'timemodified' => $now,
+        ]);
+        $second = $DB->insert_record('local_catquizlab_attempt', (object) [
+            'runid' => $run->id, 'personid' => $person->id,
+            'status' => \local_catquizlab\local\attempt_scheduler::STATUS_QUEUED,
+            'timecreated' => $now + 1, 'timemodified' => $now + 1,
+        ]);
 
-        $complete = job_complete::execute(1, 'finished', 1234);
+        // Oldest first.
+        $claim = job_claim::execute('worker-a');
+        $this->assertTrue($claim['hasjob']);
+        $this->assertSame((int) $first, $claim['attemptid']);
+        $this->assertSame(
+            \local_catquizlab\local\attempt_scheduler::STATUS_RUNNING,
+            (int) $DB->get_field('local_catquizlab_attempt', 'status', ['id' => $first])
+        );
+
+        // Second claim gets the next; a third finds nothing.
+        $this->assertSame((int) $second, job_claim::execute('worker-a')['attemptid']);
+        $this->assertFalse(job_claim::execute('worker-a')['hasjob']);
+
+        // Completing records the outcome.
+        $complete = job_complete::execute($first, 'finished', 1234, 0);
         $this->assertTrue($complete['acknowledged']);
+        $this->assertSame(
+            \local_catquizlab\local\attempt_scheduler::STATUS_COLLECTED,
+            (int) $DB->get_field('local_catquizlab_attempt', 'status', ['id' => $first])
+        );
+        $this->assertSame(1234, (int) $DB->get_field('local_catquizlab_attempt', 'runtimems', ['id' => $first]));
+
+        // A failure marks the attempt failed; an unknown id is rejected.
+        job_complete::execute($second, 'failed', 0, 0);
+        $this->assertSame(
+            \local_catquizlab\local\attempt_scheduler::STATUS_FAILED,
+            (int) $DB->get_field('local_catquizlab_attempt', 'status', ['id' => $second])
+        );
+        $this->assertFalse(job_complete::execute(0, 'finished', 0, 0)['acknowledged']);
     }
 
     /**

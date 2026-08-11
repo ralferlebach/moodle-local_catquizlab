@@ -6,6 +6,121 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.1.30] — 2026-08-10
+
+Report UI (E4.5) — results page with tables and charts.
+
+### Added
+- **Report builder** `classes/local/report_builder.php`: groups a run's stored
+  results by scope (run and each stratum), exposes the key run-scope scalars, and
+  assembles per-metric value series with stability across an experiment's runs.
+  DB-only, testable, covered by `report_builder_test.php`.
+- **Report page** `report.php`: for a run it shows a metric table per scope and a
+  bar chart of the key metrics; for an experiment it shows a stability table and a
+  line chart of each metric across runs — using Moodle's built-in chart API. Guarded
+  by `local/catquizlab:view`. New `report:*` strings (en/de). Behat scenario in
+  `tests/behat/report.feature`.
+- **Management page links**: each experiment name and run cell now links to its
+  report.
+
+- `version.php`: 2026081028 → **2026081029**, release 0.1.29 → **0.1.30**. No new
+  upgrade step (code-only round). This completes E4.
+
+---
+
+## [0.1.29] — 2026-08-10
+
+Trend and stability analyses (E4.3).
+
+### Added
+- **Trend analysis** `classes/local/trend_analysis.php` (E4.3): `stability()`
+  reports the dispersion of a metric across replications (mean, sample SD,
+  coefficient of variation, min/max, range); `linear_trend()` fits a metric
+  against an ordered parameter (slope, intercept, correlation, r²) — e.g. how RMSE
+  rises with pool degradation; `convergence()` tracks the running mean and flags
+  when it settles within a tolerance. `metric_series()` gathers a stored metric
+  across an experiment's runs (ordered by replication) so the analyses run on real
+  aggregated results. The statistics are pure/tested; only the reader touches the
+  database. Covered by `trend_analysis_test.php`.
+
+- `version.php`: 2026081027 → **2026081028**, release 0.1.28 → **0.1.29**. No new
+  upgrade step (code-only round).
+
+---
+
+## [0.1.28] — 2026-08-10
+
+Polytomous response models (E3.4).
+
+### Added
+- **Polytomous models in `response_oracle`** (E3.4): `gpcm_probabilities()`
+  (Generalized Partial Credit Model — cumulative step scores through a softmax)
+  and `grm_probabilities()` (Graded Response Model — successive differences of
+  cumulative logistic thresholds) return category probability vectors, and
+  `respond_polytomous()` draws a seed-deterministic category from either. Pure and
+  covered by `response_oracle_test.php` (probabilities sum to 1, the modal
+  category rises with ability, draws are deterministic, mean category increases
+  with θ). Wiring these into `oracle_answer` follows once item step/threshold
+  parameters are resolved from the engine.
+
+### Docs
+- Restored the CHANGELOG version headers, which a version-numbering collision (the
+  working tree was ahead of a session summary) had stripped from intermediate
+  entries; the history is now a continuous 0.1.28 → 0.1.0 sequence.
+- Corrected a stale backlog note: the collector's ad-hoc task and `collect_run()`
+  runtime measurement (E3.5) were already implemented and tested.
+
+- `version.php`: 2026081026 → **2026081027**, release 0.1.27 → **0.1.28**. No new
+  upgrade step (code-only round).
+
+---
+
+## [0.1.27] — 2026-08-10
+
+Batch collection as an ad-hoc task (E3.5 rest).
+
+### Added
+- **Batch collection**: `attempt_collector::collect_run()` collects every attempt
+  of a run that carries an engine attempt id and reports candidates, collected
+  count and its own runtime in milliseconds; `attempt_collector::queue()` enqueues
+  the new ad-hoc task `classes/task/collect_attempts.php`, which runs collection
+  off the web request (useful for re-collection or when a completion did not carry
+  the engine attempt id). Without the engine it is a clean no-op (zero collected).
+  New string `task:collectattempts`. Covered by `attempt_collector_test.php`
+  (candidate counting, timing, task execution).
+
+- `version.php`: 2026081025 → **2026081026**, release 0.1.26 → **0.1.27**. No new
+  upgrade step (code-only round).
+
+---
+
+## [0.1.26] — 2026-08-10
+
+Worker job queue and the Puppeteer worker (E3.2 / E3.3).
+
+### Changed
+- **`job_claim`** now atomically claims the oldest queued attempt (inside a
+  transaction so two workers can't take the same one), marks it running, and
+  returns the run id, attempt id, adaptivequiz course-module id and the simulated
+  user id for the worker to act on.
+- **`job_complete`** now records the reported outcome on the attempt — collected
+  or failed, with runtime and the engine attempt id — and, on a finished attempt
+  with an engine attempt id, triggers `attempt_collector::collect()` to pull the
+  trace (a no-op without the engine). New parameter `engineattemptid`; new strings
+  `job:claimed`, `job:unknownattempt`. The queue logic is core-only and covered by
+  `external_test.php` (oldest-first hand-out, running/collected/failed transitions,
+  unknown-id rejection).
+- **`worker/run_attempt.js`** is now a full reference worker: it polls
+  `job_claim`, logs in as the simulated user, opens the adaptivequiz, and for each
+  presented question asks `oracle_answer`, answers and submits, loops until the
+  engine stops, then calls `job_complete` with the runtime and engine attempt id.
+  Selectors are documented as theme-tunable.
+
+- `version.php`: 2026081024 → **2026081025**, release 0.1.25 → **0.1.26**. No new
+  upgrade step (code-only round).
+
+---
+
 ## [0.1.25] — 2026-08-10
 
 Item repository and a live response oracle (E2.1 / E3.4 wiring).
@@ -36,6 +151,8 @@ Item repository and a live response oracle (E2.1 / E3.4 wiring).
 
 ---
 
+## [0.1.24] — 2026-08-10
+
 Test binder (E2.4, reference path) — bind a run to an adaptivequiz CAT test.
 
 ### Added
@@ -55,6 +172,8 @@ Test binder (E2.4, reference path) — bind a run to an adaptivequiz CAT test.
   upgrade step (run.testcmid already exists).
 
 ---
+
+## [0.1.23] — 2026-08-10
 
 Attempt collector (E3.5) — engine trace into a lab trace.
 
@@ -77,6 +196,8 @@ Attempt collector (E3.5) — engine trace into a lab trace.
 
 ---
 
+## [0.1.22] — 2026-08-10
+
 E2.5 run cleanup, and an outdated management-page hint fixed.
 
 ### Added
@@ -96,6 +217,8 @@ E2.5 run cleanup, and an outdated management-page hint fixed.
   upgrade step (code-only round).
 
 ---
+
+## [0.1.21] — 2026-08-10
 
 Completed E4.2 (diagnostics) and E4.4 (async aggregation), plus a status overview.
 
@@ -120,6 +243,8 @@ Completed E4.2 (diagnostics) and E4.4 (async aggregation), plus a status overvie
 
 ---
 
+## [0.1.20] — 2026-08-10
+
 CI fix (privacy test: int-vs-string id comparison).
 
 ### Fixed
@@ -138,6 +263,8 @@ CI fix (privacy test: int-vs-string id comparison).
   upgrade step (test-only fix round).
 
 ---
+
+## [0.1.19] — 2026-08-10
 
 CI fixes (PHPUnit failure and risky test).
 
@@ -161,6 +288,8 @@ CI fixes (PHPUnit failure and risky test).
 
 ---
 
+## [0.1.18] — 2026-08-10
+
 Result aggregation — the bridge from traces to stored results (E4/E6).
 
 ### Added
@@ -179,6 +308,8 @@ Result aggregation — the bridge from traces to stored results (E4/E6).
   upgrade step (the attempt and result tables already exist).
 
 ---
+
+## [0.1.17] — 2026-08-10
 
 Data export to CSV, JSON and XML (E6, core formats).
 
@@ -199,6 +330,8 @@ Data export to CSV, JSON and XML (E6, core formats).
 
 ---
 
+## [0.1.16] — 2026-08-10
+
 Diagnostic / ranking measures for deficit recovery (E4.2).
 
 ### Added
@@ -217,6 +350,8 @@ Diagnostic / ranking measures for deficit recovery (E4.2).
 
 ---
 
+## [0.1.15] — 2026-08-10
+
 Evaluation metrics (E4, computational core).
 
 ### Added
@@ -234,6 +369,8 @@ Evaluation metrics (E4, computational core).
   upgrade step (code-only round).
 
 ---
+
+## [0.1.14] — 2026-08-10
 
 Response oracle: the IRT answer model (E3.4, computational core).
 
@@ -259,6 +396,8 @@ Response oracle: the IRT answer model (E3.4, computational core).
 
 ---
 
+## [0.1.13] — 2026-08-10
+
 Attempt scheduling (E3.1).
 
 ### Added
@@ -276,6 +415,8 @@ Attempt scheduling (E3.1).
   upgrade step (code-only round; the attempt table already exists).
 
 ---
+
+## [0.1.12] — 2026-08-10
 
 Course provisioning and enrolment (E2.4, core half).
 
@@ -297,6 +438,8 @@ Course provisioning and enrolment (E2.4, core half).
 
 ---
 
+## [0.1.11] — 2026-08-10
+
 Management page moved to a Mustache template with collapsible sections.
 
 ### Changed
@@ -315,6 +458,8 @@ Management page moved to a Mustache template with collapsible sections.
   upgrade step (code/template-only round).
 
 ---
+
+## [0.1.10] — 2026-08-10
 
 Makefile fixes (screen clear + resilient PHPUnit), user provisioning (E2.3
 part 2), and the privacy provider upgrade that goes with it.
@@ -350,6 +495,8 @@ part 2), and the privacy provider upgrade that goes with it.
 
 ---
 
+## [0.1.9] — 2026-08-10
+
 Restored the full local check suite, and the pool mutator (E2.2).
 
 ### Changed
@@ -379,6 +526,8 @@ Restored the full local check suite, and the pool mutator (E2.2).
 
 ---
 
+## [0.1.8] — 2026-08-10
+
 Pool planner: the item ground-truth blueprint (E2.1, part 1).
 
 ### Added
@@ -398,6 +547,8 @@ Pool planner: the item ground-truth blueprint (E2.1, part 1).
   upgrade step (code-only round).
 
 ---
+
+## [0.1.7] — 2026-08-10
 
 Language-file ordering fix and the person ground-truth generator (E2.3, part 1).
 
@@ -424,6 +575,8 @@ Language-file ordering fix and the person ground-truth generator (E2.3, part 1).
   upgrade step (code-only round; the person table already exists).
 
 ---
+
+## [0.1.6] — 2026-08-10
 
 CI fixes, an icon-only navbar button, and the naming engine (E2 groundwork).
 
@@ -458,6 +611,8 @@ CI fixes, an icon-only navbar button, and the naming engine (E2 groundwork).
 
 ---
 
+## [0.1.5] — 2026-08-10
+
 Run registry (E1.3): expanded sweeps become persisted runs, shown in the
 management page and reachable from the CLI.
 
@@ -483,6 +638,8 @@ management page and reachable from the CLI.
 
 ---
 
+## [0.1.4] — 2026-08-10
+
 Sweep expansion (E1.2) and a documentation convention.
 
 ### Added
@@ -505,6 +662,8 @@ Sweep expansion (E1.2) and a documentation convention.
   upgrade step (code-only round).
 
 ---
+
+## [0.1.3] — 2026-08-10
 
 CI fixes and the declarative experiment format (E1.1).
 
@@ -535,6 +694,8 @@ CI fixes and the declarative experiment format (E1.1).
   code-only.
 
 ---
+
+## [0.1.2] — 2026-08-10
 
 Two things: the UI entry point (management page + navigation), and a design
 correction to how item-pool variants are realised. The correction changes the

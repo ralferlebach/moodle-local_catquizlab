@@ -42,7 +42,7 @@
         "experiments": {
             "hasany": true,
             "rows": [
-                { "name": "Baseline", "tier": "baseline", "status": "Draft", "runs": 8 }
+                { "name": "Baseline", "tier": "baseline", "status": "Draft", "runs": 8, "reporturl": "report.php?experimentid=1" }
             ]
         },
         "runs": {
@@ -52,7 +52,7 @@
             "rows": [
                 {
                     "experiment": "Baseline", "tier": "baseline",
-                    "cell": "variant=ideal", "replication": 1, "seed": 12345, "status": "Draft"
+                    "cell": "variant=ideal", "replication": 1, "seed": 12345, "status": "Draft", "reporturl": "report.php?runid=1"
                 }
             ]
         }
@@ -93,7 +93,7 @@
                         <tbody>
                             {{#rows}}
                                 <tr>
-                                    <td>{{name}}</td>
+                                    <td>{{#reporturl}}<a href="{{reporturl}}">{{name}}</a>{{/reporturl}}{{^reporturl}}{{name}}{{/reporturl}}</td>
                                     <td>{{tier}}</td>
                                     <td>{{status}}</td>
                                     <td>{{runs}}</td>
@@ -133,7 +133,7 @@
                                 <tr>
                                     <td>{{experiment}}</td>
                                     <td>{{tier}}</td>
-                                    <td>{{cell}}</td>
+                                    <td>{{#reporturl}}<a href="{{reporturl}}">{{cell}}</a>{{/reporturl}}{{^reporturl}}{{cell}}{{/reporturl}}</td>
                                     <td>{{replication}}</td>
                                     <td>{{seed}}</td>
                                     <td>{{status}}</td>

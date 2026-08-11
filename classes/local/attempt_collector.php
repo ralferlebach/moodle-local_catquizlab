@@ -42,6 +42,50 @@ namespace local_catquizlab\local;
  */
 class attempt_collector {
     /**
+     * Queue the ad-hoc task that collects a run's attempts.
+     *
+     * @param int $runid The run whose attempts to collect.
+     * @return void
+     */
+    public static function queue(int $runid): void {
+        $task = new \local_catquizlab\task\collect_attempts();
+        $task->set_custom_data(['runid' => $runid]);
+        \core\task\manager::queue_adhoc_task($task, true);
+    }
+
+    /**
+     * Collect every attempt of a run that carries an engine attempt id.
+     *
+     * @param int $runid The run to collect.
+     * @return array{candidates: int, collected: int, runtimems: int} What was collected and how long it took.
+     */
+    public static function collect_run(int $runid): array {
+        global $DB;
+
+        $started = microtime(true);
+        $attempts = $DB->get_records_select(
+            'local_catquizlab_attempt',
+            'runid = :runid AND engineattemptid IS NOT NULL AND engineattemptid > 0',
+            ['runid' => $runid],
+            'id ASC',
+            'id'
+        );
+
+        $collected = 0;
+        foreach ($attempts as $attempt) {
+            if (self::collect((int) $attempt->id) !== null) {
+                $collected++;
+            }
+        }
+
+        return [
+            'candidates' => count($attempts),
+            'collected'  => $collected,
+            'runtimems'  => (int) round((microtime(true) - $started) * 1000),
+        ];
+    }
+
+    /**
      * Collect one attempt's trace from the engine and store it.
      *
      * @param int $attemptid The lab attempt id (local_catquizlab_attempt).

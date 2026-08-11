@@ -367,6 +367,66 @@ Fähigkeit; Subskalen-Auflösung folgt mit der Materialisierung (catscale↔subs
 Mapping). Tests `item_repository_test.php` + external-Test aktualisiert.
 Versionsbump → 2026081024 / 0.1.25 (reiner Code, kein Upgrade-Schritt).
 
+## Phase 29 — Worker-Queue + Puppeteer-Skript E3.2/E3.3 (Release 0.1.26)
+Echte Job-Warteschlange auf der Lab-Store-attempt-Tabelle (core-testbar).
+`job_claim` beansprucht den ältesten wartenden Attempt atomar (Transaktion, damit
+zwei Worker denselben nicht ziehen), setzt ihn auf running und liefert runid,
+attemptid, quizcmid (run.testcmid), userid. `job_complete` verbucht das Ergebnis
+am Attempt (collected/failed, runtimems, engineattemptid) und triggert bei
+„finished" + engineattemptid den `attempt_collector::collect()` (No-op ohne
+Engine). Neuer Param engineattemptid; Strings job:claimed/job:unknownattempt.
+`worker/run_attempt.js` als vollwertige Referenz: pollt job_claim, loggt als
+Simulant ein, öffnet das adaptivequiz, fragt je Frage oracle_answer, antwortet
+und submittet, bis die Engine stoppt, meldet dann job_complete (Laufzeit +
+engineattemptid). Selektoren als theme-abhängig dokumentiert. Tests: external-Test
+auf echte Queue umgestellt (ältester zuerst, Statusübergänge, unbekannte Id).
+Versionsbump → 2026081025 / 0.1.26 (reiner Code, kein Upgrade-Schritt).
+
+## Phase 30 - Collector als Adhoc-Task E3.5-Rest (Release 0.1.27)
+Batch-Collection: `attempt_collector::collect_run()` sammelt alle Attempts eines
+Laufs mit engineattemptid ein und meldet candidates/collected/runtimems (eigene
+Laufzeit). `attempt_collector::queue()` reiht den neuen Adhoc-Task
+`classes/task/collect_attempts.php` ein, der die Collection off the web request
+ausfuehrt (Re-Collection bzw. wenn ein Complete keine engineattemptid trug).
+Ohne Engine sauberer No-op (0 collected). String task:collectattempts (Reihenfolge
+aggregateresults < collectattempts < scheduleattempts). Tests
+attempt_collector_test.php (Kandidatenzaehlung, Timing, Task-Ausfuehrung).
+Versionsbump -> 2026081026 / 0.1.27 (reiner Code, kein Upgrade-Schritt).
+
+## Phase 31 — Polytome Modelle GPCM/GRM + Buchhaltungs-Korrektur (Release 0.1.28)
+E3.4-polytom: `response_oracle` um `gpcm_probabilities()` (GPCM, kumulierte
+Schritt-Scores via Softmax), `grm_probabilities()` (GRM, sukzessive Differenzen
+kumulativer logistischer Schwellen) und `respond_polytomous()` (seed-
+deterministische Kategorienwahl) erweitert — rein/testbar (Summe 1, Modalkategorie
+steigt mit θ, deterministisch, mittlere Kategorie steigt). Verdrahtung in
+`oracle_answer` folgt, sobald Schritt-/Schwellenparameter aufgelöst werden.
+Buchhaltung: Beim Weiterarbeiten fiel auf, dass der Arbeitsstand dem
+Kompaktierungs-Summary voraus war (E3.5-Batch-Collect + Task waren bereits als
+0.1.27 vorhanden). Deshalb: CHANGELOG-Header wiederhergestellt (lückenlose Folge
+0.1.28→0.1.0, dedupliziert), veraltete E3.5-Backlog-Notiz korrigiert, Version auf
+0.1.28 gesetzt (statt Doppelvergabe 0.1.27). Tests `response_oracle_test.php`
+erweitert. Versionsbump → 2026081027 / 0.1.28 (reiner Code, kein Upgrade-Schritt).
+
+## Phase 32 — Verlaufs-/Stabilitätsanalysen E4.3 (Release 0.1.29)
+`classes/local/trend_analysis.php`: `stability()` (Streuung einer Metrik über
+Replikationen — Mittel, Stichproben-SD, Variationskoeffizient, min/max, Range),
+`linear_trend()` (lineare Regression Metrik vs. geordneter Parameter — Steigung,
+Achsenabschnitt, Korrelation, r²; z. B. RMSE steigt mit Pool-Degradation),
+`convergence()` (laufendes Mittel + Konvergenz innerhalb Toleranz).
+`metric_series()` sammelt eine gespeicherte Metrik über die Runs eines Experiments
+(nach Replikation geordnet) — Statistik rein/testbar, nur der Reader nutzt die DB.
+Tests `trend_analysis_test.php`. Versionsbump → 2026081028 / 0.1.29 (reiner Code).
+
+## Phase 33 — Report-UI E4.5 (Release 0.1.30) — E4 vollständig
+`classes/local/report_builder.php` (gruppiert Run-Ergebnisse nach Scope, liefert
+Run-Skalare, baut je Metrik Serie+Stabilität über die Runs eines Experiments; DB-
+only/testbar) und `report.php` (Run: Metrik-Tabelle je Scope + Balkendiagramm;
+Experiment: Stabilitäts-Tabelle + Liniendiagramm über die Runs) über Moodles
+eingebaute Chart-API, Capability `local/catquizlab:view`. Neue `report:*`-Strings
+(en/de), Behat `report.feature`, Report-Links von der Manage-Seite (Experiment-Name,
+Run-Zelle). Tests `report_builder_test.php`. Damit ist **E4 vollständig**.
+Versionsbump → 2026081029 / 0.1.30 (reiner Code, kein Upgrade-Schritt).
+
 ## Verifikationsstand
 Container: PHP-Syntax, install.xml, YAML, Worker-JS grün; PHPCS (Moodle) 0/0
 **und PHPMD ohne Verstöße** über alle PHP-Dateien; höchster Upgrade-Savepoint ≤

@@ -93,6 +93,96 @@ class response_oracle {
     }
 
     /**
+     * Category probabilities under the Generalized Partial Credit Model (GPCM).
+     *
+     * For m step parameters there are m+1 ordered categories (0..m). The
+     * unnormalised log-score of category k is the cumulative sum of
+     * a*(theta - step_j) up to k (category 0 scores zero); a softmax normalises.
+     *
+     * @param float $theta The person's ability.
+     * @param float $discrimination The item discrimination (a).
+     * @param float[] $steps The step parameters (b_1..b_m), in order.
+     * @return float[] Probabilities for categories 0..m, summing to 1.
+     */
+    public static function gpcm_probabilities(float $theta, float $discrimination, array $steps): array {
+        $scores = [0.0];
+        $cumulative = 0.0;
+        foreach (array_values($steps) as $step) {
+            $cumulative += $discrimination * ($theta - $step);
+            $scores[] = $cumulative;
+        }
+
+        $max = max($scores);
+        $exponentials = array_map(static fn($score) => exp($score - $max), $scores);
+        $total = array_sum($exponentials);
+
+        return array_map(static fn($value) => $value / $total, $exponentials);
+    }
+
+    /**
+     * Category probabilities under the Graded Response Model (GRM).
+     *
+     * Each threshold gives a cumulative probability P(X >= k) = logistic(a(theta - b_k));
+     * the category probabilities are the successive differences, with P(X >= 0) = 1
+     * and P(X >= m+1) = 0.
+     *
+     * @param float $theta The person's ability.
+     * @param float $discrimination The item discrimination (a).
+     * @param float[] $thresholds The category thresholds (b_1..b_m), in ascending order.
+     * @return float[] Probabilities for categories 0..m, summing to 1.
+     */
+    public static function grm_probabilities(float $theta, float $discrimination, array $thresholds): array {
+        $cumulative = [1.0];
+        foreach (array_values($thresholds) as $threshold) {
+            $cumulative[] = 1.0 / (1.0 + exp(-$discrimination * ($theta - $threshold)));
+        }
+        $cumulative[] = 0.0;
+
+        $probabilities = [];
+        $count = count($cumulative) - 1;
+        for ($k = 0; $k < $count; $k++) {
+            $probabilities[] = max(0.0, $cumulative[$k] - $cumulative[$k + 1]);
+        }
+
+        return $probabilities;
+    }
+
+    /**
+     * Draw a seed-deterministic category from a polytomous model.
+     *
+     * @param float $theta The person's ability.
+     * @param string $model The model key ('grm' for graded response, otherwise GPCM).
+     * @param float $discrimination The item discrimination (a).
+     * @param float[] $params The step (GPCM) or threshold (GRM) parameters.
+     * @param int $seed Deterministic seed for this person/item presentation.
+     * @return int The chosen category index (0-based).
+     */
+    public static function respond_polytomous(
+        float $theta,
+        string $model,
+        float $discrimination,
+        array $params,
+        int $seed
+    ): int {
+        $probabilities = $model === 'grm'
+            ? self::grm_probabilities($theta, $discrimination, $params)
+            : self::gpcm_probabilities($theta, $discrimination, $params);
+
+        mt_srand($seed);
+        $draw = mt_rand() / (mt_getrandmax() + 1.0);
+
+        $accumulated = 0.0;
+        foreach ($probabilities as $category => $probability) {
+            $accumulated += $probability;
+            if ($draw < $accumulated) {
+                return $category;
+            }
+        }
+
+        return count($probabilities) - 1;
+    }
+
+    /**
      * Resolve the relevant ability from a person's hierarchical profile.
      *
      * Returns the subscale ability when a category and subscale are given, the

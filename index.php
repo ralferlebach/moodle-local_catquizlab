@@ -63,10 +63,14 @@ $envitems = [
 $experimentrows = [];
 foreach ($DB->get_records('local_catquizlab_experiment', null, 'timemodified DESC') as $experiment) {
     $experimentrows[] = [
-        'name'   => $experiment->name,
-        'tier'   => $experiment->tier,
-        'status' => $statusmap[$experiment->status] ?? (string) $experiment->status,
-        'runs'   => registry::count_runs($experiment->id),
+        'name'      => $experiment->name,
+        'tier'      => $experiment->tier,
+        'status'    => $statusmap[$experiment->status] ?? (string) $experiment->status,
+        'runs'      => registry::count_runs($experiment->id),
+        'reporturl' => (new moodle_url(
+            '/local/catquizlab/report.php',
+            ['experimentid' => $experiment->id]
+        ))->out(false),
     ];
 }
 
@@ -84,6 +88,10 @@ foreach (registry::recent_runs(100) as $run) {
         'replication' => $run->replication,
         'seed'        => $run->seed,
         'status'      => $statusmap[$run->status] ?? (string) $run->status,
+        'reporturl'   => (new moodle_url(
+            '/local/catquizlab/report.php',
+            ['runid' => $run->id]
+        ))->out(false),
     ];
 }
 
