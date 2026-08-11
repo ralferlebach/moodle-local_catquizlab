@@ -478,6 +478,19 @@ global. Damit ist der Oracle DPF-sensitiv, sobald Skalen materialisiert sind.
 Tests `scale_provisioner_test.php`. Versionsbump → 2026081033 / 0.1.34
 (Schema-Änderung → Upgrade-Schritt).
 
+## Phase 38 — Fragen/Item-Materialisierung E2.1 (Teil 3) — E2.1 komplett (Release 0.1.35)
+`classes/local/item_registrar.php`: `build_itemparam()` (rein/testbar: itemparams-
+Datensatz für bekannte Kalibrierung — raschbirnbaum, difficulty, discrimination
+1.0, guessing 0.0), `register_item()` (engine-gekapselt: Frage→Skala via
+catscale::add_or_update_testitem_to_scale, Params speichern, activeparamid setzen).
+`classes/local/materialiser.php`: `plan_items()` (rein/testbar: Blaupause →
+Item-Specs, je Item auf Subskalen-catscaleid gemappt über scalemap),
+`materialise()` (engine-gekapselt: je Item Frage rendern → question_categories
+anlegen via qtype_multichoice → register_item). Polytom-Fraktionen auf 7
+Nachkommastellen (Moodle-Fraktionsset). Tests item_registrar_test/materialiser_test.
+Damit ist **E2.1 komplett** (Skalen → Fragen → Items aus der Blaupause).
+Versionsbump → 2026081034 / 0.1.35 (reiner Code, kein Upgrade-Schritt).
+
 ## Verifikationsstand
 Container: PHP-Syntax, install.xml, YAML, Worker-JS grün; PHPCS (Moodle) 0/0
 **und PHPMD ohne Verstöße** über alle PHP-Dateien; höchster Upgrade-Savepoint ≤

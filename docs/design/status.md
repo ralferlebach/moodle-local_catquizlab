@@ -44,8 +44,6 @@ die eigentliche Experiment-Durchführung.
 
 ## Offen
 
-- **E2.1 (Rest):** Materialisierung der Item-Blaupausen zu **echten Fragen/Skalen**
-  über den `local_catquiz`-Importer (engine-abhängig).
 - **E2.4 (Rest):** **adaptivequiz-Instanz** je Lauf + `local_catquiz_tests`-Settings
   (füllt `run.testcmid`; engine-/host-abhängig).
 - **E3.1 (Rest):** Per-Attempt-Staffelung (nextruntime), Retry/faildelay, Abbruch.

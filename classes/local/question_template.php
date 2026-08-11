@@ -69,8 +69,8 @@ class question_template {
      * @return array
      */
     public static function default_polytomous(): array {
-        $correct = round(1.0 / 3.0, 5);
-        $malus = round(-1.0 / 3.0, 5);
+        $correct = round(1.0 / 3.0, 7);
+        $malus = round(-1.0 / 3.0, 7);
         return [
             'name'         => 'CATLab {scalename} #{itemnumber} (poly)',
             'questiontext' => 'Skala: {scalename} (#{scalenumber}) — Item {itemname} '

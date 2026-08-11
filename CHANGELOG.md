@@ -6,6 +6,34 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.1.35] — 2026-08-10
+
+Question and item materialisation (E2.1, part 3) — E2.1 complete.
+
+### Added
+- **Item registrar** `classes/local/item_registrar.php` (E2.1): `build_itemparam()`
+  assembles the local_catquiz_itemparams record for a known calibration
+  (raschbirnbaum, difficulty, discrimination 1.0, guessing 0.0) — pure and tested;
+  `register_item()` links a question to a scale via the engine
+  (catscale::add_or_update_testitem_to_scale), stores the parameters and marks
+  them active on the item. Engine-guarded.
+- **Materialiser** `classes/local/materialiser.php` (E2.1): `plan_items()` walks
+  the blueprint and maps each item to its subscale's engine scale via the run's
+  scale map (pure, tested); `materialise()` renders each item into a
+  multiple-choice question ({@see question_template}), creates it in a question
+  category and registers it as a CAT item. Engine-guarded; the question-creation
+  step is the most instance-specific and is validated in the target instance.
+
+### Changed
+- Polytomous default fractions now use 7 decimals (0.3333333 / -0.3333333) to
+  match Moodle's accepted multiple-choice fraction set.
+
+- `version.php`: 2026081033 → **2026081034**, release 0.1.34 → **0.1.35**. No new
+  upgrade step (code-only round). With this, E2.1 (materialisation) is complete:
+  scales → questions → items, all from the blueprint.
+
+---
+
 ## [0.1.34] — 2026-08-10
 
 Scale materialisation and profile mapping (E2.1, part 2).

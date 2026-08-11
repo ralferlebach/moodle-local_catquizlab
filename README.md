@@ -135,6 +135,8 @@ as above.
     classes/local/test_provisioner.php   create an adaptivequiz CAT test (E2.4)
     classes/local/question_template.php  render templated MC questions (E2.1)
     classes/local/scale_provisioner.php  create engine scale tree + mapping (E2.1)
+    classes/local/item_registrar.php     register questions as CAT items (E2.1)
+    classes/local/materialiser.php       blueprint -> questions + items (E2.1)
     classes/local/item_repository.php    read active item parameters (E2.1/E3.4)
     classes/local/response_oracle.php    IRT answer model incl. GPCM/GRM (E3.4)
     cli/sweep.php                   CLI: expand a sweep spec, persist or list runs
