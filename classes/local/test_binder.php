@@ -85,6 +85,9 @@ class test_binder {
             return null;
         }
 
+        // The local_catquiz_tests row has no contextid column; the CAT context is
+        // resolved from the scale by the engine (walking up the scale tree to the
+        // default context). We mirror that via \local_catquiz\catscale.
         $test = $DB->get_record('local_catquiz_tests', [
             'componentid' => $activity->adaptivequizid,
             'component'   => self::TEST_COMPONENT,
@@ -93,15 +96,30 @@ class test_binder {
             return null;
         }
 
+        $catscaleid = (int) $test->catscaleid;
+
         return [
-            'testcmid'        => $testcmid,
-            'adaptivequizid'  => (int) $activity->adaptivequizid,
-            'testname'        => (string) $activity->testname,
-            'courseid'        => (int) $activity->courseid,
-            'catscaleid'      => (int) $test->catscaleid,
-            'contextid'       => (int) $test->contextid,
-            'quizsettings'    => self::decode_settings($test),
+            'testcmid'       => $testcmid,
+            'adaptivequizid' => (int) $activity->adaptivequizid,
+            'testname'       => (string) $activity->testname,
+            'courseid'       => (int) $activity->courseid,
+            'catscaleid'     => $catscaleid,
+            'contextid'      => self::context_for_scale($catscaleid),
+            'quizsettings'   => self::decode_settings($test),
         ];
+    }
+
+    /**
+     * Resolve the engine context id for a scale, mirroring the engine.
+     *
+     * @param int $catscaleid The catquiz scale id.
+     * @return int The context id, or 0 when the engine cannot resolve it.
+     */
+    protected static function context_for_scale(int $catscaleid): int {
+        if ($catscaleid <= 0 || !class_exists('\local_catquiz\catscale')) {
+            return 0;
+        }
+        return (int) \local_catquiz\catscale::get_context_id($catscaleid);
     }
 
     /**

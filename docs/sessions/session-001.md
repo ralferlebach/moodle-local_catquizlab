@@ -427,6 +427,20 @@ eingebaute Chart-API, Capability `local/catquizlab:view`. Neue `report:*`-String
 Run-Zelle). Tests `report_builder_test.php`. Damit ist **E4 vollständig**.
 Versionsbump → 2026081029 / 0.1.30 (reiner Code, kein Upgrade-Schritt).
 
+## Phase 34 — Engine-Quellen ausgewertet + Kontext-Fix (Release 0.1.31)
+Nutzer lieferte Engine-Quellen (local_catquiz 2024070802, adaptivequiz-catmodel,
+catmodel_catquiz) + reale Schema-Ausgabe. Zentrale Erkenntnisse: (1)
+`local_catquiz_tests` hat KEINE contextid — der CAT-Kontext wird über
+`\local_catquiz\catscale::get_context_id($catscaleid)` aus der Skala aufgelöst
+(Baum hoch bis Default-Kontext). Mein `test_binder` las die nicht existente
+Spalte → gefixt (guarded via class_exists). (2) Test-Anlage ist automatisch:
+add_moduleinfo mit catmodel='catquiz' + catquiz_*-Feldern → catmodel-Handler →
+`catquiz_handler::add_or_update_instance_callback()` JSON-kodiert das ganze
+Formular und schreibt die tests-Zeile (catscaleid=catquiz_catscales, courseid).
+(3) `local_catquiz_personparams` im ZIP hat weder standarderror noch attemptid —
+Widerspruch zu go-clara (Schema-Drift, beim Nutzer zu klären). Versionsbump →
+2026081030 / 0.1.31 (reiner Fix, kein Upgrade-Schritt).
+
 ## Verifikationsstand
 Container: PHP-Syntax, install.xml, YAML, Worker-JS grün; PHPCS (Moodle) 0/0
 **und PHPMD ohne Verstöße** über alle PHP-Dateien; höchster Upgrade-Savepoint ≤

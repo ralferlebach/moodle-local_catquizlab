@@ -6,6 +6,23 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.1.31] — 2026-08-10
+
+Fix: resolve the CAT context from the scale, not a (non-existent) test column.
+
+### Fixed
+- **`test_binder::read_test_config`** read `local_catquiz_tests.contextid`, but the
+  engine schema has no such column — the CAT context is derived from the scale.
+  It now resolves the context via `\local_catquiz\catscale::get_context_id()`
+  (guarded by `class_exists`), matching the engine. Grounded in the uploaded
+  local_catquiz source. This unblocks the oracle wiring, which reads item
+  parameters in that context.
+
+- `version.php`: 2026081029 → **2026081030**, release 0.1.30 → **0.1.31**. No new
+  upgrade step (code-only fix).
+
+---
+
 ## [0.1.30] — 2026-08-10
 
 Report UI (E4.5) — results page with tables and charts.
