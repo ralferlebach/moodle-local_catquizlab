@@ -114,6 +114,10 @@ class attempt_collector {
             $engine['responses'],
             $engine['stopreason']
         );
+        $debug = $engine['debug'] ?? [];
+        $trace['scaleabilities'] = $debug['scaleabilities'] ?? [];
+        $trace['questionsperscale'] = $debug['questionsperscale'] ?? [];
+        $trace['steps'] = $debug['steps'] ?? 0;
 
         $DB->update_record('local_catquizlab_attempt', (object) [
             'id'           => $attemptid,
@@ -179,7 +183,74 @@ class attempt_collector {
             'finalse'    => $finalse,
             'responses'  => self::read_responses((int) $aq->uniqueid),
             'stopreason' => (string) ($aq->attemptstopcriteria ?? ''),
+            'debug'      => self::parse_debug_info((string) ($catquiz->debug_info ?? '')),
         ];
+    }
+
+    /**
+     * Extract the per-scale ability path and exposure from an engine debug_info blob.
+     *
+     * The engine records debug_info as a JSON list of per-step snapshots; the last
+     * snapshot carries the final per-scale ability estimates (personabilities) and
+     * the number of questions asked per scale (numquestionsperscale). These give
+     * the subscale-level estimates the DPF diagnostics compare against the truth.
+     *
+     * @param string $json The debug_info JSON.
+     * @return array{steps: int, scaleabilities: array<int, float>, questionsperscale: array}
+     */
+    public static function parse_debug_info(string $json): array {
+        $empty = ['steps' => 0, 'scaleabilities' => [], 'questionsperscale' => []];
+        if ($json === '') {
+            return $empty;
+        }
+        $rows = json_decode($json, true);
+        if (!is_array($rows) || $rows === []) {
+            return $empty;
+        }
+
+        $last = null;
+        foreach ($rows as $row) {
+            if (is_array($row) && isset($row['personabilities'])) {
+                $last = $row;
+            }
+        }
+        $last = $last ?? (array) end($rows);
+
+        return [
+            'steps'             => count($rows),
+            'scaleabilities'    => self::normalise_abilities($last['personabilities'] ?? []),
+            'questionsperscale' => is_array($last['numquestionsperscale'] ?? null)
+                ? $last['numquestionsperscale']
+                : [],
+        ];
+    }
+
+    /**
+     * Normalise a personabilities structure to a scaleid => ability map.
+     *
+     * Accepts a map keyed by scale id or a list of rows with a scale id and value.
+     *
+     * @param mixed $abilities The raw personabilities value.
+     * @return array<int, float>
+     */
+    protected static function normalise_abilities($abilities): array {
+        if (!is_array($abilities)) {
+            return [];
+        }
+
+        $out = [];
+        foreach ($abilities as $key => $value) {
+            if (is_array($value)) {
+                $scaleid = $value['catscaleid'] ?? $value['scaleid'] ?? $key;
+                $ability = $value['ability'] ?? $value['value'] ?? null;
+                if ($ability !== null) {
+                    $out[(int) $scaleid] = (float) $ability;
+                }
+            } else {
+                $out[(int) $key] = (float) $value;
+            }
+        }
+        return $out;
     }
 
     /**

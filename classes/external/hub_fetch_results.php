@@ -61,16 +61,27 @@ class hub_fetch_results extends external_api {
         $params = self::validate_parameters(self::execute_parameters(), [
             'runref' => $runref,
         ]);
-        unset($params);
 
         $context = \context_system::instance();
         self::validate_context($context);
         require_capability('local/catquizlab:hubtransfer', $context);
 
+        global $DB;
+        $runid = (int) $DB->get_field('local_catquizlab_run', 'id', ['cellkey' => $params['runref']]);
+        if (!$runid) {
+            return [
+                'available'   => false,
+                'resultsjson' => '',
+                'message'     => get_string('hub:noresults', 'local_catquizlab'),
+            ];
+        }
+
+        $metrics = \local_catquizlab\local\export_dataset::metrics([$runid]);
+
         return [
-            'available'   => false,
-            'resultsjson' => '',
-            'message'     => get_string('hub:noresults', 'local_catquizlab'),
+            'available'   => true,
+            'resultsjson' => json_encode($metrics['rows'], JSON_UNESCAPED_SLASHES),
+            'message'     => get_string('hub:resultsfound', 'local_catquizlab', $runid),
         ];
     }
 

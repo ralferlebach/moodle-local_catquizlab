@@ -163,4 +163,42 @@ class exporter {
         }
         return $name;
     }
+
+    /**
+     * Write rows to an xlsx or ods file via Moodle's dataformat writers.
+     *
+     * Uses the dataformat writer's file-output path; needs the corresponding
+     * dataformat plugin, so it returns false when that is unavailable (e.g. a
+     * bare CI harness). The row preparation feeding it is covered by tests.
+     *
+     * @param string[] $columns The ordered column keys.
+     * @param array $rows Associative rows keyed by column.
+     * @param string $format A dataformat name ('excel' for xlsx, 'ods').
+     * @param string $filepath The destination file path.
+     * @return bool Whether the file was written.
+     */
+    public static function to_spreadsheet_file(array $columns, array $rows, string $format, string $filepath): bool {
+        $classname = '\\dataformat_' . $format . '\\writer';
+        if (!class_exists($classname)) {
+            return false;
+        }
+
+        $labels = array_combine($columns, $columns);
+
+        $writer = new $classname();
+        $writer->set_filename('export');
+        $writer->start_output_to_file($filepath);
+        $writer->start_sheet($labels);
+        $rownumber = 0;
+        foreach ($rows as $row) {
+            $ordered = [];
+            foreach ($columns as $column) {
+                $ordered[$column] = $row[$column] ?? '';
+            }
+            $writer->write_record($ordered, $rownumber++);
+        }
+        $writer->close_output_to_file();
+
+        return true;
+    }
 }

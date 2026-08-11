@@ -491,6 +491,66 @@ Nachkommastellen (Moodle-Fraktionsset). Tests item_registrar_test/materialiser_t
 Damit ist **E2.1 komplett** (Skalen → Fragen → Items aus der Blaupause).
 Versionsbump → 2026081034 / 0.1.35 (reiner Code, kein Upgrade-Schritt).
 
+## Phase 39 — E3 abgeschlossen: exec-Worker, Kapazität, debug_info (Release 0.1.36)
+Engine-Quelle geprüft: `debug_info` ist eine JSON-Liste von Schritt-Snapshots mit
+`personabilities` (θ je Skala) und `numquestionsperscale` (Exposure je Skala).
+E3.5-Rest: `attempt_collector::parse_debug_info()` (rein/testbar, akzeptiert Map-
+und Listenform) extrahiert die finalen Subskalen-θ + Exposure; `collect()` legt
+sie als scaleabilities/questionsperscale/steps in die Trace — liefert der DPF-
+Diagnostik die Subskalen-Schätzungen. E3.2: `worker_launcher` (build_command rein/
+testbar; launch nur bei aktiviertem+konfiguriertem Exec-Worker + lesbarem Skript)
++ Adhoc-Task `dispatch_worker` + Settings (Enable/Node/BaseURL/Token/MaxJobs/
+Concurrency). E3.6 (M1): `capacity` (plan_batches, stagger_offsets, throughput —
+rein/testbar). Tests worker_launcher/capacity + attempt_collector erweitert.
+Damit ist **E3 vollständig**. Versionsbump → 2026081035 / 0.1.36 (reiner Code).
+
+## Phase 40 — Per-Subskala-DPF-Diagnostik verdrahtet (Release 0.1.37)
+`classes/local/subscale_evaluator.php`: bewertet, wie gut die Engine das
+Subskalen-Profil einer Person wiederfindet. Richtet die Trace-Schätzungen
+(scaleabilities aus debug_info) über das scalemap gegen die Ground-Truth-
+Subskalen aus, definiert Defizit = Subskala unter der globalen Fähigkeit (DPF),
+und rechnet die diagnostics-Maße (Spearman, Top-k, nDCG, Konfusion, Precision/
+Recall). `evaluate_person()` rein/testbar; `evaluate_run()` aggregiert je Run und
+speichert dpf_*-result-Zeilen (+ gepoolte Konfusion). Der Aggregations-Task ruft
+jetzt auch die DPF-Auswertung — ein Task erzeugt global-, stratum- und dpf-
+Ergebnisse. Tests `subscale_evaluator_test.php`. Damit ist die DPF-Auswertungs-
+schleife geschlossen. Versionsbump → 2026081036 / 0.1.37 (reiner Code).
+
+## Phase 41 — E6 abgeschlossen: Antwortmatrix, Spreadsheet-Export, Export-Task (Release 0.1.38)
+E6.2: `classes/local/answer_matrix.php` baut die Personen×Items-Antwortmatrix
+eines Runs aus den Traces (responses: questionid=>fraction); Spalten = Vereinigung
+präsentierter Items, leere Zellen wo nicht präsentiert (adaptiv). `build()` (DB),
+`to_rows()` (rein/testbar), CSV round-trip. `exporter::to_spreadsheet_file()`
+schreibt xlsx/ods über Moodles dataformat-Writer (übersprungen, wenn Plugin fehlt).
+E6.3: `run_exporter::export_to_files()` rendert die Matrix (CSV/JSON/XML, xlsx/ods
+wenn verfügbar), legt sie als Dateien im System-Kontext ab, loggt exportlog; Adhoc-
+Task `export_run` + `queue()`. `local_catquizlab_pluginfile()` liefert die Dateien
+aus (Capability :view). Tests answer_matrix/run_exporter. Damit ist **E6 komplett**.
+Versionsbump → 2026081037 / 0.1.38 (reiner Code, kein Upgrade-Schritt).
+
+## Phase 42 — Export-Ebenen/-Umfang E6.1-Rest — E6 komplett (Release 0.1.39)
+`classes/local/export_dataset.php`: Auswahl-Schicht. Ebene wählt den Datensatz —
+raw (Antwortmatrix), groundtruth (Personenprofil als Long-Form: global/category/
+subscale) oder metrics (result-Zeilen); Umfang löst die Runs auf — Run/Experiment/
+Tier (`runids_for`). Jeder Builder liefert eine {columns, rows}-Tabelle, nur Lab-
+Store. `run_exporter::export_dataset()`/`store_table()` rendern und legen beliebige
+Ebene/Umfang-Datensätze ab (mit Log). Tests `export_dataset_test.php`. Damit ist
+**E6 vollständig** (Formate csv/json/xml/xlsx/ods × Ebenen raw/GT/metrics × Umfang
+Run/Experiment/Tier + Antwortmatrix + Export-Task). Versionsbump → 2026081038 /
+0.1.39 (reiner Code, kein Upgrade-Schritt).
+
+## Phase 43 — Hub-Modus E5 (Release 0.1.40)
+`classes/local/transfer_package.php`: `build()` schnürt einen Run (Metadaten,
+Personen per Index, Attempts mit Traces, Results) als JSON-Payload + SHA-256-Hash;
+`verify()` (Integrität), `ingest()` (Hub-seitig Run unter „Hub ingest"-Experiment
+neu anlegen, Personen-Referenzen per Index re-mappen), `submit_to_hub()` (POST an
+konfigurierten Hub, per Hub-Settings gekapselt). hub_submit_run verifiziert+
+ingestiert jetzt und rechnet Metriken+DPF auf der Hub-Kopie neu (Cross-Instance-
+Aggregation); hub_fetch_results liefert die gespeicherten Metriken eines Runs
+(per cellkey) als JSON. Hub-Settings (URL/Token). Tests transfer_package_test
+(build→verify→ingest round-trip). Damit ist **E5 vollständig**. Versionsbump →
+2026081039 / 0.1.40 (reiner Code, kein Upgrade-Schritt).
+
 ## Verifikationsstand
 Container: PHP-Syntax, install.xml, YAML, Worker-JS grün; PHPCS (Moodle) 0/0
 **und PHPMD ohne Verstöße** über alle PHP-Dateien; höchster Upgrade-Savepoint ≤

@@ -117,6 +117,35 @@ final class attempt_collector_test extends \advanced_testcase {
     }
 
     /**
+     * Debug info yields the final per-scale abilities and exposure.
+     *
+     * @return void
+     */
+    public function test_parse_debug_info(): void {
+        $json = json_encode([
+            ['personabilities' => ['1' => 0.1, '2' => -0.5], 'numquestionsperscale' => ['1' => 3, '2' => 2]],
+            ['personabilities' => ['1' => 0.2, '2' => -0.8], 'numquestionsperscale' => ['1' => 4, '2' => 3]],
+        ]);
+        $parsed = \local_catquizlab\local\attempt_collector::parse_debug_info($json);
+
+        $this->assertSame(2, $parsed['steps']);
+        // The last snapshot wins.
+        $this->assertEqualsWithDelta(0.2, $parsed['scaleabilities'][1], 1e-9);
+        $this->assertEqualsWithDelta(-0.8, $parsed['scaleabilities'][2], 1e-9);
+        $this->assertSame(4, $parsed['questionsperscale'][1]);
+
+        // A list-of-objects personabilities form is also accepted.
+        $listform = json_encode([['personabilities' => [
+            ['catscaleid' => 10, 'ability' => 1.2],
+            ['catscaleid' => 11, 'ability' => -0.3],
+        ]]]);
+        $parsedlist = \local_catquizlab\local\attempt_collector::parse_debug_info($listform);
+        $this->assertEqualsWithDelta(1.2, $parsedlist['scaleabilities'][10], 1e-9);
+
+        $this->assertSame(0, \local_catquizlab\local\attempt_collector::parse_debug_info('')['steps']);
+    }
+
+    /**
      * A null standard error is preserved.
      *
      * @return void

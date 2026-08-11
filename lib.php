@@ -64,3 +64,32 @@ function local_catquizlab_render_navbar_output(\renderer_base $renderer): string
         'popover-region icon-no-margin'
     );
 }
+
+/**
+ * Serve files from the plugin's export file area.
+ *
+ * @param stdClass $course The course.
+ * @param stdClass $cm The course module.
+ * @param context $context The context.
+ * @param string $filearea The file area.
+ * @param array $args The remaining path arguments.
+ * @param bool $forcedownload Whether to force download.
+ * @param array $options Serving options.
+ * @return bool False when the file is not served.
+ */
+function local_catquizlab_pluginfile($course, $cm, $context, $filearea, $args, $forcedownload, array $options = []): bool {
+    if ($context->contextlevel !== CONTEXT_SYSTEM || $filearea !== 'export') {
+        return false;
+    }
+    require_login();
+    require_capability('local/catquizlab:view', $context);
+
+    $filename = array_pop($args);
+    $fs = get_file_storage();
+    $file = $fs->get_file($context->id, 'local_catquizlab', 'export', 0, '/', $filename);
+    if (!$file || $file->is_directory()) {
+        return false;
+    }
+    send_stored_file($file, 0, 0, $forcedownload, $options);
+    return true;
+}

@@ -71,16 +71,31 @@ class hub_submit_run extends external_api {
         self::validate_context($context);
         require_capability('local/catquizlab:hubtransfer', $context);
 
-        // Integrity check is meaningful already; storage follows in E5.
-        $computed = hash('sha256', $params['payload']);
-        $ok = hash_equals($computed, $params['hash']);
+        if (!\local_catquizlab\local\transfer_package::verify($params['payload'], $params['hash'])) {
+            return [
+                'accepted' => false,
+                'verified' => false,
+                'message'  => get_string('hub:hashmismatch', 'local_catquizlab'),
+            ];
+        }
+
+        $runid = \local_catquizlab\local\transfer_package::ingest($params['payload']);
+        if ($runid === null) {
+            return [
+                'accepted' => false,
+                'verified' => true,
+                'message'  => get_string('hub:malformed', 'local_catquizlab'),
+            ];
+        }
+
+        // Cross-instance aggregation: recompute metrics and DPF on the hub copy.
+        \local_catquizlab\local\result_aggregator::aggregate($runid);
+        \local_catquizlab\local\subscale_evaluator::evaluate_run($runid);
 
         return [
-            'accepted' => false,
-            'verified' => $ok,
-            'message'  => $ok
-                ? get_string('hub:verifiednotstored', 'local_catquizlab')
-                : get_string('hub:hashmismatch', 'local_catquizlab'),
+            'accepted' => true,
+            'verified' => true,
+            'message'  => get_string('hub:ingested', 'local_catquizlab', $runid),
         ];
     }
 

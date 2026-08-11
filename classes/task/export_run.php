@@ -15,7 +15,7 @@
 // along with Moodle.  If not, see <http://www.gnu.org/licenses/>.
 
 /**
- * Ad-hoc task that aggregates a run's results.
+ * Ad-hoc task that exports a run's answer matrix to files (E6.3).
  *
  * @package    local_catquizlab
  * @copyright  2026 Ralf Erlebach
@@ -24,29 +24,23 @@
 
 namespace local_catquizlab\task;
 
-use local_catquizlab\local\result_aggregator;
-use local_catquizlab\local\subscale_evaluator;
+use local_catquizlab\local\run_exporter;
 
 /**
- * Computes and persists a run's evaluation results when run by cron.
- *
- * The run id (and optional pool size) travel in the task's custom data. Running
- * the aggregation as a task keeps large evaluations off the web request, so no
- * page can time out while metrics are computed. Aggregation only reads collected
- * traces and writes result rows, so it does not depend on the master switch.
+ * Exports a run's answer matrix off the web request.
  */
-class aggregate_results extends \core\task\adhoc_task {
+class export_run extends \core\task\adhoc_task {
     /**
      * Human-readable task name.
      *
      * @return string
      */
     public function get_name(): string {
-        return get_string('task:aggregateresults', 'local_catquizlab');
+        return get_string('task:exportrun', 'local_catquizlab');
     }
 
     /**
-     * Aggregate the results of the run named in the custom data.
+     * Run the export.
      *
      * @return void
      */
@@ -56,11 +50,22 @@ class aggregate_results extends \core\task\adhoc_task {
         if ($runid <= 0) {
             return;
         }
-        $poolsize = isset($data->poolsize) ? (int) $data->poolsize : null;
+        $formats = isset($data->formats) ? (array) $data->formats : ['csv'];
 
-        $count = result_aggregator::aggregate($runid, $poolsize);
-        $dpf = subscale_evaluator::evaluate_run($runid);
-        mtrace("local_catquizlab: aggregated {$count} result row(s) for run {$runid}"
-            . " (DPF over {$dpf['n']} person(s)).");
+        $files = run_exporter::export_to_files($runid, $formats);
+        mtrace('local_catquizlab: exported ' . count($files) . " file(s) for run {$runid}.");
+    }
+
+    /**
+     * Queue an export for a run.
+     *
+     * @param int $runid The run.
+     * @param string[] $formats The formats to export.
+     * @return void
+     */
+    public static function queue(int $runid, array $formats = ['csv']): void {
+        $task = new self();
+        $task->set_custom_data(['runid' => $runid, 'formats' => $formats]);
+        \core\task\manager::queue_adhoc_task($task, true);
     }
 }

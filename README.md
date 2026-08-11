@@ -137,6 +137,13 @@ as above.
     classes/local/scale_provisioner.php  create engine scale tree + mapping (E2.1)
     classes/local/item_registrar.php     register questions as CAT items (E2.1)
     classes/local/materialiser.php       blueprint -> questions + items (E2.1)
+    classes/local/worker_launcher.php    exec the Puppeteer worker (E3.2)
+    classes/local/capacity.php           parallelisation + throughput (E3.6)
+    classes/local/subscale_evaluator.php per-subscale DPF diagnostics (E4.2)
+    classes/local/answer_matrix.php      persons x items response matrix (E6.2)
+    classes/local/run_exporter.php       export a run answer matrix to files (E6.3)
+    classes/local/export_dataset.php     export level/scope selection (E6.1)
+    classes/local/transfer_package.php   hub run packaging + ingest (E5)
     classes/local/item_repository.php    read active item parameters (E2.1/E3.4)
     classes/local/response_oracle.php    IRT answer model incl. GPCM/GRM (E3.4)
     cli/sweep.php                   CLI: expand a sweep spec, persist or list runs

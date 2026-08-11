@@ -47,11 +47,8 @@ die eigentliche Experiment-Durchführung.
 - **E2.4 (Rest):** **adaptivequiz-Instanz** je Lauf + `local_catquiz_tests`-Settings
   (füllt `run.testcmid`; engine-/host-abhängig).
 - **E3.1 (Rest):** Per-Attempt-Staffelung (nextruntime), Retry/faildelay, Abbruch.
-- **E3.2/3.3:** Worker-Anbindung (exec/Queue-Polling) + Puppeteer-Skript.
 - **E3.4 (Rest):** polytome Antwortauswahl (GPCM/GRM); Verdrahtung des Oracle-WS,
   sobald Frage→Item-Parameter auflösbar sind.
-- **E3.5:** Collect-Task (Trace-Übernahme aus Engine-Tabellen/Debug-Info).
-- **E3.6:** Parallelisierung/Kapazitätsmessung (Meilenstein M1).
 - **E5:** Hub-Modus (Transferpaket, Endpunkte, instanzübergreifende Aggregation).
 - **E6 (Rest):** xlsx/ods über Dataformat-/Workbook-API; Ebenen-/Umfangsauswahl +
   Datenaufsammlung; Antwortmatrix-Export; Export-Task für große Datensätze.

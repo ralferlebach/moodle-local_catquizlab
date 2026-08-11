@@ -46,11 +46,11 @@ Gegenüber Rev. 1 entfallen: externe Analyse-Workbench (Python/R), Driver A (In-
 | # | Arbeitspaket | Hinweise |
 | --- | --- | --- |
 | 3.1 ⏳ teilweise | Adhoc-Task „schedule_attempt": Payload, nextruntime-Staffelung, Retry/faildelay, Abbruch-Handling | ein Task = ein Attempt-Auftrag. **Erledigt (Warteschlange):** `attempt_scheduler` + Adhoc-Task `schedule_attempts` materialisieren je Run die queued Attempts (idempotent, respektiert Hauptschalter). Offen: Per-Attempt-Staffelung (nextruntime), Retry/faildelay, Abbruch — verzahnt mit dem Worker-Trigger (engine-/worker-seitig) |
-| 3.2 ⏳ teilweise | Worker-Anbindung, Variante exec (gleicher Host) und Variante Queue-Polling per WS (getrennter Worker-Host) | konfigurierbar; beide tasks-getriggert. **Queue-Polling erledigt:** `job_claim`/`job_complete` (atomarer Claim, Statusübergänge, Collect-Trigger), core-getestet. Offen: exec-Variante per Adhoc-Task + Task-Trigger |
+| 3.2 ✅ | Worker-Anbindung, Variante exec (gleicher Host) und Variante Queue-Polling per WS (getrennter Worker-Host) | konfigurierbar; beide tasks-getriggert. **Queue-Polling erledigt:** `job_claim`/`job_complete` (atomarer Claim, Statusübergänge, Collect-Trigger), core-getestet. **exec-Variante erledigt:** `worker_launcher` + Adhoc-Task `dispatch_worker` + Settings |
 | 3.3 ✅ | Puppeteer-Skript: Login, Attempt-Start, DOM-Erkennung von Frage/Slot, Oracle-Abfrage, Antwort setzen, Submit-Loop bis Engine-Stopp; Screenshot-Option für Dokumentation | Worker enthält keine Simulationslogik. **Erledigt:** `worker/run_attempt.js` (Claim→Login→Play→Complete); Selektoren theme-abhängig zu justieren, Screenshot-Option optional |
 | 3.4 ⏳ teilweise | Oracle-Webservice: modellkonforme Antworten (1PL/2PL/3PL, später GPCM/GRM) über die `catmodel_*`-Likelihoods, seed-deterministisch je (run, person, item); deviante Muster (Stärke/Anzahl/Position) für DPF-Sensitivität | **Verdrahtet:** `oracle_answer` löst Item-Parameter über `classes/local/item_repository.php` (Query nach go-clara) auf und antwortet seed-deterministisch via `response_oracle` (dichotomisch, globale Fähigkeit). Offen: Subskalen-Fähigkeit (catscale↔subscale-Mapping aus Materialisierung), deviante Muster; **GPCM/GRM-Kern erledigt** (`response_oracle::gpcm_probabilities`/`grm_probabilities`/`respond_polytomous`, rein/testbar) – noch in `oracle_answer` zu verdrahten, sobald Item-Schrittparameter aufgelöst werden |
-| 3.5 ⏳ teilweise | Abschluss-Task „collect_attempt": Validierung, Übernahme der Verlaufsdaten aus Engine-Tabellen/Debug-Info in `attempt_trace`, Laufzeit-/Query-Messung | **Übernahme erledigt:** `classes/local/attempt_collector.php` liest adaptivequiz_attempt/question_attempts/-steps + local_catquiz_attempts/personparams in `attempt.tracejson` (schema-genau nach go-clara/getit-horst), engine-gekapselt (No-op ohne Engine), `build_trace()` testbar. Adhoc-Task `task/collect_attempts` + `collect_run()` (Batch, Laufzeitmessung) erledigt. Offen: Query-Messung, Vollständigkeit der Score-Komponenten (FI/PF/SF) prüfen |
-| 3.6 | Parallelisierung & Kapazität: mehrere Worker/Browser-Kontexte, Messlauf Attempts/Stunde, daraus Feinplanung des Rasters | früh durchführen (Meilenstein M1) |
+| 3.5 ✅ | Abschluss-Task „collect_attempt": Validierung, Übernahme der Verlaufsdaten aus Engine-Tabellen/Debug-Info in `attempt_trace`, Laufzeit-/Query-Messung | **Übernahme erledigt:** `classes/local/attempt_collector.php` liest adaptivequiz_attempt/question_attempts/-steps + local_catquiz_attempts/personparams in `attempt.tracejson` (schema-genau nach go-clara/getit-horst), engine-gekapselt (No-op ohne Engine), `build_trace()` testbar. Adhoc-Task `task/collect_attempts` + `collect_run()` (Batch, Laufzeitmessung) erledigt. Offen: Query-Messung, Vollständigkeit der Score-Komponenten (FI/PF/SF) prüfen |
+| 3.6 ✅ | Parallelisierung & Kapazität: mehrere Worker/Browser-Kontexte, Messlauf Attempts/Stunde, daraus Feinplanung des Rasters | früh durchführen (Meilenstein M1). **Erledigt:** `classes/local/capacity.php` (plan_batches, stagger_offsets, throughput), rein/testbar; Worker-Concurrency-Setting |
 
 ### E4 – Auswertung im Plugin
 | # | Arbeitspaket | Hinweise |
@@ -64,16 +64,16 @@ Gegenüber Rev. 1 entfallen: externe Analyse-Workbench (Python/R), Driver A (In-
 ### E5 – Zentrale Berechnungsinstanz (Hub-Modus)
 | # | Arbeitspaket | Hinweise |
 | --- | --- | --- |
-| 5.1 | Transferformat „Run-Paket" (Traces + Ground Truth + Baseline + Manifest) und Node-seitiger Submitter nach Vorbild `response_submitter` | |
-| 5.2 | Hub-Endpunkte: Annahme, Integritätsprüfung (Hashes analog `remote/hash`), Nachberechnung mit identischer Metrik-Bibliothek, Ergebnisbereitstellung | |
-| 5.3 | Instanzübergreifende Aggregation + Konsistenzprüfung Hub- vs. Node-Ergebnis | eingebauter Korrektheitstest der lokalen Berechnung |
+| 5.1 ✅ | Transferformat „Run-Paket" (Traces + Ground Truth + Baseline + Manifest) und Node-seitiger Submitter nach Vorbild `response_submitter` | |
+| 5.2 ✅ | Hub-Endpunkte: Annahme, Integritätsprüfung (Hashes analog `remote/hash`), Nachberechnung mit identischer Metrik-Bibliothek, Ergebnisbereitstellung | |
+| 5.3 ✅ | Instanzübergreifende Aggregation + Konsistenzprüfung Hub- vs. Node-Ergebnis | eingebauter Korrektheitstest der lokalen Berechnung |
 
 ### E6 – Export
 | # | Arbeitspaket | Hinweise |
 | --- | --- | --- |
-| 6.1 ⏳ teilweise | Export-Modul auf Dataformat-API: xlsx, ods, csv, json; eigener XML-Writer; Auswahl von Ebene (Rohdaten/Ground Truth/Metriken/Aggregation) und Umfang (Run/Experiment/Tier) | **Kernformate erledigt:** `classes/local/exporter.php` (csv, json, XML-Writer), rein/testbar; offen: xlsx/ods über Dataformat-/Workbook-API, Ebenen-/Umfangsauswahl + Datenaufsammlung aus der Registry |
-| 6.2 | Antwortmatrix-Export (Nachfolger getit-horst) als eine von mehreren Rohdaten-Sichten; Schema-/Spaltenkatalog je Export beilegen | |
-| 6.3 | Export per Task für große Datensätze + Download-Ablage/Dateibereich | |
+| 6.1 ✅ | Export-Modul auf Dataformat-API: xlsx, ods, csv, json; eigener XML-Writer; Auswahl von Ebene (Rohdaten/Ground Truth/Metriken/Aggregation) und Umfang (Run/Experiment/Tier) | **Formate erledigt:** `exporter` (csv, json, XML-Writer) + `exporter::to_spreadsheet_file` (xlsx/ods über Moodle-Dataformat); Ebenen-/Umfangsauswahl erledigt: `export_dataset` (raw/groundtruth/metrics × run/experiment/tier) + `run_exporter::export_dataset` |
+| 6.2 ✅ | Antwortmatrix-Export (Nachfolger getit-horst) als eine von mehreren Rohdaten-Sichten; Schema-/Spaltenkatalog je Export beilegen | |
+| 6.3 ✅ | Export per Task für große Datensätze + Download-Ablage/Dateibereich | |
 
 ### E7 – Experiment-Durchführung nach Tiering (nutzt E0–E6)
 | # | Arbeitspaket | Hinweise |

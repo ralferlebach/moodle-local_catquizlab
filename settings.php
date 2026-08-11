@@ -87,4 +87,71 @@ if ($hassiteconfig) {
             'hub'  => get_string('instancerole:hub', $component),
         ]
     ));
+
+    // Local worker (exec variant): the dispatch task launches the Puppeteer
+    // worker on this host to drain the attempt queue.
+    $settings->add(new admin_setting_heading(
+        $component . '/workerheading',
+        get_string('setting:worker', $component),
+        get_string('setting:worker_desc', $component)
+    ));
+    $settings->add(new admin_setting_configcheckbox(
+        $component . '/worker_exec_enabled',
+        get_string('setting:worker_exec_enabled', $component),
+        get_string('setting:worker_exec_enabled_desc', $component),
+        0
+    ));
+    $settings->add(new admin_setting_configexecutable(
+        $component . '/worker_node_path',
+        get_string('setting:worker_node_path', $component),
+        get_string('setting:worker_node_path_desc', $component),
+        '/usr/bin/node'
+    ));
+    $settings->add(new admin_setting_configtext(
+        $component . '/worker_base_url',
+        get_string('setting:worker_base_url', $component),
+        get_string('setting:worker_base_url_desc', $component),
+        $CFG->wwwroot,
+        PARAM_URL
+    ));
+    $settings->add(new admin_setting_configpasswordunmask(
+        $component . '/worker_token',
+        get_string('setting:worker_token', $component),
+        get_string('setting:worker_token_desc', $component),
+        ''
+    ));
+    $settings->add(new admin_setting_configtext(
+        $component . '/worker_max_jobs',
+        get_string('setting:worker_max_jobs', $component),
+        get_string('setting:worker_max_jobs_desc', $component),
+        0,
+        PARAM_INT
+    ));
+    $settings->add(new admin_setting_configtext(
+        $component . '/worker_concurrency',
+        get_string('setting:worker_concurrency', $component),
+        get_string('setting:worker_concurrency_desc', $component),
+        1,
+        PARAM_INT
+    ));
+
+    // Hub connection (node -> hub submission).
+    $settings->add(new admin_setting_heading(
+        $component . '/hubheading',
+        get_string('setting:hub', $component),
+        get_string('setting:hub_desc', $component)
+    ));
+    $settings->add(new admin_setting_configtext(
+        $component . '/hub_url',
+        get_string('setting:hub_url', $component),
+        get_string('setting:hub_url_desc', $component),
+        '',
+        PARAM_URL
+    ));
+    $settings->add(new admin_setting_configpasswordunmask(
+        $component . '/hub_token',
+        get_string('setting:hub_token', $component),
+        get_string('setting:hub_token_desc', $component),
+        ''
+    ));
 }

@@ -6,6 +6,130 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.1.40] — 2026-08-10
+
+Hub mode (E5) — run packaging, ingest and cross-instance aggregation.
+
+### Added
+- **Transfer package** `classes/local/transfer_package.php` (E5): `build()` bundles a
+  run (metadata, persons by index, attempts with traces, results) into a JSON payload
+  with a SHA-256 hash; `verify()` checks integrity; `ingest()` recreates the run on the
+  hub under a dedicated "Hub ingest" experiment, re-mapping person references by index;
+  `submit_to_hub()` posts the package to the configured hub (guarded by hub settings).
+  Packaging, verification and ingest are testable (build -> verify -> ingest round-trip).
+- **Hub settings**: hub URL and token for node -> hub submission.
+
+### Changed
+- **hub_submit_run** now verifies and ingests the package on the hub, then recomputes
+  metrics and DPF on the hub copy (cross-instance aggregation), instead of only checking
+  the hash.
+- **hub_fetch_results** now returns a run's stored metrics (looked up by cell key) as
+  JSON, instead of a stub.
+
+- `version.php`: 2026081038 → **2026081039**, release 0.1.39 → **0.1.40**. No new
+  upgrade step (code-only round). With this, E5 is complete.
+
+---
+
+## [0.1.39] — 2026-08-10
+
+Export level/scope selection (E6.1 remainder) — E6 fully complete.
+
+### Added
+- **Export dataset** `classes/local/export_dataset.php`: the selection layer for
+  exports. The level chooses the dataset — raw (answer matrix), ground truth (each
+  person's true profile in tidy long form: global, category and subscale rows) or
+  metrics (the stored result rows) — and the scope resolves the runs — a single run,
+  all runs of an experiment, or all runs of a tier. Each builder returns a
+  {columns, rows} table. Reads only the lab store; covered by `export_dataset_test.php`.
+- **Generic dataset export** `run_exporter::export_dataset()` and `store_table()`:
+  render and store any level/scope dataset in the requested formats, logging each.
+
+- `version.php`: 2026081037 → **2026081038**, release 0.1.38 → **0.1.39**. No new
+  upgrade step (code-only round). With this the export module (E6) is complete:
+  formats (csv/json/xml/xlsx/ods) x levels (raw/ground-truth/metrics) x scopes
+  (run/experiment/tier), plus the answer matrix and the export task.
+
+---
+
+## [0.1.38] — 2026-08-10
+
+Complete E6: answer matrix (E6.2), spreadsheet export, export task (E6.3).
+
+### Added
+- **Answer matrix** `classes/local/answer_matrix.php` (E6.2): builds the
+  persons-by-items response matrix of a run from the collected traces
+  (responses: questionid => fraction). Columns are the union of presented items,
+  rows are the persons, and cells are empty where an item was not presented (an
+  adaptive test shows different items to different people). `build()` reads the lab
+  store; `to_rows()` flattens it for export — pure and tested; CSV round-trips.
+- **Spreadsheet export** `exporter::to_spreadsheet_file()`: writes rows to xlsx or
+  ods via Moodle's dataformat writers (skipped when the dataformat plugin is absent).
+- **Run exporter + task** `classes/local/run_exporter.php` and
+  `classes/task/export_run.php` (E6.3): render a run's answer matrix to CSV/JSON/XML
+  (and xlsx/ods when available), store each in the system context, and log it. Covered
+  by `run_exporter_test.php` (stored CSV + export log).
+- **File serving**: `local_catquizlab_pluginfile()` serves the stored export files,
+  gated by `local/catquizlab:view`.
+
+- `version.php`: 2026081036 → **2026081037**, release 0.1.37 → **0.1.38**. No new
+  upgrade step (code-only round). With this, E6 is complete.
+
+---
+
+## [0.1.37] — 2026-08-10
+
+Per-subscale DPF diagnostics wired end to end.
+
+### Added
+- **Subscale evaluator** `classes/local/subscale_evaluator.php`: evaluates how well
+  the engine recovers a person's subscale profile. It aligns the trace's per-scale
+  ability estimates (scaleabilities, from debug_info) with the ground-truth subscale
+  abilities via the scale map, treats a subscale below the person's global level as a
+  deficit (the DPF definition), and runs the diagnostics measures (Spearman, Top-k,
+  nDCG, confusion, precision/recall). `evaluate_person()` is pure and tested;
+  `evaluate_run()` aggregates across a run and stores dpf_* result rows (with a pooled
+  confusion detail). Covered by `subscale_evaluator_test.php`.
+
+### Changed
+- The aggregation task now also runs the DPF subscale evaluation, so one task
+  produces the global, per-stratum and DPF results for a run.
+
+- `version.php`: 2026081035 → **2026081036**, release 0.1.36 → **0.1.37**. No new
+  upgrade step (code-only round). This closes the DPF evaluation loop: the whole point
+  of the suite — detecting differential subscale functioning — is now measured against
+  the ground truth.
+
+---
+
+## [0.1.36] — 2026-08-10
+
+Complete E3: exec worker (E3.2), capacity (E3.6), debug-info trace (E3.5).
+
+### Added
+- **E3.2 exec worker** `classes/local/worker_launcher.php` + task
+  `classes/task/dispatch_worker.php`: the alternative to queue-polling. `build_command()`
+  assembles the worker argv (pure, tested); `launch()` runs the Puppeteer worker on
+  this host, but only when the exec worker is enabled and fully configured and the
+  script is readable (so it never runs in CI). New settings: enable, Node path, base
+  URL, token, max jobs, concurrency.
+- **E3.6 capacity** `classes/local/capacity.php` (milestone M1): `plan_batches()`
+  splits a queue into concurrency-sized batches, `stagger_offsets()` spaces starts in
+  time, and `throughput()` turns collected runtimes into mean/median runtime and the
+  estimated attempts-per-minute at a concurrency. All pure and tested.
+
+### Changed
+- **E3.5 debug-info trace**: `attempt_collector::parse_debug_info()` extracts the
+  final per-scale ability estimates (personabilities) and per-scale exposure
+  (numquestionsperscale) from the engine's debug_info, and `collect()` stores them on
+  the trace (scaleabilities, questionsperscale, steps). This gives the DPF diagnostics
+  the subscale-level estimates to compare against the ground truth. Pure parser tested.
+
+- `version.php`: 2026081034 → **2026081035**, release 0.1.35 → **0.1.36**. No new
+  upgrade step (code-only round). With this, E3 is complete.
+
+---
+
 ## [0.1.35] — 2026-08-10
 
 Question and item materialisation (E2.1, part 3) — E2.1 complete.
