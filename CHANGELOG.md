@@ -6,6 +6,33 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.1.32] — 2026-08-10
+
+Test provisioner (E2.4, create path) — create an adaptivequiz CAT test.
+
+### Added
+- **Test provisioner** `classes/local/test_provisioner.php` (E2.4): creates a new
+  adaptivequiz activity with catquiz settings for a run and binds it
+  (`run.testcmid`). `build_quizsettings()` assembles the catquiz fields the engine
+  needs — `catmodel=catquiz`, `catquiz_catscales`, `catquiz_selectteststrategy`,
+  the min/max question and per-subscale and standard-error groups, and a
+  `catquiz_subscalecheckbox_<id>` per activated scale — mirroring a real test's
+  JSON. It is pure and tested. `create()` builds the module info (adaptivequiz base
+  fields + settings) and calls `add_moduleinfo`; the engine's catmodel handler then
+  writes the `local_catquiz_tests` row. Needs the engine and host activity, so it
+  is a no-op without them (CI stays green). Grounded in the uploaded engine source
+  and a real quizsettings JSON. Covered by `test_provisioner_test.php`.
+
+### Notes
+- Confirmed against the live schema that `local_catquiz_personparams` carries
+  `attemptid` and `standarderror`, so the attempt collector's SE read is correct
+  (the older bundled install.xml lacked those columns).
+
+- `version.php`: 2026081030 → **2026081031**, release 0.1.31 → **0.1.32**. No new
+  upgrade step (code-only round).
+
+---
+
 ## [0.1.31] — 2026-08-10
 
 Fix: resolve the CAT context from the scale, not a (non-existent) test column.

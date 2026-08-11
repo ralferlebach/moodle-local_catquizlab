@@ -441,6 +441,18 @@ Formular und schreibt die tests-Zeile (catscaleid=catquiz_catscales, courseid).
 Widerspruch zu go-clara (Schema-Drift, beim Nutzer zu klären). Versionsbump →
 2026081030 / 0.1.31 (reiner Fix, kein Upgrade-Schritt).
 
+## Phase 35 — Test-Provisioner E2.4-Create (Release 0.1.32)
+Nutzer lieferte die vollständige quizsettings-JSON + bestätigte Live-Schema
+(personparams hat attemptid+standarderror → attempt_collector korrekt).
+`classes/local/test_provisioner.php`: `build_quizsettings()` (rein/testbar) baut
+die catquiz-Felder (catmodel=catquiz, catquiz_catscales, selectteststrategy,
+maxquestionsgroup/maxquestionsscalegroup/standarderrorgroup, je aktivierte Skala
+catquiz_subscalecheckbox_<id>) exakt nach echter JSON. `create()` (engine-
+gekapselt) setzt das moduleinfo zusammen (adaptivequiz-Basis + Settings) und ruft
+add_moduleinfo; der catmodel-Handler schreibt die local_catquiz_tests-Zeile selbst
+und run.testcmid wird gesetzt. Tests `test_provisioner_test.php`. Versionsbump →
+2026081031 / 0.1.32 (reiner Code, kein Upgrade-Schritt).
+
 ## Verifikationsstand
 Container: PHP-Syntax, install.xml, YAML, Worker-JS grün; PHPCS (Moodle) 0/0
 **und PHPMD ohne Verstöße** über alle PHP-Dateien; höchster Upgrade-Savepoint ≤
