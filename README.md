@@ -148,6 +148,7 @@ as above.
     classes/local/transfer_package.php   hub run packaging + ingest (E5)
     classes/local/run_orchestrator.php   set up a full run end to end (E7)
     classes/local/tier_planner.php       order experiments by tier (E7)
+    classes/local/se_diagnostics.php     SE-aware diagnostic measures (E4.2)
     classes/local/item_repository.php    read active item parameters (E2.1/E3.4)
     classes/local/response_oracle.php    IRT answer model incl. GPCM/GRM (E3.4)
     cli/sweep.php                   CLI: expand a sweep spec, persist or list runs

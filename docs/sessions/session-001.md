@@ -642,6 +642,19 @@ oder nutzt den Benutzername/Passwort-Fluss. Node-Test (loginUrlFor) + Launcher-T
 erweitert. Damit lassen sich unterschiedliche Auth-Setups (SSO/Key-Login) ohne
 Worker-Änderung nutzen. Versionsbump → 2026081046 / 0.1.47.
 
+## Phase 51 — PHPMD-Politur durch echte Refactorings (Release 0.1.48)
+Die verbliebenen (non-failing) PHPMD-Hinweise per Umbau statt Annotation gelöst
+(Moodle-phcs lehnt @SuppressWarnings ab): `diagnostics::deficit_labels` ohne
+`$below`-Flag (Defizit = unter Referenz, DPF-Definition; kein Aufrufer nutzte die
+Gegenrichtung); `exporter::to_json` ohne Flag (pretty), kompakt in neuer
+`to_json_compact`. Die SE-Maße (`deficit_labels_se`, `agreement_within_se`) in
+eine kohäsive neue Klasse `se_diagnostics` ausgelagert → diagnostics-Klassen-
+komplexität wieder unter Schwelle. Tests in `se_diagnostics_test.php` aufgeteilt.
+Verbliebene PHPMD-Nennungen nur noch db/upgrade (wachsende Upgrade-Funktion) und
+pluginfile-Pflichtsignatur — Moodle-Standardmuster, von moodle-plugin-ci nicht
+geflaggt, phpmd ohnehin non-failing. Versionsbump → 2026081047 / 0.1.48 (reiner
+Code, kein Verhaltenswechsel).
+
 ## Verifikationsstand
 Container: PHP-Syntax, install.xml, YAML, Worker-JS grün; PHPCS (Moodle) 0/0
 **und PHPMD ohne Verstöße** über alle PHP-Dateien; höchster Upgrade-Savepoint ≤

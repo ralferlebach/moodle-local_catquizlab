@@ -64,18 +64,26 @@ class exporter {
     }
 
     /**
-     * Serialise any data to JSON.
+     * Serialise any data to human-readable (pretty-printed) JSON.
      *
      * @param mixed $data The data to encode.
-     * @param bool $pretty Whether to pretty-print.
      * @return string The JSON text.
      */
-    public static function to_json($data, bool $pretty = true): string {
-        $flags = JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE;
-        if ($pretty) {
-            $flags |= JSON_PRETTY_PRINT;
-        }
-        return (string) json_encode($data, $flags);
+    public static function to_json($data): string {
+        return (string) json_encode(
+            $data,
+            JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT
+        );
+    }
+
+    /**
+     * Serialise any data to compact JSON (no whitespace).
+     *
+     * @param mixed $data The data to encode.
+     * @return string The JSON text.
+     */
+    public static function to_json_compact($data): string {
+        return (string) json_encode($data, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
     }
 
     /**

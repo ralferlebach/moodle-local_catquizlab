@@ -98,38 +98,6 @@ final class diagnostics_test extends \advanced_testcase {
         $this->assertEqualsWithDelta(0.6, $c['accuracy'], 1e-9);
     }
 
-    /**
-     * SE-aware deficit labels only flag values beyond the standard-error band.
-     *
-     * @return void
-     */
-    public function test_deficit_labels_se(): void {
-        $values = [-1.0, -0.2, 0.5];
-        $ses = [0.3, 0.3, 0.3];
-
-        // At 1 SE only the clear deficit (-1.0 < -0.3) is flagged.
-        $this->assertSame([true, false, false], diagnostics::deficit_labels_se($values, 0.0, $ses, 1.0));
-        // At 0.5 SE the borderline case (-0.2 < -0.15) is flagged too.
-        $this->assertSame([true, true, false], diagnostics::deficit_labels_se($values, 0.0, $ses, 0.5));
-    }
-
-    /**
-     * Agreement counts subscales recovered within the SE tolerance.
-     *
-     * @return void
-     */
-    public function test_agreement_within_se(): void {
-        $true = [-1.0, 0.0, 1.0];
-        $est = [-1.2, 0.1, 1.5];
-        $ses = [0.3, 0.3, 0.3];
-
-        $one = diagnostics::agreement_within_se($true, $est, $ses, 1.0);
-        $this->assertSame(2, $one['within']);
-        $this->assertEqualsWithDelta(2 / 3, $one['fraction'], 1e-6);
-
-        $two = diagnostics::agreement_within_se($true, $est, $ses, 2.0);
-        $this->assertSame(3, $two['within']);
-    }
 
     /**
      * Precision@k and recall@k use a variable relevant set.

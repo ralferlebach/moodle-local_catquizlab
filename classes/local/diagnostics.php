@@ -140,66 +140,19 @@ class diagnostics {
     /**
      * Turn per-subscale values into boolean deficit labels at a threshold.
      *
+     * A subscale is a deficit when its value is below the threshold (the person's
+     * global ability, in the DPF sense).
+     *
      * @param array $values The values.
      * @param float $threshold The threshold.
-     * @param bool $below When true, values below the threshold are deficits.
      * @return array Boolean labels aligned with $values.
      */
-    public static function deficit_labels(array $values, float $threshold, bool $below = true): array {
+    public static function deficit_labels(array $values, float $threshold): array {
         $labels = [];
         foreach ($values as $key => $value) {
-            $labels[$key] = $below ? ($value < $threshold) : ($value > $threshold);
+            $labels[$key] = $value < $threshold;
         }
         return $labels;
-    }
-
-    /**
-     * SE-aware deficit labels: a subscale is a deficit when its value lies more
-     * than `tolerance` standard errors below the reference.
-     *
-     * @param array $values The per-subscale values.
-     * @param float $reference The reference ability (e.g. the person's global level or 0).
-     * @param array $ses The standard error per subscale, aligned with $values.
-     * @param float $tolerance The tolerance in standard errors (1.0, 2.0, ...).
-     * @return array Boolean deficit labels aligned with $values.
-     */
-    public static function deficit_labels_se(array $values, float $reference, array $ses, float $tolerance = 1.0): array {
-        $labels = [];
-        foreach ($values as $key => $value) {
-            $se = (float) ($ses[$key] ?? 0.0);
-            $labels[$key] = ((float) $value) < ($reference - $tolerance * $se);
-        }
-        return $labels;
-    }
-
-    /**
-     * Share of subscales whose estimate lies within `tolerance` standard errors of the truth.
-     *
-     * @param array $truevalues True values.
-     * @param array $estvalues Estimated values, aligned.
-     * @param array $ses Standard errors, aligned.
-     * @param float $tolerance The tolerance in standard errors.
-     * @return array n, within (count) and the fraction.
-     */
-    public static function agreement_within_se(array $truevalues, array $estvalues, array $ses, float $tolerance = 1.0): array {
-        $truevalues = array_values($truevalues);
-        $estvalues = array_values($estvalues);
-        $ses = array_values($ses);
-        $n = min(count($truevalues), count($estvalues), count($ses));
-
-        $within = 0;
-        for ($i = 0; $i < $n; $i++) {
-            if (abs((float) $estvalues[$i] - (float) $truevalues[$i]) <= $tolerance * (float) $ses[$i]) {
-                $within++;
-            }
-        }
-
-        return [
-            'n'         => $n,
-            'within'    => $within,
-            'fraction'  => $n > 0 ? round($within / $n, 6) : 0.0,
-            'tolerance' => $tolerance,
-        ];
     }
 
     /**

@@ -6,6 +6,33 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.1.48] — 2026-08-11
+
+Code polish: resolve the remaining PHPMD advisories by refactoring.
+
+### Changed
+- **Removed boolean-flag arguments** (real refactors, not suppressions — Moodle's
+  phpcs rejects `@SuppressWarnings`):
+  - `diagnostics::deficit_labels()` drops its `$below` flag; a deficit is always
+    below the reference (the DPF definition). No caller used the other direction.
+  - `exporter::to_json()` is now pretty by default with no flag; the compact form
+    moves to the new `exporter::to_json_compact()`.
+- **Split the diagnostics class**: the SE-aware measures (`deficit_labels_se`,
+  `agreement_within_se`) move to a new cohesive `se_diagnostics` class, bringing
+  the diagnostics class complexity back under the threshold. Tests split into
+  `se_diagnostics_test.php` accordingly.
+
+### Notes
+- The only PHPMD items now reported anywhere are the growing `db/upgrade` function
+  and the required `pluginfile` signature parameters — both standard Moodle
+  patterns that moodle-plugin-ci does not flag, and PHPMD is non-failing in CI
+  regardless.
+
+- `version.php`: 2026081046 → **2026081047**, release 0.1.47 → **0.1.48**. No new
+  upgrade step (code-only round; no behaviour change).
+
+---
+
 ## [0.1.47] — 2026-08-11
 
 Flexible worker login (password or pre-authenticated URL).
