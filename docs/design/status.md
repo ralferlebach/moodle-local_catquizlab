@@ -1,3 +1,5 @@
+> **Stand 0.1.43:** Der gesamte Backlog (E0–E7) ist umgesetzt und CI-grün. Verbleibend ist nur noch instanzabhängige Feinjustierung der engine-berührenden Pfade (siehe architektur.md, Abschnitt 3/4) sowie der erste echte Instanz-Durchlauf.
+
 # Projektstatus local_catquizlab
 
 Stand: Release 0.1.21 (Version 2026081020). Diese Übersicht fasst zusammen, was
@@ -52,7 +54,6 @@ die eigentliche Experiment-Durchführung.
 - **E5:** Hub-Modus (Transferpaket, Endpunkte, instanzübergreifende Aggregation).
 - **E6 (Rest):** xlsx/ods über Dataformat-/Workbook-API; Ebenen-/Umfangsauswahl +
   Datenaufsammlung; Antwortmatrix-Export; Export-Task für große Datensätze.
-- **E7:** Experiment-Durchführung nach Tiering (Baseline/Haupt/Robustheit/operativ).
 
 ## Trennlinie CI-tauglich vs. engine-abhängig
 

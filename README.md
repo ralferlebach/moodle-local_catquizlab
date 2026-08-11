@@ -31,7 +31,9 @@ collection, evaluation, reporting and export:
 
 The full architecture and the epic/milestone backlog live in
 [`docs/design/architektur.md`](docs/design/architektur.md) and
-[`docs/design/backlog.md`](docs/design/backlog.md).
+[`docs/design/backlog.md`](docs/design/backlog.md). For an end-to-end
+walkthrough (define → orchestrate → run → collect → report → export), see
+[`docs/dev/durchfuehrung.md`](docs/dev/durchfuehrung.md).
 
 ## Repository
 
@@ -144,6 +146,8 @@ as above.
     classes/local/run_exporter.php       export a run answer matrix to files (E6.3)
     classes/local/export_dataset.php     export level/scope selection (E6.1)
     classes/local/transfer_package.php   hub run packaging + ingest (E5)
+    classes/local/run_orchestrator.php   set up a full run end to end (E7)
+    classes/local/tier_planner.php       order experiments by tier (E7)
     classes/local/item_repository.php    read active item parameters (E2.1/E3.4)
     classes/local/response_oracle.php    IRT answer model incl. GPCM/GRM (E3.4)
     cli/sweep.php                   CLI: expand a sweep spec, persist or list runs
@@ -155,10 +159,10 @@ as above.
     db/access.php                   manage/view/worker/hubtransfer capabilities
     settings.php                    settings page + Reports entry registration
     templates/manage.mustache       management page (collapsible sections)
-    worker/                         Puppeteer worker (stub) — ships with the plugin
+    worker/                         Puppeteer worker + node --test harness
     tests/                          PHPUnit, generator, Behat
     docs/design/                    architecture (Rev. 2) and backlog E0–E7
-    docs/dev/                       test-system setup
+    docs/dev/                       test-system setup + operator guide (durchfuehrung.md)
     docs/sessions/                  session log
     makefile                        local mirror of the CI check suite
 

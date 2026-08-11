@@ -71,13 +71,17 @@ final class question_template_test extends \advanced_testcase {
     public function test_polytomous(): void {
         $q = question_template::render(self::ITEM + ['polytomous' => true]);
 
-        $this->assertFalse($q['single']);
-        $this->assertCount(6, $q['answers']);
+        // A polytomous item is single-select with one option per ordered category.
+        $this->assertTrue($q['single']);
+        $this->assertCount(4, $q['answers']);
 
-        $positive = array_sum(array_filter(array_column($q['answers'], 'fraction'), static fn($f) => $f > 0));
-        $this->assertEqualsWithDelta(1.0, $positive, 1e-4);
-        // Correct credit and malus cancel, so full-and-wrong nets to zero.
-        $this->assertEqualsWithDelta(0.0, array_sum(array_column($q['answers'], 'fraction')), 1e-4);
+        $fractions = array_column($q['answers'], 'fraction');
+        // Categories ascend from no credit to full credit (0, 1/3, 2/3, 1).
+        $this->assertEqualsWithDelta(0.0, $fractions[0], 1e-6);
+        $this->assertEqualsWithDelta(1.0, $fractions[3], 1e-6);
+        for ($k = 1; $k < count($fractions); $k++) {
+            $this->assertGreaterThan($fractions[$k - 1], $fractions[$k]);
+        }
     }
 
     /**

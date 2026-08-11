@@ -28,9 +28,10 @@ namespace local_catquizlab\local;
  * Renders a templated multiple-choice question for a materialised item (E2.1).
  *
  * A template is a plain array with a question-text template, a 'single' flag
- * (single-choice = dichotomous 1-of-4, multi = polytomous 1..4-of-6) and a list
- * of option templates each carrying a grading fraction (1.0 correct, 0 or a
- * negative malus for distractors, partial fractions for graded options). Both the
+ * (a dichotomous item is single-choice 1-of-4; a polytomous item is single-choice
+ * with one option per ordered response category, ascending by credit) and a list
+ * of option templates each carrying a grading fraction (1.0 correct, 0 for a
+ * distractor, k/m for the k-th of m graded categories). Both the
  * question text and each option text may use placeholders — {scalename},
  * {scalenumber}, {itemname}, {itemnumber}, {itemid}, {difficulty},
  * {discrimination}, {guessing} — which are filled from the item spec. Rendering
@@ -69,21 +70,21 @@ class question_template {
      * @return array
      */
     public static function default_polytomous(): array {
-        $correct = round(1.0 / 3.0, 7);
-        $malus = round(-1.0 / 3.0, 7);
         return [
             'name'         => 'CATLab {scalename} #{itemnumber} (poly)',
             'questiontext' => 'Skala: {scalename} (#{scalenumber}) — Item {itemname} '
                 . '(#{itemnumber}, ID {itemid}). Parameter: Schwierigkeit b={difficulty}, '
-                . 'Trennschärfe a={discrimination}. Wählen Sie alle zutreffenden Optionen.',
-            'single'       => false,
+                . 'Trennschärfe a={discrimination}. Wählen Sie die zutreffende Antwortstufe.',
+            // Single-select ordered response categories (a graded/partial-credit item):
+            // one option per category, ascending by credit, so the engine's chosen
+            // category k maps to the k-th option. Shuffling is disabled on save, so the
+            // definition order is the on-screen order.
+            'single'       => true,
             'options'      => [
-                ['text' => 'Korrekt 1 ({scalename} #{itemnumber})', 'fraction' => $correct],
-                ['text' => 'Korrekt 2 ({scalename} #{itemnumber})', 'fraction' => $correct],
-                ['text' => 'Korrekt 3 ({scalename} #{itemnumber})', 'fraction' => $correct],
-                ['text' => 'Falsch 1 ({scalename} #{itemnumber})', 'fraction' => $malus],
-                ['text' => 'Falsch 2 ({scalename} #{itemnumber})', 'fraction' => $malus],
-                ['text' => 'Falsch 3 ({scalename} #{itemnumber})', 'fraction' => $malus],
+                ['text' => 'Stufe 0 — keine ({scalename} #{itemnumber})', 'fraction' => 0.0],
+                ['text' => 'Stufe 1 — teilweise ({scalename} #{itemnumber})', 'fraction' => round(1.0 / 3.0, 7)],
+                ['text' => 'Stufe 2 — überwiegend ({scalename} #{itemnumber})', 'fraction' => round(2.0 / 3.0, 7)],
+                ['text' => 'Stufe 3 — vollständig ({scalename} #{itemnumber})', 'fraction' => 1.0],
             ],
         ];
     }

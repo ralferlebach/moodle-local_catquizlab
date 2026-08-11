@@ -135,6 +135,31 @@ if ($hassiteconfig) {
         PARAM_INT
     ));
 
+    // Simulated-user login for the worker.
+    $settings->add(new admin_setting_configselect(
+        $component . '/worker_login_mode',
+        get_string('setting:worker_login_mode', $component),
+        get_string('setting:worker_login_mode_desc', $component),
+        'password',
+        [
+            'password'    => get_string('setting:worker_login_mode_password', $component),
+            'urltemplate' => get_string('setting:worker_login_mode_urltemplate', $component),
+        ]
+    ));
+    $settings->add(new admin_setting_configtext(
+        $component . '/worker_login_url_template',
+        get_string('setting:worker_login_url_template', $component),
+        get_string('setting:worker_login_url_template_desc', $component),
+        '',
+        PARAM_RAW_TRIMMED
+    ));
+    $settings->add(new admin_setting_configpasswordunmask(
+        $component . '/worker_login_suffix',
+        get_string('setting:worker_login_suffix', $component),
+        get_string('setting:worker_login_suffix_desc', $component),
+        ''
+    ));
+
     // Hub connection (node -> hub submission).
     $settings->add(new admin_setting_heading(
         $component . '/hubheading',

@@ -94,4 +94,15 @@ final class materialiser_test extends \advanced_testcase {
 
         $this->assertNull(materialiser::materialise(1, [], ['questioncategoryid' => 5]));
     }
+
+    /**
+     * Polytomous steps bracket the difficulty in ascending order.
+     *
+     * @return void
+     */
+    public function test_polytomous_steps(): void {
+        $steps = materialiser::polytomous_steps(0.5);
+        $this->assertSame([-0.5, 0.5, 1.5], $steps);
+        $this->assertTrue($steps[0] < $steps[1] && $steps[1] < $steps[2]);
+    }
 }

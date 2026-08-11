@@ -68,6 +68,27 @@ final class item_repository_test extends \advanced_testcase {
      *
      * @return void
      */
+    /**
+     * A params json with steps marks the item polytomous and exposes the steps.
+     *
+     * @return void
+     */
+    public function test_shape_params_polytomous(): void {
+        $row = (object) [
+            'questionid' => 5, 'catscaleid' => 3, 'model' => 'grmgeneralized',
+            'difficulty' => 0.5, 'discrimination' => 1.2, 'guessing' => 0.0,
+            'json' => json_encode(['steps' => [-0.5, 0.5, 1.5]]),
+        ];
+        $shaped = item_repository::shape_params($row);
+        $this->assertTrue($shaped['polytomous']);
+        $this->assertSame([-0.5, 0.5, 1.5], $shaped['steps']);
+
+        // No json means dichotomous with no steps.
+        $plain = (object) ['questionid' => 5, 'catscaleid' => 3, 'model' => 'raschbirnbaum',
+            'difficulty' => 0.5, 'discrimination' => 1.0, 'guessing' => 0.0, 'json' => ''];
+        $this->assertFalse(item_repository::shape_params($plain)['polytomous']);
+    }
+
     public function test_reads_require_engine(): void {
         $this->resetAfterTest();
 

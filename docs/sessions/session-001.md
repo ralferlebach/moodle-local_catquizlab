@@ -568,6 +568,80 @@ Ehrliche Korrektur: mein lokaler phpmd-Check zählte fälschlich „VIOLATION" (
 Token der phpmd-Textausgabe) und meldete daher zuvor irreführend 0 — künftig
 Zeilen-basierte Prüfung. Versionsbump → 2026081040 / 0.1.41 (reiner Fix).
 
+## Phase 45 — Orchestrator + Tiering E7 — Backlog vollständig (Release 0.1.42)
+`classes/local/run_orchestrator.php`: `plan_stages()` (rein/testbar: scales →
+materialise → test → people → attempts), `setup()` (engine-gekapselt: verkettet
+scale_provisioner → materialiser → test_provisioner → person_generator/user_/
+course_provisioner → attempt_scheduler; setzt Run auf SCHEDULED; jede Stage
+guarded → ohne Engine „skipped" statt Fehler). Definition via
+experiment_definition::from_json(...)->get_normalised(), Fallback example_baseline.
+`classes/local/tier_planner.php`: Ordnung nach Tier (baseline→main→robustness→
+operative, unbekannt zuletzt, Gleichstand nach id) — rein/testbar. CLI
+`cli/orchestrate.php` (einzelner Run / Experiment / alle in Tier-Reihenfolge) +
+Adhoc-Task `orchestrate_run`. Tests tier_planner/run_orchestrator. Damit ist **E7
+und der gesamte Backlog (E0–E7) vollständig**. Versionsbump → 2026081041 / 0.1.42
+(reiner Code, kein Upgrade-Schritt).
+
+## Phase 46 — Dokumentation: as-built + Durchführungsanleitung (Release 0.1.43)
+Backlog vollständig → Doku auf Endstand gehoben. `docs/design/architektur.md` auf
+Rev. 2.2 (as-built): neuer Abschnitt 4 mappt E0–E7 auf die umgesetzten Klassen,
+hält die aus den Engine-Quellen bestätigten Fakten fest (Kontext via
+catscale::get_context_id, automatische tests-Zeile, item/itemparam-Form, Live-
+personparams-Spalten) und aktualisiert die offenen Punkte auf ihren gelösten
+Stand. Neu `docs/dev/durchfuehrung.md`: Schritt-für-Schritt-Anleitung
+(Definieren/Sweep → orchestrieren → Worker → Collect/Aggregation → Reports →
+Export → Hub → Cleanup) plus die instanzabhängigen Feinjustier-Stellen.
+Reiner Doku-Release, keine Code-Änderung. Versionsbump → 2026081042 / 0.1.43.
+
+## Phase 47 — Polytome Oracle-Verdrahtung E3.4 (Release 0.1.44)
+`response_oracle::respond_item()` (rein/testbar): dispatcht nach Itemtyp — polytom
+(mit Schritt-/Schwellenparametern) zieht eine geordnete Kategorie via GPCM/GRM und
+liefert choice + proportionale fraction; dichotom scored richtig/falsch (choice -1).
+Schrittparameter durchgängig: `item_registrar::build_itemparam` legt steps im
+params-json ab, `item_repository` liest sie zurück (Flag polytomous + steps),
+`materialiser::polytomous_steps` leitet aufsteigende Schwellen um die Item-
+Schwierigkeit ab. `oracle_answer` beantwortet damit polytome Items (choice/
+fraction) statt immer dichotom. Tests response_oracle/item_registrar/materialiser/
+item_repository erweitert. Damit ist der letzte offene E3.4-Punkt geschlossen.
+Versionsbump → 2026081043 / 0.1.44 (reiner Code, kein Upgrade-Schritt).
+
+## Phase 48 — Polytome UI-Abbildung: Kategorie → konkrete Option (Release 0.1.45)
+`question_template::default_polytomous` ist jetzt ein Single-Select-Item mit einer
+Option je geordneter Antwortstufe (aufsteigend 0, 1/3, 2/3, 1) statt 3-aus-6-
+Multi-Select — passend zu GPCM/GRM: die gewählte Kategorie k ist genau die k-te
+Option (Shuffle ist beim Speichern aus, also Definitionsreihenfolge = Bildschirm-
+reihenfolge). Worker `run_attempt.js`: `answerQuestion` nimmt die volle Oracle-
+Entscheidung und klickt über das neue reine `chooseOptionIndex` bei polytom die
+kategorie-te Option (geklammert), bei dichotom die korrekte/Distraktor-Option;
+node-geprüft. Nebenbei einen echten Fehler behoben: `worker/package.json` deklarierte
+`"type":"module"`, obwohl das Skript CommonJS ist — dadurch lief der Worker gar
+nicht; Deklaration entfernt, jetzt lauffähig und der reine Helfer importierbar.
+Test `question_template::test_polytomous` auf Single-Select/aufsteigende Stufen
+umgestellt. Versionsbump → 2026081044 / 0.1.45 (reiner Code).
+
+## Phase 49 — Worker-Robustheit + Node-Testrahmen E3.3 (Release 0.1.46)
+`worker/run_attempt.js` gegen Theme-Varianz gehärtet: Fragenerkennung, Radio-
+Optionen, Absende- und Start-Button probieren je eine Liste von Fallback-
+Selektoren (`firstHandle`/`allHandles`/`clickFirst`); Navigations-Waits tolerieren
+langsame Idles und fallen auf domcontentloaded zurück; `startAttempt` klickt nicht
+mehr blind, `answerQuestion` meldet fehlende Optionen, per-Page-Navigations-Timeout
+gesetzt. Reine Helfer extrahiert und exportiert (parseArgs, normaliseBaseUrl,
+buildWsUrl, parseQuestionId, parseEngineAttemptId, usernameFor, passwordFor +
+chooseOptionIndex) — Browser/Netz-Code läuft weiterhin nur bei direktem Start.
+Neu `worker/test/run_attempt.test.js` auf Nodes eingebautem `node --test` (keine
+externen Deps), 7 Tests grün; `npm test` im worker/. Versionsbump → 2026081045 /
+0.1.46 (nur Worker, keine PHP-Änderung).
+
+## Phase 50 — Flexibler Worker-Login E3.3 (Release 0.1.47)
+Login-Modus für den Worker: Settings `worker_login_mode` (Benutzername/Passwort-
+Konvention ODER vorauthentifizierte URL-Vorlage), `worker_login_url_template`
+({userid}-Platzhalter) und `worker_login_suffix`. `worker_launcher` reicht sie als
+`--login-mode`/`--login-url-template`/`--login-suffix` durch. Worker `login()`
+dispatcht nach Modus: navigiert zur substituierten URL (neue reine `loginUrlFor`)
+oder nutzt den Benutzername/Passwort-Fluss. Node-Test (loginUrlFor) + Launcher-Test
+erweitert. Damit lassen sich unterschiedliche Auth-Setups (SSO/Key-Login) ohne
+Worker-Änderung nutzen. Versionsbump → 2026081046 / 0.1.47.
+
 ## Verifikationsstand
 Container: PHP-Syntax, install.xml, YAML, Worker-JS grün; PHPCS (Moodle) 0/0
 **und PHPMD ohne Verstöße** über alle PHP-Dateien; höchster Upgrade-Savepoint ≤

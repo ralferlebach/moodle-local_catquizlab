@@ -6,6 +6,150 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.1.47] — 2026-08-11
+
+Flexible worker login (password or pre-authenticated URL).
+
+### Added
+- **Login mode** for the worker: settings `worker_login_mode` (username/password
+  convention, or a pre-authenticated URL template), `worker_login_url_template`
+  (a URL with a {userid} placeholder) and `worker_login_suffix`. `worker_launcher`
+  passes them through as `--login-mode`, `--login-url-template` and `--login-suffix`.
+- **Worker** `login()` now dispatches by mode: it navigates to the substituted
+  pre-authenticated URL (via the new pure `loginUrlFor()`), or falls back to the
+  username/password flow. Covered by the Node harness and the launcher test.
+
+- `version.php`: 2026081045 → **2026081046**, release 0.1.46 → **0.1.47**. No new
+  upgrade step. This lets different test-instance auth setups (SSO/key login) be used
+  without editing the worker.
+
+---
+
+## [0.1.46] — 2026-08-11
+
+Worker robustness and a Node test harness (E3.3).
+
+### Changed
+- **Worker** `worker/run_attempt.js` is now defensive against theme variation:
+  question detection, radio options, the submit button and the start button each
+  try a list of fallback selectors (`firstHandle`/`allHandles`/`clickFirst`), and
+  navigation waits tolerate slow network idles and fall back to domcontentloaded.
+  `startAttempt` no longer clicks blindly, `answerQuestion` reports when no option
+  is found, and a per-page navigation timeout is set.
+- **Pure helpers extracted and exported** for testing: `parseArgs`,
+  `normaliseBaseUrl`, `buildWsUrl`, `parseQuestionId`, `parseEngineAttemptId`,
+  `usernameFor`, `passwordFor` (alongside `chooseOptionIndex`). The browser/network
+  code still runs only when the script is executed directly.
+
+### Added
+- **Node test harness** `worker/test/run_attempt.test.js` on Node's built-in
+  `node --test` runner (no external dependencies); `npm test` in `worker/` runs it.
+  Seven tests cover the pure helpers.
+
+- `version.php`: 2026081044 → **2026081045**, release 0.1.45 → **0.1.46**. No new
+  upgrade step (worker-only round; no PHP changes).
+
+---
+
+## [0.1.45] — 2026-08-11
+
+Polytomous UI mapping: ordered categories to concrete options.
+
+### Changed
+- **`question_template::default_polytomous()`** is now a single-select graded item
+  with one option per ordered response category (ascending credit 0, 1/3, 2/3, 1),
+  instead of a 3-of-6 multi-select. This matches the GPCM/GRM model: the engine's
+  chosen category k is exactly the k-th option. Answer shuffling is already disabled
+  on save, so the on-screen order equals the definition order.
+- **Worker** `worker/run_attempt.js`: `answerQuestion()` now takes the full oracle
+  decision and, via the new pure `chooseOptionIndex()`, clicks the category-th option
+  for a polytomous item (clamped) and the correct/distractor option for a dichotomous
+  one. Node-checked against the mapping.
+
+### Fixed
+- **Worker packaging**: `worker/package.json` declared `"type": "module"` while the
+  script is CommonJS (`require`/`module.exports`), so it could not actually run.
+  Removed the declaration; the worker now loads correctly and its pure helper is
+  importable for testing.
+
+- `version.php`: 2026081043 → **2026081044**, release 0.1.44 → **0.1.45**. No new
+  upgrade step (code-only round). The polytomous path is now concrete end to end:
+  engine category -> proportional fraction -> the matching on-screen option.
+
+---
+
+## [0.1.44] — 2026-08-11
+
+Polytomous response wiring in the oracle (E3.4 completion).
+
+### Added
+- **`response_oracle::respond_item()`**: a pure dispatcher that scores a presented
+  item by type — a polytomous item (flagged, carrying step/threshold parameters)
+  draws an ordered category via GPCM/GRM and reports it as the chosen category with a
+  proportional score fraction; a dichotomous item is scored right/wrong. Tested.
+- **Item step parameters end to end**: `item_registrar::build_itemparam()` stores
+  polytomous steps in the params json; `item_repository` reads them back and flags the
+  item `polytomous` with its `steps`; `materialiser::polytomous_steps()` derives
+  ascending thresholds around each item's difficulty when materialising polytomous
+  items. All covered by tests.
+
+### Changed
+- **`oracle_answer`** now answers polytomous items: it resolves the item's step
+  parameters and returns the chosen category in `choice` (with a proportional
+  `fraction`), instead of always scoring dichotomously. Dichotomous items are
+  unchanged.
+
+- `version.php`: 2026081042 → **2026081043**, release 0.1.43 → **0.1.44**. No new
+  upgrade step (code-only round). This closes the last open item from E3.4: the
+  polytomous category choice is wired through the oracle.
+
+---
+
+## [0.1.43] — 2026-08-11
+
+Documentation: as-built architecture and an operator guide.
+
+### Docs
+- **Architecture** `docs/design/architektur.md` lifted to Rev. 2.2 (as-built): new
+  section 4 maps every epic (E0–E7) to the implemented classes, records the engine
+  facts confirmed from the local_catquiz source (test context via
+  `catscale::get_context_id`, automatic test-row creation, item/itemparam shape,
+  live personparams columns), and updates the open points to their resolved state.
+- **Operator guide** `docs/dev/durchfuehrung.md` (new): a step-by-step, end-to-end
+  walkthrough — define/expand a sweep, orchestrate a run (CLI/task), run the worker,
+  collect and aggregate, view reports, export, optional hub submission, and cleanup —
+  plus the instance-specific fine-tuning points.
+
+- `version.php`: 2026081041 → **2026081042**, release 0.1.42 → **0.1.43**. No new
+  upgrade step (documentation-only round; no code changes).
+
+---
+
+## [0.1.42] — 2026-08-11
+
+Experiment orchestration and tiering (E7) — the backlog is complete.
+
+### Added
+- **Run orchestrator** `classes/local/run_orchestrator.php` (E7): `plan_stages()`
+  names the ordered setup pipeline (scales -> materialise -> test -> people ->
+  attempts) — pure and tested; `setup()` runs it for a run, delegating each stage to
+  its building block (scale tree, questions/items, CAT test, persons/users/course/
+  enrolment, queued attempts) and advancing the run to scheduled. Each stage guards
+  the engine, so without it setup reports every stage as skipped rather than failing.
+- **Tier planner** `classes/local/tier_planner.php` (E7): orders experiments and
+  their runs by study tier (baseline -> main -> robustness -> operative; unknown tiers
+  last, ties by id). Pure and tested.
+- **CLI + task**: `cli/orchestrate.php` sets up a single run, all runs of an
+  experiment, or every run in tier order; `classes/task/orchestrate_run.php` does the
+  same off the web request.
+
+- `version.php`: 2026081040 → **2026081041**, release 0.1.41 → **0.1.42**. No new
+  upgrade step (code-only round). With this, E7 — and the whole backlog (E0–E7) — is
+  complete: from experiment definition through a materialised, DPF-sensitive CAT run
+  to metrics, diagnostics, reports, export and hub aggregation.
+
+---
+
 ## [0.1.41] — 2026-08-11
 
 CI fix: update the stale hub test and reduce method complexity.

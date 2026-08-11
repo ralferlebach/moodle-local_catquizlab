@@ -64,4 +64,18 @@ final class item_registrar_test extends \advanced_testcase {
 
         $this->assertNull(item_registrar::register_item(3397, 101, 10, ['difficulty' => 0.5]));
     }
+
+    /**
+     * Polytomous step parameters are stored in the params json.
+     *
+     * @return void
+     */
+    public function test_build_itemparam_steps(): void {
+        $plain = item_registrar::build_itemparam(1, 10, ['difficulty' => 0.5]);
+        $this->assertSame('', $plain['json']);
+
+        $poly = item_registrar::build_itemparam(1, 10, ['difficulty' => 0.5, 'steps' => [-0.5, 0.5, 1.5]]);
+        $decoded = json_decode($poly['json'], true);
+        $this->assertSame([-0.5, 0.5, 1.5], $decoded['steps']);
+    }
 }

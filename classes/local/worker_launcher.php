@@ -54,6 +54,15 @@ class worker_launcher {
         if ($maxjobs > 0) {
             $argv[] = '--max-jobs=' . $maxjobs;
         }
+        if (!empty($config['loginmode'])) {
+            $argv[] = '--login-mode=' . $config['loginmode'];
+        }
+        if (!empty($config['loginurltemplate'])) {
+            $argv[] = '--login-url-template=' . $config['loginurltemplate'];
+        }
+        if (($config['loginsuffix'] ?? '') !== '') {
+            $argv[] = '--login-suffix=' . $config['loginsuffix'];
+        }
         return $argv;
     }
 
@@ -73,6 +82,9 @@ class worker_launcher {
             'token'   => (string) get_config('local_catquizlab', 'worker_token'),
             'maxjobs' => (int) get_config('local_catquizlab', 'worker_max_jobs'),
             'workerid' => 'catquizlab-exec',
+            'loginmode' => (string) get_config('local_catquizlab', 'worker_login_mode'),
+            'loginurltemplate' => (string) get_config('local_catquizlab', 'worker_login_url_template'),
+            'loginsuffix' => (string) get_config('local_catquizlab', 'worker_login_suffix'),
         ];
     }
 

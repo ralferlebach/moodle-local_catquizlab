@@ -46,6 +46,9 @@ class item_registrar {
      * @return array The local_catquiz_itemparams field set (without ids/timestamps).
      */
     public static function build_itemparam(int $questionid, int $contextid, array $params): array {
+        $steps = array_values(array_map('floatval', $params['steps'] ?? []));
+        $json = $steps !== [] ? json_encode(['steps' => $steps], JSON_UNESCAPED_SLASHES) : '';
+
         return [
             'componentid'    => $questionid,
             'componentname'  => 'question',
@@ -55,7 +58,7 @@ class item_registrar {
             'discrimination' => round((float) ($params['discrimination'] ?? 1.0), 5),
             'guessing'       => round((float) ($params['guessing'] ?? 0.0), 5),
             'status'         => self::STATUS_CALCULATED,
-            'json'           => '',
+            'json'           => $json,
         ];
     }
 

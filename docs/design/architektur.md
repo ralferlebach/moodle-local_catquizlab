@@ -1,6 +1,6 @@
-# Architektur der CAT-Experimenten-Suite (Rev. 2.1)
+# Architektur der CAT-Experimenten-Suite (Rev. 2.2 — as-built)
 
-Stand: 09.08.2026 · Diese Fassung ist die maßgebliche Architekturbeschreibung des Plugins `local_catquizlab`; das zugehörige Backlog liegt in `backlog.md`. Eingearbeitete Vorgaben:
+Stand: 11.08.2026 · Release 0.1.43 · Diese Fassung ist die maßgebliche Architekturbeschreibung des Plugins `local_catquizlab`. Rev. 2.1 beschrieb das Zielbild; Rev. 2.2 ergänzt den **Umsetzungsstand (as-built)** in Abschnitt 4 und aktualisiert die offenen Punkte in Abschnitt 3. Der gesamte Backlog (E0–E7) ist umgesetzt und CI-grün. Eingearbeitete Vorgaben:
 Vorbereitung **und** Auswertung vollständig in einem Local-Plugin · Vorbereitung über interne Routinen und Moodle-APIs · Auswertung wahlweise in derselben Instanz oder nachberechnet in einer zentralen Berechnungsinstanz · vollständiger Export (Excel, OpenDocument, CSV, XML, JSON) für optionale externe Berechnung · **keine** notwendigen externen Berechnungen · Testdurchführung **nicht** intern/in-process, sondern extern per Puppeteer, getriggert durch getimte Adhoc-Tasks
 
 ---
@@ -106,11 +106,49 @@ Personen- und Item/Question-Namen werden nach **spezifizierbaren Regeln** vergeb
 
 ---
 
-## 3. Offene Punkte
+## 3. Offene Punkte (Stand 0.1.43)
 
-1. **Trace-Tiefe der Engine:** Liefern Attempt-JSON/Debug-Info alle Selektions-Score-Komponenten (FI, PF, SF_process/scale/item) maschinenlesbar? Falls nein: minimaler, upstream-fähiger Trace-Hook in `local_catquiz` – einzige tolerierte Engine-Berührung.
-2. **PF(t)-Schalter:** Deaktivierbarkeit von `lasttimeplayedpenalty` per Test-Setting prüfen (Design verlangt zunächst PF(t)=1).
-3. **Polytome Antworten im UI:** Für GPCM/GRM muss das Oracle eine Antwortkategorie wählen und Puppeteer die passende UI-Option treffen – Fragetyp-Wahl bei der Pool-Generierung darauf abstimmen.
-4. **SE-Schwellen auf Subskalen** („noch zu entscheiden" laut Design) vor der Sweep-Definition fixieren.
-5. **Durchsatz:** UI-Durchführung ist der Flaschenhals; Kapazitätsmessung in M1 entscheidet über Fraktionierung des Rasters und Worker-Anzahl.
-6. **Simulanten-Authentifizierung:** Passwort-Login vs. tokenbasierter Auto-Login für Puppeteer (Sicherheits- und Komfortabwägung, nur Testinstanzen).
+Die ursprünglichen Design-Fragen sind durch die Umsetzung überwiegend geklärt; hier der aktuelle Stand:
+
+1. **Trace-Tiefe der Engine:** *Geklärt.* `local_catquiz_attempts.debug_info` ist eine JSON-Liste von Schritt-Snapshots mit `personabilities` (θ je Skala) und `numquestionsperscale` (Exposition je Skala). `attempt_collector::parse_debug_info()` zieht daraus die Subskalen-θ + Exposition in die Trace; damit speist sich die per-Subskala-DPF-Diagnostik. Ein upstream-Hook ist nicht nötig.
+2. **PF(t)-Schalter:** Offen (Instanz-Einstellung). Das Design verlangt zunächst PF(t)=1; die Aktivierung erfolgt über die catquiz-Testeinstellungen des angelegten Tests.
+3. **Polytome Antworten im UI:** *Kern geklärt.* `response_oracle::gpcm_probabilities`/`grm_probabilities`/`respond_polytomous` wählen eine Kategorie; `question_template` erzeugt polytome MC-Fragen (1–4 aus 6, mit Teilpunkten/Malus). Die Verdrahtung der Kategorienwahl in `oracle_answer` folgt, sobald Schritt-/Schwellenparameter der Items aufgelöst werden.
+4. **SE-Schwellen auf Subskalen:** Parametrisierbar über `test_provisioner::build_quizsettings` (`se_min`/`se_max`, `minquestionspersubscale`/`maxquestionspersubscale`); der konkrete Wert ist vor der Sweep-Definition zu fixieren.
+5. **Durchsatz:** `capacity` liefert Batching/Staffelung/Durchsatz; die konkrete Worker-Anzahl ergibt sich aus einer Messfahrt in der Zielinstanz.
+6. **Simulanten-Authentifizierung:** Passwort-Login angenommen (Person = Nutzer mit `:worker`-Fähigkeit); Token-Auto-Login bleibt als Alternative offen.
+
+**Verbleibende, rein instanzabhängige Feinjustierung** (läuft erst in der Ziel-Instanz, per Konstruktion engine-gekapselt und daher CI-neutral): die exakten `add_moduleinfo`-Felder von adaptivequiz (`highestlevel`/`lowestlevel`/`startinglevel`), das Fragebank-Layout/`save_question` bei der Materialisierung, die Kontext-/Skalen-Inserts sowie der vollständige Oracle-Pfad. Diese Stellen sind bewusst so gekapselt, dass Abweichungen der Instanz lokal nachgezogen werden, ohne die Testbarkeit oder CI zu berühren.
+
+---
+
+## 4. Umsetzungsstand (as-built, Stand 0.1.43)
+
+Der Backlog E0–E7 ist vollständig umgesetzt. Kernkomponenten (Klassen unter `classes/local/` bzw. wie vermerkt):
+
+**Definition & Registry (E1):** `experiment_definition` (deklaratives Format, Validierung, Normalisierung), `sweep` (Faktor-Expansion), `registry` (Run-Registry + Statusmodell DRAFT→SCHEDULED→RUNNING→FINISHED→FAILED), `naming` (Namensregeln); UI `index.php`/`templates/manage.mustache`, CLI `cli/sweep.php`.
+
+**Materialisierung & Provisionierung (E2):** `pool_planner` (Ideal-Pool-Blaupause), `pool_mutator` (Varianten: shifted/stretched/gappy/depleted/Kalibrier-/Taggingfehler/kombiniert), `scale_provisioner` (Kontext + catscales-Baum + `scalemap`), `question_template` (templatebare MC-Fragen, dichotom/polytom), `item_registrar` (Items + Itemparameter, raschbirnbaum), `materialiser` (Blaupause → Fragen → Items), `test_provisioner`/`test_binder` (CAT-Test anlegen/binden), `person_generator` (hierarchische θ-Profile), `user_provisioner`/`course_provisioner` (Nutzer, Kurs, Einschreibung), `run_cleanup`. Schema: `db/install.xml` (u. a. `scalemap`), Upgrade-Pfade in `db/upgrade.php`.
+
+**Durchführung (E3):** `attempt_scheduler` + Task `schedule_attempts` (Attempt-Queue), `worker_launcher` + Task `dispatch_worker` (exec-Variante) bzw. WS `job_claim`/`job_complete` (Queue-Polling), `worker/run_attempt.js` (Puppeteer-Referenz), WS `oracle_answer` (seed-deterministisch, subskalen-sensitiv via `scalemap`), `response_oracle` (IRT inkl. GPCM/GRM), `attempt_collector` + Task `collect_attempts` (Trace-Erfassung inkl. `debug_info`), `capacity` (Parallelisierung/Durchsatz).
+
+**Auswertung (E4):** `metrics` (Bias/RMSE/MAE/Korrelation/Testlänge/SE/Exposition), `diagnostics` (Spearman/Top-k/nDCG/Konfusion/Precision-Recall, SE-Toleranz), `subscale_evaluator` (per-Subskala-DPF gegen Ground Truth), `trend_analysis` (Stabilität/Trend/Konvergenz), `result_aggregator` + Task `aggregate_results` (global + Stratum + DPF), Report-UI `report.php`/`report_builder` (Tabellen + Moodle-Charts).
+
+**Hub-Modus (E5):** `transfer_package` (Paketbau, SHA-256-Integrität, Ingest, Cross-Instance-Aggregation), WS `hub_submit_run`/`hub_fetch_results`, Hub-Settings.
+
+**Export (E6):** `exporter` (csv/json/XML-Writer + xlsx/ods über Dataformat), `answer_matrix` (Personen×Items, Nachfolger getit-horst), `export_dataset` (Ebenen raw/groundtruth/metrics × Umfang run/experiment/tier), `run_exporter` + Task `export_run`, `local_catquizlab_pluginfile` (Auslieferung).
+
+**Orchestrierung & Tiering (E7):** `run_orchestrator` (Pipeline scales→materialise→test→people→attempts, engine-gekapselt), `tier_planner` (Ordnung baseline→main→robustness→operative), CLI `cli/orchestrate.php`, Task `orchestrate_run`.
+
+**Engine-Fakten (aus den Quellen von `local_catquiz` 2024070802 + catmodel-Subplugins bestätigt):**
+- `local_catquiz_tests` hat **keine** `contextid`; der CAT-Kontext wird aus der Skala über `\local_catquiz\catscale::get_context_id($catscaleid)` aufgelöst.
+- Die Test-Zeile entsteht **automatisch** beim Speichern der Aktivität: `add_moduleinfo` mit `catmodel='catquiz'` + `catquiz_*`-Feldern → catmodel-Handler → `catquiz_handler::add_or_update_instance_callback()` JSON-kodiert das Formular und schreibt `local_catquiz_tests` (`catscaleid=catquiz_catscales`, `courseid`).
+- `local_catquiz_items` (`componentname='question'`, `componentid=questionid`, `catscaleid`, `contextid`, `activeparamid`) + `local_catquiz_itemparams` (`model`, `difficulty`, `discrimination`, `guessing`); Item-Skalen-Verknüpfung über `catscale::add_or_update_testitem_to_scale`.
+- `local_catquiz_personparams` der Live-Instanz trägt `attemptid` + `standarderror` (die gebündelte install.xml war älter).
+
+**Test-/CI-Strategie:** Reine Logik (Statistik, Planung, Templating, Paketbau) ist per PHPUnit abgedeckt; engine-berührende Pfade sind über `environment`-Guards gekapselt (ohne Engine No-op/`skipped`), sodass das Plugin stand-alone installiert und die CI (phpcs/phpmd `|| true`/PHPUnit/Behat über MOODLE_405/502) grün bleibt. Die engine-abhängigen Pfade werden in der Ziel-Instanz verifiziert.
+
+---
+
+## 5. Frühere offene Design-Fragen (Archiv Rev. 2.1)
+
+*Historisch — siehe Abschnitt 3 für den aktuellen Stand.*

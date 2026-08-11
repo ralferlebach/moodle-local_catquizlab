@@ -98,6 +98,10 @@ class materialiser {
 
         $created = 0;
         foreach ($specs as $spec) {
+            if ($polytomous) {
+                $spec['steps'] = self::polytomous_steps((float) $spec['difficulty']);
+                $spec['model'] = 'grmgeneralized';
+            }
             $rendered = question_template::render($spec + ['polytomous' => $polytomous], $template);
             $questionid = self::create_question($categoryid, $rendered);
             if ($questionid > 0) {
@@ -107,6 +111,20 @@ class materialiser {
         }
 
         return ['planned' => count($specs), 'created' => $created];
+    }
+
+    /**
+     * Ordered category thresholds around an item difficulty (a 4-category default).
+     *
+     * @param float $difficulty The item difficulty b.
+     * @return float[] Ascending step thresholds [b-1, b, b+1].
+     */
+    public static function polytomous_steps(float $difficulty): array {
+        return [
+            round($difficulty - 1.0, 5),
+            round($difficulty, 5),
+            round($difficulty + 1.0, 5),
+        ];
     }
 
     /**

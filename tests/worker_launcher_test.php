@@ -45,6 +45,9 @@ final class worker_launcher_test extends \advanced_testcase {
             'token'    => 'abc123',
             'workerid' => 'w1',
             'maxjobs'  => 5,
+            'loginmode' => 'urltemplate',
+            'loginurltemplate' => 'https://moodle.example/key.php?u={userid}',
+            'loginsuffix' => '!pw',
         ]);
 
         $this->assertSame('/usr/bin/node', $argv[0]);
@@ -53,6 +56,23 @@ final class worker_launcher_test extends \advanced_testcase {
         $this->assertContains('--token=abc123', $argv);
         $this->assertContains('--worker-id=w1', $argv);
         $this->assertContains('--max-jobs=5', $argv);
+        $this->assertContains('--login-mode=urltemplate', $argv);
+        $this->assertContains('--login-url-template=https://moodle.example/key.php?u={userid}', $argv);
+        $this->assertContains('--login-suffix=!pw', $argv);
+    }
+
+    /**
+     * Login options are omitted when not configured.
+     *
+     * @return void
+     */
+    public function test_build_command_no_login_options(): void {
+        $argv = worker_launcher::build_command(['baseurl' => 'x', 'token' => 'y']);
+        foreach ($argv as $part) {
+            $this->assertStringNotContainsString('--login-mode', $part);
+            $this->assertStringNotContainsString('--login-url-template', $part);
+            $this->assertStringNotContainsString('--login-suffix', $part);
+        }
     }
 
     /**

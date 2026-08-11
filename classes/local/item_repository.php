@@ -54,7 +54,7 @@ class item_repository {
         }
 
         $sql = "SELECT lci.componentid AS questionid, lci.catscaleid,
-                       lcip.model, lcip.difficulty, lcip.discrimination, lcip.guessing
+                       lcip.model, lcip.difficulty, lcip.discrimination, lcip.guessing, lcip.json
                   FROM {local_catquiz_items} lci
                   JOIN {local_catquiz_itemparams} lcip ON lcip.id = lci.activeparamid
                  WHERE lci.contextid = :contextid AND lci.componentid = :questionid";
@@ -109,7 +109,7 @@ class item_repository {
      * @return array The shaped parameters.
      */
     public static function shape_params(\stdClass $row): array {
-        return [
+        $shape = [
             'questionid'     => (int) $row->questionid,
             'catscaleid'     => (int) ($row->catscaleid ?? 0),
             'model'          => (string) ($row->model ?? ''),
@@ -120,6 +120,17 @@ class item_repository {
             'guessing'       => isset($row->guessing) && $row->guessing !== null
                 ? (float) $row->guessing
                 : 0.0,
+            'polytomous'     => false,
+            'steps'          => [],
         ];
+
+        // Polytomous items carry their category thresholds in the params json.
+        $extra = isset($row->json) ? json_decode((string) $row->json, true) : null;
+        if (is_array($extra) && !empty($extra['steps']) && is_array($extra['steps'])) {
+            $shape['steps'] = array_values(array_map('floatval', $extra['steps']));
+            $shape['polytomous'] = true;
+        }
+
+        return $shape;
     }
 }

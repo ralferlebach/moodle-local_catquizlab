@@ -95,8 +95,8 @@ class oracle_answer extends external_api {
 
         return [
             'ready'    => true,
-            'fraction' => $correct ? 1.0 : 0.0,
-            'choice'   => -1,
+            'fraction' => $correct['fraction'],
+            'choice'   => $correct['choice'],
             'message'  => get_string('oracle:computed', 'local_catquizlab'),
         ];
     }
@@ -129,14 +129,14 @@ class oracle_answer extends external_api {
     }
 
     /**
-     * Compute the seed-deterministic correctness for a resolved item.
+     * Compute the seed-deterministic response for a resolved item.
      *
      * @param int $runid The run id.
      * @param int $questionid The question id.
      * @param array $resolved The resolved item and person.
-     * @return bool Whether the simulated answer is correct.
+     * @return array{fraction: float, choice: int} The score fraction and chosen category.
      */
-    protected static function compute(int $runid, int $questionid, array $resolved): bool {
+    protected static function compute(int $runid, int $questionid, array $resolved): array {
         $item = $resolved['item'];
         $person = $resolved['person'];
 
@@ -149,13 +149,7 @@ class oracle_answer extends external_api {
         );
         $seed = crc32("{$runid}:{$person->id}:{$questionid}") & 0x7fffffff;
 
-        return response_oracle::respond(
-            $ability,
-            $item['difficulty'],
-            $seed,
-            $item['discrimination'],
-            $item['guessing']
-        );
+        return response_oracle::respond_item($ability, $item, $seed);
     }
 
     /**

@@ -199,4 +199,34 @@ final class response_oracle_test extends \advanced_testcase {
         }
         return $sum / 1500;
     }
+
+    /**
+     * respond_item dispatches dichotomous vs polytomous scoring.
+     *
+     * @return void
+     */
+    public function test_respond_item(): void {
+        // Dichotomous: right/wrong with choice -1.
+        $hit = response_oracle::respond_item(3.0, ['difficulty' => -2.0, 'discrimination' => 1.5], 1);
+        $this->assertSame(-1, $hit['choice']);
+        $this->assertContains($hit['fraction'], [0.0, 1.0]);
+
+        // Polytomous: a category in 0..3 with a proportional fraction.
+        $poly = response_oracle::respond_item(0.0, [
+            'polytomous' => true, 'model' => 'gpcm', 'discrimination' => 1.0, 'steps' => [-1.0, 0.0, 1.0],
+        ], 7);
+        $this->assertGreaterThanOrEqual(0, $poly['choice']);
+        $this->assertLessThanOrEqual(3, $poly['choice']);
+        $this->assertEqualsWithDelta($poly['choice'] / 3.0, $poly['fraction'], 1e-6);
+
+        // Mean category rises with ability.
+        $low = 0;
+        $high = 0;
+        for ($i = 0; $i < 400; $i++) {
+            $steps = ['polytomous' => true, 'discrimination' => 1.0, 'steps' => [-1.0, 0.0, 1.0]];
+            $low += response_oracle::respond_item(-3.0, $steps, $i)['choice'];
+            $high += response_oracle::respond_item(3.0, $steps, $i)['choice'];
+        }
+        $this->assertLessThan($high, $low);
+    }
 }

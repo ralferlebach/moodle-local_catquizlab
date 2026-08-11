@@ -183,6 +183,43 @@ class response_oracle {
     }
 
     /**
+     * Answer a presented item, dispatching by item type.
+     *
+     * A polytomous item (flagged and carrying step/threshold parameters) draws a
+     * category via {@see self::respond_polytomous()} and reports it as the chosen
+     * category with a proportional score fraction; a dichotomous item is scored
+     * right/wrong via {@see self::respond()}. Pure and seed-deterministic.
+     *
+     * @param float $ability The person's ability on the item's scale.
+     * @param array $item The item parameters (model, difficulty, discrimination,
+     *                    guessing, and for polytomous items polytomous + steps).
+     * @param int $seed Deterministic seed for this presentation.
+     * @return array{fraction: float, choice: int} Score fraction in [0,1] and the
+     *         chosen polytomous category (or -1 for dichotomous items).
+     */
+    public static function respond_item(float $ability, array $item, int $seed): array {
+        $steps = array_values(array_map('floatval', $item['steps'] ?? []));
+        $discrimination = (float) ($item['discrimination'] ?? 1.0);
+
+        if (!empty($item['polytomous']) && count($steps) >= 1) {
+            $model = stripos((string) ($item['model'] ?? ''), 'grm') !== false ? 'grm' : 'gpcm';
+            $category = self::respond_polytomous($ability, $model, $discrimination, $steps, $seed);
+            $maxcategory = count($steps);
+            $fraction = $maxcategory > 0 ? $category / $maxcategory : 0.0;
+            return ['fraction' => round($fraction, 6), 'choice' => $category];
+        }
+
+        $correct = self::respond(
+            $ability,
+            (float) ($item['difficulty'] ?? 0.0),
+            $seed,
+            $discrimination,
+            (float) ($item['guessing'] ?? 0.0)
+        );
+        return ['fraction' => $correct ? 1.0 : 0.0, 'choice' => -1];
+    }
+
+    /**
      * Resolve the relevant ability from a person's hierarchical profile.
      *
      * Returns the subscale ability when a category and subscale are given, the

@@ -16,29 +16,52 @@
  *   node run_attempt.js --base-url=<wwwroot> --token=<wstoken> [--worker-id=<id>]
  *                       [--max-jobs=<n>] [--login-suffix=<pw>]
  *
- * This is a reference implementation; selectors may need tuning to the theme.
+ * This is a reference implementation. The DOM interaction is written defensively
+ * against theme variation (each interaction tries a list of selectors), but the
+ * selector lists and the login convention are the parts most likely to need
+ * tuning to a given deployment. The pure helpers at the bottom are exported for
+ * unit testing (see worker/test/).
  */
 
 'use strict';
 
-const puppeteer = require('puppeteer');
+// puppeteer is required lazily inside launch so the pure helpers below can be
+// imported (e.g. for tests) in an environment without the dependency installed.
 
-const args = Object.fromEntries(
-    process.argv.slice(2)
-        .filter((a) => a.startsWith('--'))
-        .map((a) => {
-            const [k, ...v] = a.replace(/^--/, '').split('=');
-            return [k, v.join('=') || true];
-        })
-);
+// Selector lists, tried in order until one matches, for theme robustness.
+const QUESTION_SELECTORS = ['.que', 'div[id^="question-"]', '.qtext'];
+const RADIO_SELECTORS = [
+    '.que .answer input[type="radio"]',
+    '.que input[type="radio"]',
+    'input[type="radio"]',
+];
+const SUBMIT_SELECTORS = [
+    'input[name="submitanswer"]',
+    'button[name="submitanswer"]',
+    '#responseform input[type="submit"]',
+    '.submitbtns input[type="submit"]',
+    'form[action*="attempt.php"] input[type="submit"]',
+];
+const START_SELECTORS = [
+    '#id_submitbutton',
+    'form[action*="attempt.php"] input[type="submit"]',
+    'input[type="submit"]',
+    'button[type="submit"]',
+    'a.btn-primary',
+];
 
-const BASE_URL = (args['base-url'] || '').replace(/\/+$/, '');
+const NAV_TIMEOUT = 30000;
+
+const args = parseArgs(process.argv.slice(2));
+const BASE_URL = normaliseBaseUrl(args['base-url']);
 const TOKEN = args.token || '';
 const WORKER_ID = args['worker-id'] || 'catquizlab-worker';
 const MAX_JOBS = parseInt(args['max-jobs'] || '0', 10); // 0 = until the queue is empty.
 const LOGIN_SUFFIX = args['login-suffix'] || '';
+const LOGIN_MODE = args['login-mode'] || 'password';
+const LOGIN_URL_TEMPLATE = args['login-url-template'] || '';
 
-if (!BASE_URL || !TOKEN) {
+if (require.main === module && (!BASE_URL || !TOKEN)) {
     console.error('Missing required --base-url and/or --token.');
     process.exit(2);
 }
@@ -51,13 +74,7 @@ if (!BASE_URL || !TOKEN) {
  * @returns {Promise<object>} The decoded response.
  */
 async function callWs(wsfunction, params) {
-    const url = new URL(`${BASE_URL}/webservice/rest/server.php`);
-    url.searchParams.set('wstoken', TOKEN);
-    url.searchParams.set('wsfunction', wsfunction);
-    url.searchParams.set('moodlewsrestformat', 'json');
-    for (const [k, v] of Object.entries(params)) {
-        url.searchParams.set(k, String(v));
-    }
+    const url = buildWsUrl(BASE_URL, TOKEN, wsfunction, params);
     const response = await fetch(url, {method: 'POST'});
     const data = await response.json();
     if (data && data.exception) {
@@ -86,12 +103,13 @@ async function claimJob() {
 async function playAttempt(browser, job) {
     const started = Date.now();
     const page = await browser.newPage();
+    page.setDefaultNavigationTimeout(NAV_TIMEOUT);
     let engineAttemptId = 0;
     let status = 'failed';
 
     try {
         await login(page, job.userid);
-        await page.goto(`${BASE_URL}/mod/adaptivequiz/view.php?id=${job.quizcmid}`, {waitUntil: 'networkidle2'});
+        await gotoSettle(page, `${BASE_URL}/mod/adaptivequiz/view.php?id=${job.quizcmid}`);
         await startAttempt(page);
 
         // Answer loop: while a question is on screen, ask the oracle and submit.
@@ -105,7 +123,10 @@ async function playAttempt(browser, job) {
             if (!decision.ready) {
                 throw new Error(`Oracle not ready for question ${questionId}: ${decision.message}`);
             }
-            await answerQuestion(page, decision.fraction);
+            const answered = await answerQuestion(page, decision);
+            if (!answered) {
+                throw new Error(`No answer option found for question ${questionId}.`);
+            }
             await submitQuestion(page);
         }
 
@@ -125,21 +146,29 @@ async function playAttempt(browser, job) {
 }
 
 /**
- * Log in as the simulated user. The suffix convention lets a fixed rule map a
- * user id to a password in test setups; replace with a login-token flow if used.
+ * Log in as the simulated user.
+ *
+ * Two modes are supported. In 'urltemplate' mode the worker navigates to a
+ * pre-authenticated URL (the deployment's own key/SSO endpoint) with {userid}
+ * substituted — nothing else is needed. Otherwise it uses the username/password
+ * convention (a fixed rule maps a user id to a password in test setups).
  *
  * @param {object} page The Puppeteer page.
  * @param {number} userid The Moodle user id to log in as.
  * @returns {Promise<void>}
  */
 async function login(page, userid) {
-    await page.goto(`${BASE_URL}/login/index.php`, {waitUntil: 'networkidle2'});
-    // Username convention comes from the plugin's naming engine; adjust as needed.
-    await page.type('#username', `catlab_user_${userid}`);
-    await page.type('#password', `${userid}${LOGIN_SUFFIX}`);
+    if (LOGIN_MODE === 'urltemplate' && LOGIN_URL_TEMPLATE) {
+        await gotoSettle(page, loginUrlFor(LOGIN_URL_TEMPLATE, userid));
+        return;
+    }
+
+    await gotoSettle(page, `${BASE_URL}/login/index.php`);
+    await page.type('#username', usernameFor(userid));
+    await page.type('#password', passwordFor(userid, LOGIN_SUFFIX));
     await Promise.all([
-        page.click('#loginbtn'),
-        page.waitForNavigation({waitUntil: 'networkidle2'}),
+        clickFirst(page, ['#loginbtn', 'button[type="submit"]', 'input[type="submit"]']),
+        page.waitForNavigation({waitUntil: 'networkidle2'}).catch(() => {}),
     ]);
 }
 
@@ -150,20 +179,24 @@ async function login(page, userid) {
  * @returns {Promise<void>}
  */
 async function startAttempt(page) {
-    const start = await page.$('input[type="submit"], button[type="submit"]');
-    if (start) {
-        await Promise.all([start.click(), page.waitForNavigation({waitUntil: 'networkidle2'}).catch(() => {})]);
+    // Only navigate if there is no question yet (the view page shows a start form).
+    if (await hasQuestion(page)) {
+        return;
+    }
+    const clicked = await clickFirst(page, START_SELECTORS);
+    if (clicked) {
+        await page.waitForNavigation({waitUntil: 'networkidle2'}).catch(() => {});
     }
 }
 
 /**
- * Whether a question is currently presented.
+ * Whether a question is currently presented (any known layout).
  *
  * @param {object} page The Puppeteer page.
  * @returns {Promise<boolean>}
  */
 async function hasQuestion(page) {
-    return (await page.$('.que')) !== null;
+    return (await firstHandle(page, QUESTION_SELECTORS)) !== null;
 }
 
 /**
@@ -173,34 +206,33 @@ async function hasQuestion(page) {
  * @returns {Promise<number>}
  */
 async function currentQuestionId(page) {
-    return page.evaluate(() => {
-        const el = document.querySelector('.que');
-        if (!el || !el.id) {
-            return 0;
+    const id = await page.evaluate((selectors) => {
+        for (const sel of selectors) {
+            const el = document.querySelector(sel);
+            if (el && el.id) {
+                return el.id;
+            }
         }
-        const idAttr = el.id.match(/(\d+)/);
-        return idAttr ? parseInt(idAttr[1], 10) : 0;
-    });
+        return '';
+    }, QUESTION_SELECTORS);
+    return parseQuestionId(id);
 }
 
 /**
- * Select the answer matching the oracle's fraction (1 = correct, 0 = incorrect).
- *
- * For a deterministic dichotomous simulation the worker picks the first option
- * when the fraction is >= 0.5, otherwise a distractor. Map to the real correct
- * option once the item's grading is exposed.
+ * Click the option matching the oracle's decision.
  *
  * @param {object} page The Puppeteer page.
- * @param {number} fraction The response fraction in [0,1].
- * @returns {Promise<void>}
+ * @param {object} decision The oracle response ({ready, choice, fraction}).
+ * @returns {Promise<boolean>} Whether an option was clicked.
  */
-async function answerQuestion(page, fraction) {
-    const options = await page.$$('.que .answer input[type="radio"]');
+async function answerQuestion(page, decision) {
+    const options = await allHandles(page, RADIO_SELECTORS);
     if (options.length === 0) {
-        return;
+        return false;
     }
-    const index = fraction >= 0.5 ? 0 : Math.min(1, options.length - 1);
+    const index = chooseOptionIndex(decision, options.length);
     await options[index].click();
+    return true;
 }
 
 /**
@@ -210,9 +242,9 @@ async function answerQuestion(page, fraction) {
  * @returns {Promise<void>}
  */
 async function submitQuestion(page) {
-    const submit = await page.$('input[name="submitanswer"], button[name="submitanswer"]');
-    if (submit) {
-        await Promise.all([submit.click(), page.waitForNavigation({waitUntil: 'networkidle2'}).catch(() => {})]);
+    const clicked = await clickFirst(page, SUBMIT_SELECTORS);
+    if (clicked) {
+        await page.waitForNavigation({waitUntil: 'networkidle2'}).catch(() => {});
     }
 }
 
@@ -223,9 +255,201 @@ async function submitQuestion(page) {
  * @returns {Promise<number>}
  */
 async function readEngineAttemptId(page) {
-    const url = page.url();
-    const match = url.match(/[?&]attempt=(\d+)/);
+    return parseEngineAttemptId(page.url());
+}
+
+/**
+ * Navigate to a URL and wait for the network to settle, tolerating slow idles.
+ *
+ * @param {object} page The Puppeteer page.
+ * @param {string} url The destination URL.
+ * @returns {Promise<void>}
+ */
+async function gotoSettle(page, url) {
+    await page.goto(url, {waitUntil: 'networkidle2'}).catch(() => page.goto(url, {waitUntil: 'domcontentloaded'}));
+}
+
+/**
+ * Return the first element handle matching any of the selectors, or null.
+ *
+ * @param {object} page The Puppeteer page.
+ * @param {string[]} selectors The selectors to try in order.
+ * @returns {Promise<object|null>}
+ */
+async function firstHandle(page, selectors) {
+    for (const selector of selectors) {
+        const handle = await page.$(selector);
+        if (handle) {
+            return handle;
+        }
+    }
+    return null;
+}
+
+/**
+ * Return the handles of the first selector that matches any elements.
+ *
+ * @param {object} page The Puppeteer page.
+ * @param {string[]} selectors The selectors to try in order.
+ * @returns {Promise<object[]>}
+ */
+async function allHandles(page, selectors) {
+    for (const selector of selectors) {
+        const handles = await page.$$(selector);
+        if (handles.length > 0) {
+            return handles;
+        }
+    }
+    return [];
+}
+
+/**
+ * Click the first present element among the selectors.
+ *
+ * @param {object} page The Puppeteer page.
+ * @param {string[]} selectors The selectors to try in order.
+ * @returns {Promise<boolean>} Whether something was clicked.
+ */
+async function clickFirst(page, selectors) {
+    const handle = await firstHandle(page, selectors);
+    if (!handle) {
+        return false;
+    }
+    await handle.click();
+    return true;
+}
+
+// ---------------------------------------------------------------------------
+// Pure helpers (no Puppeteer / no network) — exported for unit testing.
+// ---------------------------------------------------------------------------
+
+/**
+ * Parse --key=value CLI arguments into a plain object.
+ *
+ * @param {string[]} argv The argument list (without node/script).
+ * @returns {object}
+ */
+function parseArgs(argv) {
+    return Object.fromEntries(
+        (argv || [])
+            .filter((a) => a.startsWith('--'))
+            .map((a) => {
+                const [k, ...v] = a.replace(/^--/, '').split('=');
+                return [k, v.join('=') || true];
+            })
+    );
+}
+
+/**
+ * Normalise a base URL by stripping trailing slashes.
+ *
+ * @param {string} value The raw base URL.
+ * @returns {string}
+ */
+function normaliseBaseUrl(value) {
+    return (value || '').replace(/\/+$/, '');
+}
+
+/**
+ * Build the REST web-service URL for a function call.
+ *
+ * @param {string} baseUrl The Moodle wwwroot.
+ * @param {string} token The web-service token.
+ * @param {string} wsfunction The function name.
+ * @param {object} params The function parameters.
+ * @returns {string}
+ */
+function buildWsUrl(baseUrl, token, wsfunction, params) {
+    const url = new URL(`${normaliseBaseUrl(baseUrl)}/webservice/rest/server.php`);
+    url.searchParams.set('wstoken', token);
+    url.searchParams.set('wsfunction', wsfunction);
+    url.searchParams.set('moodlewsrestformat', 'json');
+    for (const [k, v] of Object.entries(params || {})) {
+        url.searchParams.set(k, String(v));
+    }
+    return url.toString();
+}
+
+/**
+ * Parse a numeric question id from a `.que` element id (e.g. "question-12-34").
+ *
+ * @param {string} elementId The element id.
+ * @returns {number}
+ */
+function parseQuestionId(elementId) {
+    if (!elementId) {
+        return 0;
+    }
+    const match = String(elementId).match(/(\d+)/);
     return match ? parseInt(match[1], 10) : 0;
+}
+
+/**
+ * Parse the engine attempt id from an attempt URL (attempt=N).
+ *
+ * @param {string} url The page URL.
+ * @returns {number}
+ */
+function parseEngineAttemptId(url) {
+    const match = String(url || '').match(/[?&]attempt=(\d+)/);
+    return match ? parseInt(match[1], 10) : 0;
+}
+
+/**
+ * The simulated user's username for a Moodle user id (naming convention).
+ *
+ * @param {number} userid The Moodle user id.
+ * @returns {string}
+ */
+function usernameFor(userid) {
+    return `catlab_user_${userid}`;
+}
+
+/**
+ * The simulated user's password for a Moodle user id (test convention).
+ *
+ * @param {number} userid The Moodle user id.
+ * @param {string} suffix The configured login suffix.
+ * @returns {string}
+ */
+function passwordFor(userid, suffix) {
+    return `${userid}${suffix || ''}`;
+}
+
+/**
+ * Substitute the user id into a pre-authenticated login URL template.
+ *
+ * @param {string} template A URL with a {userid} placeholder.
+ * @param {number} userid The Moodle user id.
+ * @returns {string}
+ */
+function loginUrlFor(template, userid) {
+    return String(template || '').replace(/\{userid\}/g, String(userid));
+}
+
+/**
+ * Select the on-screen option index matching the oracle's decision.
+ *
+ * Questions are created single-select with answer shuffling disabled, so the
+ * on-screen option order equals the definition order. For a polytomous item the
+ * oracle returns an ordered category (choice >= 0), which is the index of the
+ * graded option to select; for a dichotomous item (choice === -1) it returns the
+ * score fraction, and the correct option is defined first.
+ *
+ * @param {object} decision The oracle response ({choice, fraction}).
+ * @param {number} count The number of on-screen options.
+ * @returns {number} The option index to click.
+ */
+function chooseOptionIndex(decision, count) {
+    const choice = decision && typeof decision.choice === 'number' ? decision.choice : -1;
+    const fraction = decision && typeof decision.fraction === 'number' ? decision.fraction : 0;
+
+    if (choice >= 0) {
+        // Polytomous: category k is the k-th option (definition order, no shuffle).
+        return Math.max(0, Math.min(choice, count - 1));
+    }
+    // Dichotomous 1-of-N: the correct option is first (fraction 1.0 at index 0).
+    return fraction >= 0.5 ? 0 : Math.min(1, count - 1);
 }
 
 /**
@@ -235,6 +459,7 @@ async function readEngineAttemptId(page) {
  * @returns {Promise<void>}
  */
 async function main() {
+    const puppeteer = require('puppeteer');
     const browser = await puppeteer.launch({headless: 'new', args: ['--no-sandbox']});
     let played = 0;
     try {
@@ -255,7 +480,21 @@ async function main() {
     console.log(`Worker ${WORKER_ID} finished; played ${played} attempt(s).`);
 }
 
-main().catch((error) => {
-    console.error(error);
-    process.exit(1);
-});
+if (require.main === module) {
+    main().catch((error) => {
+        console.error(error);
+        process.exit(1);
+    });
+}
+
+module.exports = {
+    parseArgs,
+    normaliseBaseUrl,
+    buildWsUrl,
+    parseQuestionId,
+    parseEngineAttemptId,
+    usernameFor,
+    passwordFor,
+    loginUrlFor,
+    chooseOptionIndex,
+};
