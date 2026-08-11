@@ -106,7 +106,7 @@ class scale_provisioner {
 
         $catscaleids = [];
         $rootscaleid = 0;
-        foreach ($plan as $index => $node) {
+        foreach ($plan as $node) {
             $parentcatscaleid = self::resolve_parent($node, $catscaleids);
             $catscaleid = self::create_scale($node['name'], $parentcatscaleid, $contextid, $now);
             $catscaleids[self::node_key($node)] = $catscaleid;

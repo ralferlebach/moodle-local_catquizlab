@@ -106,7 +106,7 @@ class transfer_package {
      * @return array{submitted: bool, verified: bool, message: string}
      */
     public static function submit_to_hub(int $runid): array {
-        global $DB, $USER;
+        global $DB;
 
         $huburl = trim((string) get_config('local_catquizlab', 'hub_url'));
         $hubtoken = trim((string) get_config('local_catquizlab', 'hub_token'));
@@ -157,7 +157,7 @@ class transfer_package {
 
         $index = [];
         $persons = [];
-        foreach ($DB->get_records('local_catquizlab_person', ['runid' => $runid], 'id') as $offset => $person) {
+        foreach ($DB->get_records('local_catquizlab_person', ['runid' => $runid], 'id') as $person) {
             $index[$person->id] = count($persons);
             $persons[] = [
                 'stratum'       => (string) $person->stratum,

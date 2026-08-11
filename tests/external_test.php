@@ -126,14 +126,25 @@ final class external_test extends \advanced_testcase {
         $this->resetAfterTest();
         $this->setAdminUser();
 
-        $payload = json_encode(['run' => 1, 'traces' => []]);
+        // A well-formed (if empty) run package; the hub verifies and ingests it.
+        $payload = json_encode([
+            'version'  => 1,
+            'run'      => [
+                'cellkey' => 'cell-hub', 'seed' => 1, 'replication' => 1,
+                'status' => 20, 'manifestjson' => null,
+            ],
+            'persons'  => [],
+            'attempts' => [],
+            'results'  => [],
+        ]);
 
         $good = hub_submit_run::execute($payload, hash('sha256', $payload));
         $this->assertTrue($good['verified']);
-        $this->assertFalse($good['accepted']);
+        $this->assertTrue($good['accepted']);
 
         $bad = hub_submit_run::execute($payload, hash('sha256', 'tampered'));
         $this->assertFalse($bad['verified']);
+        $this->assertFalse($bad['accepted']);
     }
 
     /**

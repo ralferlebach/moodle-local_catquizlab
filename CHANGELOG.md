@@ -6,6 +6,33 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.1.41] — 2026-08-11
+
+CI fix: update the stale hub test and reduce method complexity.
+
+### Fixed
+- **PHPUnit** (the only hard CI failure): `external_test::test_hub_submit_verifies_hash`
+  still expected the old stub behaviour (`accepted = false`) and used a malformed
+  payload (`run => 1`, which now trips a PHP warning under `--fail-on-warning`). Since
+  0.1.40 the hub actually verifies and ingests, so the test now sends a well-formed
+  package and asserts it is accepted, and that a tampered hash is rejected.
+- **Complexity**: extracted `oracle_answer::resolve()`/`compute()` and
+  `subscale_evaluator::pool_confusion()`/`rate()`/`f1()` to bring both `execute()` and
+  `aggregate()` back under the cyclomatic/NPath thresholds. Removed unused locals
+  (`scale_provisioner` `$index`, `transfer_package` `$USER`/`$offset`).
+
+### Notes
+- PHPMD runs with `|| true` in CI, so it never fails the build; a few pre-existing
+  style advisories remain (two boolean-flag arguments, the diagnostics class
+  complexity, the growing upgrade function, the required pluginfile signature). These
+  are left as-is because Moodle's phpcs rejects `@SuppressWarnings` and refactoring the
+  public signatures would ripple widely for no CI benefit.
+
+- `version.php`: 2026081039 → **2026081040**, release 0.1.40 → **0.1.41**. No new
+  upgrade step (fix-only round).
+
+---
+
 ## [0.1.40] — 2026-08-10
 
 Hub mode (E5) — run packaging, ingest and cross-instance aggregation.

@@ -187,19 +187,10 @@ class subscale_evaluator {
      * @return array
      */
     protected static function aggregate(array $people): array {
-        $tp = $fp = $fn = $tn = 0;
-        foreach ($people as $person) {
-            [$ptp, $pfp, $pfn, $ptn] = $person['confusion'];
-            $tp += $ptp;
-            $fp += $pfp;
-            $fn += $pfn;
-            $tn += $ptn;
-        }
-        $precision = ($tp + $fp) > 0 ? $tp / ($tp + $fp) : null;
-        $recall = ($tp + $fn) > 0 ? $tp / ($tp + $fn) : null;
-        $f1 = ($precision !== null && $recall !== null && ($precision + $recall) > 0.0)
-            ? 2.0 * $precision * $recall / ($precision + $recall)
-            : null;
+        $confusion = self::pool_confusion($people);
+        $precision = self::rate($confusion['tp'], $confusion['fp']);
+        $recall = self::rate($confusion['tp'], $confusion['fn']);
+        $f1 = self::f1($precision, $recall);
 
         return [
             'n'         => count($people),
@@ -209,8 +200,51 @@ class subscale_evaluator {
             'precision' => $precision === null ? null : round($precision, 6),
             'recall'    => $recall === null ? null : round($recall, 6),
             'f1'        => $f1 === null ? null : round($f1, 6),
-            'confusion' => ['tp' => $tp, 'fp' => $fp, 'fn' => $fn, 'tn' => $tn],
+            'confusion' => $confusion,
         ];
+    }
+
+    /**
+     * Pool the per-person confusion counts.
+     *
+     * @param array $people The per-person diagnostics.
+     * @return array{tp: int, fp: int, fn: int, tn: int}
+     */
+    protected static function pool_confusion(array $people): array {
+        $totals = ['tp' => 0, 'fp' => 0, 'fn' => 0, 'tn' => 0];
+        foreach ($people as $person) {
+            [$tp, $fp, $fn, $tn] = $person['confusion'];
+            $totals['tp'] += $tp;
+            $totals['fp'] += $fp;
+            $totals['fn'] += $fn;
+            $totals['tn'] += $tn;
+        }
+        return $totals;
+    }
+
+    /**
+     * A hit rate tp / (tp + other), or null when the denominator is zero.
+     *
+     * @param int $tp True positives.
+     * @param int $other The complementary count (fp for precision, fn for recall).
+     * @return float|null
+     */
+    protected static function rate(int $tp, int $other): ?float {
+        return ($tp + $other) > 0 ? $tp / ($tp + $other) : null;
+    }
+
+    /**
+     * The harmonic mean of precision and recall, or null when undefined.
+     *
+     * @param float|null $precision Precision.
+     * @param float|null $recall Recall.
+     * @return float|null
+     */
+    protected static function f1(?float $precision, ?float $recall): ?float {
+        if ($precision === null || $recall === null || ($precision + $recall) <= 0.0) {
+            return null;
+        }
+        return 2.0 * $precision * $recall / ($precision + $recall);
     }
 
     /**

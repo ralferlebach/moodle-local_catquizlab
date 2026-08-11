@@ -69,8 +69,6 @@ class oracle_answer extends external_api {
      * @return array The oracle response.
      */
     public static function execute(int $runid, int $questionid): array {
-        global $DB, $USER;
-
         $params = self::validate_parameters(self::execute_parameters(), [
             'runid'      => $runid,
             'questionid' => $questionid,
@@ -86,22 +84,61 @@ class oracle_answer extends external_api {
         }
 
         // The caller is the simulated test-taker driving their own attempt through
-        // the UI, so identify the person by the logged-in user. Resolve the run's
-        // bound CAT test for the engine context, then the presented item's
-        // parameters, and answer with the seed-deterministic response oracle.
+        // the UI. Resolve the run's bound test, the person and the presented item;
+        // then answer with the seed-deterministic, subscale-aware response oracle.
+        $resolved = self::resolve($runid, $questionid);
+        if ($resolved === null) {
+            return self::not_ready(get_string('oracle:notready', 'local_catquizlab'));
+        }
+
+        $correct = self::compute($runid, $questionid, $resolved);
+
+        return [
+            'ready'    => true,
+            'fraction' => $correct ? 1.0 : 0.0,
+            'choice'   => -1,
+            'message'  => get_string('oracle:computed', 'local_catquizlab'),
+        ];
+    }
+
+    /**
+     * Resolve the run's test config, the person and the presented item.
+     *
+     * @param int $runid The lab run id.
+     * @param int $questionid The presented question id.
+     * @return array|null ['item' => ..., 'person' => ...], or null when not answerable.
+     */
+    protected static function resolve(int $runid, int $questionid): ?array {
+        global $DB, $USER;
+
         $run = $DB->get_record('local_catquizlab_run', ['id' => $runid]);
         if (!$run || empty($run->testcmid)) {
-            return self::not_ready(get_string('oracle:notready', 'local_catquizlab'));
+            return null;
         }
         $config = test_binder::read_test_config((int) $run->testcmid);
         $person = $DB->get_record('local_catquizlab_person', ['runid' => $runid, 'moodleuserid' => $USER->id]);
         if ($config === null || !$person) {
-            return self::not_ready(get_string('oracle:notready', 'local_catquizlab'));
+            return null;
         }
         $item = item_repository::for_question((int) $config['contextid'], $questionid);
         if ($item === null) {
-            return self::not_ready(get_string('oracle:notready', 'local_catquizlab'));
+            return null;
         }
+
+        return ['item' => $item, 'person' => $person];
+    }
+
+    /**
+     * Compute the seed-deterministic correctness for a resolved item.
+     *
+     * @param int $runid The run id.
+     * @param int $questionid The question id.
+     * @param array $resolved The resolved item and person.
+     * @return bool Whether the simulated answer is correct.
+     */
+    protected static function compute(int $runid, int $questionid, array $resolved): bool {
+        $item = $resolved['item'];
+        $person = $resolved['person'];
 
         $profile = json_decode((string) $person->profilejson, true) ?: [];
         $mapping = scale_provisioner::mapping_for($runid, (int) $item['catscaleid']);
@@ -111,20 +148,14 @@ class oracle_answer extends external_api {
             $mapping['subscaleindex'] ?? null
         );
         $seed = crc32("{$runid}:{$person->id}:{$questionid}") & 0x7fffffff;
-        $correct = response_oracle::respond(
+
+        return response_oracle::respond(
             $ability,
             $item['difficulty'],
             $seed,
             $item['discrimination'],
             $item['guessing']
         );
-
-        return [
-            'ready'    => true,
-            'fraction' => $correct ? 1.0 : 0.0,
-            'choice'   => -1,
-            'message'  => get_string('oracle:computed', 'local_catquizlab'),
-        ];
     }
 
     /**
