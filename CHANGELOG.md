@@ -6,6 +6,55 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.1.34] — 2026-08-10
+
+Scale materialisation and profile mapping (E2.1, part 2).
+
+### Added
+- **Schema**: new table `local_catquizlab_scalemap` mapping a run's materialised
+  engine scales to the ground-truth profile (level, category and subscale index),
+  with an upgrade step at savepoint 2026081033.
+- **Scale provisioner** `classes/local/scale_provisioner.php` (E2.1):
+  `plan_scales()` turns a (categories, subcategories) blueprint into a flat scale
+  plan with profile indices (pure, tested); `provision()` creates an engine CAT
+  context and scale tree (local_catquiz_catcontext / local_catquiz_catscales) and
+  records a scalemap row per scale; `mapping_for()` reads a scale's profile
+  indices. Creating engine rows needs the engine, so provisioning is a no-op
+  without it. Covered by `scale_provisioner_test.php`.
+
+### Changed
+- **Oracle** now resolves the **subscale** ability: it looks up the presented
+  item's scale in the run's scale map and asks `response_oracle::ability_for()`
+  for that category/subscale (falling back to the global ability when no mapping
+  exists). This makes the oracle DPF-sensitive once scales are materialised.
+
+- `version.php`: 2026081032 → **2026081033**, release 0.1.33 → **0.1.34**. Schema
+  change → upgrade step 2026081033.
+
+---
+
+## [0.1.33] — 2026-08-10
+
+Question templating for materialisation (E2.1, part 1).
+
+### Added
+- **Question template** `classes/local/question_template.php` (E2.1): renders a
+  templated multiple-choice question from an item spec. A template carries a
+  question-text template, a `single` flag (single-choice = dichotomous 1-of-4,
+  multi = polytomous 1..4-of-6) and option templates with grading fractions
+  (1.0 correct, 0 or a negative malus for distractors, partial fractions for
+  graded options). Question text and options support placeholders — {scalename},
+  {scalenumber}, {itemname}, {itemnumber}, {itemid}, {difficulty},
+  {discrimination}, {guessing}. Ships sensible dichotomous and polytomous defaults
+  (the polytomous one balances credit and malus to zero). Pure and testable,
+  covered by `question_template_test.php`. The engine-side question and item
+  creation will consume its output.
+
+- `version.php`: 2026081031 → **2026081032**, release 0.1.32 → **0.1.33**. No new
+  upgrade step (code-only round).
+
+---
+
 ## [0.1.32] — 2026-08-10
 
 Test provisioner (E2.4, create path) — create an adaptivequiz CAT test.

@@ -453,6 +453,31 @@ add_moduleinfo; der catmodel-Handler schreibt die local_catquiz_tests-Zeile selb
 und run.testcmid wird gesetzt. Tests `test_provisioner_test.php`. Versionsbump →
 2026081031 / 0.1.32 (reiner Code, kein Upgrade-Schritt).
 
+## Phase 36 — Frage-Templating E2.1 (Teil 1) (Release 0.1.33)
+Defaults übernommen (Platzhalter {scalename}/{scalenumber}/{itemname}/{itemnumber}/
+{itemid}/{difficulty}/{discrimination}/{guessing}; Quelle Run-Definition mit
+Fallback auf Einstellung — Wiring folgt). `classes/local/question_template.php`
+rendert templatebare MC-Fragen aus einer Item-Spezifikation: `single`-Flag
+(dichotom 1-aus-4 / polytom 1..4-aus-6), Options-Templates mit Bewertungs-
+fraktionen (1.0 korrekt, 0/negativer Malus für Distraktoren, Teilpunkte),
+Platzhalter-Ersetzung. Sinnvolle Dichotom-/Polytom-Defaults (Polytom: Gutschrift
+und Malus heben sich zu 0 auf). Rein/testbar. Tests `question_template_test.php`.
+Versionsbump → 2026081032 / 0.1.33 (reiner Code, kein Upgrade-Schritt).
+
+## Phase 37 — Skalen-Materialisierung + Profil-Mapping E2.1 (Release 0.1.34)
+Erster Schema-Bump seit Langem: neue Tabelle `local_catquizlab_scalemap` (mappt
+materialisierte Engine-Skalen eines Runs auf die Profilstruktur: level/
+categoryindex/subscaleindex), Upgrade-Schritt Savepoint 2026081033.
+`classes/local/scale_provisioner.php`: `plan_scales()` (rein/testbar: aus
+categories×subcategories ein flacher Skalenplan mit Profil-Indizes),
+`provision()` (engine-gekapselt: local_catquiz_catcontext + _catscales-Baum
+anlegen, je Skala scalemap-Zeile), `mapping_for()` (Reader). Oracle nutzt jetzt
+die **Subskalen-Fähigkeit**: schlägt die catscaleid des präsentierten Items im
+scalemap nach → `ability_for(profile, categoryindex, subscaleindex)`, Fallback
+global. Damit ist der Oracle DPF-sensitiv, sobald Skalen materialisiert sind.
+Tests `scale_provisioner_test.php`. Versionsbump → 2026081033 / 0.1.34
+(Schema-Änderung → Upgrade-Schritt).
+
 ## Verifikationsstand
 Container: PHP-Syntax, install.xml, YAML, Worker-JS grün; PHPCS (Moodle) 0/0
 **und PHPMD ohne Verstöße** über alle PHP-Dateien; höchster Upgrade-Savepoint ≤

@@ -170,5 +170,28 @@
         <INDEX NAME="direction-status" UNIQUE="false" FIELDS="direction, status"/>
       </INDEXES>
     </TABLE>
+
+    <TABLE NAME="local_catquizlab_scalemap" COMMENT="Maps a run's materialised engine CAT scales to the ground-truth profile structure (level, category and subscale indices), so the response oracle can resolve the subscale ability for a presented item.">
+      <FIELDS>
+        <FIELD NAME="id" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="true"/>
+        <FIELD NAME="runid" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="false" COMMENT="The run this mapping belongs to."/>
+        <FIELD NAME="catscaleid" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="false" COMMENT="The engine catscale id (local_catquiz_catscales)."/>
+        <FIELD NAME="parentcatscaleid" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false" COMMENT="The engine parent catscale id (0 for the root)."/>
+        <FIELD NAME="contextid" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false" COMMENT="The engine CAT context id."/>
+        <FIELD NAME="level" TYPE="int" LENGTH="2" NOTNULL="true" DEFAULT="0" SEQUENCE="false" COMMENT="0=root/global, 1=category, 2=subscale."/>
+        <FIELD NAME="categoryindex" TYPE="int" LENGTH="10" NOTNULL="false" SEQUENCE="false" COMMENT="1-based category index in the profile (null for the root)."/>
+        <FIELD NAME="subscaleindex" TYPE="int" LENGTH="10" NOTNULL="false" SEQUENCE="false" COMMENT="1-based subscale index in the profile (null unless level 2)."/>
+        <FIELD NAME="name" TYPE="char" LENGTH="255" NOTNULL="true" SEQUENCE="false" COMMENT="The scale name."/>
+        <FIELD NAME="timecreated" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
+        <FIELD NAME="timemodified" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
+      </FIELDS>
+      <KEYS>
+        <KEY NAME="primary" TYPE="primary" FIELDS="id"/>
+        <KEY NAME="runid" TYPE="foreign" FIELDS="runid" REFTABLE="local_catquizlab_run" REFFIELDS="id"/>
+      </KEYS>
+      <INDEXES>
+        <INDEX NAME="runid-catscaleid" UNIQUE="true" FIELDS="runid, catscaleid"/>
+      </INDEXES>
+    </TABLE>
   </TABLES>
 </XMLDB>

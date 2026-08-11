@@ -31,6 +31,7 @@ use core_external\external_value;
 use local_catquizlab\local\environment;
 use local_catquizlab\local\item_repository;
 use local_catquizlab\local\response_oracle;
+use local_catquizlab\local\scale_provisioner;
 use local_catquizlab\local\test_binder;
 
 /**
@@ -103,7 +104,12 @@ class oracle_answer extends external_api {
         }
 
         $profile = json_decode((string) $person->profilejson, true) ?: [];
-        $ability = response_oracle::ability_for($profile);
+        $mapping = scale_provisioner::mapping_for($runid, (int) $item['catscaleid']);
+        $ability = response_oracle::ability_for(
+            $profile,
+            $mapping['categoryindex'] ?? null,
+            $mapping['subscaleindex'] ?? null
+        );
         $seed = crc32("{$runid}:{$person->id}:{$questionid}") & 0x7fffffff;
         $correct = response_oracle::respond(
             $ability,

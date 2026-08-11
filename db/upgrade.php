@@ -95,7 +95,26 @@ function xmldb_local_catquizlab_upgrade($oldversion): bool {
         upgrade_plugin_savepoint(true, 2026081011, 'local', 'catquizlab');
     }
 
+    if ($oldversion < 2026081033) {
+        // E2.1: mapping of a run's materialised engine scales to the profile.
+        local_catquizlab_upgrade_add_scalemap_table($dbman);
+        upgrade_plugin_savepoint(true, 2026081033, 'local', 'catquizlab');
+    }
+
     return true;
+}
+
+/**
+ * Create the local_catquizlab_scalemap table from the install definition.
+ *
+ * @param database_manager $dbman The database manager.
+ * @return void
+ */
+function local_catquizlab_upgrade_add_scalemap_table(database_manager $dbman): void {
+    $table = new xmldb_table('local_catquizlab_scalemap');
+    if (!$dbman->table_exists($table)) {
+        $dbman->install_one_table_from_xmldb_file(__DIR__ . '/install.xml', 'local_catquizlab_scalemap');
+    }
 }
 
 /**
