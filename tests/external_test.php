@@ -108,10 +108,11 @@ final class external_test extends \advanced_testcase {
         );
         $this->assertSame(1234, (int) $DB->get_field('local_catquizlab_attempt', 'runtimems', ['id' => $first]));
 
-        // A failure marks the attempt failed; an unknown id is rejected.
+        // A failure requeues the attempt while retries remain (it was claimed once);
+        // an unknown id is rejected.
         job_complete::execute($second, 'failed', 0, 0);
         $this->assertSame(
-            \local_catquizlab\local\attempt_scheduler::STATUS_FAILED,
+            \local_catquizlab\local\attempt_scheduler::STATUS_QUEUED,
             (int) $DB->get_field('local_catquizlab_attempt', 'status', ['id' => $second])
         );
         $this->assertFalse(job_complete::execute(0, 'finished', 0, 0)['acknowledged']);

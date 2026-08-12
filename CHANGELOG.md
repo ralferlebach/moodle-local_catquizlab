@@ -23,8 +23,14 @@ Session close: documentation finalised and a testing guide.
 - **Session document** `docs/sessions/session-001.md` finalised with a session close
   summarising all 52 phases (0.1.0 → 0.1.50) and what remains instance-dependent.
 
+### Fixed
+- **PHPUnit**: `external_test` still asserted the pre-0.1.49 behaviour where a
+  failed job was marked failed outright. Since 0.1.49 a failure requeues the
+  attempt while retries remain, so the test now asserts the requeue (the once-claimed
+  attempt returns to queued). Test-only change; no version bump.
+
 - `version.php`: 2026081049, release **0.1.50**. No new upgrade step
-  (documentation-only round; no code changes). Session 001 is complete.
+  (documentation + test fix; no runtime change). Session 001 is complete.
 
 ---
 
