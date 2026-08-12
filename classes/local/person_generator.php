@@ -82,7 +82,7 @@ class person_generator {
                 'profile'       => [
                     'global'     => round($global, 5),
                     'categories' => $categories,
-                ],
+                ] + (empty($params['deviance']) ? [] : ['deviance' => $params['deviance']]),
             ];
         }
         return $persons;
@@ -166,6 +166,7 @@ class person_generator {
             'subscales'   => (int) $scales['subcategories'],
             'catsd'       => (float) ($variation['category'] ?? $base[0]),
             'subsd'       => (float) ($variation['subscale'] ?? $base[1]),
+            'deviance'    => isset($persons['deviance']) && is_array($persons['deviance']) ? $persons['deviance'] : [],
         ];
     }
 

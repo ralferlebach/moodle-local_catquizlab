@@ -101,4 +101,25 @@ final class worker_launcher_test extends \advanced_testcase {
             'baseurl' => 'x', 'token' => 'y',
         ]));
     }
+
+    /**
+     * worker_ids returns one id for a single worker and distinct ids for a pool.
+     *
+     * @return void
+     */
+    public function test_worker_ids(): void {
+        $this->assertSame(['base'], worker_launcher::worker_ids('base', 1));
+        $this->assertSame(['base'], worker_launcher::worker_ids('base', 0));
+        $this->assertSame(['w-1', 'w-2', 'w-3'], worker_launcher::worker_ids('w', 3));
+    }
+
+    /**
+     * launch_pool is a no-op when disabled or not configured.
+     *
+     * @return void
+     */
+    public function test_launch_pool_guarded(): void {
+        $this->assertNull(worker_launcher::launch_pool(['enabled' => false]));
+        $this->assertNull(worker_launcher::launch_pool(['enabled' => true, 'concurrency' => 2]));
+    }
 }

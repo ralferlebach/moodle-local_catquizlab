@@ -147,6 +147,12 @@ class oracle_answer extends external_api {
             $mapping['categoryindex'] ?? null,
             $mapping['subscaleindex'] ?? null
         );
+        $ability = response_oracle::deviant_ability(
+            $ability,
+            $profile['deviance'] ?? null,
+            $mapping['categoryindex'] ?? null,
+            $mapping['subscaleindex'] ?? null
+        );
         $seed = crc32("{$runid}:{$person->id}:{$questionid}") & 0x7fffffff;
 
         return response_oracle::respond_item($ability, $item, $seed);

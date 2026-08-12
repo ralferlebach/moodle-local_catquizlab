@@ -6,6 +6,63 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.1.50] — 2026-08-11
+
+Session close: documentation finalised and a testing guide.
+
+### Docs
+- **Architecture** lifted to Rev. 2.3 (as-built): the operations/hardening layer
+  (attempt retry/reclaim/abort, full teardown, worker pool, `pipeline_tick`, events,
+  deviance, PF(t) toggle, query measurement, `se_diagnostics`, worker login modes)
+  is mapped, and the open points are updated to their resolved state.
+- **Testing guide** `docs/dev/testen.md` (new): the pure-vs-engine testing model,
+  the static checks (phpcs/phpmd/savepoints), PHPUnit, Behat, the Node worker tests,
+  and an instance smoke test.
+- **Operator guide** `durchfuehrung.md` extended: unattended operation via
+  `pipeline_tick`, worker login modes, complete teardown, the PF(t) toggle.
+- **Session document** `docs/sessions/session-001.md` finalised with a session close
+  summarising all 52 phases (0.1.0 → 0.1.50) and what remains instance-dependent.
+
+- `version.php`: 2026081049, release **0.1.50**. No new upgrade step
+  (documentation-only round; no code changes). Session 001 is complete.
+
+---
+
+## [0.1.49] — 2026-08-11
+
+Operational hardening: retries, teardown, concurrency, scheduling, events.
+
+### Added
+- **Attempt retry/staggering** (E3.1): new `tries` and `nextruntime` columns
+  (upgrade 2026081048). `attempt_scheduler` gains `retry_status` (pure),
+  `reclaim_stale` (requeue crashed running attempts with backoff, or fail when
+  exhausted), `retry_or_fail`, and `abort`. `job_claim` respects `nextruntime` and
+  counts a try; `job_complete` requeues a failed attempt instead of failing it
+  outright.
+- **Scheduled task** `pipeline_tick` (+ `db/tasks.php`, disabled by default):
+  reclaims stale attempts and, when the exec worker is enabled, dispatches the pool.
+- **Worker pool**: `worker_concurrency` is now consumed — `worker_launcher::launch_pool()`
+  starts N workers (`worker_ids` pure), wired into `dispatch_worker`.
+- **Lifecycle events** `run_scheduled`, `run_aggregated`, `run_aborted`, fired from
+  the orchestrator, the aggregation task and `abort`.
+- **Deviant patterns** (E3.4): `response_oracle::deviant_ability()` shifts effective
+  ability on targeted subscales (the DPF stress mechanism); the oracle applies a
+  person's `deviance` spec, which `person_generator` carries from the definition.
+- **PF(t) toggle**: `test_provisioner::build_quizsettings()` sets
+  `catquiz_lasttimeplayedpenalty` (default on; `timepenalty => false` to disable).
+- **Query measurement**: `attempt_collector::collect_run()` reports `dbreads`/`dbwrites`.
+
+### Changed
+- **`run_cleanup` teardown is now complete**: besides the lab-store rows it removes the
+  run's engine artefacts (test module, items, item parameters, scale tree/context) and
+  the scale map — engine-guarded, so a no-op without the engine.
+
+- `version.php`: 2026081048, release **0.1.49**. Upgrade step 2026081048 (attempt
+  columns). Covered by new/extended tests (attempt_scheduler, run_cleanup, events,
+  worker_launcher, response_oracle, person_generator, test_provisioner).
+
+---
+
 ## [0.1.48] — 2026-08-11
 
 Code polish: resolve the remaining PHPMD advisories by refactoring.

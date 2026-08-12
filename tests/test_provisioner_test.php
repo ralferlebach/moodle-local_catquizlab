@@ -93,4 +93,17 @@ final class test_provisioner_test extends \advanced_testcase {
         $this->assertNull(test_provisioner::create($run->id, 1, [2, 3]));
         $this->assertNull($DB->get_field('local_catquizlab_run', 'testcmid', ['id' => $run->id]));
     }
+
+    /**
+     * The PF(t) time-penalty defaults on and can be switched off.
+     *
+     * @return void
+     */
+    public function test_timepenalty_toggle(): void {
+        $on = test_provisioner::build_quizsettings('T', 1, [2, 3]);
+        $this->assertSame('1', $on['catquiz_lasttimeplayedpenalty']);
+
+        $off = test_provisioner::build_quizsettings('T', 1, [2, 3], ['timepenalty' => false]);
+        $this->assertSame('0', $off['catquiz_lasttimeplayedpenalty']);
+    }
 }

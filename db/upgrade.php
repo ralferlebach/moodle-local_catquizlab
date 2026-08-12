@@ -101,6 +101,12 @@ function xmldb_local_catquizlab_upgrade($oldversion): bool {
         upgrade_plugin_savepoint(true, 2026081033, 'local', 'catquizlab');
     }
 
+    if ($oldversion < 2026081048) {
+        // E3.1: attempt retry limiting and staggering/backoff.
+        local_catquizlab_upgrade_add_attempt_retry_columns($dbman);
+        upgrade_plugin_savepoint(true, 2026081048, 'local', 'catquizlab');
+    }
+
     return true;
 }
 
@@ -138,4 +144,24 @@ function local_catquizlab_upgrade_add_run_course_columns(database_manager $dbman
 
     $key = new xmldb_key('courseid', XMLDB_KEY_FOREIGN, ['courseid'], 'course', ['id']);
     $dbman->add_key($table, $key);
+}
+
+/**
+ * Add the retry-count and next-run-time columns to the attempt table.
+ *
+ * @param database_manager $dbman The database manager.
+ * @return void
+ */
+function local_catquizlab_upgrade_add_attempt_retry_columns(database_manager $dbman): void {
+    $table = new xmldb_table('local_catquizlab_attempt');
+
+    $tries = new xmldb_field('tries', XMLDB_TYPE_INTEGER, '4', null, XMLDB_NOTNULL, null, '0', 'runtimems');
+    if (!$dbman->field_exists($table, $tries)) {
+        $dbman->add_field($table, $tries);
+    }
+
+    $nextruntime = new xmldb_field('nextruntime', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, '0', 'tries');
+    if (!$dbman->field_exists($table, $nextruntime)) {
+        $dbman->add_field($table, $nextruntime);
+    }
 }

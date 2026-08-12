@@ -168,4 +168,82 @@ final class attempt_scheduler_test extends \advanced_testcase {
         $task = reset($tasks);
         $this->assertSame($runid, (int) $task->get_custom_data()->runid);
     }
+
+    /**
+     * The retry decision requeues while tries remain, then fails.
+     *
+     * @return void
+     */
+    public function test_retry_status(): void {
+        $this->assertSame(attempt_scheduler::STATUS_QUEUED, attempt_scheduler::retry_status(0));
+        $this->assertSame(attempt_scheduler::STATUS_QUEUED, attempt_scheduler::retry_status(attempt_scheduler::MAX_TRIES - 1));
+        $this->assertSame(attempt_scheduler::STATUS_FAILED, attempt_scheduler::retry_status(attempt_scheduler::MAX_TRIES));
+    }
+
+    /**
+     * Stale running attempts are requeued (with tries left) or failed.
+     *
+     * @return void
+     */
+    public function test_reclaim_stale(): void {
+        global $DB;
+        $this->resetAfterTest();
+        $generator = $this->getDataGenerator()->get_plugin_generator('local_catquizlab');
+        $run = $generator->create_run();
+        $person = $generator->create_person(['runid' => $run->id]);
+        $old = time() - 100000;
+
+        $retryable = $DB->insert_record('local_catquizlab_attempt', (object) [
+            'runid' => $run->id, 'personid' => $person->id, 'status' => attempt_scheduler::STATUS_RUNNING,
+            'tries' => 1, 'nextruntime' => 0, 'timecreated' => $old, 'timemodified' => $old,
+        ]);
+        $exhausted = $DB->insert_record('local_catquizlab_attempt', (object) [
+            'runid' => $run->id, 'personid' => $person->id, 'status' => attempt_scheduler::STATUS_RUNNING,
+            'tries' => attempt_scheduler::MAX_TRIES, 'nextruntime' => 0, 'timecreated' => $old, 'timemodified' => $old,
+        ]);
+
+        $this->assertSame(2, attempt_scheduler::reclaim_stale($run->id, 60));
+        $this->assertSame(
+            attempt_scheduler::STATUS_QUEUED,
+            (int) $DB->get_field('local_catquizlab_attempt', 'status', ['id' => $retryable])
+        );
+        $this->assertSame(
+            attempt_scheduler::STATUS_FAILED,
+            (int) $DB->get_field('local_catquizlab_attempt', 'status', ['id' => $exhausted])
+        );
+    }
+
+    /**
+     * Aborting a run fails its pending attempts and fires the event.
+     *
+     * @return void
+     */
+    public function test_abort(): void {
+        global $DB;
+        $this->resetAfterTest();
+        $generator = $this->getDataGenerator()->get_plugin_generator('local_catquizlab');
+        $run = $generator->create_run();
+        $person = $generator->create_person(['runid' => $run->id]);
+        $statuses = [
+            attempt_scheduler::STATUS_QUEUED,
+            attempt_scheduler::STATUS_RUNNING,
+            attempt_scheduler::STATUS_COLLECTED,
+        ];
+        foreach ($statuses as $status) {
+            $DB->insert_record('local_catquizlab_attempt', (object) [
+                'runid' => $run->id, 'personid' => $person->id, 'status' => $status,
+                'timecreated' => time(), 'timemodified' => time(),
+            ]);
+        }
+
+        $sink = $this->redirectEvents();
+        $this->assertSame(2, attempt_scheduler::abort($run->id));
+        // The collected attempt is untouched.
+        $this->assertSame(1, $DB->count_records(
+            'local_catquizlab_attempt',
+            ['runid' => $run->id, 'status' => attempt_scheduler::STATUS_COLLECTED]
+        ));
+        $events = $sink->get_events();
+        $this->assertInstanceOf(\local_catquizlab\event\run_aborted::class, end($events));
+    }
 }

@@ -183,6 +183,45 @@ class response_oracle {
     }
 
     /**
+     * Apply a person's systematic deviance to the effective ability on a subscale.
+     *
+     * A deviance spec — `['magnitude' => float, 'subscales' => [[c, s], ...]]` —
+     * shifts the ability by `magnitude` (positive = systematic underperformance) on
+     * the targeted subscales; with no targets it applies to every scale. This is the
+     * DPF stress mechanism: it makes a person deviate on chosen subscales beyond what
+     * their true theta implies. Pure.
+     *
+     * @param float $ability The subscale ability from the profile.
+     * @param array|null $deviance The deviance spec, or null/empty for none.
+     * @param int|null $categoryindex The category being answered.
+     * @param int|null $subscaleindex The subscale being answered.
+     * @return float The effective ability.
+     */
+    public static function deviant_ability(
+        float $ability,
+        ?array $deviance,
+        ?int $categoryindex,
+        ?int $subscaleindex
+    ): float {
+        if (empty($deviance) || !isset($deviance['magnitude'])) {
+            return $ability;
+        }
+        $magnitude = (float) $deviance['magnitude'];
+        $targets = $deviance['subscales'] ?? [];
+        if ($targets === []) {
+            return $ability - $magnitude;
+        }
+        foreach ($targets as $target) {
+            $tc = (int) ($target[0] ?? $target['category'] ?? 0);
+            $ts = (int) ($target[1] ?? $target['subscale'] ?? 0);
+            if ($tc === (int) $categoryindex && $ts === (int) $subscaleindex) {
+                return $ability - $magnitude;
+            }
+        }
+        return $ability;
+    }
+
+    /**
      * Answer a presented item, dispatching by item type.
      *
      * A polytomous item (flagged and carrying step/threshold parameters) draws a

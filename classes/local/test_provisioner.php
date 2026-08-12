@@ -72,6 +72,9 @@ class test_provisioner {
                 'catquiz_standarderror_min' => (float) ($options['se_min'] ?? 0.35),
                 'catquiz_standarderror_max' => (float) ($options['se_max'] ?? 1.0),
             ],
+            // PF(t): the last-time-played penalty. Default 1 (active) per the design;
+            // set 'timepenalty' => false to switch it off for a baseline/operative run.
+            'catquiz_lasttimeplayedpenalty'          => (($options['timepenalty'] ?? true) ? '1' : '0'),
         ];
 
         // Activate the root scale and each requested subscale.

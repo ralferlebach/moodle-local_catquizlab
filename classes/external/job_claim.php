@@ -86,9 +86,9 @@ class job_claim extends external_api {
 
         $queued = $DB->get_records_select(
             'local_catquizlab_attempt',
-            'status = :status',
-            ['status' => attempt_scheduler::STATUS_QUEUED],
-            'timecreated ASC, id ASC',
+            'status = :status AND nextruntime <= :now',
+            ['status' => attempt_scheduler::STATUS_QUEUED, 'now' => time()],
+            'nextruntime ASC, timecreated ASC, id ASC',
             '*',
             0,
             1
@@ -102,6 +102,7 @@ class job_claim extends external_api {
         $DB->update_record('local_catquizlab_attempt', (object) [
             'id'           => $attempt->id,
             'status'       => attempt_scheduler::STATUS_RUNNING,
+            'tries'        => (int) $attempt->tries + 1,
             'timemodified' => time(),
         ]);
         $run = $DB->get_record('local_catquizlab_run', ['id' => $attempt->runid]);

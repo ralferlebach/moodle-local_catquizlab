@@ -85,6 +85,7 @@ class worker_launcher {
             'loginmode' => (string) get_config('local_catquizlab', 'worker_login_mode'),
             'loginurltemplate' => (string) get_config('local_catquizlab', 'worker_login_url_template'),
             'loginsuffix' => (string) get_config('local_catquizlab', 'worker_login_suffix'),
+            'concurrency' => max(1, (int) get_config('local_catquizlab', 'worker_concurrency')),
         ];
     }
 
@@ -105,6 +106,56 @@ class worker_launcher {
         exec($command . ' 2>&1', $output, $exitcode);
 
         return ['exitcode' => (int) $exitcode, 'output' => implode("\n", $output)];
+    }
+
+    /**
+     * Distinct worker ids for a pool of the given size.
+     *
+     * @param string $base The base worker id.
+     * @param int $concurrency The pool size (at least 1).
+     * @return string[]
+     */
+    public static function worker_ids(string $base, int $concurrency): array {
+        $concurrency = max(1, $concurrency);
+        if ($concurrency === 1) {
+            return [$base];
+        }
+        $ids = [];
+        for ($i = 1; $i <= $concurrency; $i++) {
+            $ids[] = $base . '-' . $i;
+        }
+        return $ids;
+    }
+
+    /**
+     * Launch a pool of workers that drain the queue in parallel.
+     *
+     * All but the last worker are started in the background; the last runs in the
+     * foreground so its exit code is captured. Returns null when disabled or not
+     * configured, so it is a safe no-op in CI.
+     *
+     * @param array $config The worker configuration (includes 'concurrency').
+     * @return array|null ['launched' => int, 'exitcode' => int, 'output' => string]
+     */
+    public static function launch_pool(array $config): ?array {
+        if (empty($config['enabled']) || !self::is_configured($config)) {
+            return null;
+        }
+
+        $ids = self::worker_ids((string) ($config['workerid'] ?? 'catquizlab-exec'), (int) ($config['concurrency'] ?? 1));
+        $last = array_pop($ids);
+
+        foreach ($ids as $id) {
+            $command = implode(' ', array_map('escapeshellarg', self::build_command(['workerid' => $id] + $config)));
+            exec($command . ' > /dev/null 2>&1 &');
+        }
+
+        $foreground = self::launch(['workerid' => $last] + $config);
+        return [
+            'launched' => count($ids) + 1,
+            'exitcode' => $foreground['exitcode'] ?? 0,
+            'output'   => $foreground['output'] ?? '',
+        ];
     }
 
     /**

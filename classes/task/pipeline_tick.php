@@ -15,7 +15,7 @@
 // along with Moodle.  If not, see <http://www.gnu.org/licenses/>.
 
 /**
- * Ad-hoc task that launches the local Puppeteer worker (E3.2 exec variant).
+ * Scheduled task that keeps the attempt pipeline moving (E3.1/E3.2).
  *
  * @package    local_catquizlab
  * @copyright  2026 Ralf Erlebach
@@ -24,26 +24,31 @@
 
 namespace local_catquizlab\task;
 
+use local_catquizlab\local\attempt_scheduler;
 use local_catquizlab\local\worker_launcher;
 
 /**
- * Launches the exec-variant worker to drain the attempt queue on this host.
+ * Periodic maintenance: reclaim crashed attempts, then dispatch the worker pool.
  *
- * Respects the master switch and the exec-worker setting; it is a no-op unless
- * both are on and the worker is configured.
+ * Reclaiming is always safe (lab-store bookkeeping). Dispatching only happens when
+ * the exec worker is enabled and configured, so on hubs, worker-less nodes and CI
+ * the task simply reclaims and returns.
  */
-class dispatch_worker extends \core\task\adhoc_task {
+class pipeline_tick extends \core\task\scheduled_task {
+    /** @var int Consider a running attempt crashed after this many seconds. */
+    public const STALE_SECONDS = 1800;
+
     /**
      * Human-readable task name.
      *
      * @return string
      */
     public function get_name(): string {
-        return get_string('task:dispatchworker', 'local_catquizlab');
+        return get_string('task:pipelinetick', 'local_catquizlab');
     }
 
     /**
-     * Launch the worker.
+     * Run one maintenance tick.
      *
      * @return void
      */
@@ -52,11 +57,14 @@ class dispatch_worker extends \core\task\adhoc_task {
             return;
         }
 
-        $result = worker_launcher::launch_pool(worker_launcher::config_from_settings());
-        if ($result === null) {
-            mtrace('local_catquizlab: exec worker not launched (disabled or not configured).');
-            return;
+        $reclaimed = attempt_scheduler::reclaim_stale(null, self::STALE_SECONDS);
+        if ($reclaimed > 0) {
+            mtrace("local_catquizlab: reclaimed {$reclaimed} stale attempt(s).");
         }
-        mtrace("local_catquizlab: exec worker pool ({$result['launched']}) finished; foreground exit code {$result['exitcode']}.");
+
+        $result = worker_launcher::launch_pool(worker_launcher::config_from_settings());
+        if ($result !== null) {
+            mtrace("local_catquizlab: dispatched worker pool ({$result['launched']}).");
+        }
     }
 }

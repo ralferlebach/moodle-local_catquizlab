@@ -63,6 +63,8 @@ class attempt_collector {
         global $DB;
 
         $started = microtime(true);
+        $readsbefore = $DB->perf_get_reads();
+        $writesbefore = $DB->perf_get_writes();
         $attempts = $DB->get_records_select(
             'local_catquizlab_attempt',
             'runid = :runid AND engineattemptid IS NOT NULL AND engineattemptid > 0',
@@ -82,6 +84,8 @@ class attempt_collector {
             'candidates' => count($attempts),
             'collected'  => $collected,
             'runtimems'  => (int) round((microtime(true) - $started) * 1000),
+            'dbreads'    => $DB->perf_get_reads() - $readsbefore,
+            'dbwrites'   => $DB->perf_get_writes() - $writesbefore,
         ];
     }
 

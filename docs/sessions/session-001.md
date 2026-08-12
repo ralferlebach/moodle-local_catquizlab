@@ -1,4 +1,4 @@
-# Session 001 — Aufbau der CAT-Experimenten-Suite (Stub → E1.1/E1.2)
+# Session 001 — CAT-Experimenten-Suite: vom Stub zum vollständigen, betriebsgehärteten Plugin (E0–E7 + Härtung)
 
 Datum: 2026-08-10. Ziel dieses Chats: aus Vorlagen- und Forschungsmaterial ein
 installierbares, CI-grünes Moodle-Plugin `local_catquizlab` aufbauen und das
@@ -655,15 +655,75 @@ pluginfile-Pflichtsignatur — Moodle-Standardmuster, von moodle-plugin-ci nicht
 geflaggt, phpmd ohnehin non-failing. Versionsbump → 2026081047 / 0.1.48 (reiner
 Code, kein Verhaltenswechsel).
 
-## Verifikationsstand
-Container: PHP-Syntax, install.xml, YAML, Worker-JS grün; PHPCS (Moodle) 0/0
-**und PHPMD ohne Verstöße** über alle PHP-Dateien; höchster Upgrade-Savepoint ≤
-Plugin-Version. PHPUnit/Behat laufen in der CI (kein Moodle im Container);
-Validator-, Sweep- und Naming-Logik zusätzlich per CLI-Harness geprüft.
+## Phase 52 — Betriebs-Härtung: Retries, Teardown, Concurrency, Scheduling, Events (Release 0.1.49)
+Alle in der Bestandsaufnahme genannten Reste in einem Zug:
+- **Attempt-Retry/Staffelung (E3.1):** neue Spalten `tries`/`nextruntime` (Upgrade
+  2026081048); `attempt_scheduler`: `retry_status` (rein), `reclaim_stale` (crashte
+  RUNNING-Attempts requeuen mit Backoff oder failen), `retry_or_fail`, `abort`.
+  `job_claim` respektiert `nextruntime` + zählt `tries`; `job_complete` requeued statt
+  hart zu failen.
+- **Geplanter Task** `pipeline_tick` (+ `db/tasks.php`, default deaktiviert): Stale-
+  Reclaim + Dispatch.
+- **`worker_concurrency` konsumiert:** `launch_pool` (N Worker, `worker_ids` rein), in
+  `dispatch_worker` verdrahtet.
+- **Events** `run_scheduled`/`run_aggregated`/`run_aborted`, an Orchestrator/Aggregat-
+  Task/`abort` gefeuert.
+- **Deviante Muster (E3.4):** `response_oracle::deviant_ability` (rein) verschiebt die
+  effektive Fähigkeit gezielt je Subskala; `oracle_answer` wendet `profile['deviance']`
+  an, `person_generator` reicht es aus der Definition durch.
+- **PF(t)-Toggle** in `build_quizsettings` (`catquiz_lasttimeplayedpenalty`, Default an).
+- **Query-Messung** `dbreads`/`dbwrites` in `collect_run`.
+- **Vollständiges Teardown:** `run_cleanup` entfernt zusätzlich Engine-Artefakte
+  (Test-Modul, Items/Itemparams, catscales-Baum, catcontext) + scalemap, engine-
+  gekapselt.
+Neue/erweiterte Tests: attempt_scheduler, run_cleanup, events (neu), worker_launcher,
+response_oracle, person_generator, test_provisioner. phpcs.xml Exit 0; CI-relevante
+PHPMD sauber (verbleibend nur db/upgrade + pluginfile — Moodle-Standard, von
+moodle-plugin-ci nicht geflaggt). Versionsbump → 2026081048 / 0.1.49.
 
-## Next
-E2.1 Pool-Generator (Templates→Items, Skalenbaum, seed-deterministisch),
-E2.3 Personen als Nutzer (+ Namensregeln), E2.4 Kurse/CAT-Tests + Einschreibung;
-parallel E3.1 Adhoc-Task „schedule_attempt" — Richtung Meilenstein M1. Die
-Run-Registry aus E1.3 liefert die Runs, auf denen Provisionierung und
-Orchestrierung aufsetzen.
+## Verifikationsstand (final, Release 0.1.50)
+Container: PHP-Syntax, `install.xml` (valides XML), Worker-JS grün; PHPCS
+(Moodle-Standard) **Exit 0** über alle PHP-Dateien; höchster Upgrade-Savepoint
+(2026081048) ≤ Plugin-Version (2026081049). Node-Worker-Tests (`node --test`)
+grün. PHPUnit/Behat laufen in der CI (kein Moodle im Container). PHPMD läuft in
+der CI non-failing (`|| true`); von den CI-relevanten Regeln ist alles sauber —
+verbleibend nur die mit jedem Schema-Schritt wachsende `db/upgrade.php`-Funktion
+und die vorgeschriebene `pluginfile`-Signatur, beides Moodle-Standardmuster, die
+moodle-plugin-ci nicht flaggt. Reine Logik ist zusätzlich per PHPUnit und teils
+CLI-/Node-Harness geprüft; engine-berührender Code ist über `environment`-Guards
+gekapselt und in der Zielinstanz zu verifizieren.
+
+## Session-Abschluss
+
+**Ergebnis dieser Session:** aus Vorlagen- und Forschungsmaterial ist ein
+installierbares, CI-grünes, betriebsgehärtetes Moodle-Plugin `local_catquizlab`
+entstanden — eine integrierte Experiment-Suite, die simulierte Testpersonen durch
+die **echte** `mod_adaptivequiz`-Oberfläche adaptiv testen lässt, die Traces
+einsammelt, DPF-Diagnostik gegen die Ground Truth rechnet und exportiert.
+
+**Vollständig umgesetzt (52 Phasen, Releases 0.1.0 → 0.1.50):** der gesamte
+Backlog **E0–E7** — Fundament; Definition/Sweep/Registry; Materialisierung
+(Skalen→Fragen→Items, Test anlegen/binden, Personen/Kurs, Cleanup); Durchführung
+(Scheduler, exec-Worker + Queue-Polling, Puppeteer, Oracle inkl. GPCM/GRM und
+polytomer Kategorienwahl, Collect inkl. `debug_info`, Kapazität); Auswertung
+(Metriken, Diagnostik, per-Subskala-DPF, Trends, Aggregation, Report-UI);
+Hub-Modus (Paket/Ingest/Cross-Instance); Export (Antwortmatrix, csv/json/xml/xlsx/
+ods × Ebenen × Umfang, Task); Orchestrierung + Tiering. Dazu die Betriebs-Härtung:
+Attempt-Retry/Reclaim/Abort, vollständiges Teardown, Worker-Pool + geplanter
+`pipeline_tick`, Lifecycle-Events, deviante Muster, PF(t)-Toggle, Query-Messung,
+flexibler Worker-Login. Dokumentation auf as-built-Stand (Architektur Rev. 2.3,
+Durchführungs- und Testanleitung).
+
+**Bewusst instanz-/entscheidungsabhängig (kein Code-Rest):** der erste echte
+Instanz-Durchlauf und die daran anschließende Feinjustierung der vier
+engine-gekapselten Stellen (adaptivequiz-`add_moduleinfo`-Felder, `save_question`,
+Kontext-/Skalen-Inserts, vollständiger Oracle-Pfad); das Festlegen konkreter
+SE-Schwellen und Deviance-Muster für die Sweeps; die Durchsatz-Messfahrt (M1). Die
+Meilensteine M1–M5 hängen an echten Läufen in der Zielinstanz.
+
+**Leitprinzipien, die sich bewährt haben:** Engine-Schema gegen die Live-Instanz
+verifizieren statt gegen die gebündelte `install.xml`; engine-berührenden Code
+kapseln, damit reiner Kern testbar bleibt und CI grün; Versionsstand kontinuierlich
+führen; Sitzung als ein Protokoll (dieses Dokument).
+
+*Session 001 abgeschlossen mit Release 0.1.50.*

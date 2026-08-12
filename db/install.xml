@@ -100,6 +100,8 @@
         <FIELD NAME="status" TYPE="int" LENGTH="2" NOTNULL="true" DEFAULT="0" SEQUENCE="false" COMMENT="0=queued, 10=running, 20=collected, 30=validated, 40=failed."/>
         <FIELD NAME="tracejson" TYPE="text" NOTNULL="false" SEQUENCE="false" COMMENT="Analysis-friendly trace copied from the engine tables/debug info: item sequence, score components, theta/SE path, activations, stop reason."/>
         <FIELD NAME="runtimems" TYPE="int" LENGTH="10" NOTNULL="false" SEQUENCE="false" COMMENT="Wall-clock runtime of the attempt in milliseconds, reported by the worker."/>
+        <FIELD NAME="tries" TYPE="int" LENGTH="4" NOTNULL="true" DEFAULT="0" SEQUENCE="false" COMMENT="Number of times the attempt has been claimed/tried (for retry limiting)."/>
+        <FIELD NAME="nextruntime" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false" COMMENT="Earliest time the attempt may be (re)claimed; used for staggering and retry backoff."/>
         <FIELD NAME="timecreated" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
         <FIELD NAME="timemodified" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
       </FIELDS>

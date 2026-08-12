@@ -229,4 +229,19 @@ final class response_oracle_test extends \advanced_testcase {
         }
         $this->assertLessThan($high, $low);
     }
+
+    /**
+     * deviant_ability shifts targeted subscales and leaves others untouched.
+     *
+     * @return void
+     */
+    public function test_deviant_ability(): void {
+        $dev = ['magnitude' => 1.5, 'subscales' => [[1, 2], [2, 1]]];
+        $this->assertEqualsWithDelta(-1.5, response_oracle::deviant_ability(0.0, $dev, 1, 2), 1e-9);
+        $this->assertEqualsWithDelta(0.0, response_oracle::deviant_ability(0.0, $dev, 1, 1), 1e-9);
+        // No targets -> global deviance.
+        $this->assertEqualsWithDelta(-0.7, response_oracle::deviant_ability(0.0, ['magnitude' => 0.7], 3, 3), 1e-9);
+        // No deviance -> unchanged.
+        $this->assertEqualsWithDelta(0.5, response_oracle::deviant_ability(0.5, null, 1, 1), 1e-9);
+    }
 }

@@ -1,4 +1,4 @@
-> **Stand 0.1.43:** Der gesamte Backlog (E0–E7) ist umgesetzt und CI-grün. Verbleibend ist nur noch instanzabhängige Feinjustierung der engine-berührenden Pfade (siehe architektur.md, Abschnitt 3/4) sowie der erste echte Instanz-Durchlauf.
+> **Stand 0.1.50 (Session 001 abgeschlossen):** Der gesamte Backlog (E0–E7) ist umgesetzt, betriebsgehärtet (Retry/Reclaim/Abort, Teardown, Worker-Pool, geplanter `pipeline_tick`, Events, deviante Muster, PF(t)-Toggle) und CI-grün. Dokumentation auf as-built-Stand (Architektur Rev. 2.3, Durchführungs- und Testanleitung). Verbleibend ist nur noch Instanz-/Entscheidungsabhängiges: der erste echte Durchlauf mit Feinjustierung der vier engine-gekapselten Stellen, konkrete SE-Schwellen/Deviance-Muster und die Durchsatz-Messfahrt (M1).
 
 # Projektstatus local_catquizlab
 

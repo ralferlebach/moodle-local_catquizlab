@@ -83,6 +83,17 @@ Der Worker antwortet **seed-deterministisch** und **subskalen-sensitiv**: das
 Oracle liest die catscale des präsentierten Items aus der `scalemap` und nutzt
 die zugehörige Subskalen-θ der Person.
 
+
+### Unbeaufsichtigter Betrieb
+
+Statt jeden Schritt manuell anzustoßen, kann der geplante Task `pipeline_tick`
+aktiviert werden (unter *Website-Administration → Server → Geplante Tasks*,
+standardmäßig deaktiviert). Er gibt hängengebliebene Attempts wieder frei
+(Reclaim mit Backoff) und dispatcht — bei aktiviertem Exec-Worker — den Worker-Pool
+in der über `worker_concurrency` konfigurierten Breite. Der Login-Modus des Workers
+(`worker_login_mode`: Passwort-Konvention oder vorauthentifizierte URL-Vorlage) wird
+mit durchgereicht.
+
 ## 4. Sammeln und Auswerten
 
 - `collect_attempts` überführt die Engine-Traces (inkl. `debug_info` →
@@ -129,8 +140,14 @@ Konsistenz-Check (Hub-Ergebnis = Node-Ergebnis).
 ## 7. Aufräumen
 
 `\local_catquizlab\local\run_cleanup::cleanup($runid, $options)` entfernt
-idempotent Attempts/Results/Personen (und optional die angelegten Nutzer sowie
-den vom Lauf erzeugten Kurs) und setzt den Run zurück auf `DRAFT`.
+idempotent Attempts/Results/Personen, **die Engine-Artefakte des Laufs**
+(Test-Modul, Items/Itemparams, catscales-Baum, catcontext) und die scalemap-
+Zeilen (und optional die angelegten Nutzer sowie den vom Lauf erzeugten Kurs) und
+setzt den Run zurück auf `DRAFT`.
+
+Die Zeit-Straffunktion PF(t) ist standardmäßig aktiv; für einen Baseline-/
+operativen Lauf lässt sie sich über `test_provisioner`-Option `timepenalty => false`
+abschalten.
 
 ---
 

@@ -123,4 +123,24 @@ final class person_generator_test extends \advanced_testcase {
         $this->assertArrayHasKey('label', $decoded);
         $this->assertArrayHasKey('categories', $decoded);
     }
+
+    /**
+     * A deviance spec in the definition is carried into every profile.
+     *
+     * @return void
+     */
+    public function test_deviance_passthrough(): void {
+        $definition = [
+            'persons' => [
+                'count' => 2, 'stratum' => 'deviant',
+                'deviance' => ['magnitude' => 1.0, 'subscales' => [[1, 1]]],
+            ],
+            'pool' => ['scales' => ['categories' => 2, 'subcategories' => 2]],
+        ];
+        $people = person_generator::generate($definition, 42);
+        $this->assertCount(2, $people);
+        foreach ($people as $person) {
+            $this->assertSame(['magnitude' => 1.0, 'subscales' => [[1, 1]]], $person['profile']['deviance']);
+        }
+    }
 }

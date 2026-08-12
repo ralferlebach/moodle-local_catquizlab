@@ -62,5 +62,10 @@ class aggregate_results extends \core\task\adhoc_task {
         $dpf = subscale_evaluator::evaluate_run($runid);
         mtrace("local_catquizlab: aggregated {$count} result row(s) for run {$runid}"
             . " (DPF over {$dpf['n']} person(s)).");
+
+        \local_catquizlab\event\run_aggregated::create([
+            'objectid' => $runid,
+            'context'  => \context_system::instance(),
+        ])->trigger();
     }
 }

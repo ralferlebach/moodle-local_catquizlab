@@ -1,6 +1,6 @@
-# Architektur der CAT-Experimenten-Suite (Rev. 2.2 — as-built)
+# Architektur der CAT-Experimenten-Suite (Rev. 2.3 — as-built)
 
-Stand: 11.08.2026 · Release 0.1.43 · Diese Fassung ist die maßgebliche Architekturbeschreibung des Plugins `local_catquizlab`. Rev. 2.1 beschrieb das Zielbild; Rev. 2.2 ergänzt den **Umsetzungsstand (as-built)** in Abschnitt 4 und aktualisiert die offenen Punkte in Abschnitt 3. Der gesamte Backlog (E0–E7) ist umgesetzt und CI-grün. Eingearbeitete Vorgaben:
+Stand: 11.08.2026 · Release 0.1.50 · Diese Fassung ist die maßgebliche Architekturbeschreibung des Plugins `local_catquizlab`. Rev. 2.1 beschrieb das Zielbild; Rev. 2.2/2.3 ergänzen den **Umsetzungsstand (as-built)** in Abschnitt 4 und aktualisieren die offenen Punkte in Abschnitt 3. Der gesamte Backlog (E0–E7) ist umgesetzt, betriebsgehärtet und CI-grün. Eingearbeitete Vorgaben:
 Vorbereitung **und** Auswertung vollständig in einem Local-Plugin · Vorbereitung über interne Routinen und Moodle-APIs · Auswertung wahlweise in derselben Instanz oder nachberechnet in einer zentralen Berechnungsinstanz · vollständiger Export (Excel, OpenDocument, CSV, XML, JSON) für optionale externe Berechnung · **keine** notwendigen externen Berechnungen · Testdurchführung **nicht** intern/in-process, sondern extern per Puppeteer, getriggert durch getimte Adhoc-Tasks
 
 ---
@@ -111,11 +111,12 @@ Personen- und Item/Question-Namen werden nach **spezifizierbaren Regeln** vergeb
 Die ursprünglichen Design-Fragen sind durch die Umsetzung überwiegend geklärt; hier der aktuelle Stand:
 
 1. **Trace-Tiefe der Engine:** *Geklärt.* `local_catquiz_attempts.debug_info` ist eine JSON-Liste von Schritt-Snapshots mit `personabilities` (θ je Skala) und `numquestionsperscale` (Exposition je Skala). `attempt_collector::parse_debug_info()` zieht daraus die Subskalen-θ + Exposition in die Trace; damit speist sich die per-Subskala-DPF-Diagnostik. Ein upstream-Hook ist nicht nötig.
-2. **PF(t)-Schalter:** Offen (Instanz-Einstellung). Das Design verlangt zunächst PF(t)=1; die Aktivierung erfolgt über die catquiz-Testeinstellungen des angelegten Tests.
-3. **Polytome Antworten im UI:** *Kern geklärt.* `response_oracle::gpcm_probabilities`/`grm_probabilities`/`respond_polytomous` wählen eine Kategorie; `question_template` erzeugt polytome MC-Fragen (1–4 aus 6, mit Teilpunkten/Malus). Die Verdrahtung der Kategorienwahl in `oracle_answer` folgt, sobald Schritt-/Schwellenparameter der Items aufgelöst werden.
-4. **SE-Schwellen auf Subskalen:** Parametrisierbar über `test_provisioner::build_quizsettings` (`se_min`/`se_max`, `minquestionspersubscale`/`maxquestionspersubscale`); der konkrete Wert ist vor der Sweep-Definition zu fixieren.
-5. **Durchsatz:** `capacity` liefert Batching/Staffelung/Durchsatz; die konkrete Worker-Anzahl ergibt sich aus einer Messfahrt in der Zielinstanz.
-6. **Simulanten-Authentifizierung:** Passwort-Login angenommen (Person = Nutzer mit `:worker`-Fähigkeit); Token-Auto-Login bleibt als Alternative offen.
+2. **PF(t)-Schalter:** *Mechanismus vorhanden.* `test_provisioner::build_quizsettings` setzt `catquiz_lasttimeplayedpenalty` (Default an; `timepenalty => false` schaltet ab). Der konkrete Einsatz je Tier ist eine Definitionsfrage.
+3. **Polytome Antworten im UI:** *Geschlossen.* `response_oracle::respond_item` dispatcht dichotom/polytom; das Fragetemplate ist Single-Select mit geordneten Stufen, und der Worker klickt die kategorie-te Option (Shuffle aus).
+4. **Deviante Muster:** *Mechanismus vorhanden.* `response_oracle::deviant_ability` verschiebt die effektive Fähigkeit gezielt je Subskala aus dem Personenprofil (`deviance`); `person_generator` reicht die Spezifikation aus der Definition durch. Welche Muster (Stärke/Anzahl/Position) wissenschaftlich sinnvoll sind, ist eine Definitionsfrage.
+5. **SE-Schwellen auf Subskalen:** Parametrisierbar über `test_provisioner::build_quizsettings` (`se_min`/`se_max`, `minquestionspersubscale`/`maxquestionspersubscale`); der konkrete Wert ist vor der Sweep-Definition zu fixieren.
+6. **Durchsatz:** `capacity` liefert Batching/Staffelung/Durchsatz und `attempt_collector::collect_run` misst DB-Reads/Writes; die konkrete Worker-Anzahl (`worker_concurrency`) ergibt sich aus einer Messfahrt in der Zielinstanz.
+7. **Simulanten-Authentifizierung:** Zwei Modi verdrahtet — Passwort-Konvention oder vorauthentifizierte URL-Vorlage (`worker_login_mode`).
 
 **Verbleibende, rein instanzabhängige Feinjustierung** (läuft erst in der Ziel-Instanz, per Konstruktion engine-gekapselt und daher CI-neutral): die exakten `add_moduleinfo`-Felder von adaptivequiz (`highestlevel`/`lowestlevel`/`startinglevel`), das Fragebank-Layout/`save_question` bei der Materialisierung, die Kontext-/Skalen-Inserts sowie der vollständige Oracle-Pfad. Diese Stellen sind bewusst so gekapselt, dass Abweichungen der Instanz lokal nachgezogen werden, ohne die Testbarkeit oder CI zu berühren.
 
@@ -138,6 +139,10 @@ Der Backlog E0–E7 ist vollständig umgesetzt. Kernkomponenten (Klassen unter `
 **Export (E6):** `exporter` (csv/json/XML-Writer + xlsx/ods über Dataformat), `answer_matrix` (Personen×Items, Nachfolger getit-horst), `export_dataset` (Ebenen raw/groundtruth/metrics × Umfang run/experiment/tier), `run_exporter` + Task `export_run`, `local_catquizlab_pluginfile` (Auslieferung).
 
 **Orchestrierung & Tiering (E7):** `run_orchestrator` (Pipeline scales→materialise→test→people→attempts, engine-gekapselt), `tier_planner` (Ordnung baseline→main→robustness→operative), CLI `cli/orchestrate.php`, Task `orchestrate_run`.
+
+**Betrieb & Härtung (Rev. 2.3):** Attempt-Robustheit — die attempt-Tabelle trägt `tries`/`nextruntime` (Upgrade 2026081048); `attempt_scheduler` gibt hängengebliebene Läufe wieder frei (`reclaim_stale`, Backoff), requeued Fehlschläge (`retry_or_fail`) und bricht Läufe ab (`abort`); `job_claim` respektiert `nextruntime` + zählt `tries`. Der geplante Task `pipeline_tick` (in `db/tasks.php`, default aus) macht Reclaim + Dispatch. `worker_launcher::launch_pool` startet `worker_concurrency` Worker. Lifecycle-Events `run_scheduled`/`run_aggregated`/`run_aborted` (`classes/event/`). `response_oracle::deviant_ability` bildet gezielte deviante Muster ab (DPF-Stress, aus dem Personenprofil). `test_provisioner` schaltet PF(t) (`catquiz_lasttimeplayedpenalty`). `run_cleanup` räumt zusätzlich die Engine-Artefakte (Test-Modul, Items/Itemparams, catscales-Baum, catcontext) + scalemap idempotent ab. `attempt_collector::collect_run` misst DB-Reads/Writes. `se_diagnostics` trägt die SE-toleranten Maße.
+
+**Worker-Login:** `worker_launcher` reicht einen Login-Modus durch — Benutzername/Passwort-Konvention oder vorauthentifizierte URL-Vorlage (`{userid}`); Node-seitige reine Helfer sind per `node --test` abgedeckt.
 
 **Engine-Fakten (aus den Quellen von `local_catquiz` 2024070802 + catmodel-Subplugins bestätigt):**
 - `local_catquiz_tests` hat **keine** `contextid`; der CAT-Kontext wird aus der Skala über `\local_catquiz\catscale::get_context_id($catscaleid)` aufgelöst.

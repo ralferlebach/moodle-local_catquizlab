@@ -30,6 +30,7 @@ use local_catquizlab\local\person_generator;
 use local_catquizlab\local\user_provisioner;
 use local_catquizlab\local\course_provisioner;
 use local_catquizlab\local\attempt_scheduler;
+use local_catquizlab\local\scale_provisioner;
 
 /**
  * Run cleanup tests.
@@ -165,5 +166,30 @@ final class run_cleanup_test extends \advanced_testcase {
 
         $this->assertTrue($counts['run']);
         $this->assertFalse($DB->record_exists('local_catquizlab_run', ['id' => $runid]));
+    }
+
+    /**
+     * Cleanup removes the scale map (a lab-store table); engine teardown is a
+     * no-op without the engine, so no items are reported.
+     *
+     * @return void
+     */
+    public function test_cleanup_removes_scalemap(): void {
+        global $DB;
+        $this->resetAfterTest();
+        $this->setAdminUser();
+
+        $generator = $this->getDataGenerator()->get_plugin_generator('local_catquizlab');
+        $run = $generator->create_run();
+        $now = time();
+        $DB->insert_record('local_catquizlab_scalemap', (object) [
+            'runid' => $run->id, 'catscaleid' => 101, 'parentcatscaleid' => 0, 'contextid' => 10,
+            'level' => scale_provisioner::LEVEL_SUBSCALE, 'categoryindex' => 1, 'subscaleindex' => 1,
+            'name' => '1:1', 'timecreated' => $now, 'timemodified' => $now,
+        ]);
+
+        $counts = run_cleanup::cleanup($run->id);
+        $this->assertSame(0, $counts['items']);
+        $this->assertSame(0, $DB->count_records('local_catquizlab_scalemap', ['runid' => $run->id]));
     }
 }

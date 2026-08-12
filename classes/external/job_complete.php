@@ -89,22 +89,27 @@ class job_complete extends external_api {
         }
 
         $finished = ($status === 'finished');
-        $update = (object) [
-            'id'           => $attemptid,
-            'status'       => $finished ? attempt_scheduler::STATUS_COLLECTED : attempt_scheduler::STATUS_FAILED,
-            'timemodified' => time(),
-        ];
-        if ($runtimems > 0) {
-            $update->runtimems = $runtimems;
-        }
-        if ($engineattemptid > 0) {
-            $update->engineattemptid = $engineattemptid;
-        }
-        $DB->update_record('local_catquizlab_attempt', $update);
+        if ($finished) {
+            $update = (object) [
+                'id'           => $attemptid,
+                'status'       => attempt_scheduler::STATUS_COLLECTED,
+                'timemodified' => time(),
+            ];
+            if ($runtimems > 0) {
+                $update->runtimems = $runtimems;
+            }
+            if ($engineattemptid > 0) {
+                $update->engineattemptid = $engineattemptid;
+            }
+            $DB->update_record('local_catquizlab_attempt', $update);
 
-        // Pull the engine trace into the attempt when possible (no-op without the engine).
-        if ($finished && $engineattemptid > 0) {
-            attempt_collector::collect($attemptid);
+            // Pull the engine trace into the attempt when possible (no-op without the engine).
+            if ($engineattemptid > 0) {
+                attempt_collector::collect($attemptid);
+            }
+        } else {
+            // Requeue with backoff while tries remain, otherwise fail for good.
+            attempt_scheduler::retry_or_fail($attemptid);
         }
 
         return [

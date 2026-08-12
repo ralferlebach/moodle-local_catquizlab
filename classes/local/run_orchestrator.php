@@ -98,6 +98,11 @@ class run_orchestrator {
 
         $DB->set_field('local_catquizlab_run', 'status', registry::STATUS_SCHEDULED, ['id' => $runid]);
 
+        \local_catquizlab\event\run_scheduled::create([
+            'objectid' => $runid,
+            'context'  => \context_system::instance(),
+        ])->trigger();
+
         return ['ok' => true, 'stages' => $stages];
     }
 

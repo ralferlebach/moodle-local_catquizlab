@@ -42,7 +42,7 @@ class run_cleanup {
      * @param array $options Optional: 'users' (default true) delete linked users,
      *                       'course' (default false) delete a suite-created course,
      *                       'run' (default false) delete the run row too.
-     * @return array{attempts: int, results: int, persons: int, users: int, course: int, run: bool} What was removed.
+     * @return array{attempts: int, results: int, persons: int, users: int, course: int, items: int, run: bool} What was removed.
      */
     public static function cleanup(int $runid, array $options = []): array {
         global $DB;
@@ -67,12 +67,18 @@ class run_cleanup {
             'persons'  => count($persons),
             'users'    => 0,
             'course'   => 0,
+            'items'    => 0,
             'run'      => false,
         ];
 
         $DB->delete_records('local_catquizlab_attempt', ['runid' => $runid]);
         $DB->delete_records('local_catquizlab_result', ['runid' => $runid]);
         $DB->delete_records('local_catquizlab_person', ['runid' => $runid]);
+
+        // Engine-side artefacts materialised for this run (guarded; no-op without engine).
+        $counts['items'] = self::teardown_engine_artifacts($runid);
+        // The scale map is a lab-store table and is always safe to remove.
+        $DB->delete_records('local_catquizlab_scalemap', ['runid' => $runid]);
 
         if ($deleteusers) {
             $counts['users'] = self::delete_users($userids);
@@ -89,6 +95,90 @@ class run_cleanup {
         }
 
         return $counts;
+    }
+
+    /**
+     * Remove the engine-side artefacts a run materialised: the delete-adaptivequiz
+     * instance, then the run's items, item parameters and scale tree/context.
+     *
+     * Recognised from the run's scale map. Guarded by the engine environment, so it
+     * is a no-op (returning 0) when the engine is absent or the run materialised
+     * nothing.
+     *
+     * @param int $runid The run.
+     * @return int The number of engine items removed.
+     */
+    protected static function teardown_engine_artifacts(int $runid): int {
+        global $DB;
+
+        if (!environment::engine_available()) {
+            return 0;
+        }
+
+        $map = $DB->get_records('local_catquizlab_scalemap', ['runid' => $runid]);
+        if (!$map) {
+            return 0;
+        }
+        // Delete the adaptivequiz test instance created for this run, if any.
+        self::delete_test_module($runid);
+
+        // Remove the run's items and item parameters, then the scale tree/context.
+        $contextids = [];
+        $items = 0;
+        foreach ($map as $node) {
+            $contextids[(int) $node->contextid] = true;
+            $items += self::delete_scale_items((int) $node->catscaleid, (int) $node->contextid);
+            $DB->delete_records('local_catquiz_catscales', ['id' => (int) $node->catscaleid]);
+        }
+        foreach (array_keys($contextids) as $contextid) {
+            if ($contextid > 0 && !$DB->record_exists('local_catquiz_catscales', ['contextid' => $contextid])) {
+                $DB->delete_records('local_catquiz_catcontext', ['id' => $contextid]);
+            }
+        }
+
+        return $items;
+    }
+
+    /**
+     * Delete the adaptivequiz test module a run created, if present.
+     *
+     * @param int $runid The run.
+     * @return void
+     */
+    protected static function delete_test_module(int $runid): void {
+        global $DB, $CFG;
+
+        $testcmid = (int) $DB->get_field('local_catquizlab_run', 'testcmid', ['id' => $runid]);
+        if ($testcmid <= 0 || !environment::adaptivequiz_available()) {
+            return;
+        }
+        require_once($CFG->dirroot . '/course/lib.php');
+        try {
+            course_delete_module($testcmid);
+        } catch (\Throwable $e) {
+            debugging('local_catquizlab: could not delete test module: ' . $e->getMessage());
+        }
+    }
+
+    /**
+     * Delete the items and item parameters of a scale within a context.
+     *
+     * @param int $catscaleid The scale.
+     * @param int $contextid The context.
+     * @return int The number of item rows removed.
+     */
+    protected static function delete_scale_items(int $catscaleid, int $contextid): int {
+        global $DB;
+
+        $items = $DB->get_records('local_catquiz_items', ['catscaleid' => $catscaleid, 'contextid' => $contextid]);
+        foreach ($items as $item) {
+            $DB->delete_records(
+                'local_catquiz_itemparams',
+                ['componentid' => $item->componentid, 'contextid' => $contextid]
+            );
+        }
+        $DB->delete_records('local_catquiz_items', ['catscaleid' => $catscaleid, 'contextid' => $contextid]);
+        return count($items);
     }
 
     /**
