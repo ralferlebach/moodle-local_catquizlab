@@ -39,6 +39,12 @@ class run_orchestrator {
     /** @var string A mandatory stage returned nothing. */
     public const REASON_NO_RESULT = 'stage-returned-no-result';
 
+    /** @var string The run has no root scale to build a test on. */
+    public const REASON_NO_ROOT_SCALE = 'no-root-scale';
+
+    /** @var string The adaptivequiz activity could not be created. */
+    public const REASON_NO_TEST = 'test-not-created';
+
     /** @var string Materialise the engine scale tree and context. */
     public const STAGE_SCALES = 'scales';
 
@@ -54,17 +60,25 @@ class run_orchestrator {
     /** @var string Queue the simulated attempts. */
     public const STAGE_ATTEMPTS = 'attempts';
 
+    /** @var string Resolving the shared course and the experiment's section. */
+    public const STAGE_CONTAINER = 'container';
+
     /**
      * The ordered setup pipeline.
      *
      * @return string[]
      */
     public static function plan_stages(): array {
+        // The container comes before the test, because an adaptivequiz needs a
+        // course and a section to be created in. The old order put the test
+        // stage first, where the run had no course yet, so test_provisioner
+        // returned null every time and the run was still reported as ok.
         return [
             self::STAGE_SCALES,
             self::STAGE_MATERIALISE,
-            self::STAGE_TEST,
+            self::STAGE_CONTAINER,
             self::STAGE_PEOPLE,
+            self::STAGE_TEST,
             self::STAGE_ATTEMPTS,
         ];
     }
@@ -95,18 +109,30 @@ class run_orchestrator {
             'options'    => $options,
         ];
 
+        // Stages stop at the first failure. Carrying on would build a test in a
+        // section that does not exist, or enrol users into a course that was
+        // never resolved, and bury the real cause under the consequences.
         $stages = [];
+        $failedstage = null;
         foreach (self::plan_stages() as $stage) {
             $stages[$stage] = self::run_stage($stage, $context);
+
+            if (self::stage_failed($stage, $stages[$stage])) {
+                $failedstage = $stage;
+                break;
+            }
         }
 
-        // A materialisation that could not realise its pool variant is not a
-        // scheduled run: the cell would otherwise be counted as a robustness
-        // condition while nothing about the pool actually changed.
-        $failure = self::first_failure($stages);
-        if ($failure !== null) {
+        if ($failedstage !== null) {
+            $reason = self::stage_reason($failedstage, $stages[$failedstage]);
             $DB->set_field('local_catquizlab_run', 'status', registry::STATUS_FAILED, ['id' => $runid]);
-            return ['ok' => false, 'reason' => $failure, 'stages' => $stages];
+
+            return [
+                'ok'          => false,
+                'reason'      => $reason,
+                'failedstage' => $failedstage,
+                'stages'      => $stages,
+            ];
         }
 
         $DB->set_field('local_catquizlab_run', 'status', registry::STATUS_SCHEDULED, ['id' => $runid]);
@@ -117,6 +143,31 @@ class run_orchestrator {
         ])->trigger();
 
         return ['ok' => true, 'stages' => $stages];
+    }
+
+    /**
+     * Resolve the shared course and the experiment's section.
+     *
+     * @param array $context The run context.
+     * @return array The container outcome.
+     */
+    protected static function stage_container(array $context): array {
+        $experimentid = (int) ($context['run']->experimentid ?? 0);
+        $outcome = experiment_container::provision($experimentid);
+
+        if (!empty($outcome['ok'])) {
+            // Every run of an experiment shares its course, which is what makes
+            // one section per experiment possible in the first place.
+            global $DB;
+            $DB->set_field(
+                'local_catquizlab_run',
+                'courseid',
+                (int) $outcome['courseid'],
+                ['id' => (int) $context['runid']]
+            );
+        }
+
+        return $outcome + ['failed' => empty($outcome['ok'])];
     }
 
     /**
@@ -152,6 +203,54 @@ class run_orchestrator {
                 $poolcondition
             ),
         ];
+    }
+
+    /**
+     * Whether a stage result means the stage did not do its job.
+     *
+     * @param string $stage The stage name.
+     * @param mixed $result What the stage returned.
+     * @return bool
+     */
+    public static function stage_failed(string $stage, $result): bool {
+        if ($result === null || $result === false) {
+            return true;
+        }
+        if (is_array($result) && !empty($result['failed'])) {
+            return true;
+        }
+        if ($stage === self::STAGE_MATERIALISE && is_array($result)) {
+            return !self::materialisation_complete($result);
+        }
+        if ($stage === self::STAGE_TEST && is_array($result)) {
+            // No activity, no run: this is the condition the whole issue is
+            // about, and it must not survive as a scheduled run.
+            return (int) ($result['testcmid'] ?? 0) <= 0;
+        }
+
+        return false;
+    }
+
+    /**
+     * The reason a stage gives for its failure.
+     *
+     * @param string $stage The stage name.
+     * @param mixed $result What the stage returned.
+     * @return string A reason of the form "stage:name (detail)".
+     */
+    protected static function stage_reason(string $stage, $result): string {
+        if ($result === null || $result === false) {
+            return 'stage:' . $stage . ' (' . self::REASON_NO_RESULT . ')';
+        }
+        $reason = is_array($result) ? (string) ($result['reason'] ?? '') : '';
+        if ($reason === '' && $stage === self::STAGE_MATERIALISE) {
+            $reason = cat_item_provisioner::REASON_NOT_VISIBLE;
+        }
+        if ($reason === '' && $stage === self::STAGE_TEST) {
+            $reason = self::REASON_NO_TEST;
+        }
+
+        return 'stage:' . $stage . ($reason !== '' ? ' (' . $reason . ')' : '');
     }
 
     /**
@@ -243,6 +342,8 @@ class run_orchestrator {
                 return self::stage_scales($context);
             case self::STAGE_MATERIALISE:
                 return self::stage_materialise($context);
+            case self::STAGE_CONTAINER:
+                return self::stage_container($context);
             case self::STAGE_TEST:
                 return self::stage_test($context);
             case self::STAGE_PEOPLE:
@@ -298,20 +399,34 @@ class run_orchestrator {
      * @param array $context The setup context.
      * @return int|null The test course-module id.
      */
-    protected static function stage_test(array $context): ?int {
+    protected static function stage_test(array $context): array {
         $runid = (int) $context['runid'];
         $root = self::root_scale($runid);
         if ($root === null) {
-            return null;
+            return ['failed' => true, 'reason' => self::REASON_NO_ROOT_SCALE, 'testcmid' => 0];
+        }
+
+        $container = experiment_container::existing((int) ($context['run']->experimentid ?? 0));
+        if ($container['sectionid'] <= 0) {
+            return ['failed' => true, 'reason' => experiment_container::REASON_NO_SECTION, 'testcmid' => 0];
         }
         // The definition is the only source for strategy, budgets and SE
         // bounds. Passing just the name here is what let two experimentally
         // different cells run with identical CAT settings.
         $options = test_provisioner::options_from_definition($context['definition'], [
-            'name' => (string) ($context['run']->cellkey ?? ('CATLab test ' . $runid)),
+            'name'    => experiment_container::activity_name($context['run']),
+            'section' => $container['sectionnum'],
         ]);
 
-        return test_provisioner::create($runid, $root, self::subscale_ids($runid), $options);
+        $testcmid = test_provisioner::create($runid, $root, self::subscale_ids($runid), $options);
+
+        // A null here used to pass as success, which is how a run with no CAT
+        // activity at all ended up scheduled.
+        if ($testcmid === null || $testcmid <= 0) {
+            return ['failed' => true, 'reason' => self::REASON_NO_TEST, 'testcmid' => 0];
+        }
+
+        return ['failed' => false, 'testcmid' => (int) $testcmid, 'section' => $container['sectionnum']];
     }
 
     /**

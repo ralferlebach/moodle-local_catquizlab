@@ -30,6 +30,7 @@ require(__DIR__ . '/../../config.php');
 require_once($CFG->libdir . '/adminlib.php');
 
 use local_catquizlab\local\environment;
+use local_catquizlab\local\experiment_container;
 use local_catquizlab\local\experiment_definition;
 use local_catquizlab\local\experiment_service;
 use local_catquizlab\local\registry;
@@ -178,8 +179,23 @@ $overview = [
     ],
 ];
 
+// Where the suite will provision. Without it nothing is created silently, so
+// the state has to be visible before someone starts a sweep.
+$course = experiment_container::course();
+$containercontext = [
+    'configured'  => $course !== null,
+    'coursename'  => $course !== null ? format_string($course->fullname) : '',
+    'courseurl'   => $course !== null
+        ? (new moodle_url('/course/view.php', ['id' => $course->id]))->out(false)
+        : '',
+    'settingsurl' => (new moodle_url('/admin/settings.php', [
+        'section' => 'local_catquizlab',
+    ]))->out(false),
+];
+
 $templatecontext = [
     'intro'       => get_string('manage:intro', $component),
+    'container'   => $containercontext,
     'canedit'     => $canedit,
     'newurl'      => (new moodle_url('/local/catquizlab/experiment.php'))->out(false),
     'importurl'   => (new moodle_url('/local/catquizlab/import.php'))->out(false),

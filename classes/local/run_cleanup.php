@@ -30,7 +30,8 @@ namespace local_catquizlab\local;
  * By default it clears the run's lab-store residue (attempts, results and person
  * rows) and deletes the Moodle users the run created, then resets the run to
  * draft. Optionally it also deletes the run's course (only when the suite created
- * it, recognised by the catlab_run_ short name) and the run row itself. It uses
+ * it under the old per-run model, recognised by the catlab_run_ short name, and
+ * only when no other run shares it) and the run row itself. It uses
  * only core APIs, is idempotent, and never touches courses it did not create, so
  * a referenced existing course is left intact.
  */
@@ -203,7 +204,13 @@ class run_cleanup {
     }
 
     /**
-     * Delete the run's course, but only if the suite created it.
+     * Delete a legacy per-run course, if this run still has one.
+     *
+     * Since issue #8 runs share one configured course, and a shared course must
+     * never be deleted because one of its runs was cleaned up — that would take
+     * every other experiment in it down too. Only a course the suite created
+     * under the old per-run model is removed, recognised by its short name, and
+     * only when no other run still points at it.
      *
      * @param \stdClass $run The run record.
      * @return int The deleted course id, or 0 if nothing was deleted.
@@ -216,6 +223,22 @@ class run_cleanup {
         }
         $course = $DB->get_record('course', ['id' => $run->courseid]);
         if (!$course || strpos((string) $course->shortname, 'catlab_run_') !== 0) {
+            return 0;
+        }
+
+        // The configured experiment course is never a cleanup target, whatever
+        // it happens to be called.
+        if ((int) $course->id === experiment_container::configured_course()) {
+            return 0;
+        }
+
+        // Another run sharing it means it is not this run's to delete.
+        $others = $DB->count_records_select(
+            'local_catquizlab_run',
+            'courseid = :courseid AND id <> :runid',
+            ['courseid' => (int) $course->id, 'runid' => (int) $run->id]
+        );
+        if ($others > 0) {
             return 0;
         }
 

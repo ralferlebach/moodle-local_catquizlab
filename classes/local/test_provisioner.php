@@ -230,7 +230,10 @@ class test_provisioner {
             'modulename'      => 'adaptivequiz',
             'module'          => $moduleid,
             'course'          => $course->id,
-            'section'         => 0,
+            // The experiment's own section, not section 0: every run activity
+            // of an experiment belongs together, and a shared course with
+            // everything in section 0 is unreadable after two sweeps.
+            'section'         => (int) ($options['section'] ?? 0),
             'visible'         => 1,
             'cmidnumber'      => '',
             'name'            => $name,

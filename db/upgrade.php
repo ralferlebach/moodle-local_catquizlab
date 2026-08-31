@@ -126,6 +126,13 @@ function xmldb_local_catquizlab_upgrade($oldversion): bool {
         upgrade_plugin_savepoint(true, 2026083102, 'local', 'catquizlab');
     }
 
+    if ($oldversion < 2026083109) {
+        // Issue #8: experiments live in one shared course, one section each,
+        // instead of a course per run.
+        local_catquizlab_upgrade_add_experiment_container($dbman);
+        upgrade_plugin_savepoint(true, 2026083109, 'local', 'catquizlab');
+    }
+
     return true;
 }
 
@@ -286,4 +293,28 @@ function local_catquizlab_upgrade_add_preset_table(database_manager $dbman): voi
         $CFG->dirroot . '/local/catquizlab/db/install.xml',
         'local_catquizlab_preset'
     );
+}
+
+/**
+ * Add the shared-course container columns to the experiment table.
+ *
+ * Nullable, because an experiment that has never been provisioned belongs to no
+ * course, and because a NOT NULL column cannot be added to a populated table.
+ * Existing runs keep their own courseid; the upgrade moves nothing.
+ *
+ * @param database_manager $dbman The database manager.
+ * @return void
+ */
+function local_catquizlab_upgrade_add_experiment_container(database_manager $dbman): void {
+    $table = new xmldb_table('local_catquizlab_experiment');
+
+    $fields = [
+        new xmldb_field('courseid', XMLDB_TYPE_INTEGER, '10', null, null, null, null, 'tier'),
+        new xmldb_field('sectionid', XMLDB_TYPE_INTEGER, '10', null, null, null, null, 'courseid'),
+    ];
+    foreach ($fields as $field) {
+        if (!$dbman->field_exists($table, $field)) {
+            $dbman->add_field($table, $field);
+        }
+    }
 }

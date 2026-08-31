@@ -200,3 +200,17 @@ Feature: Defining and running CAT experiments from the web interface
     And I should see "Attempt level"
     And I should see "Item level"
     And I should see "What the file will say about itself"
+
+  Scenario: The landing page says when no experiment course is configured
+    When I navigate to "Reports > CAT experiment suite" in site administration
+    Then I should see "No experiment course is configured"
+    And I should see "Choose an experiment course"
+
+  Scenario: A configured experiment course is shown and linked
+    Given the following "courses" exist:
+      | fullname        | shortname |
+      | CATLab Studies  | catlab    |
+    And the course "catlab" is the experiment course
+    When I navigate to "Reports > CAT experiment suite" in site administration
+    Then I should see "Experiment course:"
+    And I should see "CATLab Studies"

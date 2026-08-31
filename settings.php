@@ -160,6 +160,23 @@ if ($hassiteconfig) {
         ''
     ));
 
+    // Where the suite puts its activities. This is a deployment decision, not
+    // an experimental factor: moving a study to another Moodle must not change
+    // its scientific definition, so the target course lives here rather than in
+    // the portable experiment JSON.
+    $settings->add(new admin_setting_heading(
+        $component . '/containerheading',
+        get_string('setting:container', $component),
+        get_string('setting:container_desc', $component)
+    ));
+    $settings->add(new \local_catquizlab\admin\course_setting(
+        $component . '/experimentcourseid',
+        get_string('setting:experimentcourse', $component),
+        get_string('setting:experimentcourse_desc', $component),
+        0,
+        null
+    ));
+
     // Hub connection (node -> hub submission).
     $settings->add(new admin_setting_heading(
         $component . '/hubheading',

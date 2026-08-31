@@ -29,6 +29,7 @@
 
     Context variables required for this template:
     * intro string - introductory paragraph
+    * container object - has configured bool, coursename, courseurl, settingsurl
     * canedit bool - whether the viewer may create and change experiments
     * newurl string - the experiment editor
     * importurl string - the JSON import page
@@ -44,6 +45,7 @@
     Example context (json):
     {
         "intro": "Prepare, run and evaluate DPF-based adaptive tests.",
+        "container": { "configured": false, "settingsurl": "#" },
         "canedit": true,
         "newurl": "/local/catquizlab/experiment.php",
         "importurl": "/local/catquizlab/import.php",
@@ -104,6 +106,24 @@
             </div>
         </div>
     </div>
+
+    {{#container}}
+        {{#configured}}
+            <div class="mb-3">
+                <span class="text-muted">{{#str}}container:label, local_catquizlab{{/str}}</span>
+                <a href="{{courseurl}}">{{coursename}}</a>
+                <a href="{{settingsurl}}" class="ml-2">{{#str}}container:change, local_catquizlab{{/str}}</a>
+            </div>
+        {{/configured}}
+        {{^configured}}
+            <div class="alert alert-warning">
+                <p class="mb-2">{{#str}}container:nocourse, local_catquizlab{{/str}}</p>
+                <a href="{{settingsurl}}" class="btn btn-secondary">
+                    {{#str}}container:choose, local_catquizlab{{/str}}
+                </a>
+            </div>
+        {{/configured}}
+    {{/container}}
 
     {{#disabled}}
         <div class="alert alert-warning">{{#str}}manage:disabled, local_catquizlab{{/str}}</div>

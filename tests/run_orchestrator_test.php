@@ -40,7 +40,10 @@ final class run_orchestrator_test extends \advanced_testcase {
      */
     public function test_plan_stages(): void {
         $this->assertSame(
-            ['scales', 'materialise', 'test', 'people', 'attempts'],
+            // The container comes before the test: an adaptivequiz needs a
+            // course and a section to be created in, and the old order asked
+            // for the test while the run still had neither.
+            ['scales', 'materialise', 'container', 'people', 'test', 'attempts'],
             run_orchestrator::plan_stages()
         );
     }

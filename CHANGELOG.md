@@ -6,6 +6,61 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.2.5] — 2026-09-01
+
+Issue #8: one shared experiment course instead of a course per run.
+
+### Fixed
+- **A run could report success with no CAT activity at all.** The pipeline ran
+  `test` before `people`, but `test_provisioner::create()` needs the run's
+  course — which `people` created. So it returned null on every run, the null
+  passed as success, and the CLI printed `Run N: ok` for a course containing no
+  adaptive quiz. The pipeline is now scales → materialise → container → people
+  → test → attempts, and a test stage without an activity fails the run.
+- **A sweep of a hundred replications produced a hundred courses.** The suite
+  no longer creates courses. A person configures one experiment course; every
+  experiment gets one section in it, every run one adaptivequiz in that
+  section. Without a configured course nothing is provisioned and the reason
+  says so, rather than a course being invented.
+- **Activities landed in section 0.** They go into their experiment's section,
+  so a shared course stays readable after more than one sweep.
+- **Run cleanup could have deleted a shared course.** It now refuses to delete
+  the configured experiment course, or any course another run still points at.
+- **The course picker broke every admin page.** Building the option list in
+  settings.php ran during the admin-tree build, and formatting a course name
+  there set up the filter subsystem, which asked for the tree again —
+  surfacing as "Duplicate admin page name: adminnotifications" site-wide. The
+  choices load lazily now, which is what `load_choices()` is for.
+
+### Added
+- `experiment_container` resolves the shared course and the experiment section,
+  idempotently: provisioning the same experiment twice reuses its section.
+- The landing page shows the configured course, or says that none is set and
+  links to the setting.
+- Section names carry the experiment's creation time rather than the
+  provisioning time, so the same experiment always names its section the same
+  way. Activity names lead with the run id, which survives truncation in course
+  listings.
+- Eleven container tests, including the original bug as an assertion about
+  stage order.
+
+### Changed
+- `course_provisioner` no longer creates anything; it enrols a run's users into
+  the resolved course, idempotently, since many runs share it.
+- The former "creates a course per run" test is replaced by one asserting the
+  shared-course behaviour, as the issue requires.
+
+### Database
+`local_catquizlab_experiment` gains nullable `courseid` and `sectionid`.
+Existing runs keep their own course; the upgrade moves nothing. Savepoint
+2026083109.
+
+### Verification
+PHPUnit 353 tests / 2554 assertions, Behat 26 scenarios, phpcs and PHPDoc
+clean, fresh install without debugging output.
+
+---
+
 ## [0.2.4] — 2026-08-31
 
 CI fix.

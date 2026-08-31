@@ -81,4 +81,26 @@ class behat_local_catquizlab extends behat_base {
         $url = new \moodle_url('/local/catquizlab/runs.php', ['runid' => (int) reset($runs)->id]);
         $this->execute('behat_general::i_visit', [$url]);
     }
+
+    /**
+     * Configure a course as the experiment course by its short name.
+     *
+     * A scenario cannot know the course id in advance, and hard-coding one
+     * works only until another fixture is added before it.
+     *
+     * @Given /^the course "(?P<shortname_string>(?:[^"]|\\")*)" is the experiment course$/
+     * @param string $shortname The course short name.
+     * @return void
+     * @throws \coding_exception If no course with that short name exists.
+     */
+    public function the_course_is_the_experiment_course(string $shortname): void {
+        global $DB;
+
+        $courseid = $DB->get_field('course', 'id', ['shortname' => $shortname]);
+        if (!$courseid) {
+            throw new \coding_exception('No course with the short name "' . $shortname . '".');
+        }
+
+        set_config('experimentcourseid', (int) $courseid, 'local_catquizlab');
+    }
 }
