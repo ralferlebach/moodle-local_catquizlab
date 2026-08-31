@@ -6,6 +6,48 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.2.7] — 2026-09-01
+
+The three findings from issue #9 that invalidate results rather than annoy.
+
+### Fixed
+- **Every run executed the base definition, not its own cell.**
+  `run_orchestrator::definition_for()` read the experiment's `configjson` back
+  instead of the cell definition the sweep had persisted in the run manifest.
+  A sweep over four strategy/variant cells therefore ran the same condition
+  four times while the cell key and the manifest claimed otherwise — the
+  recorded intervention and the executed one were different things. The cell
+  definition is now authoritative; only a run predating manifested cells falls
+  back, and a configuration that contradicts its manifest fails the run
+  outright rather than producing results attributed to conditions that never
+  held.
+- **Ground truth leaked into the estimated diagnosis.**
+  `subscale_evaluator` classified both true and estimated subscale values
+  against the *true* global ability, so the diagnostic output being evaluated
+  was partly built from the answer it was being scored against. True and
+  estimated deviations now use their own reference — ground truth for the
+  truth, the engine's own global estimate for the estimate — and both are
+  persisted so the separation can be checked rather than trusted.
+- **Replication spread was pooled across experimental conditions.**
+  `trend_analysis::metric_series()` gathered every run of an experiment
+  regardless of cell, so the resulting standard deviation mixed replication
+  noise with the differences between conditions and grew precisely when the
+  experiment had worked. Aggregation is per cell now, the experiment report
+  names its aggregation level, and the old method is deprecated.
+
+### Added
+- `experiment_validity_test`: seven tests covering cell execution, manifest
+  drift, the legacy fallback and the two reference systems. Each was verified
+  by reintroducing the original defect — two tests fail per bug.
+- `report_builder_test` gains the case from the issue: two tight cells far
+  apart must not be reported as one wide spread.
+
+### Verification
+PHPUnit 362 tests / 2580 assertions, Behat 26 scenarios, phpcs and PHPDoc
+clean, every test class loading under PHPUnit 11.5.
+
+---
+
 ## [0.2.6] — 2026-09-01
 
 Every PHPUnit job on Moodle 5.0 and above died before running a test.

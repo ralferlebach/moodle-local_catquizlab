@@ -103,21 +103,57 @@ class subscale_evaluator {
             $est[] = $estmap[$key];
         }
 
-        $reference = (float) ($options['threshold'] ?? $truth['global']);
+        // Two reference systems, deliberately kept apart. The true labels are
+        // built from ground truth; the estimated labels must be built from the
+        // estimate alone. Classifying the estimate against the true global
+        // ability — as this did — hands ground truth to the diagnostic output
+        // being evaluated, so the measured detection quality is partly the
+        // simulation telling itself the answer.
+        $trueglobal = (float) $truth['global'];
+        $estglobal = isset($options['estglobal'])
+            ? (float) $options['estglobal']
+            : self::estimated_global($est);
+
+        $truedeltas = array_map(static fn(float $v): float => $v - $trueglobal, $true);
+        $estdeltas = array_map(static fn(float $v): float => $v - $estglobal, $est);
+
+        // A deficit is a deviation below the person's own global level, so the
+        // threshold applies to the deviation and is the same on both sides.
+        $threshold = -abs((float) ($options['threshold'] ?? 0.0));
         $k = (int) ($options['topk'] ?? 3);
-        $truelabels = diagnostics::deficit_labels($true, $reference);
-        $estlabels = diagnostics::deficit_labels($est, $reference);
+        $truelabels = diagnostics::deficit_labels($truedeltas, $threshold);
+        $estlabels = diagnostics::deficit_labels($estdeltas, $threshold);
         $confusion = diagnostics::confusion($truelabels, $estlabels);
-        $pr = diagnostics::precision_recall_at_k($truelabels, $est, $k);
+        $pr = diagnostics::precision_recall_at_k($truelabels, $estdeltas, $k);
 
         return [
-            'spearman'  => diagnostics::spearman($true, $est),
-            'topk'      => diagnostics::topk_agreement($true, $est, $k)['fraction'],
-            'ndcg'      => diagnostics::ndcg_at_k($true, $est, $k),
-            'confusion' => [$confusion['tp'], $confusion['fp'], $confusion['fn'], $confusion['tn']],
-            'precision' => $pr['precision'],
-            'recall'    => $pr['recall'],
+            'spearman'   => diagnostics::spearman($truedeltas, $estdeltas),
+            'topk'       => diagnostics::topk_agreement($truedeltas, $estdeltas, $k)['fraction'],
+            'ndcg'       => diagnostics::ndcg_at_k($truedeltas, $estdeltas, $k),
+            'confusion'  => [$confusion['tp'], $confusion['fp'], $confusion['fn'], $confusion['tn']],
+            'precision'  => $pr['precision'],
+            'recall'     => $pr['recall'],
+            // Persisted so the two reference systems can be checked after the
+            // fact rather than taken on trust.
+            'truedeltas' => array_map(static fn(float $v): float => round($v, 6), $truedeltas),
+            'estdeltas'  => array_map(static fn(float $v): float => round($v, 6), $estdeltas),
         ];
+    }
+
+    /**
+     * The estimated global ability a set of subscale estimates implies.
+     *
+     * Used when the caller does not supply the engine's own global estimate.
+     * The mean of the estimated subscale abilities is an estimate-only
+     * reference — the point is that no ground-truth value enters here.
+     *
+     * @param array $estimates The estimated subscale abilities.
+     * @return float
+     */
+    protected static function estimated_global(array $estimates): float {
+        $n = count($estimates);
+
+        return $n > 0 ? array_sum($estimates) / $n : 0.0;
     }
 
     /**
@@ -143,7 +179,17 @@ class subscale_evaluator {
             $trace = json_decode((string) $row->tracejson, true);
             $profile = json_decode((string) $row->profilejson, true);
             $scaleabilities = (is_array($trace) && isset($trace['scaleabilities'])) ? $trace['scaleabilities'] : [];
-            $result = self::evaluate_person((array) $profile, (array) $scaleabilities, $scalemapindex, $options);
+
+            // The engine's own global estimate is the right reference for the
+            // estimated deviations. Falling back to the mean of the subscale
+            // estimates keeps this working for traces that predate it, and
+            // still uses no ground truth.
+            $peroptions = $options;
+            if (is_array($trace) && isset($trace['finaltheta'])) {
+                $peroptions['estglobal'] = (float) $trace['finaltheta'];
+            }
+
+            $result = self::evaluate_person((array) $profile, (array) $scaleabilities, $scalemapindex, $peroptions);
             if ($result !== null) {
                 $people[] = $result;
             }

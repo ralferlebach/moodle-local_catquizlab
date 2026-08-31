@@ -82,23 +82,47 @@ class report_builder {
     }
 
     /**
-     * Per-metric value series across an experiment's runs, with stability.
+     * Per-metric report of an experiment, aggregated within cells.
+     *
+     * The dispersion is reported per cell, because a cell is the only unit
+     * whose spread is replication noise. The experiment-wide series is still
+     * returned for a quick overview, but it carries no dispersion: pooling
+     * conditions would produce a standard deviation that grows precisely when
+     * the experiment succeeded, which is worse than no figure at all.
      *
      * @param int $experimentid The experiment.
      * @param string[]|null $metrics Which metrics (defaults to EXPERIMENT_METRICS).
-     * @return array<string, array{series: float[], stability: array}>
+     * @return array<string, array{series: float[], cells: array, aggregationlevel: string}>
      */
     public static function experiment_report(int $experimentid, ?array $metrics = null): array {
         $metrics = $metrics ?? self::EXPERIMENT_METRICS;
 
         $report = [];
         foreach ($metrics as $metric) {
-            $series = trend_analysis::metric_series($experimentid, $metric, 'run');
+            $bycell = trend_analysis::metric_series_by_cell($experimentid, $metric, 'run');
+
+            $cells = [];
+            $series = [];
+            foreach ($bycell as $cellkey => $values) {
+                $cells[$cellkey] = [
+                    'n'         => count($values),
+                    'values'    => $values,
+                    'stability' => trend_analysis::stability($values),
+                ];
+                foreach ($values as $value) {
+                    $series[] = $value;
+                }
+            }
+
             $report[$metric] = [
-                'series'    => $series,
-                'stability' => trend_analysis::stability($series),
+                'series'           => $series,
+                'cells'            => $cells,
+                // Named explicitly, so a reader of the report never has to
+                // guess what an aggregate refers to.
+                'aggregationlevel' => 'cell',
             ];
         }
+
         return $report;
     }
 }

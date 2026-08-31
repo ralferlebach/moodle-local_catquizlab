@@ -45,6 +45,9 @@ class run_orchestrator {
     /** @var string The adaptivequiz activity could not be created. */
     public const REASON_NO_TEST = 'test-not-created';
 
+    /** @var string The effective configuration differs from the manifest. */
+    public const REASON_MANIFEST_DRIFT = 'manifest-configuration-drift';
+
     /** @var string Materialise the engine scale tree and context. */
     public const STAGE_SCALES = 'scales';
 
@@ -99,6 +102,18 @@ class run_orchestrator {
 
         $run = $DB->get_record('local_catquizlab_run', ['id' => $runid], '*', MUST_EXIST);
         $definition = self::definition_for($run);
+
+        $drift = self::manifest_drift($run, $definition);
+        if ($drift !== []) {
+            $DB->set_field('local_catquizlab_run', 'status', registry::STATUS_FAILED, ['id' => $runid]);
+
+            return [
+                'ok'          => false,
+                'reason'      => self::REASON_MANIFEST_DRIFT . ' (' . implode('; ', $drift) . ')',
+                'failedstage' => null,
+                'stages'      => [],
+            ];
+        }
         $seed = (int) $run->seed;
         $context = [
             'runid'      => $runid,
@@ -322,11 +337,78 @@ class run_orchestrator {
     protected static function definition_for(\stdClass $run): array {
         global $DB;
 
+        // The cell definition from the manifest, not the experiment's base
+        // definition. A sweep expands one base definition into cells that
+        // differ in strategy, model, pool variant, stratum, severity or
+        // budgets; reading the base definition back here would run every cell
+        // with the same configuration while the cell key and the manifest
+        // claimed otherwise. That is not a configuration mistake but an
+        // invalidated experiment: the recorded intervention and the executed
+        // one would differ.
+        $manifest = json_decode((string) ($run->manifestjson ?? ''), true);
+        $cell = $manifest['config']['definition'] ?? null;
+        if (is_array($cell) && $cell !== []) {
+            return (new experiment_definition($cell))->get_normalised();
+        }
+
+        // Only a run predating manifested cell definitions falls back, and it
+        // says so, because for such a run the base definition is all there is.
         $configjson = (string) $DB->get_field('local_catquizlab_experiment', 'configjson', ['id' => $run->experimentid]);
         if ($configjson === '') {
             $configjson = json_encode(experiment_definition::example_baseline());
         }
+
         return experiment_definition::from_json($configjson)->get_normalised();
+    }
+
+    /**
+     * Whether a run carries its own cell definition.
+     *
+     * @param \stdClass $run The run record.
+     * @return bool False for legacy runs provisioned before manifests held one.
+     */
+    public static function has_cell_definition(\stdClass $run): bool {
+        $manifest = json_decode((string) ($run->manifestjson ?? ''), true);
+        $cell = $manifest['config']['definition'] ?? null;
+
+        return is_array($cell) && $cell !== [];
+    }
+
+    /**
+     * Check that the run was set up with the configuration its manifest records.
+     *
+     * The manifest is what a later reader treats as the description of the
+     * intervention. If the effective configuration drifts from it, every result
+     * of the run is attributed to conditions it did not run under, so a
+     * mismatch is a hard failure rather than a warning.
+     *
+     * @param \stdClass $run The run record.
+     * @param array $definition The definition the setup actually used.
+     * @return string[] The fields that disagree; empty when they match.
+     */
+    public static function manifest_drift(\stdClass $run, array $definition): array {
+        $manifest = json_decode((string) ($run->manifestjson ?? ''), true);
+        $config = $manifest['config'] ?? null;
+        if (!is_array($config)) {
+            return [];
+        }
+
+        $checks = [
+            'strategy' => [$config['strategy']['key'] ?? null, $definition['strategy'] ?? null],
+            'model'    => [$config['model']['key'] ?? null, $definition['model'] ?? null],
+            'variant'  => [$config['pool']['variant'] ?? null, $definition['pool']['variant'] ?? null],
+            'stratum'  => [$config['persons']['stratum'] ?? null, $definition['persons']['stratum'] ?? null],
+            'severity' => [$config['persons']['severity'] ?? null, $definition['persons']['severity'] ?? null],
+        ];
+
+        $drift = [];
+        foreach ($checks as $field => [$recorded, $effective]) {
+            if ($recorded !== null && (string) $recorded !== (string) $effective) {
+                $drift[] = $field . ': manifest=' . $recorded . ', effective=' . $effective;
+            }
+        }
+
+        return $drift;
     }
 
     /**

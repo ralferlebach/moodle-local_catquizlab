@@ -83,8 +83,14 @@ final class report_builder_test extends \advanced_testcase {
         $generator = $this->getDataGenerator()->get_plugin_generator('local_catquizlab');
         $experiment = $generator->create_experiment();
 
+        // Three replications of one cell: this is the case where a spread is
+        // replication noise and therefore interpretable.
         foreach ([0.30, 0.34, 0.38] as $index => $rmse) {
-            $run = $generator->create_run(['experimentid' => $experiment->id, 'replication' => $index + 1]);
+            $run = $generator->create_run([
+                'experimentid' => $experiment->id,
+                'cellkey'      => 'strategy=fastest',
+                'replication'  => $index + 1,
+            ]);
             $DB->insert_record('local_catquizlab_result', (object) [
                 'runid' => $run->id, 'metric' => 'rmse', 'scope' => 'run',
                 'value' => $rmse, 'timecreated' => time(),
@@ -92,7 +98,63 @@ final class report_builder_test extends \advanced_testcase {
         }
 
         $report = report_builder::experiment_report($experiment->id, ['rmse']);
+
         $this->assertCount(3, $report['rmse']['series']);
-        $this->assertEqualsWithDelta(0.34, $report['rmse']['stability']['mean'], 1e-6);
+        $this->assertSame('cell', $report['rmse']['aggregationlevel']);
+        $this->assertArrayHasKey('strategy=fastest', $report['rmse']['cells']);
+        $this->assertEqualsWithDelta(
+            0.34,
+            $report['rmse']['cells']['strategy=fastest']['stability']['mean'],
+            1e-6
+        );
+    }
+
+    /**
+     * Two cells are reported separately, not pooled into one spread.
+     *
+     * @return void
+     */
+    public function test_cells_are_not_pooled_into_one_dispersion(): void {
+        global $DB;
+        $this->resetAfterTest();
+        $this->setAdminUser();
+
+        /** @var \local_catquizlab_generator $generator */
+        $generator = $this->getDataGenerator()->get_plugin_generator('local_catquizlab');
+        $experiment = $generator->create_experiment();
+
+        // Two conditions, far apart, each internally tight. Pooling them would
+        // report a large "replication" spread that is really the experimental
+        // effect — a figure that grows precisely when the experiment worked.
+        $cells = [
+            'strategy=fastest'   => [0.30, 0.31, 0.32],
+            'strategy=lowestsub' => [0.90, 0.91, 0.92],
+        ];
+        foreach ($cells as $cellkey => $values) {
+            foreach ($values as $index => $rmse) {
+                $run = $generator->create_run([
+                    'experimentid' => $experiment->id,
+                    'cellkey'      => $cellkey,
+                    'replication'  => $index + 1,
+                ]);
+                $DB->insert_record('local_catquizlab_result', (object) [
+                    'runid' => $run->id, 'metric' => 'rmse', 'scope' => 'run',
+                    'value' => $rmse, 'timecreated' => time(),
+                ]);
+            }
+        }
+
+        $report = report_builder::experiment_report($experiment->id, ['rmse']);
+        $reported = $report['rmse']['cells'];
+
+        $this->assertCount(2, $reported);
+        foreach ($reported as $cell) {
+            $this->assertSame(3, $cell['n']);
+            // Within a cell the spread is small, as the data say.
+            $this->assertLessThan(0.02, $cell['stability']['sd']);
+        }
+
+        $this->assertEqualsWithDelta(0.31, $reported['strategy=fastest']['stability']['mean'], 1e-6);
+        $this->assertEqualsWithDelta(0.91, $reported['strategy=lowestsub']['stability']['mean'], 1e-6);
     }
 }

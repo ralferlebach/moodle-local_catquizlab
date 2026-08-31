@@ -36,7 +36,76 @@ namespace local_catquizlab\local;
  */
 class trend_analysis {
     /**
+     * Gather a stored metric value across the replications of one cell.
+     *
+     * A cell — one full factor combination — is the only unit whose spread is
+     * replication noise. Pooling an experiment's runs regardless of cell mixes
+     * that noise with the systematic differences between conditions, and the
+     * resulting standard deviation answers no question anyone asked: it is
+     * large precisely when the experiment worked.
+     *
+     * @param int $experimentid The experiment.
+     * @param string $metric The metric key (e.g. rmse, bias).
+     * @param string $scope The result scope (default 'run').
+     * @param string|null $cellkey Restrict to one cell; null returns every cell separately.
+     * @return array<string, float[]> Cell key => values, ordered by replication.
+     */
+    public static function metric_series_by_cell(
+        int $experimentid,
+        string $metric,
+        string $scope = 'run',
+        ?string $cellkey = null
+    ): array {
+        global $DB;
+
+        $params = ['eid' => $experimentid, 'metric' => $metric, 'scope' => $scope];
+        $where = 'r.experimentid = :eid AND res.metric = :metric AND res.scope = :scope';
+        if ($cellkey !== null) {
+            $where .= ' AND r.cellkey = :cellkey';
+            $params['cellkey'] = $cellkey;
+        }
+
+        $sql = "SELECT res.id, res.value, r.cellkey
+                  FROM {local_catquizlab_run} r
+                  JOIN {local_catquizlab_result} res ON res.runid = r.id
+                 WHERE {$where}
+              ORDER BY r.cellkey ASC, r.replication ASC, r.id ASC";
+        $rows = $DB->get_records_sql($sql, $params);
+
+        $series = [];
+        foreach ($rows as $row) {
+            if ($row->value !== null) {
+                $series[(string) $row->cellkey][] = (float) $row->value;
+            }
+        }
+
+        return $series;
+    }
+
+    /**
+     * Within-cell dispersion of a metric, one entry per cell.
+     *
+     * @param int $experimentid The experiment.
+     * @param string $metric The metric key.
+     * @param string $scope The result scope.
+     * @return array<string, array> Cell key => the statistics from {@see self::stability()}.
+     */
+    public static function stability_by_cell(int $experimentid, string $metric, string $scope = 'run'): array {
+        $out = [];
+        foreach (self::metric_series_by_cell($experimentid, $metric, $scope) as $cellkey => $values) {
+            $out[$cellkey] = self::stability($values);
+        }
+
+        return $out;
+    }
+
+    /**
      * Gather a stored metric value across the runs of an experiment.
+     *
+     * @deprecated since 0.2.7. Pooling every run of an experiment mixes
+     * replication noise with the differences between experimental conditions,
+     * so the dispersion it produces is not interpretable. Use
+     * {@see self::metric_series_by_cell()} and aggregate within a cell first.
      *
      * @param int $experimentid The experiment.
      * @param string $metric The metric key (e.g. rmse, bias).
@@ -44,21 +113,13 @@ class trend_analysis {
      * @return float[] The values, ordered by replication then run id.
      */
     public static function metric_series(int $experimentid, string $metric, string $scope = 'run'): array {
-        global $DB;
-
-        $sql = "SELECT res.id, res.value
-                  FROM {local_catquizlab_run} r
-                  JOIN {local_catquizlab_result} res ON res.runid = r.id
-                 WHERE r.experimentid = :eid AND res.metric = :metric AND res.scope = :scope
-              ORDER BY r.replication ASC, r.id ASC";
-        $rows = $DB->get_records_sql($sql, ['eid' => $experimentid, 'metric' => $metric, 'scope' => $scope]);
-
         $values = [];
-        foreach ($rows as $row) {
-            if ($row->value !== null) {
-                $values[] = (float) $row->value;
+        foreach (self::metric_series_by_cell($experimentid, $metric, $scope) as $cellvalues) {
+            foreach ($cellvalues as $value) {
+                $values[] = $value;
             }
         }
+
         return $values;
     }
 
