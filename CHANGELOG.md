@@ -6,6 +6,32 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.2.6] — 2026-09-01
+
+Every PHPUnit job on Moodle 5.0 and above died before running a test.
+
+### Fixed
+- **A test helper named `result()`.** PHPUnit 10 and 11 declare
+  `TestCase::result()` final, so the helper was not a failing test but a fatal
+  error while the file was loaded — which takes the whole suite down. Moodle
+  4.5 still ships PHPUnit 9, where the method is not final, so it passed
+  locally and on the 4.5 matrix and killed 5.0 and 5.2. Renamed to
+  `materialisation()`, which also says what it returns.
+
+### Added
+- `testcase_names_test` checks every test file against the 86 method names
+  PHPUnit 10.5 and 11.5 declare final, taken from their sources rather than
+  from memory. It names the offending file and method, so the next collision is
+  a one-line failure instead of a fatal with no context.
+
+### Verification
+Verified against a real PHPUnit 11.5.56: every test class of the plugin loads
+under it, and reintroducing the original helper name reproduces the exact
+error from the CI log. PHPUnit 354 tests / 2555 assertions on 4.5, phpcs and
+PHPDoc clean.
+
+---
+
 ## [0.2.5] — 2026-09-01
 
 Issue #8: one shared experiment course instead of a course per run.

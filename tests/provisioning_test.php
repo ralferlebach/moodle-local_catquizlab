@@ -48,11 +48,15 @@ final class provisioning_test extends \advanced_testcase {
     /**
      * A materialisation result with the given counters.
      *
+     * Not called result(): PHPUnit 10 and 11 declare TestCase::result() final,
+     * so a helper of that name is a fatal error on Moodle 5.0 and above, before
+     * a single test runs.
+     *
      * @param int $planned The planned item count.
      * @param array $overrides Counter overrides.
      * @return array
      */
-    protected function result(int $planned, array $overrides = []): array {
+    protected function materialisation(int $planned, array $overrides = []): array {
         return $overrides + [
             'planned'              => $planned,
             'questionscreated'     => $planned,
@@ -71,7 +75,7 @@ final class provisioning_test extends \advanced_testcase {
     public function test_complete_materialisation_passes(): void {
         $this->resetAfterTest();
 
-        $this->assertTrue(run_orchestrator::materialisation_complete($this->result(2500)));
+        $this->assertTrue(run_orchestrator::materialisation_complete($this->materialisation(2500)));
     }
 
     /**
@@ -84,7 +88,7 @@ final class provisioning_test extends \advanced_testcase {
 
         // This is the reported bug in one line: 2500 questions, nothing the
         // engine can retrieve, and the run previously reported ok.
-        $result = $this->result(2500, [
+        $result = $this->materialisation(2500, [
             'itemsregistered'      => 0,
             'parametersregistered' => 0,
             'enginevisible'        => 0,
@@ -102,7 +106,7 @@ final class provisioning_test extends \advanced_testcase {
     public function test_empty_plan_fails(): void {
         $this->resetAfterTest();
 
-        $this->assertFalse(run_orchestrator::materialisation_complete($this->result(0)));
+        $this->assertFalse(run_orchestrator::materialisation_complete($this->materialisation(0)));
     }
 
     /**
@@ -113,7 +117,7 @@ final class provisioning_test extends \advanced_testcase {
     public function test_one_failed_item_fails_the_stage(): void {
         $this->resetAfterTest();
 
-        $result = $this->result(100, ['enginevisible' => 99, 'faileditems' => 1]);
+        $result = $this->materialisation(100, ['enginevisible' => 99, 'faileditems' => 1]);
 
         $this->assertFalse(run_orchestrator::materialisation_complete($result));
     }
@@ -127,7 +131,7 @@ final class provisioning_test extends \advanced_testcase {
         $this->resetAfterTest();
 
         foreach (['questionscreated', 'itemsregistered', 'parametersregistered', 'enginevisible'] as $counter) {
-            $result = $this->result(10, [$counter => 9]);
+            $result = $this->materialisation(10, [$counter => 9]);
             $this->assertFalse(
                 run_orchestrator::materialisation_complete($result),
                 'A short ' . $counter . ' should fail the stage.'
@@ -143,7 +147,7 @@ final class provisioning_test extends \advanced_testcase {
     public function test_missing_counter_fails(): void {
         $this->resetAfterTest();
 
-        $result = $this->result(10);
+        $result = $this->materialisation(10);
         unset($result['enginevisible']);
 
         $this->assertFalse(run_orchestrator::materialisation_complete($result));
