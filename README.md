@@ -46,17 +46,23 @@ tested is described in [`docs/dev/testen.md`](docs/dev/testen.md).
 
 ## Status
 
-**0.1.1 — stub** (`MATURITY_ALPHA`). Round **E0 (plugin foundation) is
-complete**: plugin structure, settings page (master switch, node/hub
-instance role, engine environment status), the four base plus worker/hub
-capabilities, the **full lab-store schema** (eight tables) with an upgrade
-path, the **five web services** (response oracle, job queue claim/complete,
-hub submit/fetch) grouped into two disabled restricted-user services, the
-**run-manifest builder**, a test data generator and PHPUnit/Behat coverage
-of exactly that scope, the Puppeteer worker stub under `worker/`, and the CI
-pipeline. **It still does nothing at runtime beyond installing cleanly and
-exposing the (disabled) services** — provisioning, orchestration, oracle
-logic, metrics and export follow per the backlog (E1–E7).
+**0.2.0** (`MATURITY_ALPHA`). The whole chain — definition, sweep expansion,
+provisioning, execution, evaluation and export — is implemented and covered by
+tests. Since 0.2.0 the **experiment definition is the sole source for what a
+run does**: strategy, item budgets, SE bounds, IRT model with its item
+parameters, and the pool variant with its recipe all come from the stored
+definition and are recorded in the run manifest. Nothing falls back on silent
+defaults.
+
+A **web interface** covers the workflow end to end: define an experiment,
+validate it, preview the sweep, expand it into runs, watch and filter them,
+compare cells, and exchange settings as JSON. The command line
+(`cli/sweep.php`) and the web interface use the same service layer, so an
+identical definition expands to identical cells either way.
+
+What remains instance-dependent is the first real run against an installed
+engine: the four engine-facing points (materialisation, test creation, attempt,
+trace collection) are so far exercised only with the engine absent.
 
 ## Requirements
 
@@ -104,6 +110,19 @@ Both open the same page (`local/catquizlab/index.php`). Plugin *settings*
 (master switch, instance role, environment status) stay under *Local plugins*
 as above.
 
+From there the workflow continues through four further pages:
+
+    index.php        experiment and run overview, "New experiment", JSON import
+    experiment.php   the editor: validation, sweep preview, sweep creation, export
+    import.php       JSON import with a preview before anything is stored
+    runs.php         run overview with filters; run detail with the manifest
+    compare.php      cells side by side, with a chart and a CSV export
+
+Four capabilities separate what a user may do: `:view` reads, `:edit` creates
+and changes definitions, `:execute` starts and cancels runs, `:export` takes
+data off the instance. Every state-changing action is a POST guarded by
+`sesskey` and the capability belonging to that specific action.
+
 ## Repository layout
 
     version.php                     component, version, dependencies
@@ -118,6 +137,15 @@ as above.
     classes/local/person_generator.php  seed-deterministic ground-truth profiles (E2.3)
     classes/local/pool_planner.php  ideal-pool item blueprint (E2.1)
     classes/local/pool_mutator.php  deterministic pool variants (E2.2)
+    classes/local/strategy_catalog.php   strategy key -> engine constant -> label
+    classes/local/model_catalog.php      model name -> engine catmodel key + parameters
+    classes/local/distribution.php       declarative item-parameter distributions
+    classes/local/seed_domains.php       one seed per random source (digital twins)
+    classes/local/experiment_service.php the layer CLI, web and API share
+    classes/local/experiment_io.php      JSON export/import with schema versioning
+    classes/local/run_registry.php       run listing, filtering and cell comparison
+    classes/form/experiment_form.php     the experiment editor form
+    classes/form/import_form.php         the JSON upload form
     classes/local/user_provisioner.php  create Moodle users from profiles (E2.3)
     classes/local/course_provisioner.php  course + enrolment per run (E2.4)
     classes/local/run_cleanup.php        reset/remove a run's residue (E2.5)

@@ -61,7 +61,10 @@ const LOGIN_SUFFIX = args['login-suffix'] || '';
 const LOGIN_MODE = args['login-mode'] || 'password';
 const LOGIN_URL_TEMPLATE = args['login-url-template'] || '';
 
-if (require.main === module && (!BASE_URL || !TOKEN)) {
+const SELF_TEST = args['self-test'] === true;
+
+// The self test never talks to Moodle, so it must not demand credentials.
+if (require.main === module && !SELF_TEST && (!BASE_URL || !TOKEN)) {
     console.error('Missing required --base-url and/or --token.');
     process.exit(2);
 }
@@ -453,6 +456,70 @@ function chooseOptionIndex(decision, count) {
 }
 
 /**
+ * Offline self test: proves the toolchain works without touching Moodle.
+ *
+ * A smoke test that pointed the real worker at an unreachable host was not a
+ * smoke test — it exercised the polling loop, hit DNS, and failed by design,
+ * which told nobody anything about the toolchain. This checks what a toolchain
+ * job can actually check: that the arguments parse, that the URL builder
+ * produces a well-formed endpoint, and that Puppeteer loads and can start and
+ * stop a browser. It claims no job and calls no web service.
+ *
+ * @returns {Promise<void>} Resolves when every check passed; rejects on the first failure.
+ */
+async function selfTest() {
+    const failures = [];
+    const check = (label, condition) => {
+        if (condition) {
+            console.log(`ok   ${label}`);
+        } else {
+            failures.push(label);
+            console.error(`FAIL ${label}`);
+        }
+    };
+
+    check('node >= 20', parseInt(process.versions.node.split('.')[0], 10) >= 20);
+    check('fetch is available', typeof fetch === 'function');
+
+    const parsed = parseArgs(['--base-url=http://example.test/moodle/', '--token=t', '--headless']);
+    check('argument parsing', parsed['base-url'] === 'http://example.test/moodle/' && parsed.headless === true);
+    check('base url normalisation', normaliseBaseUrl('http://x/moodle///') === 'http://x/moodle');
+
+    const url = buildWsUrl('http://x/', 'tok', 'local_catquizlab_job_claim', {workerid: 'w1'});
+    check('web service url', url.startsWith('http://x/webservice/rest/server.php?')
+        && url.includes('wsfunction=local_catquizlab_job_claim'));
+
+    check('dichotomous choice', chooseOptionIndex({fraction: 1.0, choice: -1}, 4) === 0);
+    check('polytomous choice', chooseOptionIndex({fraction: 0.5, choice: 2}, 4) === 2);
+
+    // The browser is what the old smoke test was really meant to prove: that
+    // Puppeteer resolved and its Chromium download works on this runner.
+    let puppeteer;
+    try {
+        puppeteer = require('puppeteer');
+        check('puppeteer loads', typeof puppeteer.launch === 'function');
+    } catch (error) {
+        check(`puppeteer loads (${error.message})`, false);
+    }
+
+    if (puppeteer && !args['no-browser']) {
+        try {
+            const browser = await puppeteer.launch({headless: 'new', args: ['--no-sandbox']});
+            const version = await browser.version();
+            await browser.close();
+            check(`browser starts (${version})`, true);
+        } catch (error) {
+            check(`browser starts (${error.message})`, false);
+        }
+    }
+
+    if (failures.length > 0) {
+        throw new Error(`Self test failed: ${failures.join(', ')}`);
+    }
+    console.log('Worker self test passed; no Moodle instance was contacted.');
+}
+
+/**
  * Main polling loop: claim and play attempts until the queue is empty or the
  * job budget is exhausted.
  *
@@ -481,13 +548,15 @@ async function main() {
 }
 
 if (require.main === module) {
-    main().catch((error) => {
+    const entry = SELF_TEST ? selfTest : main;
+    entry().catch((error) => {
         console.error(error);
         process.exit(1);
     });
 }
 
 module.exports = {
+    selfTest,
     parseArgs,
     normaliseBaseUrl,
     buildWsUrl,

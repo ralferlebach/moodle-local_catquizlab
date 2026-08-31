@@ -37,7 +37,6 @@ use local_catquizlab\local\registry;
         'runid'              => 0,
         'experimentid'       => 0,
         'questioncategoryid' => 0,
-        'polytomous'         => false,
     ],
     ['h' => 'help']
 );
@@ -49,13 +48,11 @@ if ($options['help']) {
     cli_writeln("  --experimentid=N        Set up all runs of one experiment.");
     cli_writeln("  (neither)               Set up every run of every experiment, in tier order.");
     cli_writeln("  --questioncategoryid=N  Target question category for materialised items.");
-    cli_writeln("  --polytomous            Materialise polytomous items.");
     exit(0);
 }
 
 $setupoptions = [
     'questioncategoryid' => (int) $options['questioncategoryid'],
-    'polytomous'         => (bool) $options['polytomous'],
 ];
 
 $runids = local_catquizlab_orchestrate_target_runs((int) $options['runid'], (int) $options['experimentid']);

@@ -70,7 +70,7 @@ class run_orchestrator {
      * Set up a run end to end.
      *
      * @param int $runid The run to set up.
-     * @param array $options 'questioncategoryid' for materialisation, 'polytomous', 'template'.
+     * @param array $options 'questioncategoryid' for materialisation, 'template'. Polytomy follows the model.
      * @return array{ok: bool, reason?: string, stages: array<string, mixed>}
      */
     public static function setup(int $runid, array $options = []): array {
@@ -88,12 +88,22 @@ class run_orchestrator {
             'run'        => $run,
             'definition' => $definition,
             'seed'       => $seed,
+            'seeds'      => self::seeds_for($run, $definition),
             'options'    => $options,
         ];
 
         $stages = [];
         foreach (self::plan_stages() as $stage) {
             $stages[$stage] = self::run_stage($stage, $context);
+        }
+
+        // A materialisation that could not realise its pool variant is not a
+        // scheduled run: the cell would otherwise be counted as a robustness
+        // condition while nothing about the pool actually changed.
+        $failure = self::first_failure($stages);
+        if ($failure !== null) {
+            $DB->set_field('local_catquizlab_run', 'status', registry::STATUS_FAILED, ['id' => $runid]);
+            return ['ok' => false, 'reason' => $failure, 'stages' => $stages];
         }
 
         $DB->set_field('local_catquizlab_run', 'status', registry::STATUS_SCHEDULED, ['id' => $runid]);
@@ -104,6 +114,56 @@ class run_orchestrator {
         ])->trigger();
 
         return ['ok' => true, 'stages' => $stages];
+    }
+
+    /**
+     * The derived seeds of a run, one per random source.
+     *
+     * @param \stdClass $run The run record.
+     * @param array $definition The normalised definition.
+     * @return array{master: int, person: int, deviation: int, pool: int, mutation: int, manifest: array}
+     */
+    protected static function seeds_for(\stdClass $run, array $definition): array {
+        $master = (int) ($run->masterseed ?? 0);
+        if ($master === 0) {
+            $master = (int) ($definition['seed'] ?? $run->seed);
+        }
+        $replication = (int) ($run->replication ?? 1);
+        $stratum = (string) ($definition['persons']['stratum'] ?? 'conforming');
+        $severity = (string) ($definition['persons']['severity'] ?? 'none');
+        $variant = (string) ($definition['pool']['variant'] ?? 'ideal');
+        $poolcondition = (string) ($definition['model'] ?? '2pl');
+
+        return [
+            'master'    => $master,
+            'person'    => seed_domains::person_base($master, $replication),
+            'deviation' => seed_domains::person_deviation($master, $replication, $stratum, $severity),
+            'pool'      => seed_domains::pool($master, $replication, $poolcondition),
+            'mutation'  => seed_domains::mutation($master, $replication, $variant, $poolcondition),
+            'manifest'  => seed_domains::manifest_block(
+                $master,
+                $replication,
+                $stratum,
+                $severity,
+                $variant,
+                $poolcondition
+            ),
+        ];
+    }
+
+    /**
+     * The first stage that reported a failure, if any.
+     *
+     * @param array $stages The stage results.
+     * @return string|null A reason of the form "stage:name", or null when all stages are fine.
+     */
+    protected static function first_failure(array $stages): ?string {
+        foreach ($stages as $name => $result) {
+            if (is_array($result) && !empty($result['failed'])) {
+                return 'stage:' . $name;
+            }
+        }
+        return null;
     }
 
     /**
@@ -170,10 +230,16 @@ class run_orchestrator {
      */
     protected static function stage_materialise(array $context): ?array {
         $options = $context['options'];
+        $seeds = $context['seeds'];
+
+        // Polytomy follows from the model rather than from a separate switch:
+        // a run whose definition says GPCM is polytomous, and one that says 2PL
+        // cannot be made polytomous by an option passed at setup time.
         return materialiser::materialise((int) $context['runid'], $context['definition'], [
             'questioncategoryid' => (int) ($options['questioncategoryid'] ?? 0),
             'seed'               => (int) $context['seed'],
-            'polytomous'         => !empty($options['polytomous']),
+            'poolseed'           => $seeds['pool'],
+            'mutationseed'       => $seeds['mutation'],
             'template'           => $options['template'] ?? null,
         ]);
     }
@@ -190,9 +256,14 @@ class run_orchestrator {
         if ($root === null) {
             return null;
         }
-        return test_provisioner::create($runid, $root, self::subscale_ids($runid), [
+        // The definition is the only source for strategy, budgets and SE
+        // bounds. Passing just the name here is what let two experimentally
+        // different cells run with identical CAT settings.
+        $options = test_provisioner::options_from_definition($context['definition'], [
             'name' => (string) ($context['run']->cellkey ?? ('CATLab test ' . $runid)),
         ]);
+
+        return test_provisioner::create($runid, $root, self::subscale_ids($runid), $options);
     }
 
     /**
@@ -203,7 +274,15 @@ class run_orchestrator {
      */
     protected static function stage_people(array $context): array {
         $runid = (int) $context['runid'];
-        $persons = person_generator::generate_and_persist($runid, $context['definition'], (int) $context['seed']);
+        $persons = person_generator::generate_and_persist(
+            $runid,
+            $context['definition'],
+            (int) $context['seeds']['person'],
+            [
+                'deviationseed' => (int) $context['seeds']['deviation'],
+                'replication'   => (int) ($context['run']->replication ?? 1),
+            ]
+        );
         $users = user_provisioner::provision($runid);
         $course = course_provisioner::provision($runid);
         return ['persons' => $persons, 'users' => $users, 'course' => $course];

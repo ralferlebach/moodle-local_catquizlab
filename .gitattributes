@@ -13,6 +13,7 @@
 /makefile           export-ignore
 /phpcs.xml          export-ignore
 /.phpcsignore       export-ignore
+/tools              export-ignore
 
 # --- Never distribute: internal documentation -----------------------------
 # Working notes, session logs and planning material are not product

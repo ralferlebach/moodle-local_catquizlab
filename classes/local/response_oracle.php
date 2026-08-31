@@ -240,8 +240,19 @@ class response_oracle {
         $steps = array_values(array_map('floatval', $item['steps'] ?? []));
         $discrimination = (float) ($item['discrimination'] ?? 1.0);
 
-        if (!empty($item['polytomous']) && count($steps) >= 1) {
-            $model = stripos((string) ($item['model'] ?? ''), 'grm') !== false ? 'grm' : 'gpcm';
+        // The model decides the response family, via the same catalogue the
+        // materialiser used. Sniffing the engine key for the substring "grm"
+        // worked by accident and would have read pcmgeneralized as GPCM only
+        // because it happens not to contain those three letters.
+        $modelname = (string) ($item['model'] ?? '');
+        $family = $modelname !== '' && model_catalog::has($modelname)
+            ? model_catalog::oracle_family($modelname)
+            : '';
+        $polytomous = !empty($item['polytomous'])
+            || ($modelname !== '' && model_catalog::has($modelname) && model_catalog::is_polytomous($modelname));
+
+        if ($polytomous && count($steps) >= 1) {
+            $model = $family === 'grm' ? 'grm' : 'gpcm';
             $category = self::respond_polytomous($ability, $model, $discrimination, $steps, $seed);
             $maxcategory = count($steps);
             $fraction = $maxcategory > 0 ? $category / $maxcategory : 0.0;

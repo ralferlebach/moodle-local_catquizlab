@@ -49,11 +49,19 @@ class item_registrar {
         $steps = array_values(array_map('floatval', $params['steps'] ?? []));
         $json = $steps !== [] ? json_encode(['steps' => $steps], JSON_UNESCAPED_SLASHES) : '';
 
+        // The model comes from the experiment, resolved through the catalogue.
+        // The old fallback to raschbirnbaum meant a 3PL run silently produced
+        // 2PL item parameters whenever the caller forgot to pass the model.
+        $model = (string) ($params['model'] ?? '');
+        $model = $model !== '' && model_catalog::has($model)
+            ? model_catalog::engine_key($model)
+            : ($model !== '' ? $model : model_catalog::engine_key('2pl'));
+
         return [
             'componentid'    => $questionid,
             'componentname'  => 'question',
             'contextid'      => $contextid,
-            'model'          => (string) ($params['model'] ?? 'raschbirnbaum'),
+            'model'          => $model,
             'difficulty'     => round((float) ($params['difficulty'] ?? 0.0), 5),
             'discrimination' => round((float) ($params['discrimination'] ?? 1.0), 5),
             'guessing'       => round((float) ($params['guessing'] ?? 0.0), 5),

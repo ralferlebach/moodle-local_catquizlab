@@ -41,31 +41,63 @@ class materialiser {
      *
      * @param array $blueprint The pool blueprint (from {@see pool_planner::plan()}).
      * @param array $scalemap The run's scale map rows (from {@see scale_provisioner}).
+     * @param array $options 'model': the public model key driving the item parameters.
      * @return array[] Item specs ready for the template and the registrar.
      */
-    public static function plan_items(array $blueprint, array $scalemap): array {
+    public static function plan_items(array $blueprint, array $scalemap, array $options = []): array {
         $index = self::index_scalemap($scalemap);
+        $model = model_catalog::normalise((string) ($options['model'] ?? '2pl')) ?? '2pl';
+        $enginemodel = model_catalog::engine_key($model);
+        $polytomous = model_catalog::is_polytomous($model);
 
         $specs = [];
         foreach ($blueprint['categories'] ?? [] as $category) {
             foreach ($category['subscales'] ?? [] as $subscale) {
-                $key = $category['index'] . ':' . $subscale['index'];
-                if (!isset($index[$key])) {
-                    continue;
-                }
-                $mapping = $index[$key];
                 foreach ($subscale['items'] ?? [] as $item) {
-                    $specs[] = [
-                        'catscaleid'     => $mapping['catscaleid'],
-                        'contextid'      => $mapping['contextid'],
-                        'scalename'      => $mapping['name'],
-                        'scalenumber'    => $subscale['index'],
-                        'itemname'       => $item['name'],
-                        'itemnumber'     => $item['index'],
-                        'difficulty'     => $item['difficulty'],
-                        'discrimination' => 1.0,
-                        'guessing'       => 0.0,
+                    // Two placements, deliberately kept apart. The assigned one
+                    // is what the engine is told and is what a tagging error
+                    // corrupts; the true one stays with the item so the oracle
+                    // can still answer against the ability that really governs
+                    // it. Collapsing them would neutralise the tagging-error
+                    // condition, because a mistagged item would simply become
+                    // an item of the other subscale.
+                    $truekey = ($item['truecategory'] ?? $category['index'])
+                        . ':' . ($item['truesubscale'] ?? $subscale['index']);
+                    $assignedkey = ($item['assignedcategory'] ?? $category['index'])
+                        . ':' . ($item['assignedsubscale'] ?? $subscale['index']);
+                    if (!isset($index[$assignedkey])) {
+                        continue;
+                    }
+                    $mapping = $index[$assignedkey];
+                    $truemapping = $index[$truekey] ?? $mapping;
+
+                    $spec = [
+                        'catscaleid'         => $mapping['catscaleid'],
+                        'contextid'          => $mapping['contextid'],
+                        'scalename'          => $mapping['name'],
+                        'scalenumber'        => $item['assignedsubscale'] ?? $subscale['index'],
+                        'truecatscaleid'     => $truemapping['catscaleid'],
+                        'truecategory'       => $item['truecategory'] ?? $category['index'],
+                        'truesubscale'       => $item['truesubscale'] ?? $subscale['index'],
+                        'mistagged'          => !empty($item['mistagged']),
+                        'itemname'           => $item['name'],
+                        'itemnumber'         => $item['index'],
+                        'model'              => $enginemodel,
+                        'publicmodel'        => $model,
+                        // The difficulty is the ground truth; storeddifficulty is
+                        // what reaches local_catquiz_itemparams. They differ
+                        // exactly when a calibration error was injected.
+                        'difficulty'         => $item['storeddifficulty'] ?? $item['difficulty'],
+                        'truedifficulty'     => $item['difficulty'],
+                        'miscalibrated'      => !empty($item['miscalibrated']),
+                        'discrimination'     => (float) ($item['discrimination'] ?? 1.0),
+                        'guessing'           => (float) ($item['guessing'] ?? 0.0),
                     ];
+                    if ($polytomous) {
+                        $spec['steps'] = $item['steps'] ?? self::polytomous_steps((float) $spec['difficulty']);
+                        $spec['categories'] = (int) ($item['categories'] ?? (count($spec['steps']) + 1));
+                    }
+                    $specs[] = $spec;
                 }
             }
         }
@@ -77,10 +109,12 @@ class materialiser {
      *
      * @param int $runid The run.
      * @param array $definition The experiment definition (drives the blueprint).
-     * @param array $options 'questioncategoryid' (required), 'seed', 'template', 'polytomous'.
+     * @param array $options 'questioncategoryid' (required), 'seed', 'poolseed', 'mutationseed', 'template'.
      * @return array|null planned and created counts, or null when unavailable.
      */
     public static function materialise(int $runid, array $definition, array $options = []): ?array {
+        global $DB;
+
         if (!environment::engine_available()) {
             return null;
         }
@@ -91,26 +125,151 @@ class materialiser {
             return null;
         }
 
-        $blueprint = pool_planner::plan($definition, (int) ($options['seed'] ?? 42));
-        $specs = self::plan_items($blueprint, $scalemap);
+        $model = model_catalog::normalise((string) ($definition['model'] ?? '2pl')) ?? '2pl';
+        $polytomous = model_catalog::is_polytomous($model);
+        $variant = (string) ($definition['pool']['variant'] ?? 'ideal');
+        $recipe = (array) ($definition['pool']['recipe'] ?? []);
+        $poolseed = (int) ($options['poolseed'] ?? $options['seed'] ?? 42);
+        $mutationseed = (int) ($options['mutationseed'] ?? $poolseed);
+
+        // Plan the ideal pool, then mutate it. Before this, mutate() was never
+        // called at runtime, so a robustness cell ran on the ideal pool and
+        // still reported success — the condition existed only in the cell key.
+        $blueprint = pool_planner::plan($definition, $poolseed);
+        $blueprint = pool_mutator::mutate($blueprint, $variant, $recipe, $mutationseed);
+
+        $poolid = self::record_pool($runid, $variant, $recipe, $poolseed, $mutationseed);
+        $specs = self::plan_items($blueprint, $scalemap, ['model' => $model]);
+        if ($specs === [] && $variant !== 'ideal') {
+            // No pool row is written for a mutation that produced nothing, so
+            // an empty realised pool cannot be mistaken for a finished one.
+            // A mutation that materialises nothing must not pass as a good run.
+            return ['planned' => 0, 'created' => 0, 'variant' => $variant, 'failed' => true];
+        }
         $template = $options['template'] ?? null;
-        $polytomous = !empty($options['polytomous']);
 
         $created = 0;
         foreach ($specs as $spec) {
-            if ($polytomous) {
-                $spec['steps'] = self::polytomous_steps((float) $spec['difficulty']);
-                $spec['model'] = 'grmgeneralized';
-            }
             $rendered = question_template::render($spec + ['polytomous' => $polytomous], $template);
             $questionid = self::create_question($categoryid, $rendered);
             if ($questionid > 0) {
                 item_registrar::register_item($questionid, $spec['catscaleid'], $spec['contextid'], $spec);
+                self::record_ground_truth($runid, $poolid, $questionid, $spec);
                 $created++;
             }
         }
 
-        return ['planned' => count($specs), 'created' => $created];
+        if ($poolid > 0) {
+            $DB->set_field('local_catquizlab_pool', 'itemcount', $created, ['id' => $poolid]);
+            $DB->set_field('local_catquizlab_pool', 'questioncategoryid', $categoryid, ['id' => $poolid]);
+        }
+
+        return [
+            'planned' => count($specs),
+            'created' => $created,
+            'variant' => $variant,
+            'poolid'  => $poolid,
+            'model'   => $model,
+            'failed'  => $created === 0 && $specs !== [],
+        ];
+    }
+
+
+    /**
+     * Record the realised pool of a run.
+     *
+     * The pool table used to be schema-only. Writing the variant, its recipe
+     * and both seeds here is what makes a robustness condition auditable after
+     * the fact: without it, "this cell ran on a gappy pool" is a claim about
+     * the cell key rather than about the items that were played.
+     *
+     * @param int $runid The run.
+     * @param string $variant The pool variant.
+     * @param array $recipe The variant recipe, defaults already applied.
+     * @param int $poolseed Seed of the ideal blueprint.
+     * @param int $mutationseed Seed of the mutation.
+     * @return int The pool row id.
+     */
+    protected static function record_pool(
+        int $runid,
+        string $variant,
+        array $recipe,
+        int $poolseed,
+        int $mutationseed
+    ): int {
+        global $DB;
+
+        $experimentid = (int) $DB->get_field('local_catquizlab_run', 'experimentid', ['id' => $runid]);
+        $now = time();
+
+        return (int) $DB->insert_record('local_catquizlab_pool', (object) [
+            'experimentid'       => $experimentid,
+            'runid'              => $runid,
+            'variant'            => $variant,
+            'recipejson'         => json_encode(
+                pool_mutator::apply_recipe_defaults($variant, $recipe),
+                JSON_UNESCAPED_SLASHES
+            ),
+            'poolseed'           => $poolseed,
+            'mutationseed'       => $mutationseed,
+            'itemcount'          => 0,
+            'scaleid'            => null,
+            'questioncategoryid' => null,
+            'timecreated'        => $now,
+            'timemodified'       => $now,
+        ]);
+    }
+
+    /**
+     * Record one item's ground truth alongside the engine's view of it.
+     *
+     * @param int $runid The run.
+     * @param int $poolid The realised pool.
+     * @param int $questionid The generated question.
+     * @param array $spec The item spec from {@see self::plan_items()}.
+     * @return void
+     */
+    protected static function record_ground_truth(int $runid, int $poolid, int $questionid, array $spec): void {
+        global $DB;
+
+        $DB->insert_record('local_catquizlab_item', (object) [
+            'runid'              => $runid,
+            'poolid'             => $poolid,
+            'questionid'         => $questionid,
+            'itemname'           => (string) $spec['itemname'],
+            'model'              => (string) $spec['model'],
+            'truedifficulty'     => (float) $spec['truedifficulty'],
+            'storeddifficulty'   => (float) $spec['difficulty'],
+            'discrimination'     => (float) $spec['discrimination'],
+            'guessing'           => (float) $spec['guessing'],
+            'stepsjson'          => isset($spec['steps']) ? json_encode($spec['steps']) : null,
+            'truecatscaleid'     => (int) $spec['truecatscaleid'],
+            'assignedcatscaleid' => (int) $spec['catscaleid'],
+            'truecategory'       => (int) $spec['truecategory'],
+            'truesubscale'       => (int) $spec['truesubscale'],
+            'miscalibrated'      => !empty($spec['miscalibrated']) ? 1 : 0,
+            'mistagged'          => !empty($spec['mistagged']) ? 1 : 0,
+            'timecreated'        => time(),
+        ]);
+    }
+
+    /**
+     * The recorded ground truth of a question, or null when it is not a lab item.
+     *
+     * @param int $questionid The question.
+     * @param int|null $runid Restrict to one run when known.
+     * @return \stdClass|null
+     */
+    public static function ground_truth_for_question(int $questionid, ?int $runid = null): ?\stdClass {
+        global $DB;
+
+        $conditions = ['questionid' => $questionid];
+        if ($runid !== null) {
+            $conditions['runid'] = $runid;
+        }
+        $record = $DB->get_records('local_catquizlab_item', $conditions, 'id DESC', '*', 0, 1);
+
+        return $record ? reset($record) : null;
     }
 
     /**

@@ -29,6 +29,7 @@
         <FIELD NAME="id" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="true"/>
         <FIELD NAME="experimentid" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="false" COMMENT="Parent experiment."/>
         <FIELD NAME="cellkey" TYPE="char" LENGTH="255" NOTNULL="true" SEQUENCE="false" COMMENT="Stable identifier of this sweep cell within the experiment (factor combination)."/>
+        <FIELD NAME="masterseed" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false" COMMENT="The experiment master seed every derived seed of this run comes from."/>
         <FIELD NAME="seed" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false" COMMENT="Master seed making the run reproducible."/>
         <FIELD NAME="replication" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="1" SEQUENCE="false" COMMENT="Replication index (1..R) of this cell."/>
         <FIELD NAME="status" TYPE="int" LENGTH="2" NOTNULL="true" DEFAULT="0" SEQUENCE="false" COMMENT="0=draft, 10=scheduled, 20=running, 30=finished, 40=failed."/>
@@ -54,6 +55,10 @@
       <FIELDS>
         <FIELD NAME="id" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="true"/>
         <FIELD NAME="experimentid" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="false" COMMENT="Owning experiment."/>
+        <FIELD NAME="runid" TYPE="int" LENGTH="10" NOTNULL="false" SEQUENCE="false" COMMENT="The run this realised pool belongs to. Null for a pool defined at experiment level."/>
+        <FIELD NAME="poolseed" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false" COMMENT="Seed of the ideal blueprint."/>
+        <FIELD NAME="mutationseed" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false" COMMENT="Seed of the mutation applied to the blueprint."/>
+        <FIELD NAME="itemcount" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false" COMMENT="Number of items actually materialised."/>
         <FIELD NAME="variant" TYPE="char" LENGTH="64" NOTNULL="true" DEFAULT="ideal" SEQUENCE="false" COMMENT="Variant type: ideal, shifted, stretched, gappy, calibrationerror, taggingerror, depleted, combined."/>
         <FIELD NAME="recipejson" TYPE="text" NOTNULL="false" SEQUENCE="false" COMMENT="Deterministic mutation recipe (JSON): parameters and seed used to derive this variant from the ideal pool."/>
         <FIELD NAME="scaleid" TYPE="int" LENGTH="10" NOTNULL="false" SEQUENCE="false" COMMENT="Root item scale (local_catquiz catscale) of this variant. Variants differ by their items and scales, not by CAT context. Null until provisioned (E2)."/>
@@ -67,6 +72,36 @@
       </KEYS>
       <INDEXES>
         <INDEX NAME="experimentid-variant" UNIQUE="false" FIELDS="experimentid, variant"/>
+      </INDEXES>
+    </TABLE>
+
+    <TABLE NAME="local_catquizlab_item" COMMENT="Ground truth of one materialised item: the true parameters and the true content placement, kept apart from what the CAT engine was told. Robustness conditions such as calibration and tagging errors are exactly the difference between the two.">
+      <FIELDS>
+        <FIELD NAME="id" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="true"/>
+        <FIELD NAME="runid" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="false" COMMENT="Owning run."/>
+        <FIELD NAME="poolid" TYPE="int" LENGTH="10" NOTNULL="false" SEQUENCE="false" COMMENT="The pool variant this item belongs to."/>
+        <FIELD NAME="questionid" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="false" COMMENT="The generated question."/>
+        <FIELD NAME="itemname" TYPE="char" LENGTH="255" NOTNULL="true" DEFAULT="" SEQUENCE="false" COMMENT="Item name from the naming engine."/>
+        <FIELD NAME="model" TYPE="char" LENGTH="64" NOTNULL="true" DEFAULT="raschbirnbaum" SEQUENCE="false" COMMENT="Engine catmodel key the item was registered with."/>
+        <FIELD NAME="truedifficulty" TYPE="number" LENGTH="10" DECIMALS="5" NOTNULL="true" DEFAULT="0" SEQUENCE="false" COMMENT="The true difficulty b the response oracle answers against."/>
+        <FIELD NAME="storeddifficulty" TYPE="number" LENGTH="10" DECIMALS="5" NOTNULL="true" DEFAULT="0" SEQUENCE="false" COMMENT="The difficulty handed to the engine; differs from the true one under a calibration error."/>
+        <FIELD NAME="discrimination" TYPE="number" LENGTH="10" DECIMALS="5" NOTNULL="true" DEFAULT="1" SEQUENCE="false" COMMENT="The true discrimination a."/>
+        <FIELD NAME="guessing" TYPE="number" LENGTH="10" DECIMALS="5" NOTNULL="true" DEFAULT="0" SEQUENCE="false" COMMENT="The true guessing parameter c."/>
+        <FIELD NAME="stepsjson" TYPE="text" NOTNULL="false" SEQUENCE="false" COMMENT="Ordered step thresholds of a polytomous item (JSON), null for dichotomous items."/>
+        <FIELD NAME="truecatscaleid" TYPE="int" LENGTH="10" NOTNULL="false" SEQUENCE="false" COMMENT="The engine scale the item truly belongs to."/>
+        <FIELD NAME="assignedcatscaleid" TYPE="int" LENGTH="10" NOTNULL="false" SEQUENCE="false" COMMENT="The engine scale the item was registered under; differs under a tagging error."/>
+        <FIELD NAME="truecategory" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false" COMMENT="True category index in the blueprint."/>
+        <FIELD NAME="truesubscale" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false" COMMENT="True subscale index in the blueprint."/>
+        <FIELD NAME="miscalibrated" TYPE="int" LENGTH="1" NOTNULL="true" DEFAULT="0" SEQUENCE="false" COMMENT="Whether a calibration error was injected for this item."/>
+        <FIELD NAME="mistagged" TYPE="int" LENGTH="1" NOTNULL="true" DEFAULT="0" SEQUENCE="false" COMMENT="Whether a tagging error was injected for this item."/>
+        <FIELD NAME="timecreated" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
+      </FIELDS>
+      <KEYS>
+        <KEY NAME="primary" TYPE="primary" FIELDS="id"/>
+        <KEY NAME="runid" TYPE="foreign" FIELDS="runid" REFTABLE="local_catquizlab_run" REFFIELDS="id"/>
+      </KEYS>
+      <INDEXES>
+        <INDEX NAME="runid-questionid" UNIQUE="false" FIELDS="runid, questionid"/>
       </INDEXES>
     </TABLE>
 

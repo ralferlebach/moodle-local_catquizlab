@@ -87,16 +87,25 @@
                                 <th scope="col">{{#str}}manage:col_name, local_catquizlab{{/str}}</th>
                                 <th scope="col">{{#str}}manage:col_tier, local_catquizlab{{/str}}</th>
                                 <th scope="col">{{#str}}manage:col_status, local_catquizlab{{/str}}</th>
+                                <th scope="col">{{#str}}manage:col_model, local_catquizlab{{/str}}</th>
+                                <th scope="col">{{#str}}manage:col_strategy, local_catquizlab{{/str}}</th>
                                 <th scope="col">{{#str}}manage:col_runs, local_catquizlab{{/str}}</th>
+                                <th scope="col">{{#str}}manage:col_actions, local_catquizlab{{/str}}</th>
                             </tr>
                         </thead>
                         <tbody>
                             {{#rows}}
                                 <tr>
-                                    <td>{{#reporturl}}<a href="{{reporturl}}">{{name}}</a>{{/reporturl}}{{^reporturl}}{{name}}{{/reporturl}}</td>
+                                    <td>{{#editurl}}<a href="{{editurl}}">{{name}}</a>{{/editurl}}{{^editurl}}{{name}}{{/editurl}}</td>
                                     <td>{{tier}}</td>
                                     <td>{{status}}</td>
+                                    <td>{{modellabel}}</td>
+                                    <td>{{strategylabel}} <span class="text-muted small">({{strategy}})</span></td>
                                     <td>{{runs}}</td>
+                                    <td>
+                                        <a href="{{reporturl}}">{{#str}}manage:results, local_catquizlab{{/str}}</a>
+                                        <a href="{{compareurl}}" class="ml-2">{{#str}}manage:compare, local_catquizlab{{/str}}</a>
+                                    </td>
                                 </tr>
                             {{/rows}}
                         </tbody>
@@ -104,6 +113,9 @@
                 {{/hasany}}
                 {{^hasany}}
                     <div class="alert alert-info">{{#str}}manage:noexperiments, local_catquizlab{{/str}}</div>
+                    {{#canedit}}
+                        <a href="{{newurl}}" class="btn btn-primary">{{#str}}manage:newexperiment, local_catquizlab{{/str}}</a>
+                    {{/canedit}}
                 {{/hasany}}
             </div>
         </details>
@@ -149,5 +161,11 @@
         </details>
     {{/runs}}
 
-    <div class="alert alert-secondary mt-3">{{#str}}manage:createhint, local_catquizlab{{/str}}</div>
+    {{#canedit}}
+        <div class="mt-3">
+            <a href="{{newurl}}" class="btn btn-primary">{{#str}}manage:newexperiment, local_catquizlab{{/str}}</a>
+            <a href="{{importurl}}" class="btn btn-secondary ml-2">{{#str}}manage:importexperiment, local_catquizlab{{/str}}</a>
+            <a href="{{runsurl}}" class="btn btn-secondary ml-2">{{#str}}manage:allruns, local_catquizlab{{/str}}</a>
+        </div>
+    {{/canedit}}
 </div>

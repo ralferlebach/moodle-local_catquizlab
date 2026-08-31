@@ -48,6 +48,39 @@ $capabilities = [
     // Granted to the dedicated web-service user whose token the Puppeteer
     // worker uses. It answers item requests from the oracle and claims/reports
     // attempt jobs — no configuration or data-loss risk of its own.
+    // Creating and editing experiment definitions. Separate from :manage so a
+    // researcher can design experiments without also holding the operational
+    // rights to start and cancel runs on a shared instance.
+    'local/catquizlab:edit' => [
+        'riskbitmask'  => RISK_SPAM,
+        'captype'      => 'write',
+        'contextlevel' => CONTEXT_SYSTEM,
+        'archetypes'   => [
+            'manager' => CAP_ALLOW,
+        ],
+    ],
+
+    // Starting, cancelling and re-running experiment runs. This is the
+    // capability that consumes real capacity on the instance.
+    'local/catquizlab:execute' => [
+        'riskbitmask'  => RISK_SPAM,
+        'captype'      => 'write',
+        'contextlevel' => CONTEXT_SYSTEM,
+        'archetypes'   => [
+            'manager' => CAP_ALLOW,
+        ],
+    ],
+
+    // Exporting result data and manifests.
+    'local/catquizlab:export' => [
+        'riskbitmask'  => RISK_PERSONAL,
+        'captype'      => 'read',
+        'contextlevel' => CONTEXT_SYSTEM,
+        'archetypes'   => [
+            'manager' => CAP_ALLOW,
+        ],
+    ],
+
     'local/catquizlab:worker' => [
         'captype'      => 'read',
         'contextlevel' => CONTEXT_SYSTEM,

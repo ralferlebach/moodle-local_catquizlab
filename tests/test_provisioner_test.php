@@ -24,8 +24,9 @@
 
 namespace local_catquizlab;
 
-use local_catquizlab\local\test_provisioner;
 use local_catquizlab\local\environment;
+use local_catquizlab\local\strategy_catalog;
+use local_catquizlab\local\test_provisioner;
 
 /**
  * Test provisioner tests.
@@ -69,7 +70,13 @@ final class test_provisioner_test extends \advanced_testcase {
         $settings = test_provisioner::build_quizsettings('Demo', 5, []);
         $this->assertSame(10, $settings['maxquestionsgroup']['catquiz_minquestions']);
         $this->assertSame(15, $settings['maxquestionsgroup']['catquiz_maxquestions']);
-        $this->assertSame('4', $settings['catquiz_selectteststrategy']);
+        // No silent default 4 any more: an unspecified strategy resolves
+        // through the catalogue rather than landing on weakest-subscale by
+        // accident (issue #1).
+        $this->assertSame(
+            (string) strategy_catalog::engine_id('fastest'),
+            $settings['catquiz_selectteststrategy']
+        );
     }
 
     /**

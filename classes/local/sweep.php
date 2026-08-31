@@ -49,7 +49,12 @@ class sweep {
     protected const FACTOR_PATHS = [
         'variant'  => ['pool', 'variant'],
         'stratum'  => ['persons', 'stratum'],
+        // Severity is a factor in its own right: the design compares the same
+        // stratum at mild, medium and strong, which only works if a sweep can
+        // vary it without varying anything else.
+        'severity' => ['persons', 'severity'],
         'strategy' => ['strategy'],
+        'model'    => ['model'],
     ];
 
     /**

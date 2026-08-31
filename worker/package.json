@@ -9,7 +9,8 @@
   "scripts": {
     "start": "node run_attempt.js",
     "check": "node --check run_attempt.js",
-    "test": "node --test"
+    "test": "node --test",
+    "selftest": "node run_attempt.js --self-test"
   },
   "dependencies": {
     "puppeteer": "^24.0.0"

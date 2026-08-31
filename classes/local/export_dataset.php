@@ -36,7 +36,15 @@ namespace local_catquizlab\local;
 class export_dataset {
     /** @var string[] Ground-truth long-format columns. */
     public const GROUNDTRUTH_COLUMNS = [
-        'runid', 'personid', 'person', 'level', 'categoryindex', 'subscaleindex', 'theta',
+        'runid', 'personid', 'person', 'twinid', 'stratum', 'severity',
+        'level', 'categoryindex', 'subscaleindex', 'theta',
+    ];
+
+    /** @var string[] Item ground-truth columns: the truth beside the engine's view. */
+    public const ITEM_COLUMNS = [
+        'runid', 'questionid', 'itemname', 'model', 'truedifficulty', 'storeddifficulty',
+        'discrimination', 'guessing', 'truecategory', 'truesubscale',
+        'truecatscaleid', 'assignedcatscaleid', 'miscalibrated', 'mistagged',
     ];
 
     /** @var string[] Metric long-format columns. */
@@ -98,6 +106,51 @@ class export_dataset {
         }
 
         return ['columns' => self::GROUNDTRUTH_COLUMNS, 'rows' => $rows];
+    }
+
+    /**
+     * Item ground truth across the given runs.
+     *
+     * Exports the true item parameters and the true content placement next to
+     * what the engine was given. A robustness analysis needs both columns: the
+     * difference between them is the condition, and without it a mistagged or
+     * miscalibrated item cannot be identified after the run.
+     *
+     * @param int[] $runids The runs.
+     * @return array{columns: string[], rows: array[]}
+     */
+    public static function items(array $runids): array {
+        global $DB;
+
+        $runids = array_values(array_filter(array_map('intval', $runids)));
+        if ($runids === []) {
+            return ['columns' => self::ITEM_COLUMNS, 'rows' => []];
+        }
+
+        [$insql, $params] = $DB->get_in_or_equal($runids, SQL_PARAMS_NAMED, 'run');
+        $records = $DB->get_records_select('local_catquizlab_item', 'runid ' . $insql, $params, 'runid, id');
+
+        $rows = [];
+        foreach ($records as $record) {
+            $rows[] = [
+                'runid'              => (int) $record->runid,
+                'questionid'         => (int) $record->questionid,
+                'itemname'           => (string) $record->itemname,
+                'model'              => (string) $record->model,
+                'truedifficulty'     => round((float) $record->truedifficulty, 5),
+                'storeddifficulty'   => round((float) $record->storeddifficulty, 5),
+                'discrimination'     => round((float) $record->discrimination, 5),
+                'guessing'           => round((float) $record->guessing, 5),
+                'truecategory'       => (int) $record->truecategory,
+                'truesubscale'       => (int) $record->truesubscale,
+                'truecatscaleid'     => (int) $record->truecatscaleid,
+                'assignedcatscaleid' => (int) $record->assignedcatscaleid,
+                'miscalibrated'      => (int) $record->miscalibrated,
+                'mistagged'          => (int) $record->mistagged,
+            ];
+        }
+
+        return ['columns' => self::ITEM_COLUMNS, 'rows' => $rows];
     }
 
     /**
@@ -188,6 +241,12 @@ class export_dataset {
             'runid'         => (int) $person->runid,
             'personid'      => (int) $person->id,
             'person'        => $label,
+            // The twin key is what makes a paired analysis possible after the
+            // fact: without it, matching the same person across cells means
+            // guessing from the ability value.
+            'twinid'        => (string) ($person->twinid ?? ''),
+            'stratum'       => (string) ($person->stratum ?? ''),
+            'severity'      => (string) ($person->severity ?? 'none'),
             'level'         => $level,
             'categoryindex' => $categoryindex ?? '',
             'subscaleindex' => $subscaleindex ?? '',

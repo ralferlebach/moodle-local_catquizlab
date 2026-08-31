@@ -30,6 +30,8 @@ use core_external\external_single_structure;
 use core_external\external_value;
 use local_catquizlab\local\environment;
 use local_catquizlab\local\item_repository;
+use local_catquizlab\local\materialiser;
+use local_catquizlab\local\seed_domains;
 use local_catquizlab\local\response_oracle;
 use local_catquizlab\local\scale_provisioner;
 use local_catquizlab\local\test_binder;
@@ -137,23 +139,53 @@ class oracle_answer extends external_api {
      * @return array{fraction: float, choice: int} The score fraction and chosen category.
      */
     protected static function compute(int $runid, int $questionid, array $resolved): array {
+        global $DB;
+
         $item = $resolved['item'];
         $person = $resolved['person'];
+        $truth = materialiser::ground_truth_for_question($questionid, $runid);
+
+        // Which ability governs this item is a question about the item's true
+        // content, not about the tag it was imported with. Reading the engine's
+        // catscaleid here — as this did before — would make a deliberately
+        // mistagged item genuinely belong to the wrong subscale, and the
+        // tagging-error condition would cancel itself out.
+        $categoryindex = null;
+        $subscaleindex = null;
+        if ($truth !== null && (int) $truth->truecategory > 0) {
+            $categoryindex = (int) $truth->truecategory;
+            $subscaleindex = (int) $truth->truesubscale;
+        } else {
+            $mapping = scale_provisioner::mapping_for($runid, (int) $item['catscaleid']);
+            $categoryindex = $mapping['categoryindex'] ?? null;
+            $subscaleindex = $mapping['subscaleindex'] ?? null;
+        }
 
         $profile = json_decode((string) $person->profilejson, true) ?: [];
-        $mapping = scale_provisioner::mapping_for($runid, (int) $item['catscaleid']);
-        $ability = response_oracle::ability_for(
-            $profile,
-            $mapping['categoryindex'] ?? null,
-            $mapping['subscaleindex'] ?? null
-        );
+        $ability = response_oracle::ability_for($profile, $categoryindex, $subscaleindex);
         $ability = response_oracle::deviant_ability(
             $ability,
             $profile['deviance'] ?? null,
-            $mapping['categoryindex'] ?? null,
-            $mapping['subscaleindex'] ?? null
+            $categoryindex,
+            $subscaleindex
         );
-        $seed = crc32("{$runid}:{$person->id}:{$questionid}") & 0x7fffffff;
+
+        // Likewise for the parameters: the oracle answers against the true
+        // a/b/c, while the engine works from the stored ones. Under a
+        // calibration error the two differ, and that difference is the
+        // condition being tested.
+        if ($truth !== null) {
+            $item['difficulty'] = (float) $truth->truedifficulty;
+            $item['discrimination'] = (float) $truth->discrimination;
+            $item['guessing'] = (float) $truth->guessing;
+            $item['model'] = (string) $truth->model;
+            if (!empty($truth->stepsjson)) {
+                $item['steps'] = json_decode((string) $truth->stepsjson, true) ?: [];
+            }
+        }
+
+        $masterseed = (int) ($DB->get_field('local_catquizlab_run', 'masterseed', ['id' => $runid]) ?: 0);
+        $seed = seed_domains::response($masterseed, $runid, (int) $person->id, $questionid);
 
         return response_oracle::respond_item($ability, $item, $seed);
     }

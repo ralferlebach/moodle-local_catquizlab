@@ -63,6 +63,62 @@ class manifest {
     }
 
     /**
+     * Build the manifest of a run from its normalised definition.
+     *
+     * A run's manifest has to answer "what exactly was executed here" without
+     * anyone re-deriving it from the code: the effective CAT configuration, the
+     * model and its engine key, the pool variant with its recipe, the person
+     * stratum and severity, and which factors each seed depends on.
+     *
+     * @param array $definition The normalised experiment definition.
+     * @param array $extra Run-level facts: runid, cellkey, replication, seeds.
+     * @return array The manifest.
+     */
+    public static function build_for_run(array $definition, array $extra = []): array {
+        $model = (string) ($definition['model'] ?? '2pl');
+        $strategy = (string) ($definition['strategy'] ?? 'fastest');
+        $variant = (string) ($definition['pool']['variant'] ?? 'ideal');
+        $persons = (array) ($definition['persons'] ?? []);
+
+        $config = $extra + [
+            'experiment' => [
+                'name'          => $definition['name'] ?? null,
+                'tier'          => $definition['tier'] ?? null,
+                'schemaversion' => $definition['schemaversion'] ?? experiment_definition::SCHEMAVERSION,
+                'publication'   => experiment_definition::is_publication($definition),
+            ],
+            'model'      => [
+                'key'         => $model,
+                'label'       => model_catalog::has($model) ? model_catalog::label($model) : $model,
+                'enginekey'   => model_catalog::has($model) ? model_catalog::engine_key($model) : null,
+                'polytomous'  => model_catalog::has($model) && model_catalog::is_polytomous($model),
+                'parameters'  => $definition['modelparams'] ?? [],
+            ],
+            'strategy'   => [
+                'key'      => $strategy,
+                'label'    => strategy_catalog::has($strategy) ? strategy_catalog::label($strategy) : $strategy,
+                'engineid' => strategy_catalog::has($strategy) ? strategy_catalog::engine_id($strategy) : null,
+            ],
+            'pool'       => [
+                'variant' => $variant,
+                'recipe'  => pool_mutator::apply_recipe_defaults($variant, (array) ($definition['pool']['recipe'] ?? [])),
+                'scales'  => $definition['pool']['scales'] ?? [],
+            ],
+            'persons'    => [
+                'stratum'       => $persons['stratum'] ?? null,
+                'severity'      => $persons['severity'] ?? 'none',
+                'count'         => $persons['count'] ?? null,
+                'twins'         => $persons['twins'] ?? [],
+                'severityscale' => $persons['severityscale'] ?? [],
+            ],
+            'cat'        => test_provisioner::effective_parameters($definition),
+            'definition' => $definition,
+        ];
+
+        return self::build($config);
+    }
+
+    /**
      * Build the manifest and encode it as a JSON string for storage.
      *
      * @param array $config Experiment/run configuration to record.

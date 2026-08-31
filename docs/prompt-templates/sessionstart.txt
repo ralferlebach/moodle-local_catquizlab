@@ -1,0 +1,18 @@
+# Session start — local_catquizlab
+
+You are continuing development of **local_catquizlab**, the system administration and operations layer of FlexAccess.
+
+Before changing code:
+1. Read `docs/Lastenheft.md`, `docs/Pflichtenheft.md`, and `docs/Technisches_Blueprint.md`.
+2. Read the latest `docs/sessions/session-*.md` if present.
+3. Inspect the actual public APIs of `local_catquizlab` and `local_catquizlab`; do not bypass them with direct writes.
+4. Keep this tool out of the runtime login path. No other FlexAccess plugin may depend on it.
+5. Use system-context capabilities and POST + sesskey for every mutation.
+6. Paginate/bound all account and queue lists; avoid N+1 queries.
+7. `accounttype` remains exactly `temporary user` or `authenticated user`.
+8. `make check` is a fast local pre-check; GitHub CI is the authoritative release gate.
+
+Current session objective:
+> [Choose one concrete admin/operations slice from the backlog.]
+
+Access-key diagnostics may show only required/effective scope (none|system|course). Never request, log, render or export cleartext/hash values.

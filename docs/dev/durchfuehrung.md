@@ -50,9 +50,12 @@ php local/catquizlab/cli/orchestrate.php --experimentid=7 --questioncategoryid=1
 # Alle Runs aller Experimente, in Tier-Reihenfolge (baseline → main → robustness → operative):
 php local/catquizlab/cli/orchestrate.php --questioncategoryid=123
 
-# Polytome Items statt dichotom:
-php local/catquizlab/cli/orchestrate.php --runid=42 --questioncategoryid=123 --polytomous
 ```
+
+Polytome Items werden **nicht** mehr über einen Schalter angefordert: sie folgen
+seit 0.2.0 aus dem Modell der Experimentdefinition (`"model": "gpcm"` oder ein
+anderes polytomes Modell). Ein Run ist damit allein aus `configjson + seed`
+rekonstruierbar, was mit einem separaten Setup-Parameter nicht der Fall war.
 
 Off-request geht dasselbe über den Adhoc-Task
 `\local_catquizlab\task\orchestrate_run::queue($runid, $options)`.
@@ -165,3 +168,63 @@ Abweichungen lokal nachziehen, ohne Testbarkeit/CI zu berühren):
 
 Bei Abweichungen genügen meist Anpassungen in `test_provisioner::build_moduleinfo`,
 `materialiser::create_question` bzw. `scale_provisioner`/`item_registrar`.
+
+
+## Worker-E2E vorbereiten
+
+Für einen vollständigen Worker-Durchlauf — echter Attempt durch die reale
+`mod_adaptivequiz`-Oberfläche — bereitet ein eigenes CLI alles vor, was der
+Worker braucht:
+
+```bash
+php local/catquizlab/cli/e2e_prepare.php --persons=1
+```
+
+Es legt ein kleines Experiment an, expandiert es zu einem Run, provisioniert
+diesen, stellt die Attempts in die Warteschlange, aktiviert den
+Worker-Webservice und gibt einen Token aus. Die Ausgabe ist zeilenweise
+`schlüssel=wert` und damit direkt als GitHub-Actions-Output verwendbar:
+
+```text
+experimentid=12
+runid=34
+attempts=1
+token=a1b2c3...
+```
+
+Anschließend spielt der Worker den Job:
+
+```bash
+cd local/catquizlab/worker
+npm install --no-audit --no-fund
+node run_attempt.js --base-url=http://127.0.0.1:8000 --token=<token> --max-jobs=1
+```
+
+Und die Gegenprobe:
+
+```bash
+php local/catquizlab/cli/e2e_prepare.php --verify --runid=34
+```
+
+Der Verify-Aufruf endet nur dann mit 0, wenn tatsächlich jeder eingereihte
+Attempt abgeschlossen wurde — ein Worker, der nichts gespielt hat, gilt nicht
+als Erfolg.
+
+Ohne installierte Engine bricht die Vorbereitung mit Exit-Code 1 und einer
+entsprechenden Meldung ab, statt einen unbrauchbaren Run zu erzeugen.
+
+### Abgrenzung zum Toolchain-Test
+
+Die CI trennt beides bewusst:
+
+| Prüfung | Braucht Moodle | Braucht Netzwerk | Wann |
+|---|---|---|---|
+| `npm run check` | nein | nein | jeder Push |
+| `npm test` | nein | nein | jeder Push |
+| `npm run selftest` | nein | nein | jeder Push |
+| `run_attempt.js` gegen eine Instanz | ja | ja | manuell, opt-in |
+
+`npm run selftest` prüft Argumentverarbeitung, URL-Aufbau, Antwortauswahl und
+dass Puppeteer lädt und einen Browser starten kann. Er ruft **keinen**
+Webservice auf und claimt **keinen** Job. Mit `--no-browser` entfällt zusätzlich
+der Browserstart, was auf Runnern ohne Chromium-Download nützlich ist.

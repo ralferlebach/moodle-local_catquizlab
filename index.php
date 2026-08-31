@@ -32,6 +32,7 @@ require(__DIR__ . '/../../config.php');
 require_once($CFG->libdir . '/adminlib.php');
 
 use local_catquizlab\local\environment;
+use local_catquizlab\local\experiment_service;
 use local_catquizlab\local\registry;
 
 // Registers the page in the admin/reports tree, sets the system context and the
@@ -59,19 +60,28 @@ $envitems = [
         : ['text' => get_string('env:adaptivequizmissing', $component), 'class' => 'text-danger'],
 ];
 
-// Experiments defined so far, with their run counts.
+// Experiments defined so far. The overview comes from the service, so the
+// labels shown here are the publication ones used in the manuscript and the
+// exports rather than a second set invented for the UI.
 $experimentrows = [];
-foreach ($DB->get_records('local_catquizlab_experiment', null, 'timemodified DESC') as $experiment) {
-    $experimentrows[] = [
-        'name'      => $experiment->name,
-        'tier'      => $experiment->tier,
-        'status'    => $statusmap[$experiment->status] ?? (string) $experiment->status,
-        'runs'      => registry::count_runs($experiment->id),
+foreach (experiment_service::overview() as $row) {
+    // The name links to the editor rather than the report: from the overview
+    // the next step is almost always to look at or change the definition.
+    $experimentrows[] = array_merge($row, [
+        'status'    => $row['statuslabel'],
+        'editurl'   => (new moodle_url(
+            '/local/catquizlab/experiment.php',
+            ['id' => $row['id']]
+        ))->out(false),
         'reporturl' => (new moodle_url(
             '/local/catquizlab/report.php',
-            ['experimentid' => $experiment->id]
+            ['experimentid' => $row['id']]
         ))->out(false),
-    ];
+        'compareurl' => (new moodle_url(
+            '/local/catquizlab/compare.php',
+            ['experimentid' => $row['id']]
+        ))->out(false),
+    ]);
 }
 
 // Run registry: a status summary plus the most recent runs.
@@ -89,14 +99,20 @@ foreach (registry::recent_runs(100) as $run) {
         'seed'        => $run->seed,
         'status'      => $statusmap[$run->status] ?? (string) $run->status,
         'reporturl'   => (new moodle_url(
-            '/local/catquizlab/report.php',
+            '/local/catquizlab/runs.php',
             ['runid' => $run->id]
         ))->out(false),
     ];
 }
 
+$canedit = has_capability('local/catquizlab:edit', context_system::instance());
+
 $templatecontext = [
     'intro'       => get_string('manage:intro', $component),
+    'canedit'     => $canedit,
+    'newurl'      => (new moodle_url('/local/catquizlab/experiment.php'))->out(false),
+    'importurl'   => (new moodle_url('/local/catquizlab/import.php'))->out(false),
+    'runsurl'     => (new moodle_url('/local/catquizlab/runs.php'))->out(false),
     'disabled'    => !get_config($component, 'enabled'),
     'environment' => ['items' => $envitems],
     'experiments' => [

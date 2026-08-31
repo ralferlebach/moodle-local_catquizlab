@@ -37,8 +37,87 @@ namespace local_catquizlab\local;
  * host activity and is a no-op without them (CI and stand-alone stay green).
  */
 class test_provisioner {
-    /** @var int The default CAT selection strategy (matches the engine demo). */
+    /**
+     * The fallback CAT selection strategy.
+     *
+     * @deprecated since 0.2.0. The strategy comes from the experiment
+     * definition via {@see strategy_catalog}; a numeric default here is what
+     * made every unconfigured run a weakest-subscale run. Kept so existing
+     * callers do not fatal, and no longer consulted by build_quizsettings().
+     * @var int
+     */
     public const DEFAULT_STRATEGY = 4;
+
+    /**
+     * Translate a normalised experiment definition into provisioning options.
+     *
+     * This is the join the pipeline was missing: strategy, item budgets and SE
+     * bounds are experimental factors, so they have to come from the definition
+     * rather than from defaults in this class. Anything the definition does not
+     * fix (the naming of the activity, the timing penalty) may still default.
+     *
+     * @param array $definition The normalised experiment definition.
+     * @param array $extra Options that are not part of the definition, e.g. 'name'.
+     * @return array Options for {@see self::build_quizsettings()} and {@see self::create()}.
+     */
+    public static function options_from_definition(array $definition, array $extra = []): array {
+        $budgets = (array) ($definition['budgets'] ?? []);
+        $global = (array) ($budgets['global'] ?? []);
+        $subscale = (array) ($budgets['subscale'] ?? []);
+        $se = (array) ($budgets['se'] ?? []);
+        $strategy = (string) ($definition['strategy'] ?? 'fastest');
+
+        return $extra + [
+            'strategykey'             => $strategy,
+            'teststrategy'            => strategy_catalog::engine_id($strategy),
+            'minquestions'            => (int) ($global['minitems'] ?? 10),
+            'maxquestions'            => (int) ($global['maxitems'] ?? 15),
+            'minquestionspersubscale' => (int) ($subscale['minitems'] ?? 3),
+            'maxquestionspersubscale' => (int) ($subscale['maxitems'] ?? 4),
+            'se_min'                  => (float) ($se['min'] ?? 0.35),
+            'se_max'                  => (float) ($se['max'] ?? 1.0),
+        ];
+    }
+
+    /**
+     * The effective CAT parameters of a run, for the manifest.
+     *
+     * The relation the article uses between a precision target and the
+     * information needed to reach it is I_target = 1 / SE_target^2. The engine
+     * applies it; the lab only has to hand over the right SE bounds and record
+     * what it handed over, which is what this returns.
+     *
+     * @param array $definition The normalised experiment definition.
+     * @return array The effective parameters, ready to be serialised.
+     */
+    public static function effective_parameters(array $definition): array {
+        $options = self::options_from_definition($definition);
+        $semin = (float) $options['se_min'];
+        $semax = (float) $options['se_max'];
+
+        return [
+            'strategy'         => [
+                'key'      => $options['strategykey'],
+                'engineid' => $options['teststrategy'],
+                'label'    => strategy_catalog::label($options['strategykey']),
+            ],
+            'budgets'          => [
+                'global'   => [
+                    'minitems' => $options['minquestions'],
+                    'maxitems' => $options['maxquestions'],
+                ],
+                'subscale' => [
+                    'minitems' => $options['minquestionspersubscale'],
+                    'maxitems' => $options['maxquestionspersubscale'],
+                ],
+            ],
+            'se'               => ['min' => $semin, 'max' => $semax],
+            'targetinformation' => [
+                'min' => $semax > 0 ? round(1.0 / ($semax * $semax), 5) : null,
+                'max' => $semin > 0 ? round(1.0 / ($semin * $semin), 5) : null,
+            ],
+        ];
+    }
 
     /**
      * Build the catquiz settings fields for the activity form.
@@ -54,7 +133,8 @@ class test_provisioner {
             'name'                                   => $name,
             'catmodel'                               => 'catquiz',
             'catquiz_catscales'                      => (string) $catscaleid,
-            'catquiz_selectteststrategy'             => (string) ($options['teststrategy'] ?? self::DEFAULT_STRATEGY),
+            'catquiz_selectteststrategy'             => (string) ($options['teststrategy']
+                ?? strategy_catalog::engine_id((string) ($options['strategykey'] ?? 'fastest'))),
             'catquiz_selectfirstquestion'            => (string) ($options['selectfirstquestion'] ?? '0'),
             'catquiz_includepilotquestions'          => '0',
             'catquiz_firstquestionreuseexistingdata' => '1',

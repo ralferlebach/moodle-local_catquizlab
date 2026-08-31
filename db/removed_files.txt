@@ -1,0 +1,7 @@
+# Files removed in earlier releases of this plugin.
+#
+# Updating a repository in place leaves a removed file behind, where it keeps being autoloaded and
+# executed. Moodle's own ZIP installation replaces the plugin directory as a whole and is not
+# affected, which is why this file is excluded from the release archive.
+#
+# The stale-files CI job fails while any of these paths still exists.

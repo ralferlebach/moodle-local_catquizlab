@@ -6,6 +6,159 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.2.1] — 2026-08-31
+
+Worker CI: the toolchain job no longer fails by construction.
+
+### Fixed
+- **The "Worker toolchain installs" job was red every single time.** It "smoke
+  tested" the worker by starting it against `https://example.invalid` with
+  dummy credentials. The worker does not read that as a self test: it started
+  its normal polling loop, called `local_catquizlab_job_claim` and died on
+  `getaddrinfo ENOTFOUND`. The failure was deterministic and said nothing about
+  the worker. The job now runs `npm run check`, `npm test` and an offline self
+  test, needs no Moodle instance, no token and no external host.
+
+### Added
+- **`--self-test`** in `worker/run_attempt.js` (`npm run selftest`): checks
+  argument parsing, URL normalisation, the web-service URL builder, the
+  dichotomous and polytomous option choice, that Puppeteer loads and that a
+  browser starts — which is what the old step was really meant to prove. It
+  claims no job and calls no web service. `--no-browser` skips the browser
+  start on runners without a Chromium download.
+- **A real end-to-end job**, separate from the toolchain job and opt-in via
+  `workflow_dispatch`. It provisions PostgreSQL, Moodle, the CAT engine and its
+  host activity, prepares an experiment and a queued attempt, issues a worker
+  token, plays one attempt through the real UI and verifies the queue
+  afterwards.
+- **`cli/e2e_prepare.php`**: prepares and verifies such a run through the
+  ordinary services, so the end-to-end job cannot drift into a second
+  provisioning path. It prints `key=value` lines for `$GITHUB_OUTPUT`, exits 1
+  when the engine is absent, and its `--verify` mode fails unless every queued
+  attempt actually finished — a worker that played nothing is not a success.
+- Three further worker unit tests (self-test export, choice clamping, parameter
+  escaping); eleven in total.
+
+### Changed
+- `cli/orchestrate.php` loses its `--polytomous` switch. Since 0.2.0 polytomy
+  follows from the model in the experiment definition, and a separate setup
+  parameter meant a run was not reconstructible from `configjson + seed` alone.
+- The worker workflow runs on pushes touching `worker/**` instead of being
+  manual-only, since it no longer needs anything unavailable in CI.
+
+### Verification
+`npm run check`, `npm test` (11 tests) and `npm run selftest` all pass locally,
+including a real browser start (Chrome 148). Each was also checked to fail on a
+deliberately broken syntax, a failing assertion and a broken helper, so a red
+pipeline still means a real defect. PHPUnit 249 tests, phpcs and PHPDoc clean.
+
+---
+
+## [0.2.0] — 2026-08-31
+
+Session 002: the experiment definition now drives the run, and there is a web
+interface for it. Closes issues #1–#7.
+
+### Added
+- **Catalogues as single sources of truth**: `strategy_catalog` (internal key →
+  engine constant → publication label) and `model_catalog` (1PL/2PL/3PL/PCM/
+  GPCM/GRM/GGRM → engine catmodel key, required item parameters, oracle family).
+  Engine ids are read from the engine's own constants at runtime; an installed
+  but too old engine is refused with a readable message instead of being mapped
+  silently. (#1, #3, #5, #6)
+- **`distribution`**: declarative, seed-deterministic distributions for the
+  discrimination and guessing parameters a 2PL/3PL run needs. (#3)
+- **`seed_domains`**: separate random sources for person base, person deviation,
+  pool, mutation and response. The person seed no longer depends on the cell
+  key, so twins survive a change of strategy or pool variant. (#4)
+- **Definition schema 2**: split global and per-subscale budgets, separate
+  SE_min and SE_max, model parameters, variant recipes, person severity and
+  twin settings, explicit `schema`/`schemaversion`. Schema-1 definitions keep
+  validating; their keys are normalised and mirrored. (#1, #2, #3, #4)
+- **`local_catquizlab_item`**: per-item ground truth kept apart from what the
+  engine was told, which is what makes calibration and tagging errors real
+  robustness conditions. (#2)
+- **`experiment_service`**: the layer CLI, web UI and API share — validate,
+  save, duplicate, preview, expand. UI preview and CLI expansion provably yield
+  the same cells. (#7)
+- **`experiment_io`**: JSON export in a declarative and a normalised variant,
+  import with size limit, schema check, deterministic schema-1 migration and
+  explicit conflict resolution. An import never starts a sweep. (#7)
+- **Web interface**: experiment editor with field-level validation and sweep
+  preview, JSON import page, run overview with filters, run detail with the
+  reproducibility manifest, and a cell comparison with mean, SD and a 95%
+  interval. (#7)
+- **`run_registry`**: resolves a run's experimental coordinates from its
+  manifest and aggregates replications into comparable cells. (#7)
+- **Capabilities** `:edit`, `:execute` and `:export`, separate from `:manage`.
+  Every state change is POST + sesskey + the capability for that action. (#7)
+- **Behat**: nine scenarios covering the editor, validation, sweep preview,
+  sweep creation, run filtering, the manifest and the import page, plus a data
+  generator and a step for sweep expansion. (#7)
+- **From the plugin template**: `tests/coverage.php`, `tools/`, `pix/`,
+  `db/removed_files.txt` and the session prompt templates.
+- **`docs/dev/environment-setup.md`**: the verification environment as actually
+  built, including the failure modes met along the way.
+
+### Fixed
+- **The definition did not reach the run.** `stage_test()` passed only the test
+  name, so two experimentally different cells ran with identical CAT settings
+  and an unconfigured run silently became a weakest-subscale run via the
+  numeric default 4. Strategy, both budget levels and both SE bounds now come
+  from the definition. (#1)
+- **Pool variants had no effect.** `pool_mutator::mutate()` was never called at
+  runtime: a robustness cell ran on the ideal pool and still reported success.
+  It is now wired into materialisation, and a mutation that cannot be realised
+  fails the run instead of passing as scheduled. (#2)
+- **`gappy` and `depleted` were the same disturbance.** Gappy is now a fixed-N
+  redistribution — the item count stays constant and a gap with a pile-up on
+  each side appears; depleted remains the variant that removes items. Study
+  values corrected to +1.0 logit and ×1.25. (#2)
+- **Calibration and tagging errors cancelled themselves out.** True and stored
+  difficulty, and true and assigned subscale, are now kept apart end to end.
+  The oracle answers against the truth, the engine works from the stored value.
+  (#2)
+- **2PL and 3PL materialised as 1PL.** `plan_items()` hardcoded
+  `discrimination = 1.0` and `guessing = 0.0`, and `item_registrar` fell back to
+  `raschbirnbaum` whenever no model was passed. Item parameters now follow the
+  declared model. (#3)
+- **Stratum 3 removed the variation of stratum 2.** `subscalevariation` was
+  `[0.0, 0.5]`, which made the strata alternatives rather than a progression;
+  it is now cumulative. `chaotic` became its own generator mode whose subscale
+  abilities hang off the global value, so the hierarchy assumption is genuinely
+  stressed rather than merely noisier. (#4)
+- **GPCM was materialised as `grmgeneralized`.** The model now selects the
+  engine key, and the oracle picks its response family through the catalogue
+  rather than by looking for the substring "grm". (#5)
+- **Polytomous questions had a fixed four options.** With five categories the
+  fifth was unreachable and the item silently truncated; the option count now
+  follows the model. (#5)
+- **The management page was a dead end.** It now offers "New experiment" and
+  "Import settings" instead of pointing at the CLI. (#7)
+- **`$row + [...]` in `index.php`** left the status label unused, because the
+  `+` operator keeps the left operand; the overview showed the numeric status.
+
+### Changed
+- `test_provisioner::DEFAULT_STRATEGY` is deprecated and no longer consulted.
+- The run manifest records the effective CAT parameters, the target information
+  `I = 1/SE²`, the model with its engine key, the variant with its resolved
+  recipe, and which factors each derived seed depends on. (#1, #6)
+- Exports carry `twinid`, `stratum` and `severity`, and a new item dataset with
+  true beside stored parameters. (#2, #4, #6)
+- Severity and model are usable as sweep factors. (#4)
+
+### Database
+- New table `local_catquizlab_item`; `local_catquizlab_pool` gains `runid`,
+  `poolseed`, `mutationseed` and `itemcount` and is now used in the run
+  lifecycle; `local_catquizlab_person` gains `twinid`, `twinindex` and
+  `severity`; `local_catquizlab_run` gains `masterseed`. Savepoint 2026083100.
+
+### Verification
+PHPUnit 249 tests / 1774 assertions, Behat 14 scenarios / 79 steps (with the
+accessibility checks enabled), phpcs clean, PHPDoc without findings.
+
+---
+
 ## [0.1.50] — 2026-08-11
 
 Session close: documentation finalised and a testing guide.

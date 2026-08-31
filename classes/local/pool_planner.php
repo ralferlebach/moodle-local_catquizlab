@@ -95,7 +95,17 @@ class pool_planner {
             'itemsd'     => 0.5,
         ];
 
+        $model = model_catalog::normalise((string) ($definition['model'] ?? '2pl')) ?? '2pl';
+        $modelparams = (array) ($definition['modelparams'] ?? []);
+
         return [
+            'model'           => $model,
+            'enginemodel'     => model_catalog::engine_key($model),
+            'polytomous'      => model_catalog::is_polytomous($model),
+            'discrimination'  => $modelparams['discrimination'] ?? distribution::constant(1.0),
+            'guessing'        => $modelparams['guessing'] ?? distribution::constant(0.0),
+            'categories_n'    => (int) ($modelparams['categories'] ?? 4),
+            'stepspacing'     => $modelparams['stepspacing'] ?? distribution::constant(1.0),
             'categories'      => (int) $scales['categories'],
             'subscales'       => (int) $scales['subcategories'],
             'itemspersubscale' => (int) $scales['itemspersubscale'],
@@ -140,17 +150,70 @@ class pool_planner {
     protected static function build_items(int $category, int $subscale, float $subscalemean, array $params): array {
         $items = [];
         for ($i = 1; $i <= $params['itemspersubscale']; $i++) {
-            $items[] = [
+            $difficulty = round(self::normal($subscalemean, $params['itemsd']), 5);
+            $item = [
                 'index'      => $i,
                 'name'       => naming::expand($params['pattern'], [
                     'category' => $category,
                     'subscale' => $subscale,
                     'index'    => $i,
                 ]),
-                'difficulty' => round(self::normal($subscalemean, $params['itemsd']), 5),
+                'difficulty' => $difficulty,
+                'model'      => $params['model'],
             ];
+
+            // Every parameter the model needs is drawn here, in the blueprint,
+            // so the ground truth is complete before anything is materialised.
+            // Draws happen unconditionally per model so that the sequence of
+            // random numbers — and therefore the pool — depends only on the
+            // seed and the model, never on which branch happened to run.
+            if (in_array('discrimination', model_catalog::requires($params['model']), true)) {
+                $item['discrimination'] = round(distribution::draw($params['discrimination']), 5);
+            } else {
+                $item['discrimination'] = 1.0;
+            }
+            if (in_array('guessing', model_catalog::requires($params['model']), true)) {
+                $item['guessing'] = round(distribution::draw($params['guessing']), 5);
+            } else {
+                $item['guessing'] = 0.0;
+            }
+            if ($params['polytomous']) {
+                $item['steps'] = self::draw_steps($difficulty, $params);
+                $item['categories'] = $params['categories_n'];
+            }
+
+            $items[] = $item;
         }
         return $items;
+    }
+
+    /**
+     * Draw ordered step thresholds around an item difficulty.
+     *
+     * A polytomous item with k categories has k-1 thresholds. They are placed
+     * symmetrically around the item difficulty using spacings drawn from the
+     * declared distribution, then sorted: an unordered threshold vector is not
+     * a valid GPCM/GRM item, and sorting is cheaper than rejecting the draw.
+     *
+     * @param float $difficulty The item difficulty.
+     * @param array $params Normalised planning parameters.
+     * @return float[] Ascending thresholds, k-1 of them.
+     */
+    protected static function draw_steps(float $difficulty, array $params): array {
+        $count = max(1, $params['categories_n'] - 1);
+        $offsets = [];
+        for ($k = 0; $k < $count; $k++) {
+            $spacing = abs(distribution::draw($params['stepspacing']));
+            $position = $k - (($count - 1) / 2.0);
+            $offsets[] = $position * ($spacing > 0 ? $spacing : 1.0);
+        }
+        sort($offsets);
+
+        $steps = [];
+        foreach ($offsets as $offset) {
+            $steps[] = round($difficulty + $offset, 5);
+        }
+        return $steps;
     }
 
     /**
