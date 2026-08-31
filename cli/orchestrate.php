@@ -61,12 +61,94 @@ if ($runids === []) {
     exit(0);
 }
 
+$failures = 0;
 foreach ($runids as $runid) {
     $result = run_orchestrator::setup($runid, $setupoptions);
-    $status = $result['ok'] ? 'ok' : ('skipped (' . ($result['reason'] ?? 'unknown') . ')');
-    cli_writeln("Run {$runid}: {$status}");
+    $materialise = $result['stages'][run_orchestrator::STAGE_MATERIALISE] ?? null;
+
+    if (!empty($result['ok'])) {
+        cli_writeln("Run {$runid}: ok" . local_catquizlab_materialise_summary($materialise));
+        continue;
+    }
+
+    // The word "skipped" was the only outcome the CLI had, so a run that
+    // materialised nothing read exactly like one that ran without the engine.
+    $failures++;
+    cli_writeln("Run {$runid}: FAILED [" . ($result['reason'] ?? 'unknown') . ']');
+    foreach (local_catquizlab_materialise_detail($materialise) as $line) {
+        cli_writeln('  ' . $line);
+    }
 }
+
 cli_writeln('Done.');
+
+if ($failures > 0) {
+    // A non-zero exit code, so a scripted run cannot mistake a broken
+    // provisioning for a finished one.
+    cli_writeln("{$failures} run(s) failed.");
+    exit(1);
+}
+
+exit(0);
+
+/**
+ * A one-line materialisation summary for a successful run.
+ *
+ * @param mixed $materialise The materialisation stage result.
+ * @return string The summary, or an empty string when there is nothing to report.
+ */
+function local_catquizlab_materialise_summary($materialise): string {
+    if (!is_array($materialise) || !isset($materialise['planned'])) {
+        return '';
+    }
+
+    return sprintf(
+        ' [materialise: planned=%d, questions=%d, items=%d, params=%d, visible=%d]',
+        (int) $materialise['planned'],
+        (int) ($materialise['questionscreated'] ?? 0),
+        (int) ($materialise['itemsregistered'] ?? 0),
+        (int) ($materialise['parametersregistered'] ?? 0),
+        (int) ($materialise['enginevisible'] ?? 0)
+    );
+}
+
+/**
+ * The diagnostic lines for a failed run.
+ *
+ * @param mixed $materialise The materialisation stage result.
+ * @return string[] Lines to print.
+ */
+function local_catquizlab_materialise_detail($materialise): array {
+    if (!is_array($materialise)) {
+        return [];
+    }
+
+    $lines = [];
+    if (isset($materialise['planned'])) {
+        $lines[] = sprintf(
+            'planned=%d questions=%d items=%d params=%d visible=%d failed=%d',
+            (int) $materialise['planned'],
+            (int) ($materialise['questionscreated'] ?? 0),
+            (int) ($materialise['itemsregistered'] ?? 0),
+            (int) ($materialise['parametersregistered'] ?? 0),
+            (int) ($materialise['enginevisible'] ?? 0),
+            (int) ($materialise['faileditems'] ?? 0)
+        );
+    }
+    if (!empty($materialise['reason'])) {
+        $lines[] = 'reason=' . $materialise['reason'];
+    }
+    foreach (array_slice((array) ($materialise['errors'] ?? []), 0, 5) as $error) {
+        $lines[] = sprintf(
+            'item %s: %s%s',
+            (string) ($error['itemname'] ?? '?'),
+            (string) ($error['reason'] ?? '?'),
+            !empty($error['engineerror']) ? ' — ' . $error['engineerror'] : ''
+        );
+    }
+
+    return $lines;
+}
 
 /**
  * Resolve the run ids to set up, honouring tier order for the full-suite case.

@@ -113,6 +113,149 @@ final class schema_test extends \advanced_testcase {
     }
 
     /**
+     * No column declares a default Moodle will reject and rewrite.
+     *
+     * A CHAR or TEXT column that is NOT NULL with an empty-string default makes
+     * Moodle print a debugging message and silently change the default to NULL.
+     * That message is fatal in CI — moodle-plugin-ci treats any debugging output
+     * during installation as a failure — so the whole matrix went red over three
+     * DEFAULT="" attributes that had no effect in the first place.
+     *
+     * @return void
+     */
+    public function test_no_column_declares_a_rejected_default(): void {
+        global $CFG;
+        $this->resetAfterTest();
+
+        $xml = file_get_contents($CFG->dirroot . '/local/catquizlab/db/install.xml');
+        preg_match_all('/<FIELD NAME="([^"]+)" TYPE="([^"]+)"([^\/]*)\/>/', $xml, $matches, PREG_SET_ORDER);
+
+        $this->assertNotEmpty($matches, 'No fields were found in install.xml.');
+
+        foreach ($matches as $match) {
+            [, $name, $type, $rest] = $match;
+            if (!in_array($type, ['char', 'text'], true)) {
+                continue;
+            }
+            $hasdefault = preg_match('/DEFAULT="([^"]*)"/', $rest, $default) === 1;
+
+            if ($hasdefault) {
+                $this->assertNotSame(
+                    '',
+                    $default[1],
+                    'Column ' . $name . ' declares an empty-string default; drop the DEFAULT attribute.'
+                );
+            }
+            if ($type === 'text') {
+                $this->assertFalse(
+                    $hasdefault,
+                    'Column ' . $name . ' is a text column with a default, which Moodle does not allow.'
+                );
+            }
+        }
+    }
+
+    /**
+     * No upgrade step adds a NOT NULL column without a default.
+     *
+     * Such a column cannot be added to a table that already holds rows, so the
+     * step works on a fresh site and fails on every real one.
+     *
+     * @return void
+     */
+    public function test_no_upgrade_field_is_not_null_without_a_default(): void {
+        global $CFG;
+        $this->resetAfterTest();
+
+        $upgrade = file_get_contents($CFG->dirroot . '/local/catquizlab/db/upgrade.php');
+        preg_match_all(
+            "/new xmldb_field\\(\s*'([^']+)',\s*(XMLDB_TYPE_\w+),\s*[^,]*,\s*[^,]*,\s*([^,]*),\s*[^,]*,\s*([^,]*),/",
+            $upgrade,
+            $matches,
+            PREG_SET_ORDER
+        );
+
+        foreach ($matches as $match) {
+            [, $name, $type, $notnull, $default] = $match;
+            if (trim($notnull) !== 'XMLDB_NOTNULL') {
+                continue;
+            }
+            $default = trim($default);
+
+            $this->assertNotSame(
+                'null',
+                $default,
+                'Upgrade field ' . $name . ' is NOT NULL without a default and cannot be added to a populated table.'
+            );
+            $this->assertNotSame(
+                "''",
+                $default,
+                'Upgrade field ' . $name . ' declares an empty-string default, which Moodle rewrites to NULL.'
+            );
+        }
+    }
+
+    /**
+     * Every capability has a language string describing it.
+     *
+     * A capability without one shows up in the roles UI as its raw identifier,
+     * and moodle-plugin-ci validate refuses the plugin outright. Three new
+     * capabilities reached the code without their strings and nothing noticed
+     * until CI did.
+     *
+     * @return void
+     */
+    public function test_every_capability_is_named(): void {
+        global $CFG;
+        $this->resetAfterTest();
+
+        $capabilities = [];
+        require($CFG->dirroot . '/local/catquizlab/db/access.php');
+
+        $this->assertNotEmpty($capabilities, 'The plugin declares no capabilities.');
+
+        foreach (array_keys($capabilities) as $capability) {
+            $key = str_replace('local/', '', $capability);
+            $this->assertTrue(
+                get_string_manager()->string_exists($key, 'local_catquizlab'),
+                'Capability ' . $capability . ' has no language string "' . $key . '".'
+            );
+        }
+    }
+
+    /**
+     * The English and German language packs describe the same set of strings.
+     *
+     * A key present in one pack and missing from the other surfaces as the raw
+     * identifier for half the users and is invisible to the other half.
+     *
+     * @return void
+     */
+    public function test_language_packs_match(): void {
+        global $CFG;
+        $this->resetAfterTest();
+
+        $read = static function (string $path): array {
+            $string = [];
+            require($path);
+            return array_keys($string);
+        };
+
+        $base = $CFG->dirroot . '/local/catquizlab/lang/';
+        $en = $read($base . 'en/local_catquizlab.php');
+        $de = $read($base . 'de/local_catquizlab.php');
+
+        $this->assertSame([], array_values(array_diff($en, $de)), 'Strings missing from the German pack.');
+        $this->assertSame([], array_values(array_diff($de, $en)), 'Strings missing from the English pack.');
+
+        // Moodle's own lang checker wants them sorted, and a sorted file is
+        // also the only way two people editing it do not collide constantly.
+        $sorted = $en;
+        sort($sorted);
+        $this->assertSame($sorted, $en, 'The English language file is not sorted by key.');
+    }
+
+    /**
      * Every savepoint in the upgrade path is at most the plugin version.
      *
      * A savepoint above the version can never be reached, so the upgrade step

@@ -6,6 +6,126 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.2.4] — 2026-08-31
+
+CI fix.
+
+### Fixed
+- **Every matrix job failed at the install step.** Three CHAR NOT NULL columns
+  declared `DEFAULT=""`. Moodle rejects an empty-string default on a character
+  column, rewrites it to NULL and prints a debugging message — and
+  moodle-plugin-ci treats any debugging output during installation as a
+  failure. So `itemname`, `fingerprint` and `twinid` took the whole matrix down
+  over three attributes that had no effect in the first place.
+- **`twinid` could not have been added to a populated table.** It was NOT NULL
+  without a usable default, which works on a fresh site and fails on every real
+  one. It is nullable now, which is also the honest value: a person generated
+  before the paired design existed has no twin.
+- **Three capabilities had no language strings.** `:edit`, `:execute` and
+  `:export` would have shown up in the roles UI as raw identifiers, and
+  `moodle-plugin-ci validate` refuses a plugin in that state.
+- The CI workflow header still described a plugin with no templates and a
+  worker stub; both stopped being true.
+
+### Added
+Four schema tests that catch this class of mistake before CI does: no column
+declares a default Moodle will reject, no upgrade step adds a NOT NULL column
+without a default, every capability is named, and the two language packs
+describe the same sorted set of strings. Each was checked by reintroducing the
+original defect and confirming the test goes red.
+
+### Verification
+PHPUnit 341 tests / 2520 assertions, Behat 24 scenarios, phpcs and PHPDoc
+clean, and a fresh PHPUnit install now runs without a single debugging message.
+
+---
+
+## [0.2.3] — 2026-08-31
+
+Reusable building blocks, the rebuilt landing page and editor, and the results
+views. The release number stays in the 0.2 line: the plugin has not been run
+against a live CAT engine yet, so none of this is field-proven.
+
+### Added
+- **Reusable building blocks** (`preset_library`, `presets.php`): an item-pool
+  structure or a person model is saved once and cited by any number of
+  experiments. Each block carries a fingerprint over its sorted payload,
+  recorded in the run manifest, so two experiments can be shown to have used
+  the same blueprint rather than two that merely look alike. A block cited by
+  an experiment that has runs is locked. Deliberately not part of a block: the
+  pool variant and its recipe, which belong to the study rather than to the
+  pool it disturbs, and the person count, which is a design decision.
+- **Landing page rebuilt to the mockup**: overview panel counting experiments
+  and runs by state, primary actions above the fold, experiment table with
+  per-row actions, the ten most recent runs with progress bars. It previously
+  put everything into collapsed sections, so a first-time visitor saw three
+  closed triangles and no way in.
+- **Editor rebuilt to the mockup**: numbered section navigation with a one-line
+  summary of each section, and a validation panel that stays visible while
+  scrolling — a definition can be invalid in eight places at once, and a list
+  at the top of a long form leaves the author hunting for the field. Study
+  metadata added: description, a stable experiment key, version, tags.
+- **Results views** (`results.php`) with eight tabs, all reading through one
+  data source so a figure in a chart and the same figure in the table below it
+  cannot disagree: Overview, Global metrics, Subscales, Deficit detection,
+  Robustness, Test flow, Raw data, Export.
+- **`scatter_chart`**: Moodle's chart API has no scatter and the design needs
+  several, so this draws static inline SVG with labelled axes, units, reference
+  lines and an accompanying summary table, since an SVG alone is unreadable to
+  a screen reader.
+- **`metrics::concentration`**: exposure inequality as Gini and Herfindahl. A
+  mean exposure rate cannot distinguish an evenly used pool from one where a
+  tenth of the items carry every test; items never shown count as zero, so an
+  unused remainder raises the concentration instead of vanishing.
+- **`local_analysis`**: local diagnostics on deviations rather than absolute
+  subscale abilities. A test that places every subscale one logit too high has
+  recovered the local structure and missed the global level; comparing absolute
+  abilities would report the local diagnostics as failing too.
+- **`robustness_analysis`**: deltas against the ideal pool under otherwise
+  identical conditions, with the disturbance strength as its own coordinate.
+- **`test_flow`**: the step-by-step course of one attempt, and a feasibility
+  verdict — a precision target implies an information I = 1/SE², and a budget
+  that cannot deliver it would have ended on exhaustion however well the items
+  were chosen.
+- **`results_export`**: four flat levels (run, attempt, subscale, item) taking
+  the filter that is on screen, with the filter, level and versions travelling
+  in the file's metadata and name.
+- **`schema_test`**: compares the installed schema against the columns the code
+  actually touches.
+
+### Fixed
+- **install.xml and upgrade.php had drifted.** twinid, twinindex and severity
+  were added to the upgrade only, so every freshly installed site lost the
+  digital-twin identity — the thing the paired design rests on.
+- **`parse_debug_info` read only the last step snapshot**, discarding the
+  ability trajectory the test-flow view exists to show.
+- **`stop_reached()` matched 'error' as a substring**, filing 'standarderror' —
+  the precision criterion doing its job — as the test running out of items.
+- **`json_encode` dropped zero fractions**, so a discrimination of 1.0 came
+  back as int 1 and silently changed type between saving and reuse.
+- **`$row + [...]` in index.php** left the status label unused, because the `+`
+  operator keeps the left operand.
+- Two dropdowns had only an aria-label, and two results tabs showed nothing but
+  "no data" without saying what they would have contained.
+
+### Corrected documentation
+Earlier notes claimed the engine deletes `local_catquiz_progress` when an
+attempt finishes. It does not: `progress::delete()` is never called in the
+production path, and the row is removed only when the activity is deleted. See
+`docs/design/issue-catquiz-progress-retention.md` for the upstream issue this
+raised.
+
+### Database
+New tables `local_catquizlab_preset`; `local_catquizlab_person` gains twinid,
+twinindex and severity in install.xml as well as in the upgrade. Savepoint
+2026083102.
+
+### Verification
+PHPUnit 324 tests / 2439 assertions, Behat 24 scenarios / 167 steps with
+accessibility checks enabled, phpcs and PHPDoc clean.
+
+---
+
 ## [0.2.1] — 2026-08-31
 
 Worker CI: the toolchain job no longer fails by construction.

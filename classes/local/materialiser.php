@@ -36,6 +36,18 @@ namespace local_catquizlab\local;
  * and engine rows needs the engine, so materialisation is a no-op without it.
  */
 class materialiser {
+    /** @var string The plan contained no items at all. */
+    public const REASON_EMPTY_PLAN = 'empty-materialisation-plan';
+
+    /** @var string A Moodle question could not be created. */
+    public const REASON_NO_QUESTION = 'question-creation-failed';
+
+    /** @var string Some items did not complete for mixed reasons. */
+    public const REASON_INCOMPLETE = 'materialisation-incomplete';
+
+    /** @var int How many individual item errors are kept for diagnosis. */
+    public const MAX_RECORDED_ERRORS = 20;
+
     /**
      * Plan the item specs from a blueprint and a run's scale map.
      *
@@ -138,42 +150,158 @@ class materialiser {
         $blueprint = pool_planner::plan($definition, $poolseed);
         $blueprint = pool_mutator::mutate($blueprint, $variant, $recipe, $mutationseed);
 
-        $poolid = self::record_pool($runid, $variant, $recipe, $poolseed, $mutationseed);
         $specs = self::plan_items($blueprint, $scalemap, ['model' => $model]);
-        if ($specs === [] && $variant !== 'ideal') {
-            // No pool row is written for a mutation that produced nothing, so
-            // an empty realised pool cannot be mistaken for a finished one.
-            // A mutation that materialises nothing must not pass as a good run.
-            return ['planned' => 0, 'created' => 0, 'variant' => $variant, 'failed' => true];
-        }
-        $template = $options['template'] ?? null;
 
-        $created = 0;
+        // An empty plan is a failure whatever the variant. The ideal pool used
+        // to be exempt, which meant a run whose blueprint or scale map produced
+        // nothing at all was reported as a good run with zero items.
+        if ($specs === []) {
+            return [
+                'planned'              => 0,
+                'questionscreated'     => 0,
+                'itemsregistered'      => 0,
+                'parametersregistered' => 0,
+                'enginevisible'        => 0,
+                'faileditems'          => 0,
+                'created'              => 0,
+                'variant'              => $variant,
+                'model'                => $model,
+                'failed'               => true,
+                'reason'               => self::REASON_EMPTY_PLAN,
+                'errors'               => [],
+            ];
+        }
+
+        $poolid = self::record_pool($runid, $variant, $recipe, $poolseed, $mutationseed);
+        $template = $options['template'] ?? null;
+        $verify = $options['verify'] ?? true;
+
+        $counts = [
+            'planned'              => count($specs),
+            'questionscreated'     => 0,
+            'itemsregistered'      => 0,
+            'parametersregistered' => 0,
+            'enginevisible'        => 0,
+            'faileditems'          => 0,
+        ];
+        $errors = [];
+
         foreach ($specs as $spec) {
             $rendered = question_template::render($spec + ['polytomous' => $polytomous], $template);
             $questionid = self::create_question($categoryid, $rendered);
-            if ($questionid > 0) {
-                item_registrar::register_item($questionid, $spec['catscaleid'], $spec['contextid'], $spec);
-                self::record_ground_truth($runid, $poolid, $questionid, $spec);
-                $created++;
+            if ($questionid <= 0) {
+                $counts['faileditems']++;
+                $errors = self::record_error($errors, [
+                    'itemname' => $spec['itemname'] ?? '',
+                    'reason'   => self::REASON_NO_QUESTION,
+                ]);
+                continue;
             }
+            $counts['questionscreated']++;
+
+            // The engine's verdict is binding. Counting an item before it is
+            // registered — as this did — turned "a question row exists" into
+            // "the CAT engine can play this item", which are different claims.
+            $outcome = cat_item_provisioner::provision(
+                $questionid,
+                (int) $spec['catscaleid'],
+                (int) $spec['contextid'],
+                $spec,
+                ['verify' => $verify]
+            );
+
+            if ($outcome['itemid'] !== null) {
+                $counts['itemsregistered']++;
+            }
+            if ($outcome['paramid'] !== null) {
+                $counts['parametersregistered']++;
+            }
+
+            if (!$outcome['ok']) {
+                $counts['faileditems']++;
+                $errors = self::record_error($errors, [
+                    'itemname'    => $spec['itemname'] ?? '',
+                    'questionid'  => $questionid,
+                    'catscaleid'  => (int) $spec['catscaleid'],
+                    'reason'      => (string) $outcome['reason'],
+                    'engineerror' => $outcome['engineerror'],
+                ]);
+                continue;
+            }
+
+            $counts['enginevisible']++;
+            // Ground truth is written only for an item the engine can actually
+            // retrieve, so an audit row never describes an item that is not
+            // part of the realised pool.
+            self::record_ground_truth($runid, $poolid, $questionid, $spec);
         }
 
         if ($poolid > 0) {
-            $DB->set_field('local_catquizlab_pool', 'itemcount', $created, ['id' => $poolid]);
+            $DB->set_field('local_catquizlab_pool', 'itemcount', $counts['enginevisible'], ['id' => $poolid]);
             $DB->set_field('local_catquizlab_pool', 'questioncategoryid', $categoryid, ['id' => $poolid]);
         }
 
-        return [
-            'planned' => count($specs),
-            'created' => $created,
+        $failed = $counts['faileditems'] > 0 || $counts['enginevisible'] !== $counts['planned'];
+
+        return $counts + [
+            // Kept so existing readers of the old key keep working; it now
+            // means "items the engine can retrieve", which is what a caller
+            // asking "how many were created" actually wants to know.
+            'created' => $counts['enginevisible'],
             'variant' => $variant,
             'poolid'  => $poolid,
             'model'   => $model,
-            'failed'  => $created === 0 && $specs !== [],
+            'failed'  => $failed,
+            'reason'  => $failed ? self::failure_reason($counts, $errors) : null,
+            'errors'  => $errors,
         ];
     }
 
+    /**
+     * The reason that best describes a failed materialisation.
+     *
+     * The first broken link in the chain is the useful one: knowing that the
+     * questions were created but nothing was registered points at the engine
+     * boundary, while "0 visible" alone does not.
+     *
+     * @param array $counts The stage counters.
+     * @param array $errors The recorded item errors.
+     * @return string
+     */
+    protected static function failure_reason(array $counts, array $errors): string {
+        if ($counts['questionscreated'] < $counts['planned']) {
+            return self::REASON_NO_QUESTION;
+        }
+        if ($counts['itemsregistered'] < $counts['planned']) {
+            return cat_item_provisioner::REASON_ASSIGNMENT;
+        }
+        if ($counts['parametersregistered'] < $counts['planned']) {
+            return cat_item_provisioner::REASON_PARAMETERS;
+        }
+        if ($counts['enginevisible'] < $counts['planned']) {
+            return cat_item_provisioner::REASON_NOT_VISIBLE;
+        }
+
+        return $errors[0]['reason'] ?? self::REASON_INCOMPLETE;
+    }
+
+    /**
+     * Append an item error, keeping the list bounded.
+     *
+     * A run of 2500 items can fail 2500 times for the same reason; the first
+     * few plus the total tell a reader everything the full list would.
+     *
+     * @param array $errors The errors so far.
+     * @param array $error The error to add.
+     * @return array
+     */
+    protected static function record_error(array $errors, array $error): array {
+        if (count($errors) < self::MAX_RECORDED_ERRORS) {
+            $errors[] = $error;
+        }
+
+        return $errors;
+    }
 
     /**
      * Record the realised pool of a run.

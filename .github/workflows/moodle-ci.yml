@@ -14,10 +14,11 @@
 #   --add-plugin Wunderbyte-GmbH/moodle-mod_adaptivequiz
 # (plus local_wunderbyte_table) to every `moodle-plugin-ci install` call.
 #
-# Removed vs. the mod_vimipad ancestor: the bundle-reproducibility job, all
-# Grunt/AMD steps and the Mustache lint (this plugin ships no JS bundle, no
-# AMD modules and no templates yet), and the jMeter/k6 load workflow. The
-# Playwright workflow was replaced by worker-check (Puppeteer worker stub).
+# The plugin ships Mustache templates (templates/) but no JS bundle and no AMD
+# modules, so the Mustache lint runs and the bundle-reproducibility job does
+# not. The jMeter/k6 load workflow is not used. The Puppeteer worker has its
+# own workflow (worker-e2e.yml), which separates a network-free toolchain job
+# from a real end-to-end run.
 ##############################################################################
 
 name: Moodle Plugin CI
@@ -37,9 +38,10 @@ env:
 
 jobs:
 
-  # ── 0. Worker stub ──────────────────────────────────────────────────────
-  # The Puppeteer worker is plain Node (no AMD, no bundle). Until real E2E
-  # runs exist (backlog E3), CI only guards its syntax and manifest.
+  # ── 0. Worker ───────────────────────────────────────────────────────────
+  # A fast syntax and manifest guard on every push. The worker's own unit
+  # tests, its offline self test and the real end-to-end run live in
+  # worker-e2e.yml, so this job stays cheap enough to run in every matrix.
   worker-check:
     name: "Worker syntax check"
     runs-on: ubuntu-24.04

@@ -36,6 +36,9 @@ namespace local_catquizlab\local;
  * playing, collection and aggregation happen asynchronously via the worker and tasks.
  */
 class run_orchestrator {
+    /** @var string A mandatory stage returned nothing. */
+    public const REASON_NO_RESULT = 'stage-returned-no-result';
+
     /** @var string Materialise the engine scale tree and context. */
     public const STAGE_SCALES = 'scales';
 
@@ -152,18 +155,63 @@ class run_orchestrator {
     }
 
     /**
-     * The first stage that reported a failure, if any.
+     * The first stage that did not meet its postconditions.
+     *
+     * A stage counts as failed when it says so, but also when it returns
+     * nothing at all. A null return used to pass as success, so a stage that
+     * bailed out early — no question category, no scale map — left the run
+     * scheduled with no pool behind it.
      *
      * @param array $stages The stage results.
-     * @return string|null A reason of the form "stage:name", or null when all stages are fine.
+     * @return string|null A reason of the form "stage:name (detail)", or null when all stages hold.
      */
     protected static function first_failure(array $stages): ?string {
-        foreach ($stages as $name => $result) {
+        foreach (self::plan_stages() as $name) {
+            $result = $stages[$name] ?? null;
+
+            if ($result === null || $result === false) {
+                return 'stage:' . $name . ' (' . self::REASON_NO_RESULT . ')';
+            }
             if (is_array($result) && !empty($result['failed'])) {
-                return 'stage:' . $name;
+                $reason = (string) ($result['reason'] ?? '');
+
+                return 'stage:' . $name . ($reason !== '' ? ' (' . $reason . ')' : '');
+            }
+            if ($name === 'materialise' && is_array($result) && !self::materialisation_complete($result)) {
+                return 'stage:materialise (' . cat_item_provisioner::REASON_NOT_VISIBLE . ')';
             }
         }
+
         return null;
+    }
+
+    /**
+     * Whether a materialisation result meets every postcondition of the stage.
+     *
+     * A run may only be scheduled when every planned item exists as a question,
+     * is registered with the engine, carries active parameters and can be
+     * retrieved through the engine's own path. Anything less is a pool the test
+     * cannot actually be played from.
+     *
+     * @param array $result The materialisation stage result.
+     * @return bool
+     */
+    public static function materialisation_complete(array $result): bool {
+        $planned = (int) ($result['planned'] ?? 0);
+        if ($planned <= 0) {
+            return false;
+        }
+        if ((int) ($result['faileditems'] ?? 0) > 0) {
+            return false;
+        }
+
+        foreach (['questionscreated', 'itemsregistered', 'parametersregistered', 'enginevisible'] as $counter) {
+            if (!isset($result[$counter]) || (int) $result[$counter] !== $planned) {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     /**

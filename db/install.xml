@@ -81,7 +81,7 @@
         <FIELD NAME="runid" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="false" COMMENT="Owning run."/>
         <FIELD NAME="poolid" TYPE="int" LENGTH="10" NOTNULL="false" SEQUENCE="false" COMMENT="The pool variant this item belongs to."/>
         <FIELD NAME="questionid" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="false" COMMENT="The generated question."/>
-        <FIELD NAME="itemname" TYPE="char" LENGTH="255" NOTNULL="true" DEFAULT="" SEQUENCE="false" COMMENT="Item name from the naming engine."/>
+        <FIELD NAME="itemname" TYPE="char" LENGTH="255" NOTNULL="true" SEQUENCE="false" COMMENT="Item name from the naming engine."/>
         <FIELD NAME="model" TYPE="char" LENGTH="64" NOTNULL="true" DEFAULT="raschbirnbaum" SEQUENCE="false" COMMENT="Engine catmodel key the item was registered with."/>
         <FIELD NAME="truedifficulty" TYPE="number" LENGTH="10" DECIMALS="5" NOTNULL="true" DEFAULT="0" SEQUENCE="false" COMMENT="The true difficulty b the response oracle answers against."/>
         <FIELD NAME="storeddifficulty" TYPE="number" LENGTH="10" DECIMALS="5" NOTNULL="true" DEFAULT="0" SEQUENCE="false" COMMENT="The difficulty handed to the engine; differs from the true one under a calibration error."/>
@@ -112,7 +112,7 @@
         <FIELD NAME="name" TYPE="char" LENGTH="255" NOTNULL="true" SEQUENCE="false" COMMENT="Human-readable name shown in the pickers."/>
         <FIELD NAME="description" TYPE="text" NOTNULL="false" SEQUENCE="false" COMMENT="What this preset is for and where its parameters come from."/>
         <FIELD NAME="payloadjson" TYPE="text" NOTNULL="true" SEQUENCE="false" COMMENT="The definition fragment this preset contributes, as JSON."/>
-        <FIELD NAME="fingerprint" TYPE="char" LENGTH="64" NOTNULL="true" DEFAULT="" SEQUENCE="false" COMMENT="Hash of the payload. Two experiments citing the same fingerprint used provably identical parameters."/>
+        <FIELD NAME="fingerprint" TYPE="char" LENGTH="64" NOTNULL="true" SEQUENCE="false" COMMENT="Hash of the payload. Two experiments citing the same fingerprint used provably identical parameters."/>
         <FIELD NAME="usecount" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false" COMMENT="How many experiments reference this preset."/>
         <FIELD NAME="locked" TYPE="int" LENGTH="1" NOTNULL="true" DEFAULT="0" SEQUENCE="false" COMMENT="A preset already used by a published experiment is locked: editing it would retrospectively change what those runs did."/>
         <FIELD NAME="usermodified" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
@@ -132,7 +132,7 @@
       <FIELDS>
         <FIELD NAME="id" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="true"/>
         <FIELD NAME="runid" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="false" COMMENT="Owning run."/>
-        <FIELD NAME="twinid" TYPE="char" LENGTH="64" NOTNULL="true" DEFAULT="" SEQUENCE="false" COMMENT="Stable comparison key of the digital twin: the same twin recurs across the cells being compared."/>
+        <FIELD NAME="twinid" TYPE="char" LENGTH="64" NOTNULL="false" SEQUENCE="false" COMMENT="Stable comparison key of the digital twin: the same twin recurs across the cells being compared. Null for persons generated before the paired design existed."/>
         <FIELD NAME="twinindex" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false" COMMENT="The twin index within the replication."/>
         <FIELD NAME="severity" TYPE="char" LENGTH="32" NOTNULL="true" DEFAULT="none" SEQUENCE="false" COMMENT="Deviation severity: none, mild, medium or strong."/>
         <FIELD NAME="stratum" TYPE="char" LENGTH="64" NOTNULL="true" SEQUENCE="false" COMMENT="Person stratum: conforming, categoryvariation, subscalevariation, chaotic."/>

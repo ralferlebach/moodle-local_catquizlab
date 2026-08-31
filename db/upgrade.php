@@ -238,7 +238,12 @@ function local_catquizlab_upgrade_add_person_twin_columns(database_manager $dbma
     $table = new xmldb_table('local_catquizlab_person');
 
     $fields = [
-        new xmldb_field('twinid', XMLDB_TYPE_CHAR, '64', null, XMLDB_NOTNULL, null, '', 'runid'),
+        // Nullable rather than NOT NULL with an empty default: Moodle rejects
+        // an empty-string default on a CHAR column, and a NOT NULL column
+        // without one cannot be added to a table that already has rows.
+        // Null is also the honest value for persons generated before the
+        // paired design existed — they have no twin.
+        new xmldb_field('twinid', XMLDB_TYPE_CHAR, '64', null, null, null, null, 'runid'),
         new xmldb_field('twinindex', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, '0', 'twinid'),
         new xmldb_field('severity', XMLDB_TYPE_CHAR, '32', null, XMLDB_NOTNULL, null, 'none', 'twinindex'),
     ];

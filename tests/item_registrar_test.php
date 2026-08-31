@@ -24,6 +24,7 @@
 
 namespace local_catquizlab;
 
+use local_catquizlab\local\cat_item_provisioner;
 use local_catquizlab\local\item_registrar;
 use local_catquizlab\local\environment;
 
@@ -62,7 +63,13 @@ final class item_registrar_test extends \advanced_testcase {
             $this->markTestSkipped('Engine present; the guard path is not exercised.');
         }
 
-        $this->assertNull(item_registrar::register_item(3397, 101, 10, ['difficulty' => 0.5]));
+        $outcome = item_registrar::register_item(3397, 101, 10, ['difficulty' => 0.5]);
+
+        // A structured refusal, not null: a caller must be able to tell why a
+        // registration did not happen, and a bare null said only "something".
+        $this->assertFalse($outcome['ok']);
+        $this->assertSame(cat_item_provisioner::REASON_NO_ENGINE, $outcome['reason']);
+        $this->assertNull($outcome['itemid']);
     }
 
     /**
