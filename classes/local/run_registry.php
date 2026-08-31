@@ -127,6 +127,11 @@ class run_registry {
             'model'         => $model,
             'modellabel'    => model_catalog::has($model) ? model_catalog::label($model) : $model,
             'variant'       => (string) ($definition['pool']['variant'] ?? 'ideal'),
+            'recipe'        => (array) ($definition['pool']['recipe'] ?? []),
+            'strength'      => self::disturbance_strength(
+                (string) ($definition['pool']['variant'] ?? 'ideal'),
+                (array) ($definition['pool']['recipe'] ?? [])
+            ),
             'stratum'       => (string) ($definition['persons']['stratum'] ?? ''),
             'severity'      => (string) ($definition['persons']['severity'] ?? 'none'),
             'attempts'      => $attempts,
@@ -136,6 +141,62 @@ class run_registry {
             'timemodified'  => (int) $record->timemodified,
             'duration'      => max(0, (int) $record->timemodified - (int) $record->timecreated),
         ];
+    }
+
+    /**
+     * The strength of a pool disturbance, on the scale that variant uses.
+     *
+     * Robustness is read against the size of the disturbance, so the design
+     * needs one number per run that says how badly the pool was disturbed. Each
+     * variant measures that differently — a share of affected items, a shift in
+     * logits, a stretch factor — so the figure is only comparable within a
+     * variant, which is how the robustness view groups it.
+     *
+     * @param string $variant The pool variant.
+     * @param array $recipe The variant recipe.
+     * @return float|null The strength, or null for the ideal pool and unknown variants.
+     */
+    public static function disturbance_strength(string $variant, array $recipe): ?float {
+        $recipe = pool_mutator::apply_recipe_defaults($variant, $recipe);
+
+        switch ($variant) {
+            case 'depleted':
+            case 'taggingerror':
+            case 'calibrationerror':
+                return isset($recipe['fraction']) ? round((float) $recipe['fraction'], 6) : null;
+            case 'shifted':
+                return isset($recipe['shift']) ? round(abs((float) $recipe['shift']), 6) : null;
+            case 'stretched':
+                return isset($recipe['factor']) ? round((float) $recipe['factor'], 6) : null;
+            case 'gappy':
+                if (isset($recipe['gapmin'], $recipe['gapmax'])) {
+                    return round((float) $recipe['gapmax'] - (float) $recipe['gapmin'], 6);
+                }
+                return null;
+            default:
+                // The ideal pool has no disturbance, and 'combined' has several
+                // that do not reduce to one number.
+                return null;
+        }
+    }
+
+    /**
+     * The unit the strength of a variant is measured in.
+     *
+     * @param string $variant The pool variant.
+     * @return string A language string key suffix, or an empty string when there is no strength.
+     */
+    public static function strength_unit(string $variant): string {
+        $units = [
+            'depleted'         => 'share',
+            'taggingerror'     => 'share',
+            'calibrationerror' => 'share',
+            'shifted'          => 'logits',
+            'stretched'        => 'factor',
+            'gappy'            => 'logits',
+        ];
+
+        return $units[$variant] ?? '';
     }
 
     /**

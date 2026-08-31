@@ -121,7 +121,21 @@ class attempt_collector {
         $debug = $engine['debug'] ?? [];
         $trace['scaleabilities'] = $debug['scaleabilities'] ?? [];
         $trace['questionsperscale'] = $debug['questionsperscale'] ?? [];
+        $trace['abilitypath'] = $debug['abilitypath'] ?? [];
         $trace['steps'] = $debug['steps'] ?? 0;
+        // Per-scale standard errors come from the engine's person parameters,
+        // not from debug_info. Without them the local agreement measures — is
+        // the estimated deviation within one or two standard errors of the true
+        // one — cannot be computed at all, and guessing a value would turn a
+        // missing measurement into a fabricated one.
+        $trace['scalestandarderrors'] = $engine['scalestandarderrors'] ?? [];
+        // The progress row carries what debug_info does not: which scales were
+        // active, dropped or locked, and the item sequence. It survives the
+        // attempt today, but only until the activity is deleted, and the engine
+        // ships a delete() for it — so the lab keeps its own copy rather than
+        // depending on someone else's retention decision.
+        $trace['progress'] = self::read_progress((int) $attempt->engineattemptid);
+        $trace['steps'] = self::step_series($trace, $debug);
 
         $DB->update_record('local_catquizlab_attempt', (object) [
             'id'           => $attemptid,
@@ -188,7 +202,112 @@ class attempt_collector {
             'responses'  => self::read_responses((int) $aq->uniqueid),
             'stopreason' => (string) ($aq->attemptstopcriteria ?? ''),
             'debug'      => self::parse_debug_info((string) ($catquiz->debug_info ?? '')),
+            'scalestandarderrors' => self::read_scale_standarderrors($catquiz),
         ];
+    }
+
+    /**
+     * Archive the engine's progress snapshot of an attempt, if it still exists.
+     *
+     * The row currently outlives the attempt and is removed only when the
+     * activity itself is deleted. That is not something to rely on: the engine
+     * defines progress::delete(), and the table is documented as holding the
+     * data needed to continue an attempt. A missing row is therefore treated as
+     * ordinary rather than as an error.
+     *
+     * @param int $engineattemptid The engine attempt id.
+     * @return array The decoded snapshot, or an empty array when it is gone.
+     */
+    protected static function read_progress(int $engineattemptid): array {
+        global $DB;
+
+        if ($engineattemptid <= 0 || !$DB->get_manager()->table_exists('local_catquiz_progress')) {
+            return [];
+        }
+
+        $record = $DB->get_records(
+            'local_catquiz_progress',
+            ['attemptid' => $engineattemptid],
+            'id DESC',
+            '*',
+            0,
+            1
+        );
+        if (!$record) {
+            return [];
+        }
+        $record = reset($record);
+        $decoded = json_decode((string) ($record->json ?? ''), true);
+        if (!is_array($decoded)) {
+            return [];
+        }
+
+        // Only the parts the test-flow view needs are kept. The rest is engine
+        // bookkeeping and would bloat every trace row.
+        $keep = [
+            'playedquestions', 'playedquestionsbyscale', 'activescales',
+            'droppedscales', 'lockedscales', 'responses', 'abilities',
+            'preattemptabilities', 'starttime',
+        ];
+
+        return array_intersect_key($decoded, array_flip($keep));
+    }
+
+    /**
+     * Build the per-step series of a test flow.
+     *
+     * Prefers the progress snapshot, which records the ability after each
+     * response; falls back to the step count debug_info reports, which is all
+     * that survives once the progress row is deleted.
+     *
+     * @param array $trace The trace being assembled.
+     * @param array $debug The parsed debug_info.
+     * @return int The number of steps.
+     */
+    protected static function step_series(array $trace, array $debug): int {
+        $progress = (array) ($trace['progress'] ?? []);
+        $played = (array) ($progress['playedquestions'] ?? []);
+
+        return $played !== [] ? count($played) : (int) ($debug['steps'] ?? 0);
+    }
+
+    /**
+     * Read the per-scale standard errors of a finished attempt.
+     *
+     * local_catquiz_personparams carries one row per scale with the ability and
+     * its standard error. Older engine builds shipped the table without the
+     * standarderror column, so a missing column is reported as no data rather
+     * than as a fatal.
+     *
+     * @param \stdClass|false $catquiz The engine attempt row.
+     * @return array<int, float> Standard error keyed by engine scale id.
+     */
+    protected static function read_scale_standarderrors($catquiz): array {
+        global $DB;
+
+        if (!$catquiz || empty($catquiz->attemptid)) {
+            return [];
+        }
+        $columns = $DB->get_columns('local_catquiz_personparams');
+        if (!isset($columns['standarderror']) || !isset($columns['attemptid'])) {
+            return [];
+        }
+
+        $rows = $DB->get_records(
+            'local_catquiz_personparams',
+            ['attemptid' => (int) $catquiz->attemptid],
+            '',
+            'id, catscaleid, standarderror'
+        );
+
+        $out = [];
+        foreach ($rows as $row) {
+            if ($row->standarderror !== null) {
+                $out[(int) $row->catscaleid] = (float) $row->standarderror;
+            }
+        }
+
+        return $out;
     }
 
     /**
@@ -220,9 +339,25 @@ class attempt_collector {
         }
         $last = $last ?? (array) end($rows);
 
+        // The debug_info blob is a list of per-step snapshots, so the path is
+        // the sequence of them — not just the final one. Reading only the last
+        // snapshot, as this used to, discards the trajectory the test-flow view
+        // exists to show.
+        $path = [];
+        foreach ($rows as $index => $row) {
+            if (!is_array($row) || !isset($row['personabilities'])) {
+                continue;
+            }
+            $path[] = [
+                'step'      => $index + 1,
+                'abilities' => self::normalise_abilities($row['personabilities']),
+            ];
+        }
+
         return [
             'steps'             => count($rows),
             'scaleabilities'    => self::normalise_abilities($last['personabilities'] ?? []),
+            'abilitypath'       => $path,
             'questionsperscale' => is_array($last['numquestionsperscale'] ?? null)
                 ? $last['numquestionsperscale']
                 : [],

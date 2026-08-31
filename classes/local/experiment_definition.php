@@ -468,7 +468,16 @@ class experiment_definition {
             'strategy'      => 'fastest',
             'replications'  => 1,
             'seed'          => 42,
+            // Study metadata. They carry no computational meaning, but a
+            // published experiment has to be citable, and "the third one in the
+            // list" is not a citation.
+            'description'   => '',
+            'experimentkey' => '',
+            'version'       => '1.0.0',
+            'tags'          => [],
+            'enabled'       => true,
         ];
+        $def['tags'] = array_values(array_filter(array_map('strval', (array) $def['tags'])));
         $def['publication'] = self::is_publication($def);
 
         if (is_array($def['pool'] ?? null) || $fillrequired) {

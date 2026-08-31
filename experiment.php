@@ -33,6 +33,7 @@ use local_catquizlab\form\experiment_form;
 use local_catquizlab\local\experiment_definition;
 use local_catquizlab\local\experiment_io;
 use local_catquizlab\local\experiment_service;
+use local_catquizlab\local\preset_library;
 
 $id = optional_param('id', 0, PARAM_INT);
 $action = optional_param('action', '', PARAM_ALPHA);
@@ -146,6 +147,7 @@ if ($form->is_cancelled()) {
 
 $preview = null;
 $validation = null;
+$notes = [];
 
 if ($data = $form->get_data()) {
     require_capability('local/catquizlab:edit', $context);
@@ -166,6 +168,22 @@ if ($data = $form->get_data()) {
     $form->set_data(experiment_form::to_form_data($definition, $id));
     $validation = experiment_service::validate($definition);
     $preview = experiment_service::preview($definition);
+
+    // Remarks that are neither defects nor doubts: an experiment with runs is
+    // read-only, and a cited building block is worth naming.
+    if (experiment_service::run_count($id) > 0) {
+        $notes[] = get_string('editor:hasruns', $component);
+    }
+    $normalisedfornotes = $validation['normalised'];
+    foreach (['poolpreset' => 'preset:kindpool', 'personspreset' => 'preset:kindpersons'] as $field => $label) {
+        $presetid = (int) ($normalisedfornotes[$field] ?? 0);
+        if ($presetid > 0 && ($preset = preset_library::get($presetid)) !== null) {
+            $notes[] = get_string('editor:usesblock', $component, (object) [
+                'kind' => get_string($label, $component),
+                'name' => $preset['name'],
+            ]);
+        }
+    }
 }
 
 echo $OUTPUT->header();
@@ -173,79 +191,76 @@ echo $OUTPUT->heading($id > 0
     ? get_string('heading:editexperiment', $component)
     : get_string('heading:newexperiment', $component));
 
+// The definition currently on screen: the stored one when editing, the
+// defaults when creating. It drives the section summaries so the navigation
+// describes the design rather than repeating the section titles.
+$current = $id > 0
+    ? (new experiment_definition($definition))->get_normalised()
+    : experiment_definition::apply_defaults([]);
+
+$sections = experiment_form::sections($current);
+
+$validationcontext = false;
 if ($validation !== null) {
-    foreach ($validation['errors'] as $message) {
-        echo $OUTPUT->notification($message, \core\output\notification::NOTIFY_ERROR);
-    }
-    foreach ($validation['warnings'] as $message) {
-        echo $OUTPUT->notification($message, \core\output\notification::NOTIFY_WARNING);
-    }
-}
-
-// The preview is produced by the same expansion the sweep will run, so the
-// numbers shown here are the numbers that get created.
-if ($preview !== null && $preview['runs'] > 0) {
-    $rows = [
-        [get_string('preview:cells', $component), $preview['cells']],
-        [get_string('preview:replications', $component), $preview['replications']],
-        [get_string('preview:runs', $component), $preview['runs']],
-        [get_string('preview:attempts', $component), $preview['attempts']],
-    ];
-    $table = new html_table();
-    $table->attributes['class'] = 'generaltable table-sm w-auto';
-    $table->head = [get_string('preview:quantity', $component), get_string('preview:value', $component)];
-    $table->data = $rows;
-
-    echo $OUTPUT->heading(get_string('heading:sweeppreview', $component), 3);
-    echo html_writer::table($table);
-
-    if ($preview['large']) {
-        echo $OUTPUT->notification(
-            get_string('sweep:large', $component, number_format($preview['runs'])),
-            \core\output\notification::NOTIFY_WARNING
-        );
-    }
-
-    if (has_capability('local/catquizlab:execute', $context)) {
-        echo $OUTPUT->single_button(
-            new moodle_url('/local/catquizlab/experiment.php', [
-                'id'      => $id,
-                'action'  => 'createsweep',
-                'sesskey' => sesskey(),
-            ]),
-            get_string('action:createsweep', $component),
-            'post'
-        );
-    }
-}
-
-if ($id > 0 && has_capability('local/catquizlab:export', $context)) {
-    echo $OUTPUT->heading(get_string('heading:exchange', $component), 3);
-    echo html_writer::div(
-        html_writer::link(
-            new moodle_url('/local/catquizlab/experiment.php', [
-                'id'      => $id,
-                'action'  => 'export',
-                'variant' => experiment_io::VARIANT_DECLARATIVE,
-            ]),
-            get_string('action:exportdeclarative', $component),
-            ['class' => 'btn btn-secondary mr-2']
-        )
-        . ' '
-        . html_writer::link(
-            new moodle_url('/local/catquizlab/experiment.php', [
-                'id'      => $id,
-                'action'  => 'export',
-                'variant' => experiment_io::VARIANT_NORMALISED,
-            ]),
-            get_string('action:exportnormalised', $component),
-            ['class' => 'btn btn-secondary']
+    $validationcontext = [
+        'valid'        => $validation['valid'],
+        'checked'      => true,
+        'errorcount'   => count($validation['errors']),
+        'warningcount' => count($validation['warnings']),
+        // Notes are informational remarks that neither block a run nor
+        // question it; the count is shown so an empty panel is not mistaken
+        // for an unchecked one.
+        'infocount'    => count($notes),
+        'errors'       => array_map(
+            static fn(string $message): array => ['message' => $message],
+            $validation['errors']
         ),
-        'mb-3'
-    );
-    echo html_writer::tag('p', get_string('exchange:explain', $component), ['class' => 'text-muted']);
+        'warnings'     => array_map(
+            static fn(string $message): array => ['message' => $message],
+            $validation['warnings']
+        ),
+        'notes'        => array_map(
+            static fn(string $message): array => ['message' => $message],
+            $notes
+        ),
+    ];
+} else {
+    $validationcontext = ['checked' => false, 'valid' => false];
 }
 
-$form->display();
+$previewcontext = false;
+if ($preview !== null && $preview['runs'] > 0) {
+    $previewcontext = [
+        'cells'        => $preview['cells'],
+        'replications' => $preview['replications'],
+        'runs'         => $preview['runs'],
+        'attempts'     => $preview['attempts'],
+        'large'        => $preview['large'],
+        'cansweep'     => has_capability('local/catquizlab:execute', $context),
+        'sesskey'      => sesskey(),
+        'experimentid' => $id,
+        'createurl'    => (new moodle_url('/local/catquizlab/experiment.php'))->out(false),
+    ];
+}
+
+$exchangecontext = false;
+if ($id > 0 && has_capability('local/catquizlab:export', $context)) {
+    $exchangecontext = [
+        'declarativeurl' => (new moodle_url('/local/catquizlab/experiment.php', [
+            'id' => $id, 'action' => 'export', 'variant' => experiment_io::VARIANT_DECLARATIVE,
+        ]))->out(false),
+        'normalisedurl'  => (new moodle_url('/local/catquizlab/experiment.php', [
+            'id' => $id, 'action' => 'export', 'variant' => experiment_io::VARIANT_NORMALISED,
+        ]))->out(false),
+    ];
+}
+
+echo $OUTPUT->render_from_template('local_catquizlab/experiment_editor', [
+    'sections'   => $sections,
+    'form'       => $form->render(),
+    'validation' => $validationcontext,
+    'preview'    => $previewcontext,
+    'exchange'   => $exchangecontext,
+]);
 
 echo $OUTPUT->footer();

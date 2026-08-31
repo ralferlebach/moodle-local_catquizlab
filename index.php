@@ -15,13 +15,11 @@
 // along with Moodle.  If not, see <http://www.gnu.org/licenses/>.
 
 /**
- * Management page for the CAT experiment suite.
+ * Landing page of the CAT experiment suite.
  *
- * Entry point of the plugin's UI, reachable from the navbar button (next to the
- * engine's CATQUIZ button) and from Site administration > Reports. It is the
- * registry landing page: environment status, experiments and runs, each in a
- * collapsible section rendered from the local_catquizlab/manage template. The
- * create/edit forms follow with a later milestone.
+ * Shows an overview panel, the primary actions, the experiments and the most
+ * recent runs. Everything factual comes from the services; this file resolves
+ * parameters and builds the template context.
  *
  * @package    local_catquizlab
  * @copyright  2026 Ralf Erlebach
@@ -32,23 +30,20 @@ require(__DIR__ . '/../../config.php');
 require_once($CFG->libdir . '/adminlib.php');
 
 use local_catquizlab\local\environment;
+use local_catquizlab\local\experiment_definition;
 use local_catquizlab\local\experiment_service;
 use local_catquizlab\local\registry;
+use local_catquizlab\local\run_registry;
 
-// Registers the page in the admin/reports tree, sets the system context and the
-// admin report layout, and enforces the page capability from settings.php
-// (local/catquizlab:manage).
 admin_externalpage_setup('local_catquizlab_manage');
 
 $component = 'local_catquizlab';
+$context = context_system::instance();
+$canedit = has_capability('local/catquizlab:edit', $context);
+$canexecute = has_capability('local/catquizlab:execute', $context);
+$canexport = has_capability('local/catquizlab:export', $context);
 
-$statusmap = [
-    registry::STATUS_DRAFT     => get_string('status:draft', $component),
-    registry::STATUS_SCHEDULED => get_string('status:scheduled', $component),
-    registry::STATUS_RUNNING   => get_string('status:running', $component),
-    registry::STATUS_FINISHED  => get_string('status:finished', $component),
-    registry::STATUS_FAILED    => get_string('status:failed', $component),
-];
+$runsurl = new moodle_url('/local/catquizlab/runs.php');
 
 // Environment status: can experiments actually run on this site?
 $envitems = [
@@ -60,74 +55,154 @@ $envitems = [
         : ['text' => get_string('env:adaptivequizmissing', $component), 'class' => 'text-danger'],
 ];
 
-// Experiments defined so far. The overview comes from the service, so the
-// labels shown here are the publication ones used in the manuscript and the
-// exports rather than a second set invented for the UI.
+/**
+ * The bootstrap badge class for a run or experiment status.
+ *
+ * @param int $status The status value.
+ * @return string
+ */
+function local_catquizlab_status_class(int $status): string {
+    $map = [
+        registry::STATUS_DRAFT     => 'badge-secondary',
+        registry::STATUS_SCHEDULED => 'badge-info',
+        registry::STATUS_RUNNING   => 'badge-primary',
+        registry::STATUS_FINISHED  => 'badge-success',
+        registry::STATUS_FAILED    => 'badge-danger',
+    ];
+
+    return $map[$status] ?? 'badge-secondary';
+}
+
+// Experiments, with the actions the viewer is actually allowed to perform.
 $experimentrows = [];
 foreach (experiment_service::overview() as $row) {
-    // The name links to the editor rather than the report: from the overview
-    // the next step is almost always to look at or change the definition.
+    $editurl = new moodle_url('/local/catquizlab/experiment.php', ['id' => $row['id']]);
+
+    $actions = [
+        html_writer::link(
+            new moodle_url('/local/catquizlab/results.php', ['experimentid' => $row['id']]),
+            get_string('manage:results', $component),
+            ['class' => 'mr-2']
+        ),
+        html_writer::link(
+            new moodle_url('/local/catquizlab/compare.php', ['experimentid' => $row['id']]),
+            get_string('manage:compare', $component),
+            ['class' => 'mr-2']
+        ),
+    ];
+    if ($canedit) {
+        $actions[] = html_writer::link(
+            new moodle_url('/local/catquizlab/experiment.php', [
+                'id' => $row['id'], 'action' => 'duplicate', 'sesskey' => sesskey(),
+            ]),
+            get_string('manage:duplicate', $component),
+            ['class' => 'mr-2']
+        );
+    }
+    if ($canexport) {
+        $actions[] = html_writer::link(
+            new moodle_url('/local/catquizlab/experiment.php', [
+                'id' => $row['id'], 'action' => 'export',
+            ]),
+            get_string('manage:exportjson', $component)
+        );
+    }
+
+    $status = (int) $row['status'];
     $experimentrows[] = array_merge($row, [
-        'status'    => $row['statuslabel'],
-        'editurl'   => (new moodle_url(
-            '/local/catquizlab/experiment.php',
-            ['id' => $row['id']]
-        ))->out(false),
-        'reporturl' => (new moodle_url(
-            '/local/catquizlab/report.php',
-            ['experimentid' => $row['id']]
-        ))->out(false),
-        'compareurl' => (new moodle_url(
-            '/local/catquizlab/compare.php',
-            ['experimentid' => $row['id']]
-        ))->out(false),
+        'status'       => $row['statuslabel'],
+        'statusclass'  => local_catquizlab_status_class($status),
+        'tierlabel'    => get_string_manager()->string_exists('tier:' . $row['tier'], $component)
+            ? get_string('tier:' . $row['tier'], $component)
+            : $row['tier'],
+        'cells'        => $row['cells'] ?? '—',
+        'modified'     => userdate($row['timemodified'], get_string('strftimedatetimeshort')),
+        'editurl'      => $editurl->out(false),
+        'actions'      => implode('', $actions),
     ]);
 }
 
-// Run registry: a status summary plus the most recent runs.
-$summaryparts = [];
-foreach (registry::global_status_summary() as $status => $count) {
-    $summaryparts[] = ($statusmap[$status] ?? (string) $status) . ': ' . $count;
-}
+// The most recent runs; the full, filterable listing lives on runs.php.
+$recent = run_registry::listing([], 0, 10);
 $runrows = [];
-foreach (registry::recent_runs(100) as $run) {
+foreach ($recent['rows'] as $row) {
     $runrows[] = [
-        'experiment'  => $run->experimentname,
-        'tier'        => $run->tier,
-        'cell'        => $run->cellkey,
-        'replication' => $run->replication,
-        'seed'        => $run->seed,
-        'status'      => $statusmap[$run->status] ?? (string) $run->status,
-        'reporturl'   => (new moodle_url(
-            '/local/catquizlab/runs.php',
-            ['runid' => $run->id]
-        ))->out(false),
+        'id'            => $row['id'],
+        'experiment'    => $row['experiment'],
+        'strategylabel' => $row['strategylabel'],
+        'variantlabel'  => run_registry::group_label('variant', $row['variant']),
+        'stratumlabel'  => run_registry::group_label('stratum', $row['stratum']),
+        'statuslabel'   => $row['statuslabel'],
+        'statusclass'   => local_catquizlab_status_class((int) $row['status']),
+        'progress'      => $row['progress'],
+        'progressclass' => (int) $row['status'] === registry::STATUS_FAILED ? 'bg-danger' : '',
+        'progresslabel' => get_string('run:progressof', $component, (object) [
+            'done'  => $row['attemptsdone'],
+            'total' => $row['attempts'],
+        ]),
+        'detailurl'     => (new moodle_url('/local/catquizlab/runs.php', ['runid' => $row['id']]))->out(false),
     ];
 }
 
-$canedit = has_capability('local/catquizlab:edit', context_system::instance());
+// The overview panel: how much is there, and how much of it is in trouble.
+$counts = [
+    'experiments' => count($experimentrows),
+    'running'     => $DB->count_records('local_catquizlab_run', ['status' => registry::STATUS_RUNNING]),
+    'finished'    => $DB->count_records('local_catquizlab_run', ['status' => registry::STATUS_FINISHED]),
+    'failed'      => $DB->count_records('local_catquizlab_run', ['status' => registry::STATUS_FAILED]),
+];
+$overview = [
+    [
+        'count' => $counts['experiments'],
+        'label' => get_string('overview:experiments', $component),
+        'url'   => '#experiments',
+        'class' => 'text-primary',
+    ],
+    [
+        'count' => $counts['running'],
+        'label' => get_string('overview:running', $component),
+        'url'   => (new moodle_url($runsurl, ['status' => registry::STATUS_RUNNING]))->out(false),
+        'class' => 'text-primary',
+    ],
+    [
+        'count' => $counts['finished'],
+        'label' => get_string('overview:finished', $component),
+        'url'   => (new moodle_url($runsurl, ['status' => registry::STATUS_FINISHED]))->out(false),
+        'class' => 'text-success',
+    ],
+    [
+        'count' => $counts['failed'],
+        'label' => get_string('overview:failed', $component),
+        'url'   => (new moodle_url($runsurl, ['status' => registry::STATUS_FAILED]))->out(false),
+        'class' => 'text-danger',
+    ],
+];
 
 $templatecontext = [
     'intro'       => get_string('manage:intro', $component),
     'canedit'     => $canedit,
     'newurl'      => (new moodle_url('/local/catquizlab/experiment.php'))->out(false),
     'importurl'   => (new moodle_url('/local/catquizlab/import.php'))->out(false),
-    'runsurl'     => (new moodle_url('/local/catquizlab/runs.php'))->out(false),
-    'disabled'    => !get_config($component, 'enabled'),
+    'presetsurl'  => (new moodle_url('/local/catquizlab/presets.php'))->out(false),
+    'runsurl'     => $runsurl->out(false),
+    'resultsurl'  => (new moodle_url('/local/catquizlab/results.php'))->out(false),
+    'overview'    => $overview,
     'environment' => ['items' => $envitems],
-    'experiments' => [
-        'hasany' => $experimentrows !== [],
-        'rows'   => $experimentrows,
-    ],
+    'disabled'    => !get_config($component, 'enabled'),
+    'experiments' => ['hasany' => $experimentrows !== [], 'rows' => $experimentrows],
     'runs'        => [
         'hasany'     => $runrows !== [],
-        'hassummary' => $summaryparts !== [],
-        'summary'    => implode(' · ', $summaryparts),
+        'hassummary' => $recent['total'] > count($runrows),
+        'summary'    => get_string('manage:runsummary', $component, (object) [
+            'shown' => count($runrows),
+            'total' => $recent['total'],
+        ]),
         'rows'       => $runrows,
+        'runsurl'    => $runsurl->out(false),
     ],
 ];
 
 echo $OUTPUT->header();
-echo $OUTPUT->heading(get_string('manage:heading', $component));
+echo $OUTPUT->heading(get_string('pluginname', $component));
 echo $OUTPUT->render_from_template('local_catquizlab/manage', $templatecontext);
 echo $OUTPUT->footer();

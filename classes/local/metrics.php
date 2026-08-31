@@ -131,6 +131,81 @@ class metrics {
             'itemsused' => $used,
             'maxrate'   => $rates ? max($rates) : 0.0,
             'unused'    => $poolsize !== null ? max(0, $poolsize - $used) : null,
+            'concentration' => self::concentration($rates, $poolsize),
+        ];
+    }
+
+    /**
+     * How unevenly the pool was used.
+     *
+     * A mean exposure rate says nothing about concentration: a pool where every
+     * item is shown equally often and one where a tenth of the items carry the
+     * whole test can have the same mean. The design cares about the second
+     * case, so the primary figure here is the Gini coefficient over the
+     * exposure rates — 0 when every item is used equally, approaching 1 when a
+     * vanishing share of items carries everything.
+     *
+     * The Herfindahl index is reported alongside because it reacts more
+     * sharply to a few dominant items, and the two disagreeing is itself
+     * informative. Items never shown count as zero exposure, so a large unused
+     * remainder raises the concentration rather than being ignored.
+     *
+     * @param array $rates Exposure rate per item.
+     * @param int|null $poolsize Total items available, including unused ones.
+     * @return array{n: int, gini: float|null, hhi: float|null, max: float, mean: float, above: float}
+     */
+    public static function concentration(array $rates, ?int $poolsize = null): array {
+        $values = array_values(array_map('floatval', $rates));
+        if ($poolsize !== null && $poolsize > count($values)) {
+            $values = array_pad($values, $poolsize, 0.0);
+        }
+
+        $n = count($values);
+        if ($n === 0) {
+            return ['n' => 0, 'gini' => null, 'hhi' => null, 'max' => 0.0, 'mean' => 0.0, 'above' => 0.0];
+        }
+
+        sort($values);
+        $total = array_sum($values);
+        $mean = $total / $n;
+
+        $gini = null;
+        if ($total > 0.0) {
+            // Sorted-values form of the Gini coefficient.
+            $weighted = 0.0;
+            foreach ($values as $i => $value) {
+                $weighted += ($i + 1) * $value;
+            }
+            $gini = (2.0 * $weighted) / ($n * $total) - ($n + 1) / $n;
+        }
+
+        $hhi = null;
+        if ($total > 0.0) {
+            $sumsquares = 0.0;
+            foreach ($values as $value) {
+                $share = $value / $total;
+                $sumsquares += $share * $share;
+            }
+            $hhi = $sumsquares;
+        }
+
+        // The share of items shown more often than twice the mean: a plain
+        // reading of "how many items are carrying more than their share".
+        $threshold = 2.0 * $mean;
+        $above = 0;
+        foreach ($values as $value) {
+            if ($threshold > 0.0 && $value > $threshold) {
+                $above++;
+            }
+        }
+
+        return [
+            'n'    => $n,
+            'gini' => $gini === null ? null : round($gini, 6),
+            'hhi'  => $hhi === null ? null : round($hhi, 6),
+            'max'  => round(max($values), 6),
+            'mean' => round($mean, 6),
+            'above' => round($above / $n, 6),
         ];
     }
 

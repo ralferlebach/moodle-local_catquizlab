@@ -90,7 +90,13 @@ class experiment_service {
         $record = (object) [
             'name'         => (string) ($normalised['name'] ?? get_string('experiment:untitled', 'local_catquizlab')),
             'tier'         => (string) ($normalised['tier'] ?? 'baseline'),
-            'configjson'   => json_encode($definition, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE),
+            // PRESERVE_ZERO_FRACTION keeps a discrimination of 1.0 a float;
+            // without it the stored definition differs in type from the one
+            // that was validated.
+            'configjson'   => json_encode(
+                $definition,
+                JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_PRESERVE_ZERO_FRACTION
+            ),
             'status'       => $result['valid'] ? self::STATUS_VALIDATED : self::STATUS_DRAFT,
             'usermodified' => (int) ($USER->id ?? 0),
             'timemodified' => $now,
@@ -274,6 +280,15 @@ class experiment_service {
         $DB->set_field('local_catquizlab_experiment', 'status', self::STATUS_EXECUTED, ['id' => $experimentid]);
         $transaction->allow_commit();
 
+        // Runs now depend on whatever building blocks the definition cited, so
+        // those blocks may no longer be edited in place.
+        foreach (['poolpreset', 'personspreset'] as $field) {
+            $presetid = (int) ($normalised[$field] ?? 0);
+            if ($presetid > 0) {
+                preset_library::record_use($presetid, true);
+            }
+        }
+
         return [
             'created' => count($runids),
             'cells'   => count($expansion['cells'] ?? []),
@@ -349,12 +364,31 @@ class experiment_service {
                 'stratum'      => (string) ($normalised['persons']['stratum'] ?? ''),
                 'severity'     => (string) ($normalised['persons']['severity'] ?? 'none'),
                 'replications' => (int) ($normalised['replications'] ?? 1),
+                'cells'        => self::cell_count($normalised),
                 'runs'         => self::run_count((int) $record->id),
                 'timemodified' => (int) $record->timemodified,
             ];
         }
 
         return $rows;
+    }
+
+    /**
+     * How many experimental cells a definition expands to.
+     *
+     * Expanding can fail on an invalid definition, and a draft is allowed to be
+     * invalid, so the overview reports a dash rather than refusing to render.
+     *
+     * @param array $normalised The normalised definition.
+     * @return int|string The cell count, or an em dash when it cannot be determined.
+     */
+    public static function cell_count(array $normalised) {
+        try {
+            $expansion = sweep::expand(self::sweep_spec($normalised));
+            return count($expansion['cells'] ?? []);
+        } catch (\Throwable $e) {
+            return '—';
+        }
     }
 
     /**

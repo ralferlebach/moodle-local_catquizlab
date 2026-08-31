@@ -27,6 +27,7 @@ namespace local_catquizlab\form;
 use local_catquizlab\local\experiment_definition;
 use local_catquizlab\local\model_catalog;
 use local_catquizlab\local\pool_mutator;
+use local_catquizlab\local\preset_library;
 use local_catquizlab\local\strategy_catalog;
 
 defined('MOODLE_INTERNAL') || die();
@@ -66,6 +67,29 @@ class experiment_form extends \moodleform {
         $mform->addElement('text', 'name', get_string('form:name', $component), ['size' => 60]);
         $mform->setType('name', PARAM_TEXT);
         $mform->addRule('name', null, 'required', null, 'client');
+
+        $mform->addElement('textarea', 'description', get_string('form:description', $component), [
+            'rows' => 3, 'cols' => 60,
+        ]);
+        $mform->setType('description', PARAM_TEXT);
+        $mform->addHelpButton('description', 'form:description', $component);
+
+        $mform->addElement('text', 'experimentkey', get_string('form:experimentkey', $component), ['size' => 40]);
+        $mform->setType('experimentkey', PARAM_ALPHANUMEXT);
+        $mform->addHelpButton('experimentkey', 'form:experimentkey', $component);
+
+        $mform->addElement('text', 'version', get_string('form:version', $component), ['size' => 12]);
+        $mform->setType('version', PARAM_TEXT);
+        $mform->setDefault('version', '1.0.0');
+        $mform->addHelpButton('version', 'form:version', $component);
+
+        $mform->addElement('text', 'tags', get_string('form:tags', $component), ['size' => 40]);
+        $mform->setType('tags', PARAM_TEXT);
+        $mform->addHelpButton('tags', 'form:tags', $component);
+
+        $mform->addElement('advcheckbox', 'enabled', get_string('form:enabled', $component));
+        $mform->setDefault('enabled', 1);
+        $mform->addHelpButton('enabled', 'form:enabled', $component);
 
         $mform->addElement('select', 'tier', get_string('form:tier', $component), self::tier_menu());
         $mform->addHelpButton('tier', 'form:tier', $component);
@@ -124,6 +148,18 @@ class experiment_form extends \moodleform {
         // Item pool.
         $mform->addElement('header', 'poolheader', get_string('form:pool', $component));
 
+        $poolpresets = preset_library::menu(preset_library::KIND_POOL);
+        if ($poolpresets !== []) {
+            $mform->addElement(
+                'select',
+                'poolpreset',
+                get_string('form:poolpreset', $component),
+                [0 => get_string('form:nopreset', $component)] + $poolpresets
+            );
+            $mform->setType('poolpreset', PARAM_INT);
+            $mform->addHelpButton('poolpreset', 'form:poolpreset', $component);
+        }
+
         $mform->addElement('text', 'poolcategories', get_string('form:domains', $component), ['size' => 6]);
         $mform->setType('poolcategories', PARAM_INT);
         $mform->setDefault('poolcategories', 10);
@@ -174,6 +210,18 @@ class experiment_form extends \moodleform {
 
         // Persons.
         $mform->addElement('header', 'personsheader', get_string('form:persons', $component));
+
+        $personpresets = preset_library::menu(preset_library::KIND_PERSONS);
+        if ($personpresets !== []) {
+            $mform->addElement(
+                'select',
+                'personspreset',
+                get_string('form:personspreset', $component),
+                [0 => get_string('form:nopreset', $component)] + $personpresets
+            );
+            $mform->setType('personspreset', PARAM_INT);
+            $mform->addHelpButton('personspreset', 'form:personspreset', $component);
+        }
 
         $mform->addElement('select', 'stratum', get_string('form:stratum', $component), self::stratum_menu());
         $mform->setDefault('stratum', 'conforming');
@@ -340,6 +388,11 @@ class experiment_form extends \moodleform {
             'schema'        => experiment_definition::SCHEMA,
             'schemaversion' => experiment_definition::SCHEMAVERSION,
             'name'          => (string) ($data['name'] ?? ''),
+            'description'   => (string) ($data['description'] ?? ''),
+            'experimentkey' => (string) ($data['experimentkey'] ?? ''),
+            'version'       => (string) ($data['version'] ?? '1.0.0'),
+            'tags'          => self::split_tags((string) ($data['tags'] ?? '')),
+            'enabled'       => !empty($data['enabled']),
             'tier'          => (string) ($data['tier'] ?? 'baseline'),
             'model'         => $model,
             'modelparams'   => self::model_params($data, $model),
@@ -401,6 +454,22 @@ class experiment_form extends \moodleform {
             $definition['sweep'] = ['factors' => $factors];
         }
 
+        // A cited block is recorded by id and fingerprint, so the manifest can
+        // later show that two experiments really shared a blueprint. The form
+        // values still win, because the author saw and could change them.
+        foreach (['poolpreset' => 'pool', 'personspreset' => 'persons'] as $field => $kind) {
+            $presetid = (int) ($data[$field] ?? 0);
+            if ($presetid <= 0) {
+                continue;
+            }
+            $preset = preset_library::get($presetid);
+            if ($preset === null) {
+                continue;
+            }
+            $definition[$field] = $presetid;
+            $definition[$field . 'fingerprint'] = $preset['fingerprint'];
+        }
+
         return $definition;
     }
 
@@ -422,6 +491,11 @@ class experiment_form extends \moodleform {
         return [
             'id'                 => $id,
             'name'               => (string) ($normalised['name'] ?? ''),
+            'description'        => (string) ($normalised['description'] ?? ''),
+            'experimentkey'      => (string) ($normalised['experimentkey'] ?? ''),
+            'version'            => (string) ($normalised['version'] ?? '1.0.0'),
+            'tags'               => implode(', ', (array) ($normalised['tags'] ?? [])),
+            'enabled'            => !empty($normalised['enabled']) ? 1 : 0,
             'tier'               => (string) ($normalised['tier'] ?? 'baseline'),
             'seed'               => (int) ($normalised['seed'] ?? 42),
             'replications'       => (int) ($normalised['replications'] ?? 1),
@@ -458,7 +532,21 @@ class experiment_form extends \moodleform {
             'sweepvariants'      => (array) ($factors['variant'] ?? []),
             'sweepstrata'        => (array) ($factors['stratum'] ?? []),
             'sweepseverities'    => (array) ($factors['severity'] ?? []),
+            'poolpreset'         => (int) ($normalised['poolpreset'] ?? 0),
+            'personspreset'      => (int) ($normalised['personspreset'] ?? 0),
         ];
+    }
+
+    /**
+     * Split a comma-separated tag field into a list.
+     *
+     * @param string $value The raw field value.
+     * @return string[] Trimmed, non-empty tags.
+     */
+    protected static function split_tags(string $value): array {
+        $tags = array_map('trim', explode(',', $value));
+
+        return array_values(array_filter($tags, static fn(string $tag): bool => $tag !== ''));
     }
 
     /**
@@ -534,6 +622,91 @@ class experiment_form extends \moodleform {
             default:
                 return [];
         }
+    }
+
+    /**
+     * The editor sections, with a one-line summary of what each currently holds.
+     *
+     * The mockup shows the summary next to the collapsed section, so an author
+     * can see the whole design without opening eight panels one after another.
+     *
+     * @param array $definition The normalised definition being edited.
+     * @return array[] One entry per section: number, anchor, title, summary.
+     */
+    public static function sections(array $definition): array {
+        $component = 'local_catquizlab';
+        $model = (string) ($definition['model'] ?? '2pl');
+        $strategy = (string) ($definition['strategy'] ?? 'fastest');
+        $variant = (string) ($definition['pool']['variant'] ?? 'ideal');
+        $scales = (array) ($definition['pool']['scales'] ?? []);
+        $persons = (array) ($definition['persons'] ?? []);
+        $budgets = (array) ($definition['budgets'] ?? []);
+        $factors = (array) ($definition['sweep']['factors'] ?? []);
+
+        $items = (int) ($scales['categories'] ?? 0)
+            * (int) ($scales['subcategories'] ?? 0)
+            * (int) ($scales['itemspersubscale'] ?? 0);
+
+        return [
+            [
+                'number'  => 1,
+                'anchor'  => 'id_basics',
+                'title'   => get_string('form:basics', $component),
+                'summary' => (string) ($definition['name'] ?? ''),
+            ],
+            [
+                'number'  => 2,
+                'anchor'  => 'id_modelheader',
+                'title'   => get_string('form:model', $component),
+                'summary' => get_string('editor:modelsummary', $component, (object) [
+                    'model' => model_catalog::has($model) ? model_catalog::label($model) : $model,
+                    'engine' => model_catalog::has($model) ? model_catalog::engine_key($model) : '—',
+                ]),
+            ],
+            [
+                'number'  => 3,
+                'anchor'  => 'id_poolheader',
+                'title'   => get_string('form:pool', $component),
+                'summary' => get_string('editor:poolsummary', $component, (object) [
+                    'variant' => get_string('variant:' . $variant, $component),
+                    'items'   => $items,
+                ]),
+            ],
+            [
+                'number'  => 4,
+                'anchor'  => 'id_personsheader',
+                'title'   => get_string('form:persons', $component),
+                'summary' => get_string('editor:personsummary', $component, (object) [
+                    'stratum' => get_string('stratum:' . ($persons['stratum'] ?? 'conforming'), $component),
+                    'count'   => (int) ($persons['count'] ?? 0),
+                ]),
+            ],
+            [
+                'number'  => 5,
+                'anchor'  => 'id_catheader',
+                'title'   => get_string('form:cat', $component),
+                'summary' => get_string('editor:catsummary', $component, (object) [
+                    'strategy' => strategy_catalog::has($strategy)
+                        ? strategy_catalog::label($strategy)
+                        : $strategy,
+                    'min'      => (int) ($budgets['global']['minitems'] ?? 0),
+                    'max'      => (int) ($budgets['global']['maxitems'] ?? 0),
+                    'semin'    => format_float((float) ($budgets['se']['min'] ?? 0), 2),
+                    'semax'    => format_float((float) ($budgets['se']['max'] ?? 0), 2),
+                ]),
+            ],
+            [
+                'number'  => 6,
+                'anchor'  => 'id_sweepheader',
+                'title'   => get_string('form:sweep', $component),
+                'summary' => get_string('editor:sweepsummary', $component, (object) [
+                    'factors'      => $factors === []
+                        ? get_string('editor:nofactors', $component)
+                        : implode(', ', array_keys($factors)),
+                    'replications' => (int) ($definition['replications'] ?? 1),
+                ]),
+            ],
+        ];
     }
 
     /**

@@ -89,7 +89,10 @@ class experiment_io {
             'definition'    => $definition,
         ];
 
-        return json_encode($payload, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+        return json_encode(
+            $payload,
+            JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_PRESERVE_ZERO_FRACTION
+        );
     }
 
     /**

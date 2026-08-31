@@ -25,7 +25,7 @@
 defined('MOODLE_INTERNAL') || die();
 
 $plugin->component    = 'local_catquizlab';
-$plugin->version      = 2026083101;
+$plugin->version      = 2026083106;
 $plugin->requires     = 2024100700;   // Moodle 4.5.0 — hard minimum.
 $plugin->supported    = [405, 502];   // Tested on Moodle 4.5, 5.0 and 5.2; raise as new majors are added to CI.
 $plugin->maturity     = MATURITY_ALPHA;

@@ -1,0 +1,205 @@
+{{!
+    This file is part of Moodle - http://moodle.org/
+
+    Moodle is free software: you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+    the Free Software Foundation, either version 3 of the License, or
+    (at your option) any later version.
+
+    Moodle is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+    GNU General Public License for more details.
+
+    You should have received a copy of the GNU General Public License
+    along with Moodle.  If not, see <http://www.gnu.org/licenses/>.
+}}
+{{!
+    @template local_catquizlab/experiment_editor
+
+    The experiment editor: section navigation, the form, and a validation panel.
+
+    The panel is what makes the layout worth having. A definition can be invalid
+    in eight places at once, and a list of errors at the top of a long form
+    leaves the author hunting for the field each one belongs to. Here the counts
+    stay visible while scrolling and each message links to its section.
+
+    Classes required for JS: none.
+    Data attributes required for JS: none.
+
+    Context variables required for this template:
+    * heading string - page heading
+    * sections array of { number int, anchor string, title string, summary string, current bool }
+    * form string - the rendered form HTML
+    * validation object - has valid bool, checked bool, errorcount int, warningcount int,
+      infocount int, errors array of { message string }, warnings array of { message string },
+      notes array of { message string }
+    * preview object|false - has cells, replications, runs, attempts, large bool,
+      createurl, cansweep bool, sesskey string, experimentid int
+    * exchange object|false - has declarativeurl, normalisedurl
+
+    Example context (json):
+    {
+        "heading": "New experiment",
+        "sections": [
+            { "number": 1, "anchor": "id_basics", "title": "Basics", "summary": "Baseline", "current": true }
+        ],
+        "form": "<form></form>",
+        "validation": {
+            "valid": true, "checked": true, "errorcount": 0, "warningcount": 0, "infocount": 0,
+            "errors": [], "warnings": []
+        },
+        "preview": false,
+        "exchange": false
+    }
+}}
+<div class="local-catquizlab-editor">
+    <div class="row">
+        <div class="col-lg-3 order-lg-1">
+            <nav aria-label="{{#str}}editor:sections, local_catquizlab{{/str}}">
+                <ol class="list-group list-group-flush mb-4">
+                    {{#sections}}
+                        <li class="list-group-item px-2 py-2">
+                            <a href="#{{anchor}}" class="d-block text-decoration-none">
+                                <span class="badge badge-secondary mr-2">{{number}}</span>
+                                <strong>{{title}}</strong>
+                            </a>
+                            {{#summary}}
+                                <div class="small text-muted ml-4 pl-2">{{summary}}</div>
+                            {{/summary}}
+                        </li>
+                    {{/sections}}
+                </ol>
+            </nav>
+        </div>
+
+        <div class="col-lg-6 order-lg-2">
+            {{{form}}}
+        </div>
+
+        <div class="col-lg-3 order-lg-3">
+            {{#validation}}
+                <div class="card mb-3">
+                    <div class="card-body">
+                        <h2 class="h5 card-title">
+                            {{#str}}editor:validation, local_catquizlab{{/str}}
+                        </h2>
+
+                        {{#checked}}
+                            {{#valid}}
+                                <div class="alert alert-success py-2">
+                                    {{#str}}editor:valid, local_catquizlab{{/str}}
+                                </div>
+                            {{/valid}}
+                            {{^valid}}
+                                <div class="alert alert-danger py-2">
+                                    {{#str}}editor:invalid, local_catquizlab{{/str}}
+                                </div>
+                            {{/valid}}
+
+                            <ul class="list-unstyled mb-0">
+                                <li class="d-flex justify-content-between py-1">
+                                    <span>{{#str}}editor:errors, local_catquizlab{{/str}}</span>
+                                    <strong class="text-danger">{{errorcount}}</strong>
+                                </li>
+                                <li class="d-flex justify-content-between py-1">
+                                    <span>{{#str}}editor:warnings, local_catquizlab{{/str}}</span>
+                                    <strong class="text-warning">{{warningcount}}</strong>
+                                </li>
+                                <li class="d-flex justify-content-between py-1">
+                                    <span>{{#str}}editor:notes, local_catquizlab{{/str}}</span>
+                                    <strong class="text-muted">{{infocount}}</strong>
+                                </li>
+                            </ul>
+
+                            {{#errors}}
+                                <div class="small text-danger mt-2">{{message}}</div>
+                            {{/errors}}
+                            {{#warnings}}
+                                <div class="small text-warning mt-2">{{message}}</div>
+                            {{/warnings}}
+                            {{! Counting the notes without showing them told the
+                                author that something was worth knowing and then
+                                withheld it. }}
+                            {{#notes}}
+                                <div class="small text-muted mt-2">{{message}}</div>
+                            {{/notes}}
+                        {{/checked}}
+                        {{^checked}}
+                            <p class="text-muted small mb-0">
+                                {{#str}}editor:notcheckedyet, local_catquizlab{{/str}}
+                            </p>
+                        {{/checked}}
+                    </div>
+                </div>
+            {{/validation}}
+
+            {{#preview}}
+                <div class="card mb-3">
+                    <div class="card-body">
+                        <h2 class="h5 card-title">
+                            {{#str}}heading:sweeppreview, local_catquizlab{{/str}}
+                        </h2>
+                        <ul class="list-unstyled mb-2">
+                            <li class="d-flex justify-content-between py-1">
+                                <span>{{#str}}preview:cells, local_catquizlab{{/str}}</span>
+                                <strong>{{cells}}</strong>
+                            </li>
+                            <li class="d-flex justify-content-between py-1">
+                                <span>{{#str}}preview:replications, local_catquizlab{{/str}}</span>
+                                <strong>{{replications}}</strong>
+                            </li>
+                            <li class="d-flex justify-content-between py-1">
+                                <span>{{#str}}preview:runs, local_catquizlab{{/str}}</span>
+                                <strong>{{runs}}</strong>
+                            </li>
+                            <li class="d-flex justify-content-between py-1">
+                                <span>{{#str}}preview:attempts, local_catquizlab{{/str}}</span>
+                                <strong>{{attempts}}</strong>
+                            </li>
+                        </ul>
+
+                        {{#large}}
+                            <div class="alert alert-warning py-2 small">
+                                {{#str}}editor:largesweep, local_catquizlab{{/str}}
+                            </div>
+                        {{/large}}
+
+                        {{#cansweep}}
+                            {{! Creating a sweep changes state, so it is a POST
+                                with a sesskey rather than a link somebody could
+                                be tricked into following. }}
+                            <form method="post" action="{{createurl}}">
+                                <input type="hidden" name="sesskey" value="{{sesskey}}">
+                                <input type="hidden" name="action" value="createsweep">
+                                <input type="hidden" name="id" value="{{experimentid}}">
+                                <button type="submit" class="btn btn-primary btn-block">
+                                    {{#str}}action:createsweep, local_catquizlab{{/str}}
+                                </button>
+                            </form>
+                        {{/cansweep}}
+                    </div>
+                </div>
+            {{/preview}}
+
+            {{#exchange}}
+                <div class="card">
+                    <div class="card-body">
+                        <h2 class="h5 card-title">
+                            {{#str}}heading:exchange, local_catquizlab{{/str}}
+                        </h2>
+                        <a href="{{declarativeurl}}" class="btn btn-outline-secondary btn-block btn-sm">
+                            {{#str}}action:exportdeclarative, local_catquizlab{{/str}}
+                        </a>
+                        <a href="{{normalisedurl}}" class="btn btn-outline-secondary btn-block btn-sm">
+                            {{#str}}action:exportnormalised, local_catquizlab{{/str}}
+                        </a>
+                        <p class="small text-muted mt-2 mb-0">
+                            {{#str}}exchange:explain, local_catquizlab{{/str}}
+                        </p>
+                    </div>
+                </div>
+            {{/exchange}}
+        </div>
+    </div>
+</div>

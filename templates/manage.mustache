@@ -17,53 +17,103 @@
 {{!
     @template local_catquizlab/manage
 
-    Management landing page of the CAT experiment suite. Renders the environment
-    status, the experiments and the runs, each in its own collapsible section
-    (native details/summary, open by default).
+    The landing page of the experiment suite.
+
+    An overview panel on the right, the primary actions above the tables, then
+    the experiments and the runs. The previous version put everything into
+    collapsed <details> sections, which left a first-time visitor looking at
+    three closed triangles and no way in.
+
+    Classes required for JS: none.
+    Data attributes required for JS: none.
 
     Context variables required for this template:
     * intro string - introductory paragraph
+    * canedit bool - whether the viewer may create and change experiments
+    * newurl string - the experiment editor
+    * importurl string - the JSON import page
+    * runsurl string - the run overview
+    * resultsurl string - the results page
+    * presetsurl string - the reusable building blocks
+    * overview array of { count int, label string, url string, class string }
     * environment object - has items array of { text string, class string }
     * disabled bool - true when the master switch is off
-    * experiments object - has hasany bool and rows array of { name, tier, status, runs }
-    * runs object - has hasany bool, hassummary bool, summary string and rows array of
-      { experiment, tier, cell, replication, seed, status }
+    * experiments object - has hasany bool and rows array
+    * runs object - has hasany bool, hassummary bool, summary string, rows array
 
     Example context (json):
     {
         "intro": "Prepare, run and evaluate DPF-based adaptive tests.",
+        "canedit": true,
+        "newurl": "/local/catquizlab/experiment.php",
+        "importurl": "/local/catquizlab/import.php",
+        "runsurl": "/local/catquizlab/runs.php",
+        "presetsurl": "/local/catquizlab/presets.php",
+        "overview": [
+            { "count": 5, "label": "Experiments", "url": "#", "class": "text-primary" }
+        ],
         "environment": {
-            "items": [
-                { "text": "CAT engine local_catquiz: installed.", "class": "text-success" },
-                { "text": "Host activity mod_adaptivequiz: installed.", "class": "text-success" }
-            ]
+            "items": [ { "text": "CAT engine detected", "class": "text-success" } ]
         },
-        "disabled": true,
-        "experiments": {
-            "hasany": true,
-            "rows": [
-                { "name": "Baseline", "tier": "baseline", "status": "Draft", "runs": 8, "reporturl": "report.php?experimentid=1" }
-            ]
-        },
-        "runs": {
-            "hasany": true,
-            "hassummary": true,
-            "summary": "Draft: 8",
-            "rows": [
-                {
-                    "experiment": "Baseline", "tier": "baseline",
-                    "cell": "variant=ideal", "replication": 1, "seed": 12345, "status": "Draft", "reporturl": "report.php?runid=1"
-                }
-            ]
-        }
+        "disabled": false,
+        "experiments": { "hasany": false, "rows": [] },
+        "runs": { "hasany": false, "hassummary": false, "summary": "", "rows": [] }
     }
 }}
 <div class="local-catquizlab-manage">
-    <p class="text-muted mb-4">{{intro}}</p>
+    <div class="row">
+        <div class="col-lg-8">
+            <p class="text-muted">{{intro}}</p>
+
+            {{#canedit}}
+                <div class="mb-4">
+                    <a href="{{newurl}}" class="btn btn-primary">
+                        {{#str}}manage:newexperiment, local_catquizlab{{/str}}
+                    </a>
+                    <a href="{{importurl}}" class="btn btn-outline-secondary ml-2">
+                        {{#str}}manage:importexperiment, local_catquizlab{{/str}}
+                    </a>
+                    <a href="{{presetsurl}}" class="btn btn-outline-secondary ml-2">
+                        {{#str}}manage:presets, local_catquizlab{{/str}}
+                    </a>
+                    <a href="{{runsurl}}" class="btn btn-outline-secondary ml-2">
+                        {{#str}}manage:allruns, local_catquizlab{{/str}}
+                    </a>
+                    <a href="{{resultsurl}}" class="btn btn-outline-secondary ml-2">
+                        {{#str}}heading:results, local_catquizlab{{/str}}
+                    </a>
+                </div>
+            {{/canedit}}
+        </div>
+
+        <div class="col-lg-4">
+            <div class="card mb-4">
+                <div class="card-body">
+                    <h2 class="h5 card-title">{{#str}}manage:overview, local_catquizlab{{/str}}</h2>
+                    <ul class="list-unstyled mb-0">
+                        {{#overview}}
+                            <li class="d-flex align-items-center justify-content-between py-1">
+                                <span>
+                                    <strong class="{{class}} mr-2">{{count}}</strong>
+                                    <a href="{{url}}">{{label}}</a>
+                                </span>
+                            </li>
+                        {{/overview}}
+                    </ul>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    {{#disabled}}
+        <div class="alert alert-warning">{{#str}}manage:disabled, local_catquizlab{{/str}}</div>
+    {{/disabled}}
 
     {{#environment}}
-        <details open class="local-catquizlab-section mb-3">
-            <summary class="local-catquizlab-summary"><span class="h4 mb-0">{{#str}}manage:environment, local_catquizlab{{/str}}</span></summary>
+        <details class="local-catquizlab-section mb-4">
+            <summary class="local-catquizlab-summary">
+                <span class="h5">{{#str}}manage:environment, local_catquizlab{{/str}}</span>
+            </summary>
             <div class="mt-2">
                 {{#items}}
                     <div class="{{class}}">{{text}}</div>
@@ -72,100 +122,91 @@
         </details>
     {{/environment}}
 
-    {{#disabled}}
-        <div class="alert alert-warning">{{#str}}manage:disabled, local_catquizlab{{/str}}</div>
-    {{/disabled}}
-
     {{#experiments}}
-        <details open class="local-catquizlab-section mb-3">
-            <summary class="local-catquizlab-summary"><span class="h4 mb-0">{{#str}}manage:experiments, local_catquizlab{{/str}}</span></summary>
-            <div class="mt-2">
-                {{#hasany}}
-                    <table class="generaltable">
-                        <thead>
-                            <tr>
-                                <th scope="col">{{#str}}manage:col_name, local_catquizlab{{/str}}</th>
-                                <th scope="col">{{#str}}manage:col_tier, local_catquizlab{{/str}}</th>
-                                <th scope="col">{{#str}}manage:col_status, local_catquizlab{{/str}}</th>
-                                <th scope="col">{{#str}}manage:col_model, local_catquizlab{{/str}}</th>
-                                <th scope="col">{{#str}}manage:col_strategy, local_catquizlab{{/str}}</th>
-                                <th scope="col">{{#str}}manage:col_runs, local_catquizlab{{/str}}</th>
-                                <th scope="col">{{#str}}manage:col_actions, local_catquizlab{{/str}}</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            {{#rows}}
-                                <tr>
-                                    <td>{{#editurl}}<a href="{{editurl}}">{{name}}</a>{{/editurl}}{{^editurl}}{{name}}{{/editurl}}</td>
-                                    <td>{{tier}}</td>
-                                    <td>{{status}}</td>
-                                    <td>{{modellabel}}</td>
-                                    <td>{{strategylabel}} <span class="text-muted small">({{strategy}})</span></td>
-                                    <td>{{runs}}</td>
-                                    <td>
-                                        <a href="{{reporturl}}">{{#str}}manage:results, local_catquizlab{{/str}}</a>
-                                        <a href="{{compareurl}}" class="ml-2">{{#str}}manage:compare, local_catquizlab{{/str}}</a>
-                                    </td>
-                                </tr>
-                            {{/rows}}
-                        </tbody>
-                    </table>
-                {{/hasany}}
-                {{^hasany}}
-                    <div class="alert alert-info">{{#str}}manage:noexperiments, local_catquizlab{{/str}}</div>
-                    {{#canedit}}
-                        <a href="{{newurl}}" class="btn btn-primary">{{#str}}manage:newexperiment, local_catquizlab{{/str}}</a>
-                    {{/canedit}}
-                {{/hasany}}
-            </div>
-        </details>
+        <h2 class="h4">{{#str}}manage:experiments, local_catquizlab{{/str}}</h2>
+        {{#hasany}}
+            <table class="generaltable table-sm">
+                <caption class="sr-only">{{#str}}manage:experiments, local_catquizlab{{/str}}</caption>
+                <thead>
+                    <tr>
+                        <th scope="col">{{#str}}manage:col_name, local_catquizlab{{/str}}</th>
+                        <th scope="col">{{#str}}manage:col_tier, local_catquizlab{{/str}}</th>
+                        <th scope="col">{{#str}}manage:col_model, local_catquizlab{{/str}}</th>
+                        <th scope="col">{{#str}}manage:col_strategy, local_catquizlab{{/str}}</th>
+                        <th scope="col">{{#str}}manage:col_status, local_catquizlab{{/str}}</th>
+                        <th scope="col">{{#str}}manage:col_cells, local_catquizlab{{/str}}</th>
+                        <th scope="col">{{#str}}manage:col_runs, local_catquizlab{{/str}}</th>
+                        <th scope="col">{{#str}}manage:col_modified, local_catquizlab{{/str}}</th>
+                        <th scope="col">{{#str}}manage:col_actions, local_catquizlab{{/str}}</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {{#rows}}
+                        <tr>
+                            <td><a href="{{editurl}}">{{name}}</a></td>
+                            <td>{{tierlabel}}</td>
+                            <td>{{modellabel}}</td>
+                            <td>{{strategylabel}} <span class="text-muted small">({{strategy}})</span></td>
+                            <td><span class="badge {{statusclass}}">{{status}}</span></td>
+                            <td>{{cells}}</td>
+                            <td>{{runs}}</td>
+                            <td>{{modified}}</td>
+                            <td>{{{actions}}}</td>
+                        </tr>
+                    {{/rows}}
+                </tbody>
+            </table>
+        {{/hasany}}
+        {{^hasany}}
+            <div class="alert alert-info">{{#str}}manage:noexperiments, local_catquizlab{{/str}}</div>
+        {{/hasany}}
     {{/experiments}}
 
     {{#runs}}
-        <details open class="local-catquizlab-section mb-3">
-            <summary class="local-catquizlab-summary"><span class="h4 mb-0">{{#str}}manage:runs, local_catquizlab{{/str}}</span></summary>
-            <div class="mt-2">
-                {{#hassummary}}
-                    <div class="text-muted mb-2">{{summary}}</div>
-                {{/hassummary}}
-                {{#hasany}}
-                    <table class="generaltable">
-                        <thead>
-                            <tr>
-                                <th scope="col">{{#str}}manage:col_experiment, local_catquizlab{{/str}}</th>
-                                <th scope="col">{{#str}}manage:col_tier, local_catquizlab{{/str}}</th>
-                                <th scope="col">{{#str}}manage:col_cell, local_catquizlab{{/str}}</th>
-                                <th scope="col">{{#str}}manage:col_replication, local_catquizlab{{/str}}</th>
-                                <th scope="col">{{#str}}manage:col_seed, local_catquizlab{{/str}}</th>
-                                <th scope="col">{{#str}}manage:col_status, local_catquizlab{{/str}}</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            {{#rows}}
-                                <tr>
-                                    <td>{{experiment}}</td>
-                                    <td>{{tier}}</td>
-                                    <td>{{#reporturl}}<a href="{{reporturl}}">{{cell}}</a>{{/reporturl}}{{^reporturl}}{{cell}}{{/reporturl}}</td>
-                                    <td>{{replication}}</td>
-                                    <td>{{seed}}</td>
-                                    <td>{{status}}</td>
-                                </tr>
-                            {{/rows}}
-                        </tbody>
-                    </table>
-                {{/hasany}}
-                {{^hasany}}
-                    <div class="alert alert-info">{{#str}}manage:noruns, local_catquizlab{{/str}}</div>
-                {{/hasany}}
-            </div>
-        </details>
+        <h2 class="h4 mt-4">{{#str}}manage:runs, local_catquizlab{{/str}}</h2>
+        {{#hassummary}}
+            <div class="text-muted mb-2">{{summary}}</div>
+        {{/hassummary}}
+        {{#hasany}}
+            <table class="generaltable table-sm">
+                <caption class="sr-only">{{#str}}manage:runs, local_catquizlab{{/str}}</caption>
+                <thead>
+                    <tr>
+                        <th scope="col">{{#str}}run:id, local_catquizlab{{/str}}</th>
+                        <th scope="col">{{#str}}manage:col_experiment, local_catquizlab{{/str}}</th>
+                        <th scope="col">{{#str}}form:strategy, local_catquizlab{{/str}}</th>
+                        <th scope="col">{{#str}}form:variant, local_catquizlab{{/str}}</th>
+                        <th scope="col">{{#str}}form:stratum, local_catquizlab{{/str}}</th>
+                        <th scope="col">{{#str}}run:status, local_catquizlab{{/str}}</th>
+                        <th scope="col">{{#str}}run:progress, local_catquizlab{{/str}}</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {{#rows}}
+                        <tr>
+                            <td><a href="{{detailurl}}">{{id}}</a></td>
+                            <td>{{experiment}}</td>
+                            <td>{{strategylabel}}</td>
+                            <td>{{variantlabel}}</td>
+                            <td>{{stratumlabel}}</td>
+                            <td><span class="badge {{statusclass}}">{{statuslabel}}</span></td>
+                            <td>
+                                <div class="progress" style="height:0.75rem;">
+                                    <div class="progress-bar {{progressclass}}" role="progressbar"
+                                         style="width:{{progress}}%;"
+                                         aria-valuenow="{{progress}}" aria-valuemin="0" aria-valuemax="100"
+                                         aria-label="{{progresslabel}}"></div>
+                                </div>
+                                <span class="small text-muted">{{progress}}&nbsp;%</span>
+                            </td>
+                        </tr>
+                    {{/rows}}
+                </tbody>
+            </table>
+            <a href="{{runsurl}}">{{#str}}manage:allruns, local_catquizlab{{/str}}</a>
+        {{/hasany}}
+        {{^hasany}}
+            <div class="alert alert-info">{{#str}}manage:noruns, local_catquizlab{{/str}}</div>
+        {{/hasany}}
     {{/runs}}
-
-    {{#canedit}}
-        <div class="mt-3">
-            <a href="{{newurl}}" class="btn btn-primary">{{#str}}manage:newexperiment, local_catquizlab{{/str}}</a>
-            <a href="{{importurl}}" class="btn btn-secondary ml-2">{{#str}}manage:importexperiment, local_catquizlab{{/str}}</a>
-            <a href="{{runsurl}}" class="btn btn-secondary ml-2">{{#str}}manage:allruns, local_catquizlab{{/str}}</a>
-        </div>
-    {{/canedit}}
 </div>

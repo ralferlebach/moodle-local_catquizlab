@@ -118,6 +118,14 @@ function xmldb_local_catquizlab_upgrade($oldversion): bool {
         upgrade_plugin_savepoint(true, 2026083100, 'local', 'catquizlab');
     }
 
+    if ($oldversion < 2026083102) {
+        // Reusable pool and person building blocks, so a new experiment can
+        // cite an existing scale structure or person model instead of
+        // restating it and hoping the numbers match.
+        local_catquizlab_upgrade_add_preset_table($dbman);
+        upgrade_plugin_savepoint(true, 2026083102, 'local', 'catquizlab');
+    }
+
     return true;
 }
 
@@ -254,4 +262,23 @@ function local_catquizlab_upgrade_add_run_masterseed(database_manager $dbman): v
     if (!$dbman->field_exists($table, $field)) {
         $dbman->add_field($table, $field);
     }
+}
+
+/**
+ * Add the reusable-preset table.
+ *
+ * @param database_manager $dbman The database manager.
+ * @return void
+ */
+function local_catquizlab_upgrade_add_preset_table(database_manager $dbman): void {
+    global $CFG;
+
+    $table = new xmldb_table('local_catquizlab_preset');
+    if ($dbman->table_exists($table)) {
+        return;
+    }
+    $dbman->install_one_table_from_xmldb_file(
+        $CFG->dirroot . '/local/catquizlab/db/install.xml',
+        'local_catquizlab_preset'
+    );
 }

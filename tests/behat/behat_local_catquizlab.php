@@ -53,4 +53,32 @@ class behat_local_catquizlab extends behat_base {
 
         \local_catquizlab\local\experiment_service::create_sweep((int) $id);
     }
+
+    /**
+     * Open the detail page of an experiment's first run.
+     *
+     * Run ids are database ids, so a scenario cannot know them in advance;
+     * matching on a literal "1" only worked while the table happened to start
+     * at one.
+     *
+     * @Given /^I open the first run of "(?P<name_string>(?:[^"]|\\")*)"$/
+     * @param string $name The experiment name.
+     * @return void
+     * @throws \coding_exception If the experiment or its runs are missing.
+     */
+    public function i_open_the_first_run_of(string $name): void {
+        global $DB;
+
+        $experimentid = $DB->get_field('local_catquizlab_experiment', 'id', ['name' => $name]);
+        if (!$experimentid) {
+            throw new \coding_exception('No experiment named "' . $name . '".');
+        }
+        $runs = $DB->get_records('local_catquizlab_run', ['experimentid' => $experimentid], 'id ASC', 'id', 0, 1);
+        if (!$runs) {
+            throw new \coding_exception('The experiment "' . $name . '" has no runs.');
+        }
+
+        $url = new \moodle_url('/local/catquizlab/runs.php', ['runid' => (int) reset($runs)->id]);
+        $this->execute('behat_general::i_visit', [$url]);
+    }
 }

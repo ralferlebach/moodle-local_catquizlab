@@ -112,6 +112,19 @@ class manifest {
                 'severityscale' => $persons['severityscale'] ?? [],
             ],
             'cat'        => test_provisioner::effective_parameters($definition),
+            // Recorded so a later reader can tell whether two experiments ran
+            // on the same pool blueprint or person model, rather than on two
+            // that merely look alike.
+            'presets'    => [
+                'pool'    => [
+                    'id'          => $definition['poolpreset'] ?? null,
+                    'fingerprint' => $definition['poolpresetfingerprint'] ?? null,
+                ],
+                'persons' => [
+                    'id'          => $definition['personspreset'] ?? null,
+                    'fingerprint' => $definition['personspresetfingerprint'] ?? null,
+                ],
+            ],
             'definition' => $definition,
         ];
 
