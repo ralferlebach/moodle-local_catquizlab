@@ -64,11 +64,16 @@ $envitems = [
  */
 function local_catquizlab_status_class(int $status): string {
     $map = [
-        registry::STATUS_DRAFT     => 'badge-secondary',
-        registry::STATUS_SCHEDULED => 'badge-info',
-        registry::STATUS_RUNNING   => 'badge-primary',
-        registry::STATUS_FINISHED  => 'badge-success',
-        registry::STATUS_FAILED    => 'badge-danger',
+        registry::STATUS_DRAFT       => 'badge-secondary',
+        registry::STATUS_SCHEDULED   => 'badge-info',
+        registry::STATUS_READY       => 'badge-info',
+        registry::STATUS_RUNNING     => 'badge-primary',
+        registry::STATUS_AGGREGATING => 'badge-primary',
+        registry::STATUS_FINISHED    => 'badge-success',
+        registry::STATUS_FAILED      => 'badge-danger',
+        // Cancelled is a decision, not a defect, so it is not shown in the
+        // colour that means "something is wrong".
+        registry::STATUS_CANCELLED   => 'badge-warning',
     ];
 
     return $map[$status] ?? 'badge-secondary';

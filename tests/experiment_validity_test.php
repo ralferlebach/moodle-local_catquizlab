@@ -234,6 +234,147 @@ final class experiment_validity_test extends \advanced_testcase {
     }
 
     /**
+     * A 2PL with a constant discrimination is refused for a publication run.
+     *
+     * @return void
+     */
+    public function test_degenerate_2pl_is_refused_for_a_publication_run(): void {
+        $this->resetAfterTest();
+
+        $definition = experiment_definition::example_publication_2pl();
+        $definition['modelparams'] = ['discrimination' => ['dist' => 'constant', 'value' => 1.0]];
+
+        $result = (new experiment_definition($definition))->validate();
+
+        // A study labelled 2PL that measures a Rasch model is not a
+        // configuration slip; the label and the model would simply disagree.
+        $this->assertFalse($result['valid']);
+        $this->assertNotEmpty($result['errors']);
+    }
+
+    /**
+     * The same configuration passes when it is declared a control condition.
+     *
+     * @return void
+     */
+    public function test_degenerate_2pl_passes_when_declared(): void {
+        $this->resetAfterTest();
+
+        $definition = experiment_definition::example_publication_2pl();
+        $definition['modelparams'] = [
+            'discrimination'  => ['dist' => 'constant', 'value' => 1.0],
+            'allowdegenerate' => true,
+        ];
+
+        $result = (new experiment_definition($definition))->validate();
+
+        $this->assertTrue($result['valid'], implode('; ', $result['errors']));
+    }
+
+    /**
+     * The editor does not declare the control condition on the author's behalf.
+     *
+     * @return void
+     */
+    public function test_the_form_does_not_set_the_degenerate_flag_by_itself(): void {
+        $this->resetAfterTest();
+
+        $silent = \local_catquizlab\form\experiment_form::to_definition([
+            'name'               => 'Quiet degeneracy',
+            'tier'               => 'main',
+            'model'              => '2pl',
+            'discriminationdist' => 'constant',
+            'discriminationa'    => 1.0,
+        ]);
+        $declared = \local_catquizlab\form\experiment_form::to_definition([
+            'name'               => 'Declared control',
+            'tier'               => 'main',
+            'model'              => '2pl',
+            'discriminationdist' => 'constant',
+            'discriminationa'    => 1.0,
+            'allowdegenerate'    => 1,
+        ]);
+
+        // Answering the question for the author defeats the check entirely.
+        $this->assertArrayNotHasKey('allowdegenerate', $silent['modelparams']);
+        $this->assertTrue($declared['modelparams']['allowdegenerate']);
+    }
+
+    /**
+     * An experiment keeps its identity when it is renamed.
+     *
+     * @return void
+     */
+    public function test_import_matches_on_the_key_not_the_name(): void {
+        $this->resetAfterTest();
+
+        $definition = experiment_definition::example_baseline();
+        $definition['experimentkey'] = 'article-main-2pl';
+        $definition['version'] = '1.0.0';
+        experiment_service::save($definition);
+
+        // Renaming a study must not make it a different one.
+        $renamed = $definition;
+        $renamed['name'] = 'A completely different label';
+
+        $conflict = \local_catquizlab\local\experiment_io::inspect(json_encode($renamed))['conflict'];
+
+        $this->assertNotNull($conflict);
+        $this->assertSame('keyversion', $conflict['matchedon']);
+        $this->assertSame('article-main-2pl', $conflict['key']);
+    }
+
+    /**
+     * Two studies sharing a name but not a key are not confused.
+     *
+     * @return void
+     */
+    public function test_same_name_different_key_is_not_a_version_conflict(): void {
+        $this->resetAfterTest();
+
+        $first = experiment_definition::example_baseline();
+        $first['experimentkey'] = 'study-a';
+        experiment_service::save($first);
+
+        $second = $first;
+        $second['experimentkey'] = 'study-b';
+
+        $conflict = \local_catquizlab\local\experiment_io::inspect(json_encode($second))['conflict'];
+
+        // They still collide on the name, which is worth reporting, but the
+        // report says which of the two identities matched.
+        $this->assertNotNull($conflict);
+        $this->assertSame('name', $conflict['matchedon']);
+    }
+
+    /**
+     * A new version keeps the key and raises the version.
+     *
+     * @return void
+     */
+    public function test_new_version_keeps_the_key(): void {
+        global $DB;
+        $this->resetAfterTest();
+
+        $definition = experiment_definition::example_baseline();
+        $definition['experimentkey'] = 'article-main-2pl';
+        $definition['version'] = '1.2.0';
+        experiment_service::save($definition);
+
+        $stored = \local_catquizlab\local\experiment_io::store(
+            $definition,
+            \local_catquizlab\local\experiment_io::CONFLICT_VERSION
+        );
+        $config = json_decode(
+            (string) $DB->get_field('local_catquizlab_experiment', 'configjson', ['id' => $stored['id']]),
+            true
+        );
+
+        $this->assertSame('article-main-2pl', $config['experimentkey']);
+        $this->assertSame('1.2.1', $config['version']);
+    }
+
+    /**
      * The true deviations come from ground truth alone.
      *
      * @return void

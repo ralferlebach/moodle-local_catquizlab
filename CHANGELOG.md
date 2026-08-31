@@ -6,6 +6,115 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.2.10] — 2026-09-01
+
+Closing the session: the last two result filters and the documentation.
+
+### Added
+- **Budget and cell as result filters.** The item budget is offered as one
+  condition ("global 20-25, subscale 3-5 items") rather than as four numbers
+  that only mean something together, and a full factor combination can be
+  selected directly. These were the two filters still missing from the
+  specified set.
+
+### Changed
+- `docs/sessions/session-002.md` carries the whole session: thirty-one phases,
+  the verification state, and a table of the ten issues and eleven sub-findings
+  with their status.
+- `docs/design/status.md` reflects 0.2.9 and names what actually remains — the
+  first real run against an installed CAT engine, since every engine-facing
+  path has so far only been exercised as a guard path.
+
+### Verification
+PHPUnit 390 tests / 2679 assertions, Behat 27 scenarios / 187 steps, phpcs and
+PHPDoc clean, 595 language strings per language, all test classes loading under
+PHPUnit 11.5.
+
+---
+
+## [0.2.9] — 2026-09-01
+
+Issue #9, findings 8 and 9: the full sweep design in the editor, and a run
+lifecycle that says what it means.
+
+### Added
+- **Composite sweep factors.** Model, global budget, subscale budget, the SE
+  window and the disturbance strength can now be varied from the web interface.
+  Budgets and SE windows are swept as pairs rather than as two independent
+  ends: "10 to 15 items" is one condition, and varying the ends separately
+  would also produce 40/15, which describes nothing.
+- **Disturbance strength is its own factor**, so a study can vary the kind of
+  disturbance and its size independently. A strength that does not apply to a
+  cell's variant — an ideal pool takes no shift — is dropped for that cell
+  instead of making a cell the author plainly meant to include invalid.
+- **Three lifecycle states**: ready (provisioned but not queued), aggregating
+  (attempts done, results being computed) and cancelled. Cancelled is
+  deliberately not a kind of failure: one records a decision, the other a
+  defect, and a list where both look alike hides the defects among the
+  decisions. It is also not shown in the colour that means something is wrong.
+- **Status-dependent actions.** A run offers only what its state allows,
+  because a button that cannot work reads as a defect in the suite rather than
+  as a property of the run. A reproduction records which run it came from and
+  links back to it.
+
+### Fixed
+- **A budget swept as a factor produced invalid cells.** The normalised base
+  definition still carried the schema-1 mirrors of the budgets, which then
+  contradicted the level the sweep had just set — so the validator rejected
+  cells for a disagreement the sweep itself had created. The mirrors are
+  dropped when a budget level is applied and rewritten from the new value.
+
+### Verification
+PHPUnit 390 tests / 2679 assertions, Behat 27 scenarios, phpcs and PHPDoc
+clean, all test classes loading under PHPUnit 11.5.
+
+---
+
+## [0.2.8] — 2026-09-01
+
+The remaining findings of issue #9: outcomes 4, 7, 10 and 11.
+
+### Fixed
+- **The outcome pipeline computed but did not persist.** Stop-rule success,
+  exposure concentration and runtime were shown on screen and never written to
+  the result store, so nothing downstream could aggregate them across
+  replications, export them or compare them between cells. All three are
+  result rows now, with the stop reasons kept beside the success rate: a rate
+  of 0.67 says nothing about whether the rest ran out of items or were cut
+  short by another criterion.
+- **A single configured k hid what a strategy achieved.** Finding the single
+  worst subscale and finding the worst five are different results. Top-k,
+  precision, recall and nDCG are evaluated at k = 1, 3, 5 and 10 at once, and
+  a k larger than the number of subscales is left out rather than invented.
+- **The local deviations themselves were not reported**, only their ordering.
+  A strategy can rank the subscales perfectly and still be a logit out on every
+  one of them; local bias and local RMSE are persisted alongside the ranking.
+- **The editor declared the control condition on the author's behalf.**
+  Choosing a constant discrimination set `allowdegenerate` automatically, which
+  defeated the very check it exists for: a run labelled 2PL would quietly be a
+  Rasch run and the validator, which would have said so, was answered before it
+  could ask. The flag is now a deliberate tick box, and the default
+  distribution is log-normal — a model called 2PL should describe a 2PL unless
+  someone decides otherwise.
+- **Import matched experiments on their display name.** Renaming a study lost
+  its history, and two unrelated studies sharing a name collided. The
+  experiment key is the identity now, the version distinguishes stages of it,
+  and the conflict report says which of the two matched. A new version keeps
+  the key and raises the patch level.
+
+### Changed
+- Manifest and JSON export carry the experiment key and version.
+- README, the test-system guide and the CI header no longer describe a stub
+  with a placeholder worker workflow; they describe the worker pipeline that
+  exists, including which job needs a Moodle and which does not.
+
+### Verification
+PHPUnit 376 tests / 2621 assertions, Behat 26 scenarios, worker check and 11
+worker unit tests, phpcs and PHPDoc clean, every test class loading under
+PHPUnit 11.5.
+
+---
+
 ## [0.2.7] — 2026-09-01
 
 The three findings from issue #9 that invalidate results rather than annoy.

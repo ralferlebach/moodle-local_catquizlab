@@ -214,3 +214,15 @@ Feature: Defining and running CAT experiments from the web interface
     When I navigate to "Reports > CAT experiment suite" in site administration
     Then I should see "Experiment course:"
     And I should see "CATLab Studies"
+
+  Scenario: The editor offers every sweep factor of the design
+    Given the following "local_catquizlab > experiment" exists:
+      | name | Behat sweep factors |
+    And I navigate to "Reports > CAT experiment suite" in site administration
+    When I follow "Behat sweep factors"
+    Then I should see "Vary strategy"
+    And I should see "Vary the IRT model"
+    And I should see "Vary the global item budget"
+    And I should see "Vary the subscale item budget"
+    And I should see "Vary the SE window"
+    And I should see "Vary the disturbance strength"

@@ -68,18 +68,19 @@ trace collection) are so far exercised only with the engine absent.
 
 - Moodle **4.5+** (developed and CI-tested against 4.5, 5.0 and 5.2 on
   PHP 8.1–8.3 with MariaDB and PostgreSQL).
-- For actual experiment runs (not needed for the stub install):
+- For actual experiment runs (not needed to install the plugin):
   [`local_catquiz`](https://github.com/Wunderbyte-GmbH/moodle-local_catquiz)
   and the Wunderbyte fork of `mod_adaptivequiz` including the
   `adaptivequizcatmodel_catquiz` bridge, plus their own dependency
   `local_wunderbyte_table`.
-- For the worker (later milestones): Node.js 20+ on the worker host.
+- For the Puppeteer worker: Node.js 20+ on the worker host.
 
-The engine plugins are **deliberately not declared as hard dependencies**
-yet: the stub detects them at runtime (`classes/local/environment.php`) and
-shows the result on the settings page, so it installs stand-alone — notably
-in CI. This will be revisited once the attempt runner lands (see
-`version.php`).
+The engine plugins are **deliberately not declared as hard dependencies**:
+the suite detects them at runtime (`classes/local/environment.php`) and shows
+the result on the settings page, so it installs stand-alone — notably in CI,
+where the engine is absent and every engine-facing path is a guard path.
+Without the engine the plugin is installable and testable but cannot
+provision or play a run.
 
 ## Installation
 
@@ -184,7 +185,7 @@ data off the instance. Every state-changing action is a POST guarded by
     classes/local/response_oracle.php    IRT answer model incl. GPCM/GRM (E3.4)
     cli/sweep.php                   CLI: expand a sweep spec, persist or list runs
     classes/external/*.php          five web-service functions (oracle, jobs, hub)
-    classes/privacy/provider.php    null provider (stub stores no personal data)
+    classes/privacy/provider.php    privacy provider for the lab store
     db/install.xml                  lab-store schema (eight tables)
     db/upgrade.php                  upgrade path for existing installs
     db/services.php                 worker and hub web services
@@ -207,9 +208,19 @@ data off the instance. Every state-changing action is a POST guarded by
     make worker-setup   # npm install for the Puppeteer worker
 
 CI (GitHub Actions) runs PHPCS, PHPDoc, structure validation, savepoints,
-PHPUnit and Behat across the Moodle/PHP/DB matrix, plus a syntax check of
-the worker. `worker-e2e.yml` is a manual placeholder until the attempt
-runner exists.
+PHPUnit and Behat across the Moodle/PHP/DB matrix, plus a syntax check of the
+worker.
+
+`worker-e2e.yml` holds the worker's own pipeline and keeps two things apart
+that answer different questions. Its toolchain job needs no Moodle, no token
+and no network beyond the checkout: a syntax check, the unit tests over the
+worker's pure helpers, and an offline self test that also starts a browser.
+Its end-to-end job is opt-in and provisions PostgreSQL, Moodle, the CAT engine
+and its host activity, prepares a run with a queued attempt, issues a worker
+token, plays one attempt through the real `mod_adaptivequiz` interface and
+verifies the queue afterwards. The preparation lives in
+`cli/e2e_prepare.php`, so the end-to-end path uses the same provisioning an
+operator does.
 
 ## License
 

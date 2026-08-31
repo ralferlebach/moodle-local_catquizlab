@@ -122,12 +122,15 @@ class run_registry {
             'masterseed'    => (int) ($record->masterseed ?? 0),
             'status'        => (int) $record->status,
             'statuslabel'   => self::status_label((int) $record->status),
+            'actions'       => registry::allowed_actions((int) $record->status),
+            'terminal'      => registry::is_terminal((int) $record->status),
             'strategy'      => $strategy,
             'strategylabel' => strategy_catalog::has($strategy) ? strategy_catalog::label($strategy) : $strategy,
             'model'         => $model,
             'modellabel'    => model_catalog::has($model) ? model_catalog::label($model) : $model,
             'variant'       => (string) ($definition['pool']['variant'] ?? 'ideal'),
             'recipe'        => (array) ($definition['pool']['recipe'] ?? []),
+            'budget'        => self::budget_key($definition),
             'strength'      => self::disturbance_strength(
                 (string) ($definition['pool']['variant'] ?? 'ideal'),
                 (array) ($definition['pool']['recipe'] ?? [])
@@ -141,6 +144,32 @@ class run_registry {
             'timemodified'  => (int) $record->timemodified,
             'duration'      => max(0, (int) $record->timemodified - (int) $record->timecreated),
         ];
+    }
+
+    /**
+     * The item budget of a run as one comparable token.
+     *
+     * Written as "global 20-25 / subscale 3-5": the two ends of a budget only
+     * mean something together, so a filter has to offer the condition rather
+     * than four separate numbers.
+     *
+     * @param array $definition The normalised definition.
+     * @return string
+     */
+    public static function budget_key(array $definition): string {
+        $global = (array) ($definition['budgets']['global'] ?? []);
+        $subscale = (array) ($definition['budgets']['subscale'] ?? []);
+        if ($global === [] && $subscale === []) {
+            return '';
+        }
+
+        return sprintf(
+            '%d-%d/%d-%d',
+            (int) ($global['minitems'] ?? 0),
+            (int) ($global['maxitems'] ?? 0),
+            (int) ($subscale['minitems'] ?? 0),
+            (int) ($subscale['maxitems'] ?? 0)
+        );
     }
 
     /**
@@ -346,6 +375,14 @@ class run_registry {
         if ($factor === 'model' && model_catalog::has($value)) {
             return model_catalog::label($value);
         }
+        if ($factor === 'budget' && $value !== '') {
+            [$global, $subscale] = array_pad(explode('/', $value), 2, '');
+
+            return get_string('filter:budgetlabel', 'local_catquizlab', (object) [
+                'global'   => $global,
+                'subscale' => $subscale,
+            ]);
+        }
         foreach (['variant' => 'variant:', 'stratum' => 'stratum:', 'severity' => 'severity:'] as $name => $prefix) {
             if ($factor === $name) {
                 $key = $prefix . $value;
@@ -367,11 +404,14 @@ class run_registry {
      */
     public static function status_label(int $status): string {
         $keys = [
-            registry::STATUS_DRAFT     => 'status:draft',
-            registry::STATUS_SCHEDULED => 'status:scheduled',
-            registry::STATUS_RUNNING   => 'status:running',
-            registry::STATUS_FINISHED  => 'status:finished',
-            registry::STATUS_FAILED    => 'status:failed',
+            registry::STATUS_DRAFT       => 'status:draft',
+            registry::STATUS_SCHEDULED   => 'status:scheduled',
+            registry::STATUS_READY       => 'status:ready',
+            registry::STATUS_RUNNING     => 'status:running',
+            registry::STATUS_AGGREGATING => 'status:aggregating',
+            registry::STATUS_FINISHED    => 'status:finished',
+            registry::STATUS_FAILED      => 'status:failed',
+            registry::STATUS_CANCELLED   => 'status:cancelled',
         ];
 
         return get_string($keys[$status] ?? 'status:draft', 'local_catquizlab');

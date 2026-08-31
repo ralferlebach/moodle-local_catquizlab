@@ -83,6 +83,10 @@ class manifest {
         $config = $extra + [
             'experiment' => [
                 'name'          => $definition['name'] ?? null,
+                // The key and version identify the study; the name is a label
+                // and may change without the study becoming another one.
+                'key'           => $definition['experimentkey'] ?? null,
+                'version'       => $definition['version'] ?? null,
                 'tier'          => $definition['tier'] ?? null,
                 'schemaversion' => $definition['schemaversion'] ?? experiment_definition::SCHEMAVERSION,
                 'publication'   => experiment_definition::is_publication($definition),

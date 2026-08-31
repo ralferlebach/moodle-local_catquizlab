@@ -36,6 +36,9 @@ namespace local_catquizlab\local;
  * {@see self::evaluate_run()} aggregates across a run and stores dpf_* result rows.
  */
 class subscale_evaluator {
+    /** @var int[] The k values every evaluation reports at once. */
+    public const TOPK_VALUES = [1, 3, 5, 10];
+
     /**
      * Flatten a person's profile into a subscale map plus the global ability.
      *
@@ -126,7 +129,22 @@ class subscale_evaluator {
         $confusion = diagnostics::confusion($truelabels, $estlabels);
         $pr = diagnostics::precision_recall_at_k($truelabels, $estdeltas, $k);
 
-        return [
+        // Several k at once: a strategy that finds the single worst subscale
+        // and one that finds the worst five are different achievements, and a
+        // single configured k hides which of the two happened.
+        $perk = [];
+        foreach (self::TOPK_VALUES as $kvalue) {
+            if ($kvalue > count($truedeltas)) {
+                continue;
+            }
+            $rates = diagnostics::precision_recall_at_k($truelabels, $estdeltas, $kvalue);
+            $perk['topk' . $kvalue] = diagnostics::topk_agreement($truedeltas, $estdeltas, $kvalue)['fraction'];
+            $perk['ndcg' . $kvalue] = diagnostics::ndcg_at_k($truedeltas, $estdeltas, $kvalue);
+            $perk['precision' . $kvalue] = $rates['precision'];
+            $perk['recall' . $kvalue] = $rates['recall'];
+        }
+
+        return $perk + [
             'spearman'   => diagnostics::spearman($truedeltas, $estdeltas),
             'topk'       => diagnostics::topk_agreement($truedeltas, $estdeltas, $k)['fraction'],
             'ndcg'       => diagnostics::ndcg_at_k($truedeltas, $estdeltas, $k),
@@ -238,6 +256,42 @@ class subscale_evaluator {
         $recall = self::rate($confusion['tp'], $confusion['fn']);
         $f1 = self::f1($precision, $recall);
 
+        // The recovery of the local deviations themselves, not only their
+        // ranking. A strategy can order the subscales correctly and still get
+        // every deviation wrong by a logit, and the article asks for both.
+        $errors = [];
+        foreach ($people as $person) {
+            foreach ($person['truedeltas'] ?? [] as $index => $truedelta) {
+                $estdelta = $person['estdeltas'][$index] ?? null;
+                if ($estdelta !== null) {
+                    $errors[] = (float) $estdelta - (float) $truedelta;
+                }
+            }
+        }
+        $localn = count($errors);
+        $localbias = $localn > 0 ? array_sum($errors) / $localn : null;
+        $localrmse = $localn > 0
+            ? sqrt(array_sum(array_map(static fn(float $e): float => $e * $e, $errors)) / $localn)
+            : null;
+
+        $multik = [];
+        foreach (self::TOPK_VALUES as $k) {
+            $agreement = self::mean(array_column($people, 'topk' . $k));
+            $ndcg = self::mean(array_column($people, 'ndcg' . $k));
+            $precisionk = self::mean(array_column($people, 'precision' . $k));
+            $recallk = self::mean(array_column($people, 'recall' . $k));
+            if ($agreement === null && $ndcg === null) {
+                // Fewer subscales than k: reporting a value would invent one.
+                continue;
+            }
+            $multik[$k] = [
+                'topk'      => $agreement,
+                'ndcg'      => $ndcg,
+                'precision' => $precisionk,
+                'recall'    => $recallk,
+            ];
+        }
+
         return [
             'n'         => count($people),
             'spearman'  => self::mean(array_column($people, 'spearman')),
@@ -247,6 +301,10 @@ class subscale_evaluator {
             'recall'    => $recall === null ? null : round($recall, 6),
             'f1'        => $f1 === null ? null : round($f1, 6),
             'confusion' => $confusion,
+            'localn'    => $localn,
+            'localbias' => $localbias === null ? null : round($localbias, 6),
+            'localrmse' => $localrmse === null ? null : round($localrmse, 6),
+            'multik'    => $multik,
         ];
     }
 
@@ -328,7 +386,15 @@ class subscale_evaluator {
             'dpf_precision' => $summary['precision'],
             'dpf_recall'    => $summary['recall'],
             'dpf_f1'        => $summary['f1'],
+            'dpf_localn'    => $summary['localn'],
+            'dpf_localbias' => $summary['localbias'],
+            'dpf_localrmse' => $summary['localrmse'],
         ];
+        foreach ($summary['multik'] as $k => $measures) {
+            foreach ($measures as $name => $value) {
+                $scalars['dpf_' . $name . '_k' . $k] = $value;
+            }
+        }
         foreach ($scalars as $metric => $value) {
             $DB->insert_record('local_catquizlab_result', (object) [
                 'runid'       => $runid,

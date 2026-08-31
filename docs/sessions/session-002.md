@@ -235,30 +235,196 @@ Nebenbei entfernt: der `--polytomous`-Schalter aus `cli/orchestrate.php`. Seit
 0.2.0 folgt Polytomie aus dem Modell; ein separater Setup-Parameter machte einen
 Run aus `configjson + seed` allein nicht rekonstruierbar.
 
+## Phase 18 — Bausteinbibliothek und neu gebaute Startseite (0.3.0-Arbeit, später auf 0.2.3 zurückbenannt)
+
+Ein Screenshot zeigte die Startseite als drei zugeklappte Dreiecke ohne Inhalt:
+alles steckte in `<details>`-Sektionen, und wer die Seite zum ersten Mal
+öffnete, fand keinen Einstieg. Neu gebaut nach dem Mock-up „Experimente
+verwalten": Überblickspanel mit Zählern je Status, Primäraktionen über den
+Tabellen, Experimenttabelle mit Zeilenaktionen, die zehn neuesten Runs mit
+Fortschrittsbalken.
+
+Dazu die neue Anforderung: wiederverwendbare Itempool- und Personen-Bausteine
+(`preset_library`). Jeder Baustein trägt einen Fingerabdruck über seine
+sortierte Payload, der im Manifest landet — damit ist belegbar, dass zwei
+Experimente denselben Bauplan benutzt haben. Bewusst **nicht** Teil eines
+Bausteins: die Poolvariante samt Recipe, weil eine Robustheitsbedingung zur
+Studie gehört und nicht zum Pool, den sie stört, und die Personenzahl, weil der
+Stichprobenumfang eine Designentscheidung ist.
+
+Gefunden: `json_encode(1.0)` liest sich als `int 1` zurück. Eine Trennschärfe
+wechselte beim Speichern den Typ. Alle drei Definitions-Encoder setzen jetzt
+`JSON_PRESERVE_ZERO_FRACTION`.
+
+## Phase 19 — Editor nach Mock-up
+
+Abschnittsnavigation mit Einzeilen-Zusammenfassung je Abschnitt, Formular in der
+Mitte, mitscrollendes Validierungspanel rechts. Studienmetadaten ergänzt:
+Beschreibung, stabile Experiment-ID, Version, Tags.
+
+Zwei Befunde aus dem Behat-Lauf: Ich hatte „Sweep erzeugen" beim Umbau vom
+POST-Button zum GET-Link gemacht — ein Zustandswechsel, den man jemandem
+unterschieben kann. Und das Panel zählte Hinweise, zeigte aber keinen davon.
+
+## Phasen 20–24 — Ergebnisoberfläche in fünf Etappen
+
+`results_query` als gemeinsame Datengrundlage: Tabellen und Diagramme lesen
+durch dieselbe Berechnung, sonst kann ein Leser bei zwei abweichenden Zahlen
+nicht entscheiden, welcher er glauben soll. Beobachtungseinheit ist ein
+Attempt; aggregiert wird danach, und jede Aggregation nennt Ebene, Anzahl und
+Streuungsdefinition. Eine Gruppe mit einer Beobachtung meldet **kein**
+Intervall.
+
+`scatter_chart` als eigener SVG-Renderer, weil Moodles Chart-API keinen Scatter
+kennt und die Spezifikation mehrere verlangt — mit Achsenbeschriftung samt
+Einheit, Referenzlinien und begleitender Kennzahlentabelle, da ein SVG für sich
+für einen Screenreader unlesbar ist.
+
+Acht Reiter: Übersicht, Globale Metriken, Subskalen, Defiziterkennung (Titel
+folgt der Strategie), Robustheit, Testverlauf, Rohdaten, Export.
+
+Fachliche Kernentscheidungen:
+
+- **Lokale Diagnostik rechnet mit Abweichungen**, nicht mit absoluten
+  Subskalenfähigkeiten. Ein Test, der alle Subskalen um ein Logit zu hoch
+  verortet, hat die lokale Struktur rekonstruiert und das globale Niveau
+  verfehlt; ein Vergleich absoluter Werte lastete das der lokalen Diagnostik an.
+- **Robustheit ist eine Differenz unter sonst gleichen Bedingungen.** Referenz
+  ist die Idealpool-Zelle mit demselben Tier, derselben Strategie, demselben
+  Modell, Stratum und derselben Severity — sonst stünde der Strategieunterschied
+  als Robustheitseffekt in der Tabelle.
+- **Erreichbarkeit vor Stop-Regel-Urteil.** Ein SE-Ziel impliziert eine
+  Information `I = 1/SE²`; kann das Budget sie nicht liefern, wäre der Test auch
+  bei perfekter Auswahl durch Erschöpfung geendet.
+
+Gefunden: `install.xml` und `upgrade.php` waren auseinandergelaufen —
+`twinid`/`twinindex`/`severity` standen nur im Upgrade, jede Neuinstallation
+verlor die Twin-Identität. Und `stop_reached()` fing `error` als Teilstring und
+stufte `standarderror` als Erschöpfung ein.
+
+## Phase 25 — Engine-Grenze (Issue #10)
+
+Ein Run meldete Erfolg, während der CAT-Manager keine Fragen zeigte. Ursache war
+eine Definition: Das Plugin zählte Moodle-Question-Zeilen und schrieb die
+Engine-Tabellen selbst, wenn die Engine-API keine Zeile angelegt hatte — so
+wurde eine **abgelehnte** Zuordnung zum Erfolg. `cat_item_provisioner` hält
+jetzt die Grenze: Engine-Verdikt ist verbindlich, Parameter einmal je Item und
+Kontext, danach Rückholprobe über `catscale::get_testitems()`. Getrennte Zähler,
+`planned = 0` scheitert für jede Variante, `cli/verify.php` benennt das erste
+gebrochene Kettenglied.
+
+## Phase 26 — CI grün
+
+Drei `CHAR NOT NULL`-Spalten mit `DEFAULT=""`. Moodle korrigiert das selbst und
+schreibt eine Debugging-Meldung; `moodle-plugin-ci` wertet jede Debugging-Ausgabe
+bei der Installation als Fehlschlag. Drei wirkungslose Attribute nahmen die
+gesamte Matrix mit. Dazu: `twinid` war `NOT NULL` ohne Default und wäre auf jeder
+befüllten Tabelle gescheitert; drei Capabilities hatten keine Sprachstrings.
+
+## Phase 27 — Shared Course (Issue #8)
+
+`test` lief vor `people`, brauchte aber die `courseid`, die `people` erst
+anlegte — der Aufruf lieferte bei jedem Run `null`, und `null` galt als Erfolg.
+Neue Reihenfolge mit eigener Container-Stage. Ein Kurs pro Run hätte bei hundert
+Replikationen hundert Kurse für eine Bedingung erzeugt; jetzt ein konfigurierter
+Kurs, eine Section je Experiment, eine Aktivität je Run.
+
+Behat fing dabei einen Fehler von mir, der weit über das Plugin hinausreichte:
+Die Kursliste in `settings.php` lief beim Aufbau des Admin-Baums, und
+`format_string()` initialisierte das Filtersystem, das den Baum erneut
+anforderte — jede Admin-Seite der Site brach ab. Jetzt lazy über
+`load_choices()`.
+
+## Phase 28 — PHPUnit 10/11
+
+Ein Hilfsmethodenname `result()` ist in PHPUnit 10/11 final und damit ein Fatal
+beim Laden der Datei, das die ganze Suite mitreißt. Moodle 4.5 liefert PHPUnit 9
+— die Fehlerart war genau dort unsichtbar, wo ich testete. `testcase_names_test`
+prüft jetzt gegen die 86 finalen Methodennamen aus den Quellen von 10.5 und
+11.5. Verifiziert gegen ein echtes PHPUnit 11.5.56.
+
+## Phase 29 — Experiment-Validität (Issue #9, Befunde 1–3)
+
+Drei Befunde, die Ergebnisse ungültig machen:
+
+- `definition_for()` las die Basisdefinition statt der Zelldefinition aus dem
+  Manifest. Ein Sweep über vier Zellen hätte viermal dieselbe Bedingung
+  ausgeführt, während Cellkey und Manifest vier verschiedene dokumentierten.
+- `subscale_evaluator` klassifizierte die **geschätzten** Werte gegen die
+  **wahre** globale Fähigkeit. Die bewertete Ausgabe wurde teilweise aus der
+  Antwort konstruiert, gegen die sie bewertet wurde.
+- `metric_series()` poolte alle Runs eines Experiments. Die SD mischte
+  Replikationsrauschen mit Bedingungsunterschieden und wurde groß, gerade wenn
+  das Experiment funktionierte.
+
+## Phase 30 — Outcome-Pipeline, degeneriertes 2PL, Identität, Doku
+
+Stop-Erfolg, Expositionskonzentration und Laufzeit wurden berechnet, aber nicht
+persistiert — ein Outcome, das nur während einer geöffneten Seite existiert,
+lässt sich nicht aggregieren. Multi-k (1, 3, 5, 10) statt eines konfigurierten
+k. Der Editor setzte `allowdegenerate` automatisch und hebelte damit die
+Prüfung aus, für die das Flag existiert. Import matchte auf den Anzeigenamen
+statt auf `experimentkey` und `version`.
+
+## Phase 31 — Sweep-Faktoren und Lifecycle
+
+Modell, Budgets, SE-Fenster und Störungsstärke als Sweep-Faktoren in der UI.
+Budgets werden als Paar variiert: getrennte Enden erzeugten Zellen wie 40/15,
+die nichts beschreiben. Ein Test fand dabei, dass die Schema-1-Spiegel der
+Budgets dem gesweepten Wert widersprachen — der Validator wies Zellen wegen
+einer Unstimmigkeit zurück, die der Sweep selbst erzeugt hatte.
+
+Lifecycle um `ready`, `aggregating` und `cancelled` erweitert. Abgebrochen ist
+keine Spielart von Fehlgeschlagen: das eine hält eine Entscheidung fest, das
+andere einen Defekt, und in einer Liste, in der beides gleich aussieht,
+verstecken sich die Defekte zwischen den Entscheidungen.
+
 ---
 
 ## Verifikationsstand
 
 | Gate | Ergebnis |
 |---|---|
-| PHPUnit (pgsql) | 249 Tests, 1774 Assertions — grün |
-| Behat (Chrome, inkl. Accessibility) | 14 Szenarien, 79 Schritte — grün |
+| PHPUnit (Moodle 4.5, pgsql) | 390 Tests, 2679 Assertions — grün |
+| PHPUnit 11.5 (Ladeprüfung) | alle Testklassen laden fehlerfrei |
+| Behat (Chrome, inkl. Accessibility) | 27 Szenarien, 187 Schritte — grün |
 | Worker (`check` / `test` / `selftest`) | Syntax ok, 11 Tests, Selbsttest inkl. Browserstart |
 | phpcs (moodle-cs 3.x) | Exit 0 |
 | PHPDoc (local_moodlecheck) | 0 Befunde |
-| Savepoints | `2026083100` ≤ Version `2026083100` |
-| Sprachdateien | 297 Strings je Sprache, sortiert, deckungsgleich |
+| Frische Installation | keine Debugging-Ausgabe |
+| Savepoints | ≤ Version `2026090103` |
+| Sprachdateien | 587 Strings je Sprache, sortiert, deckungsgleich |
+| CI (GitHub Actions) | grün über die Matrix 4.5/5.0/5.2 × PHP 8.1–8.3 × mariadb/pgsql |
+
+## Abgearbeitete Issues
+
+| Issue | Gegenstand | Stand |
+|---|---|---|
+| #1 | Definition erreicht die CAT-Testkonfiguration | erledigt |
+| #2 | Poolvarianten im E2E-Pfad | erledigt |
+| #3 | Modellgerechte Itemparameter | erledigt |
+| #4 | Digital Twins und Strata | erledigt |
+| #5 | Polytome Experimente (GPCM) | erledigt |
+| #6 | Praxisnahe Strategiebezeichnungen | erledigt |
+| #7 | Web-UI (inkl. Addendum) | erledigt |
+| #8 | Shared Course und Provisionierungsreihenfolge | erledigt |
+| #9 | Restliste, elf Teilbefunde | erledigt |
+| #10 | Engine-Grenze der Materialisierung | erledigt |
+| #9 (Worker-CI) | `example.invalid` im Toolchain-Job | erledigt |
 
 ## Next
 
-- Erster echter Durchlauf gegen eine Instanz mit installierter Engine: die vier
-  engine-gekapselten Stellen (Materialisierung, Test-Anlage, Attempt, Trace)
-  sind bisher nur ohne Engine getestet.
-- Ergebnis-Dashboard vertiefen: Defiziterkennungsmetriken (Precision@k,
-  nDCG@k, Konfusionsmatrix) sind im `diagnostics`-Kern vorhanden, aber noch
-  nicht in der Vergleichsansicht sichtbar.
-- Testverlaufsansicht je Run (Kapitel 15 aus Issue #7): braucht die
-  `debug_info`-Schrittdaten aus einem echten Attempt.
-- Die konkreten Studienparameter für a- und c-Verteilungen sowie die
-  Severity-Skalen festlegen — Catquizlab führt sie reproduzierbar aus, legt sie
-  aber bewusst nicht selbst fest.
+- **Erster echter Durchlauf gegen eine Instanz mit installierter Engine.** Das
+  ist der einzige verbliebene Punkt von Substanz: alle engine-nahen Pfade sind
+  bisher nur als Guard-Pfad getestet, weil in dieser Umgebung keine Engine
+  vorhanden ist. `cli/e2e_prepare.php` und `cli/verify.php` sind genau dafür
+  gebaut — letzteres benennt das erste gebrochene Kettenglied.
+- **Upstream-Issue zu `local_catquiz_progress`** einreichen
+  (`docs/design/issue-catquiz-progress-retention.md`): Aufbewahrung und
+  Verlaufstiefe sollten konfigurierbar sein statt implizit.
+- **Studienparameter festlegen** — a-/c-Verteilungen und Severity-Skalen.
+  Catquizlab führt sie reproduzierbar aus und verlangt sie für Publication-Runs
+  ausdrücklich, legt sie aber bewusst nicht selbst fest.
+- **Eine Moodle-5.x-Instanz in der Entwicklungsumgebung.** Der
+  PHPUnit-10/11-Fehler war auf 4.5 unsichtbar; eine zweite Instanz fände solche
+  Divergenzen vor dem CI-Lauf.

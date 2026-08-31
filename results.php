@@ -51,6 +51,14 @@ foreach (['tier', 'model', 'strategy', 'variant', 'stratum', 'severity'] as $key
     }
 }
 
+// The budget and cell keys carry separators, so they are not ALPHANUMEXT.
+foreach (['budget', 'cellkey'] as $key) {
+    $value = optional_param($key, '', PARAM_TEXT);
+    if ($value !== '') {
+        $filter[$key] = $value;
+    }
+}
+
 admin_externalpage_setup('local_catquizlab_manage');
 
 $context = context_system::instance();

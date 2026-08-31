@@ -116,9 +116,17 @@ class experiment_form extends \moodleform {
             'lognormal' => get_string('dist:lognormal', $component),
             'uniform'   => get_string('dist:uniform', $component),
         ]);
-        $mform->setDefault('discriminationdist', 'constant');
+        // Log-normal rather than constant: a model called 2PL should describe
+        // a 2PL by default, and a Rasch parametrisation should be something an
+        // author chooses rather than something they fail to notice.
+        $mform->setDefault('discriminationdist', 'lognormal');
         $mform->addHelpButton('discriminationdist', 'form:discriminationdist', $component);
         $mform->hideIf('discriminationdist', 'model', 'eq', '1pl');
+
+        $mform->addElement('advcheckbox', 'allowdegenerate', get_string('form:allowdegenerate', $component));
+        $mform->addHelpButton('allowdegenerate', 'form:allowdegenerate', $component);
+        $mform->hideIf('allowdegenerate', 'discriminationdist', 'noteq', 'constant');
+        $mform->hideIf('allowdegenerate', 'model', 'eq', '1pl');
 
         $mform->addElement('text', 'discriminationa', get_string('form:paramone', $component), ['size' => 10]);
         $mform->setType('discriminationa', PARAM_FLOAT);
@@ -308,6 +316,41 @@ class experiment_form extends \moodleform {
         );
         $severities->setMultiple(true);
 
+        $models = $mform->addElement(
+            'select',
+            'sweepmodels',
+            get_string('form:sweepmodels', $component),
+            self::model_menu()
+        );
+        $models->setMultiple(true);
+
+        // Budgets and SE windows are pairs: "10 to 15 items" is one condition,
+        // and varying the ends independently would produce cells like 40/15.
+        // Each line is therefore one level.
+        $mform->addElement('textarea', 'sweepglobalbudgets', get_string('form:sweepglobalbudgets', $component), [
+            'rows' => 4, 'cols' => 30,
+        ]);
+        $mform->setType('sweepglobalbudgets', PARAM_TEXT);
+        $mform->addHelpButton('sweepglobalbudgets', 'form:sweepglobalbudgets', $component);
+
+        $mform->addElement('textarea', 'sweepsubscalebudgets', get_string('form:sweepsubscalebudgets', $component), [
+            'rows' => 4, 'cols' => 30,
+        ]);
+        $mform->setType('sweepsubscalebudgets', PARAM_TEXT);
+        $mform->addHelpButton('sweepsubscalebudgets', 'form:sweepsubscalebudgets', $component);
+
+        $mform->addElement('textarea', 'sweepse', get_string('form:sweepse', $component), [
+            'rows' => 4, 'cols' => 30,
+        ]);
+        $mform->setType('sweepse', PARAM_TEXT);
+        $mform->addHelpButton('sweepse', 'form:sweepse', $component);
+
+        $mform->addElement('textarea', 'sweepstrengths', get_string('form:sweepstrengths', $component), [
+            'rows' => 4, 'cols' => 30,
+        ]);
+        $mform->setType('sweepstrengths', PARAM_TEXT);
+        $mform->addHelpButton('sweepstrengths', 'form:sweepstrengths', $component);
+
         $this->add_action_buttons(true, get_string('form:save', $component));
     }
 
@@ -445,10 +488,15 @@ class experiment_form extends \moodleform {
         }
 
         $factors = array_filter([
-            'strategy' => array_values((array) ($data['sweepstrategies'] ?? [])),
-            'variant'  => array_values((array) ($data['sweepvariants'] ?? [])),
-            'stratum'  => array_values((array) ($data['sweepstrata'] ?? [])),
-            'severity' => array_values((array) ($data['sweepseverities'] ?? [])),
+            'strategy'       => array_values((array) ($data['sweepstrategies'] ?? [])),
+            'variant'        => array_values((array) ($data['sweepvariants'] ?? [])),
+            'stratum'        => array_values((array) ($data['sweepstrata'] ?? [])),
+            'severity'       => array_values((array) ($data['sweepseverities'] ?? [])),
+            'model'          => array_values((array) ($data['sweepmodels'] ?? [])),
+            'globalbudget'   => self::parse_pairs((string) ($data['sweepglobalbudgets'] ?? ''), 'items'),
+            'subscalebudget' => self::parse_pairs((string) ($data['sweepsubscalebudgets'] ?? ''), 'items'),
+            'se'             => self::parse_pairs((string) ($data['sweepse'] ?? ''), 'se'),
+            'recipe'         => self::parse_strengths((string) ($data['sweepstrengths'] ?? '')),
         ]);
         if ($factors !== []) {
             $definition['sweep'] = ['factors' => $factors];
@@ -501,6 +549,7 @@ class experiment_form extends \moodleform {
             'replications'       => (int) ($normalised['replications'] ?? 1),
             'model'              => (string) ($normalised['model'] ?? '2pl'),
             'discriminationdist' => (string) ($discrimination['dist'] ?? 'constant'),
+            'allowdegenerate'    => !empty($params['allowdegenerate']) ? 1 : 0,
             'discriminationa'    => (float) ($discrimination['value']
                 ?? $discrimination['meanlog'] ?? $discrimination['min'] ?? 1.0),
             'discriminationb'    => (float) ($discrimination['sdlog'] ?? $discrimination['max'] ?? 0.3),
@@ -532,9 +581,111 @@ class experiment_form extends \moodleform {
             'sweepvariants'      => (array) ($factors['variant'] ?? []),
             'sweepstrata'        => (array) ($factors['stratum'] ?? []),
             'sweepseverities'    => (array) ($factors['severity'] ?? []),
+            'sweepmodels'        => (array) ($factors['model'] ?? []),
+            'sweepglobalbudgets' => self::render_pairs(
+                (array) ($factors['globalbudget'] ?? []),
+                ['minitems', 'maxitems']
+            ),
+            'sweepsubscalebudgets' => self::render_pairs(
+                (array) ($factors['subscalebudget'] ?? []),
+                ['minitems', 'maxitems']
+            ),
+            'sweepse'            => self::render_pairs((array) ($factors['se'] ?? []), ['min', 'max']),
+            'sweepstrengths'     => implode("\n", array_map(
+                static function (array $level): string {
+                    $key = array_key_first($level);
+
+                    return $key === 'fraction'
+                        ? (string) round(100 * (float) $level[$key], 4)
+                        : $key . '=' . $level[$key];
+                },
+                (array) ($factors['recipe'] ?? [])
+            )),
             'poolpreset'         => (int) ($normalised['poolpreset'] ?? 0),
             'personspreset'      => (int) ($normalised['personspreset'] ?? 0),
         ];
+    }
+
+    /**
+     * Parse one level per line, each written as "min/max".
+     *
+     * @param string $value The raw field value.
+     * @param string $kind 'items' for integer item budgets, 'se' for the SE window.
+     * @return array[] One block per line; empty when nothing parses.
+     */
+    public static function parse_pairs(string $value, string $kind): array {
+        $levels = [];
+        foreach (preg_split('/\r?\n/', $value) as $line) {
+            $line = trim($line);
+            if ($line === '') {
+                continue;
+            }
+            $parts = array_map('trim', explode('/', $line));
+            if (count($parts) !== 2 || !is_numeric($parts[0]) || !is_numeric($parts[1])) {
+                continue;
+            }
+            if ($kind === 'se') {
+                $levels[] = ['min' => (float) $parts[0], 'max' => (float) $parts[1]];
+            } else {
+                $levels[] = ['minitems' => (int) $parts[0], 'maxitems' => (int) $parts[1]];
+            }
+        }
+
+        return $levels;
+    }
+
+    /**
+     * Parse one disturbance strength per line.
+     *
+     * A bare number is read as the affected share for the error and depletion
+     * variants; "shift=1.0" or "factor=1.25" name the key explicitly for the
+     * variants that measure their strength differently. The recipe is filtered
+     * against the variant of each cell during expansion, so a level that does
+     * not apply is dropped rather than making the cell invalid.
+     *
+     * @param string $value The raw field value.
+     * @return array[] One recipe block per line.
+     */
+    public static function parse_strengths(string $value): array {
+        $levels = [];
+        foreach (preg_split('/\r?\n/', $value) as $line) {
+            $line = trim($line);
+            if ($line === '') {
+                continue;
+            }
+            if (strpos($line, '=') !== false) {
+                [$key, $raw] = array_map('trim', explode('=', $line, 2));
+                if ($key !== '' && is_numeric($raw)) {
+                    $levels[] = [$key => (float) $raw];
+                }
+                continue;
+            }
+            if (is_numeric($line)) {
+                // A percentage is written as a percentage and stored as a share.
+                $number = (float) $line;
+                $levels[] = ['fraction' => $number > 1.0 ? $number / 100.0 : $number];
+            }
+        }
+
+        return $levels;
+    }
+
+    /**
+     * Render parsed levels back into the textarea format.
+     *
+     * @param array $levels The levels from the definition.
+     * @param string[] $keys The two keys to join with a slash.
+     * @return string
+     */
+    protected static function render_pairs(array $levels, array $keys): string {
+        $lines = [];
+        foreach ($levels as $level) {
+            if (isset($level[$keys[0]], $level[$keys[1]])) {
+                $lines[] = $level[$keys[0]] . '/' . $level[$keys[1]];
+            }
+        }
+
+        return implode("\n", $lines);
     }
 
     /**
@@ -571,9 +722,15 @@ class experiment_form extends \moodleform {
                 $params['discrimination'] = ['dist' => 'uniform', 'min' => $a, 'max' => $b];
             } else {
                 $params['discrimination'] = ['dist' => 'constant', 'value' => $a];
-                // A constant a is a control condition; saying so here keeps a
-                // publication run from being refused for an unstated choice.
-                $params['allowdegenerate'] = true;
+                // The degenerate flag is only set when the author ticked the
+                // box that says so. Setting it here automatically, as this used
+                // to, defeated the check it exists for: a run labelled 2PL
+                // would quietly be a Rasch run, and the validator would have
+                // said so had the form not answered the question on the
+                // author's behalf.
+                if (!empty($data['allowdegenerate'])) {
+                    $params['allowdegenerate'] = true;
+                }
             }
         }
 

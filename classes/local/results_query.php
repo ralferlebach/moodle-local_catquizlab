@@ -39,7 +39,8 @@ namespace local_catquizlab\local;
 class results_query {
     /** @var string[] The filters a results view understands. */
     public const FILTERS = [
-        'experimentid', 'tier', 'model', 'strategy', 'variant', 'stratum', 'severity', 'replication',
+        'experimentid', 'tier', 'model', 'strategy', 'variant', 'stratum', 'severity',
+        'replication', 'cellkey', 'budget',
     ];
 
     /** @var string Dispersion reported as the standard deviation over replications. */
@@ -162,6 +163,10 @@ class results_query {
                 'model'       => $run['model'],
                 'variant'     => $run['variant'],
                 'strength'    => $run['strength'] ?? null,
+                // The budget as one comparable token. A study that varies the
+                // budget needs to filter on the condition, not on two numbers
+                // that only mean something together.
+                'budget'      => $run['budget'] ?? '',
                 'stratum'     => $run['stratum'],
                 'severity'    => $run['severity'],
                 'truetheta'   => $truetheta,
@@ -461,7 +466,7 @@ class results_query {
      * @return bool
      */
     protected function matches(array $row): bool {
-        foreach (['tier', 'model', 'strategy', 'variant', 'stratum', 'severity'] as $key) {
+        foreach (['tier', 'model', 'strategy', 'variant', 'stratum', 'severity', 'cellkey', 'budget'] as $key) {
             if (!empty($this->filter[$key]) && (string) ($row[$key] ?? '') !== (string) $this->filter[$key]) {
                 return false;
             }

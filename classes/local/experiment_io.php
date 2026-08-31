@@ -82,6 +82,8 @@ class experiment_io {
             'exported'      => date('c'),
             'experiment'    => [
                 'id'      => (int) $record->id,
+                'key'     => (string) ($definition['experimentkey'] ?? ''),
+                'version' => (string) ($definition['version'] ?? ''),
                 'name'    => (string) $record->name,
                 'tier'    => (string) $record->tier,
                 'runs'    => experiment_service::run_count($experimentid),
@@ -210,6 +212,10 @@ class experiment_io {
 
         if ($conflict === self::CONFLICT_VERSION) {
             $definition['name'] = self::next_version_name($definition);
+            // The key is the identity and survives; the version moves on. The
+            // two records are then recognisably the same study at two stages
+            // rather than two studies with similar names.
+            $definition['version'] = self::next_version((string) ($definition['version'] ?? ''));
             $result = experiment_service::save($definition);
             return ['id' => (int) $result['id'], 'created' => true];
         }
@@ -271,20 +277,55 @@ class experiment_io {
     protected static function find_conflict(array $definition): ?array {
         global $DB;
 
-        $name = trim((string) ($definition['name'] ?? ''));
-        if ($name === '') {
-            return null;
+        // The experiment key is the identity; the name is a label. Matching on
+        // the name alone means renaming a study loses its history, while two
+        // unrelated studies that happen to share a name collide. The key is
+        // therefore tried first, and the name only as a fallback for
+        // definitions written before keys existed.
+        $key = trim((string) ($definition['experimentkey'] ?? ''));
+        $version = trim((string) ($definition['version'] ?? ''));
+        $match = null;
+        $matchedon = null;
+
+        if ($key !== '') {
+            foreach ($DB->get_records('local_catquizlab_experiment', null, 'id ASC') as $record) {
+                $stored = json_decode((string) $record->configjson, true) ?: [];
+                if (trim((string) ($stored['experimentkey'] ?? '')) !== $key) {
+                    continue;
+                }
+                $match = $record;
+                $matchedon = 'key';
+                // Same key and same version is the exact same experiment; keep
+                // looking otherwise, since a later version is the better match.
+                if (trim((string) ($stored['version'] ?? '')) === $version) {
+                    $matchedon = 'keyversion';
+                    break;
+                }
+            }
         }
-        $existing = $DB->get_records('local_catquizlab_experiment', ['name' => $name], 'id', 'id, name', 0, 1);
-        if (!$existing) {
-            return null;
+
+        if ($match === null) {
+            $name = trim((string) ($definition['name'] ?? ''));
+            if ($name === '') {
+                return null;
+            }
+            $existing = $DB->get_records('local_catquizlab_experiment', ['name' => $name], 'id', '*', 0, 1);
+            if (!$existing) {
+                return null;
+            }
+            $match = reset($existing);
+            $matchedon = 'name';
         }
-        $record = reset($existing);
-        $runs = experiment_service::run_count((int) $record->id);
+
+        $stored = json_decode((string) $match->configjson, true) ?: [];
+        $runs = experiment_service::run_count((int) $match->id);
 
         return [
-            'id'         => (int) $record->id,
-            'name'       => (string) $record->name,
+            'id'         => (int) $match->id,
+            'name'       => (string) $match->name,
+            'key'        => (string) ($stored['experimentkey'] ?? ''),
+            'version'    => (string) ($stored['version'] ?? ''),
+            'matchedon'  => $matchedon,
             'runs'       => $runs,
             // With runs present, replacing would rewrite history, so only the
             // non-destructive modes remain open.
@@ -311,6 +352,25 @@ class experiment_io {
         }
 
         return $base . ' v' . $version;
+    }
+
+    /**
+     * Raise the patch level of a semantic version string.
+     *
+     * A new version derived from an existing one keeps the experiment key, so
+     * the two remain recognisably the same study at two stages.
+     *
+     * @param string $version The current version.
+     * @return string The next one.
+     */
+    public static function next_version(string $version): string {
+        $parts = explode('.', trim($version));
+        if (count($parts) !== 3 || !ctype_digit($parts[2])) {
+            return $version === '' ? '1.0.1' : $version . '.1';
+        }
+        $parts[2] = (string) ((int) $parts[2] + 1);
+
+        return implode('.', $parts);
     }
 
     /**

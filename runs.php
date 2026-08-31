@@ -69,7 +69,18 @@ if ($action !== '' && $runid > 0) {
     $returnurl = new moodle_url('/local/catquizlab/runs.php', ['runid' => $runid]);
 
     if ($action === 'cancel') {
-        $DB->set_field('local_catquizlab_run', 'status', registry::STATUS_FAILED, ['id' => $runid]);
+        if (!registry::allowed_actions((int) $run->status)['cancel']) {
+            redirect(
+                $returnurl,
+                get_string('run:cannotcancel', $component),
+                null,
+                \core\output\notification::NOTIFY_WARNING
+            );
+        }
+        // Cancelled, not failed: one records a decision, the other a defect,
+        // and a list where both look alike hides the defects among the
+        // decisions.
+        $DB->set_field('local_catquizlab_run', 'status', registry::STATUS_CANCELLED, ['id' => $runid]);
         $DB->set_field('local_catquizlab_run', 'timemodified', time(), ['id' => $runid]);
         \local_catquizlab\event\run_aborted::create([
             'objectid' => $runid,
@@ -88,9 +99,23 @@ if ($action !== '' && $runid > 0) {
         // id, the same seeds. Rewriting the original would destroy the record
         // of what it did.
         $now = time();
+        if (!registry::allowed_actions((int) $run->status)['reproduce']) {
+            redirect(
+                $returnurl,
+                get_string('run:cannotreproduce', $component),
+                null,
+                \core\output\notification::NOTIFY_WARNING
+            );
+        }
+
         $copy = clone $run;
         unset($copy->id);
         $copy->status = registry::STATUS_DRAFT;
+        // The new run says which run it came from, so a reproduction can be
+        // told from an original without comparing seeds by hand.
+        $manifest = json_decode((string) $run->manifestjson, true) ?: [];
+        $manifest['config']['reproducedfrom'] = (int) $run->id;
+        $copy->manifestjson = json_encode($manifest, JSON_UNESCAPED_SLASHES);
         $copy->courseid = null;
         $copy->testcmid = null;
         $copy->timecreated = $now;
@@ -148,31 +173,53 @@ if ($runid > 0) {
         ['class' => 'bg-light p-3 small', 'style' => 'max-height:24em;overflow:auto']
     );
 
+    // Only the actions this status allows: a button that cannot work reads as
+    // a defect in the suite rather than a property of the run.
+    $allowed = $run['actions'];
     if (has_capability('local/catquizlab:execute', $context)) {
-        echo html_writer::div(
-            $OUTPUT->single_button(
+        $buttons = '';
+        if ($allowed['reproduce']) {
+            $buttons .= $OUTPUT->single_button(
                 new moodle_url('/local/catquizlab/runs.php', [
                     'runid' => $runid, 'action' => 'reproduce', 'sesskey' => sesskey(),
                 ]),
                 get_string('action:reproduce', $component),
                 'post'
-            )
-            . $OUTPUT->single_button(
+            );
+        }
+        if ($allowed['cancel']) {
+            $buttons .= $OUTPUT->single_button(
                 new moodle_url('/local/catquizlab/runs.php', [
                     'runid' => $runid, 'action' => 'cancel', 'sesskey' => sesskey(),
                 ]),
                 get_string('action:cancel', $component),
                 'post'
-            ),
-            'd-flex'
+            );
+        }
+        if ($buttons !== '') {
+            echo html_writer::div($buttons, 'd-flex');
+        }
+    }
+
+    if ($allowed['results']) {
+        echo html_writer::link(
+            new moodle_url('/local/catquizlab/results.php', ['experimentid' => $run['experimentid']]),
+            get_string('action:openresults', $component),
+            ['class' => 'btn btn-secondary mt-2']
         );
     }
 
-    echo html_writer::link(
-        new moodle_url('/local/catquizlab/report.php', ['runid' => $runid]),
-        get_string('action:openresults', $component),
-        ['class' => 'btn btn-secondary mt-2']
-    );
+    $origin = $detail['manifest']['config']['reproducedfrom'] ?? null;
+    if ($origin !== null) {
+        echo html_writer::div(
+            get_string('run:reproducedfrom', $component, (int) $origin) . ' '
+            . html_writer::link(
+                new moodle_url('/local/catquizlab/runs.php', ['runid' => (int) $origin]),
+                get_string('run:openorigin', $component)
+            ),
+            'mt-2 text-muted'
+        );
+    }
 
     echo $OUTPUT->footer();
     die();

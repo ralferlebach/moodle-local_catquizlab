@@ -57,7 +57,11 @@ Applikationsserver sein):
     npm install
     node run_attempt.js --base-url=<wwwroot> --run-id=0 --token=dummy
 
-Erwartete Ausgabe: `[catquizlab-worker] stub OK — would run attempt …`.
+Erwartete Ausgabe: die Prüfliste des Selbsttests, abschließend
+`Worker self test passed; no Moodle instance was contacted.` Der Selbsttest
+prüft Argumentverarbeitung, URL-Aufbau, Antwortauswahl sowie das Laden von
+Puppeteer und den Start eines Browsers; er ruft keinen Webservice auf und
+claimt keinen Job. Mit `--no-browser` entfällt der Browserstart.
 Node 20+ wird benötigt; `npm install` lädt Puppeteer samt Chromium.
 
 ## 5. Deinstallation / Reset

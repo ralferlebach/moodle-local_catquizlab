@@ -6,10 +6,10 @@
 #
 # Matrix: Moodle 4.5 · 5.0 · 5.2  ×  PHP 8.1–8.3  ×  mariadb · pgsql
 #
-# The stub declares NO hard plugin dependencies: local_catquiz and
+# The plugin declares NO hard plugin dependencies: local_catquiz and
 # mod_adaptivequiz are detected at runtime (classes/local/environment.php),
-# so nothing extra is installed here. Once the attempt runner lands and the
-# dependencies become hard (see version.php), add
+# so nothing extra is installed here and every engine-facing path is a guard
+# path in CI. To exercise the engine paths as well, add
 #   --add-plugin Wunderbyte-GmbH/moodle-local_catquiz
 #   --add-plugin Wunderbyte-GmbH/moodle-mod_adaptivequiz
 # (plus local_wunderbyte_table) to every `moodle-plugin-ci install` call.
