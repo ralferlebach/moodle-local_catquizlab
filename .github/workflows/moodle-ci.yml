@@ -7,12 +7,15 @@
 # Matrix: Moodle 4.5 · 5.0 · 5.2  ×  PHP 8.1–8.3  ×  mariadb · pgsql
 #
 # The plugin declares NO hard plugin dependencies: local_catquiz and
-# mod_adaptivequiz are detected at runtime (classes/local/environment.php),
-# so nothing extra is installed here and every engine-facing path is a guard
-# path in CI. To exercise the engine paths as well, add
-#   --add-plugin Wunderbyte-GmbH/moodle-local_catquiz
-#   --add-plugin Wunderbyte-GmbH/moodle-mod_adaptivequiz
-# (plus local_wunderbyte_table) to every `moodle-plugin-ci install` call.
+# mod_adaptivequiz are detected at runtime (classes/local/environment.php), so
+# the plugin installs stand-alone. The PHPUnit and Behat jobs nevertheless
+# install the engine (see .github/scripts/fetch-engine.sh), because the guard
+# paths are not the interesting ones: a run against a real local_catquiz found
+# five defects that no amount of testing without it could show — a correct
+# engine reported as too old, a missing question library, a stale retrieval
+# cache, a NOT NULL column of the host activity, and provisioning that was not
+# idempotent. The lint jobs stay engine-free, so a broken engine checkout can
+# never make the coding standard look red.
 #
 # The plugin ships Mustache templates (templates/) but no JS bundle and no AMD
 # modules, so the Mustache lint runs and the bundle-reproducibility job does
@@ -243,10 +246,14 @@ jobs:
           echo "$GITHUB_WORKSPACE/ci/bin"        >> "$GITHUB_PATH"
           echo "$GITHUB_WORKSPACE/ci/vendor/bin" >> "$GITHUB_PATH"
 
-      - name: Install Moodle and plugin
+      - name: Fetch the CAT engine
+        run: .github/scripts/fetch-engine.sh
+
+      - name: Install Moodle, engine and plugin
         run: |
           moodle-plugin-ci install \
             --plugin ./plugin \
+            --extra-plugins ../engine \
             --db-host 127.0.0.1 \
             --db-port ${{ matrix.db.port }} \
             --db-user ${{ matrix.db.user }} \
@@ -311,10 +318,14 @@ jobs:
           echo "$GITHUB_WORKSPACE/ci/bin"        >> "$GITHUB_PATH"
           echo "$GITHUB_WORKSPACE/ci/vendor/bin" >> "$GITHUB_PATH"
 
-      - name: Install Moodle and plugin
+      - name: Fetch the CAT engine
+        run: .github/scripts/fetch-engine.sh
+
+      - name: Install Moodle, engine and plugin
         run: |
           moodle-plugin-ci install \
             --plugin ./plugin \
+            --extra-plugins ../engine \
             --branch ${{ matrix.moodle }} \
             --db-type mariadb \
             --db-host 127.0.0.1 \

@@ -211,6 +211,14 @@ CI (GitHub Actions) runs PHPCS, PHPDoc, structure validation, savepoints,
 PHPUnit and Behat across the Moodle/PHP/DB matrix, plus a syntax check of the
 worker.
 
+The PHPUnit and Behat jobs install the CAT engine as well
+(`.github/scripts/fetch-engine.sh` fetches `local_catquiz`,
+`mod_adaptivequiz` at `v-3.0`, the `adaptivequizcatmodel_catquiz` bridge and
+`local_wunderbyte_table`). The plugin still installs without them — the lint
+jobs run engine-free on purpose — but the guard paths are not the interesting
+ones: the first run against a real engine found five defects that testing
+without it could not have shown.
+
 `worker-e2e.yml` holds the worker's own pipeline and keeps two things apart
 that answer different questions. Its toolchain job needs no Moodle, no token
 and no network beyond the checkout: a syntax check, the unit tests over the

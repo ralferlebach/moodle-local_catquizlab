@@ -239,6 +239,12 @@ class test_provisioner {
             'name'            => $name,
             'intro'           => $options['intro'] ?? '',
             'introformat'     => FORMAT_HTML,
+            // The adaptivequiz module declares these NOT NULL without a default, and
+            // add_moduleinfo() passes the module info straight to the database.
+            // Leaving them out failed the insert on the first real run; without
+            // the host activity installed nothing had ever exercised this.
+            'attemptfeedback'       => '',
+            'attemptfeedbackformat' => FORMAT_HTML,
             'attempts'        => 0,
             'password'        => '',
             'browsersecurity' => 0,

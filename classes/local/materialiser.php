@@ -172,6 +172,15 @@ class materialiser {
             ];
         }
 
+        // A run that is already fully materialised keeps its pool. Without this
+        // a second provisioning built the whole pool again: six more questions,
+        // six more engine items, and a ground truth describing twice as many
+        // items as the run actually used.
+        $existing = self::existing_pool($runid, count($specs), $options['verify'] ?? true);
+        if ($existing !== null) {
+            return $existing;
+        }
+
         $poolid = self::record_pool($runid, $variant, $recipe, $poolseed, $mutationseed);
         $template = $options['template'] ?? null;
         $verify = $options['verify'] ?? true;
@@ -255,6 +264,82 @@ class materialiser {
             'reason'  => $failed ? self::failure_reason($counts, $errors) : null,
             'errors'  => $errors,
         ];
+    }
+
+    /**
+     * The result of a run whose pool is already complete, if it is.
+     *
+     * Completeness is judged the same way a fresh materialisation is: every
+     * recorded item must still be retrievable through the engine's own path.
+     * A pool that only half survived is rebuilt rather than trusted.
+     *
+     * @param int $runid The run.
+     * @param int $planned How many items the plan calls for.
+     * @param bool $verify Whether to check engine visibility.
+     * @return array|null The stage result, or null when there is nothing to reuse.
+     */
+    protected static function existing_pool(int $runid, int $planned, bool $verify): ?array {
+        global $DB;
+
+        $items = $DB->get_records('local_catquizlab_item', ['runid' => $runid]);
+        if (count($items) !== $planned || $planned === 0) {
+            return null;
+        }
+
+        $visible = 0;
+        foreach ($items as $item) {
+            if (
+                !$verify || cat_item_provisioner::is_visible(
+                    (int) $item->questionid,
+                    (int) $item->assignedcatscaleid,
+                    self::context_of_item($item)
+                )
+            ) {
+                $visible++;
+            }
+        }
+
+        if ($visible !== $planned) {
+            return null;
+        }
+
+        $pool = $DB->get_records('local_catquizlab_pool', ['runid' => $runid], 'id DESC', '*', 0, 1);
+        $pool = $pool ? reset($pool) : null;
+
+        return [
+            'planned'              => $planned,
+            'questionscreated'     => $planned,
+            'itemsregistered'      => $planned,
+            'parametersregistered' => $planned,
+            'enginevisible'        => $planned,
+            'faileditems'          => 0,
+            'created'              => $planned,
+            'variant'              => $pool ? (string) $pool->variant : 'ideal',
+            'poolid'               => $pool ? (int) $pool->id : 0,
+            'model'                => (string) ($items ? reset($items)->model : ''),
+            'failed'               => false,
+            'reason'               => null,
+            'errors'               => [],
+            'reused'               => true,
+        ];
+    }
+
+    /**
+     * The CAT context an already-materialised item lives in.
+     *
+     * @param \stdClass $item The ground-truth row.
+     * @return int
+     */
+    protected static function context_of_item(\stdClass $item): int {
+        global $DB;
+
+        $row = $DB->get_record('local_catquiz_items', [
+            'componentid'   => (int) $item->questionid,
+            'componentname' => 'question',
+            'catscaleid'    => (int) $item->assignedcatscaleid,
+        ]);
+
+        return $row ? (int) $row->contextid : 0;
     }
 
     /**
@@ -467,7 +552,14 @@ class materialiser {
      * @return int The new question id, or 0 on failure.
      */
     protected static function create_question(int $categoryid, array $rendered): int {
-        global $USER, $DB;
+        global $USER, $DB, $CFG;
+
+        // Moodle autoloads question_bank only where something has already
+        // pulled the question library in. A web request usually has; a CLI run,
+        // a scheduled task and a web service have not, so materialising from
+        // the command line died on a missing class rather than on anything to
+        // do with the pool.
+        require_once($CFG->libdir . '/questionlib.php');
 
         $category = $DB->get_record('question_categories', ['id' => $categoryid]);
         if (!$category) {

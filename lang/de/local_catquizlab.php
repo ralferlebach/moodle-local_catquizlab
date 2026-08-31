@@ -84,6 +84,7 @@ $string['confusion:threshold'] = 'Eine Subskala gilt als Ziel, wenn ihre wahre A
 $string['confusion:truenegative'] = 'Kein wahres Ziel';
 $string['confusion:truepositive'] = 'Wahres Ziel';
 $string['container:activityname'] = 'Run #{$a->runid} – {$a->cellkey} – Rep {$a->replication}';
+$string['container:activitynamenocell'] = 'Run #{$a->runid} – Rep {$a->replication}';
 $string['container:change'] = 'Ändern';
 $string['container:choose'] = 'Experimentkurs auswählen';
 $string['container:coursemissing'] = 'Der konfigurierte Experimentkurs existiert nicht mehr. Bitte in den Plugin-Einstellungen einen anderen wählen.';

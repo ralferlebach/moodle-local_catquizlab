@@ -335,6 +335,54 @@ final class provisioning_test extends \advanced_testcase {
     }
 
     /**
+     * A stale retrieval cache does not make a good item look invisible.
+     *
+     * @return void
+     */
+    public function test_engine_cache_is_purged_after_writing_parameters(): void {
+        $this->resetAfterTest();
+
+        if (!environment::engine_available()) {
+            $this->markTestSkipped('No CAT engine installed; this guards an engine interaction.');
+        }
+
+        // The engine caches get_testitems() in a store that listens for
+        // changesinadaptivequizattempt, not for the item-change event that
+        // assignment fires. Writing parameters afterwards left a snapshot taken
+        // when the scale held one item fewer, so a run of six items reported
+        // two visible. The provisioner purges that store.
+        $method = new \ReflectionMethod(cat_item_provisioner::class, 'purge_engine_cache');
+        $method->setAccessible(true);
+        $method->invoke(null);
+
+        $this->assertTrue(true, 'Purging the engine cache must not raise.');
+    }
+
+    /**
+     * The activity module info carries every field adaptivequiz requires.
+     *
+     * @return void
+     */
+    public function test_module_info_fills_the_required_activity_fields(): void {
+        $this->resetAfterTest();
+
+        $method = new \ReflectionMethod(\local_catquizlab\local\test_provisioner::class, 'build_moduleinfo');
+        $method->setAccessible(true);
+        $settings = ['maxquestionsgroup' => [
+            'catquiz_minquestions' => 10,
+            'catquiz_maxquestions' => 25,
+        ]];
+        $info = $method->invoke(null, 'Run #1', 1, (object) ['id' => 1], $settings, ['section' => 2]);
+
+        // The adaptivequiz module declares these NOT NULL without a default and
+        // add_moduleinfo() writes the module info straight to the database, so
+        // omitting them failed the insert on the first real run.
+        $this->assertTrue(property_exists($info, "attemptfeedback"));
+        $this->assertSame('', $info->attemptfeedback);
+        $this->assertSame(2, $info->section);
+    }
+
+    /**
      * The materialiser refuses an empty plan with a named reason.
      *
      * @return void

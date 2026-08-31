@@ -492,6 +492,20 @@ class run_orchestrator {
         if ($container['sectionid'] <= 0) {
             return ['failed' => true, 'reason' => experiment_container::REASON_NO_SECTION, 'testcmid' => 0];
         }
+
+        // An activity this run already has is reused. Re-provisioning used to
+        // add a second adaptivequiz to the section, leaving two activities for
+        // one run and no way to tell which one its attempts belonged to.
+        global $DB;
+        $existingcmid = (int) ($context['run']->testcmid ?? 0);
+        if ($existingcmid > 0 && $DB->record_exists('course_modules', ['id' => $existingcmid])) {
+            return [
+                'failed'   => false,
+                'testcmid' => $existingcmid,
+                'section'  => $container['sectionnum'],
+                'reused'   => true,
+            ];
+        }
         // The definition is the only source for strategy, budgets and SE
         // bounds. Passing just the name here is what let two experimentally
         // different cells run with identical CAT settings.

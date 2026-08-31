@@ -84,6 +84,7 @@ $string['confusion:threshold'] = 'A subscale counts as a target when its true de
 $string['confusion:truenegative'] = 'Not a true target';
 $string['confusion:truepositive'] = 'True target';
 $string['container:activityname'] = 'Run #{$a->runid} – {$a->cellkey} – Rep {$a->replication}';
+$string['container:activitynamenocell'] = 'Run #{$a->runid} – Rep {$a->replication}';
 $string['container:change'] = 'Change';
 $string['container:choose'] = 'Choose an experiment course';
 $string['container:coursemissing'] = 'The configured experiment course no longer exists. Choose another one in the plugin settings.';

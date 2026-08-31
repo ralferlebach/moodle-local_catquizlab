@@ -198,9 +198,16 @@ class experiment_container {
      * @return string
      */
     public static function activity_name(\stdClass $run): string {
-        return get_string('container:activityname', 'local_catquizlab', (object) [
+        $cellkey = trim((string) ($run->cellkey ?? ''));
+
+        // An experiment with no swept factors has an empty cell key, and the
+        // full pattern then reads "Run #9 –  – Rep 1" with a gap where the
+        // condition should be. A run without conditions simply has none.
+        $key = $cellkey === '' ? 'container:activitynamenocell' : 'container:activityname';
+
+        return get_string($key, 'local_catquizlab', (object) [
             'runid'       => (int) $run->id,
-            'cellkey'     => (string) ($run->cellkey ?? ''),
+            'cellkey'     => $cellkey,
             'replication' => (int) ($run->replication ?? 1),
         ]);
     }

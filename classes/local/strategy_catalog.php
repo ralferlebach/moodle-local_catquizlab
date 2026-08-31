@@ -175,10 +175,45 @@ class strategy_catalog {
         if (defined($constant)) {
             return (int) constant($constant);
         }
+
+        // The engine defines its strategy constants in its lib.php, and Moodle
+        // loads a local plugin's lib.php only when something asks for it. In a
+        // CLI run or a web service nothing has, so the constants are absent
+        // even though the engine is installed and correct. Checking without
+        // loading first reported a perfectly good engine as too old.
+        self::load_engine_library();
+        if (defined($constant)) {
+            return (int) constant($constant);
+        }
+
         if (environment::engine_available()) {
             throw new \moodle_exception('strategy:engineincompatible', 'local_catquizlab', '', $constant);
         }
+
         return (int) self::CATALOG[$key]['contractid'];
+    }
+
+    /**
+     * Load the engine's library, which is where its constants live.
+     *
+     * Loading it more than once is harmless and cheap; not loading it at all
+     * makes a correct engine look incompatible.
+     *
+     * @return void
+     */
+    protected static function load_engine_library(): void {
+        global $CFG;
+
+        static $loaded = false;
+        if ($loaded) {
+            return;
+        }
+        $loaded = true;
+
+        $library = $CFG->dirroot . '/local/catquiz/lib.php';
+        if (is_readable($library)) {
+            require_once($library);
+        }
     }
 
     /**

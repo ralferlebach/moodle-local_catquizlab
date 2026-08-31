@@ -134,6 +134,15 @@ class cat_item_provisioner {
             'contextid'     => $contextid,
         ]);
 
+        // The engine caches get_testitems() per scale and context in its
+        // adaptivequizattempt store, and that store listens for
+        // changesinadaptivequizattempt — not for the changesintestitems event
+        // that assigning an item fires. Writing the parameters afterwards
+        // therefore leaves a stale snapshot in place, taken when the scale held
+        // one item fewer. In a real run of six items that showed up as
+        // "planned 6, visible 2": each scale kept the list from its first item.
+        self::purge_engine_cache();
+
         // Step 4: the proof. Counting rows in local_catquiz_items would miss
         // exactly the inconsistencies this check exists to catch.
         if (($options['verify'] ?? true) && !self::is_visible($questionid, $catscaleid, $contextid)) {
@@ -143,6 +152,31 @@ class cat_item_provisioner {
         $result['ok'] = true;
 
         return $result;
+    }
+
+    /**
+     * Drop the engine's cached item lists.
+     *
+     * @return void
+     */
+    protected static function purge_engine_cache(): void {
+        if (!class_exists('\cache_helper')) {
+            return;
+        }
+
+        try {
+            // Both: the event the engine fires for item changes, and the store
+            // that actually holds the retrieval results. Purging the store
+            // directly is safe here because provisioning runs before any
+            // attempt exists, so there is no attempt state to lose.
+            \cache_helper::purge_by_event('changesintestitems');
+            \cache::make('local_catquiz', 'adaptivequizattempt')->purge();
+        } catch (\Throwable $e) {
+            // A cache that cannot be purged is not a reason to fail a
+            // materialisation; the retrieval check that follows will notice if
+            // the item is genuinely absent.
+            debugging('Could not purge the CAT engine item cache: ' . $e->getMessage(), DEBUG_DEVELOPER);
+        }
     }
 
     /**

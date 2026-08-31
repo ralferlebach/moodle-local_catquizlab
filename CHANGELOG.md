@@ -6,6 +6,85 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.2.12] — 2026-09-01
+
+The CAT engine in the development environment and in CI.
+
+### Changed
+- The **PHPUnit and Behat jobs install the engine**:
+  `.github/scripts/fetch-engine.sh` fetches `local_catquiz`,
+  `mod_adaptivequiz` at `v-3.0`, the `adaptivequizcatmodel_catquiz` bridge and
+  `local_wunderbyte_table`, and moves the cat model into its host activity
+  before the install — installed side by side it would land in the wrong
+  directory and never be found. The lint jobs stay engine-free, so a broken
+  engine checkout can never make the coding standard look red.
+- The development environment now runs the same versions rather than the
+  raised ones the previous release had to fake: mod_adaptivequiz 2026082705 and
+  adaptivequizcatmodel_catquiz 2026082704 from the `v-3.0` branches satisfy the
+  engine's dependency declaration as it stands.
+
+### Fixed
+- An experiment without swept factors produced an activity called
+  `Run #9 –  – Rep 1`, with a gap where the condition should be. A run without
+  conditions simply has none.
+
+### Verification
+The full chain against the real engine versions, without any local
+modification: `planned=6 questions=6 items=6 params=6 visible=6 failed=0`, all
+stages green, `verify` 6/6/6/6/6 OK, the activity carrying `catmodel=catquiz`
+and the engine reporting all six items through its own retrieval path.
+PHPUnit 393 tests, Behat 27 scenarios, phpcs and PHPDoc clean.
+
+---
+
+## [0.2.11] — 2026-09-01
+
+**First run against a real CAT engine.** Five defects that no amount of testing
+without the engine could have found.
+
+### Fixed
+- **A correct engine was reported as too old.** `strategy_catalog::engine_id()`
+  checked for the engine's strategy constants without loading the engine's
+  `lib.php`, where they are defined. Moodle loads a local plugin's library only
+  when something asks for it, and in a CLI run, a scheduled task or a web
+  service nothing has — so provisioning refused to start on a perfectly good
+  installation.
+- **Materialising from the command line died on a missing class.**
+  `question_bank` is autoloaded only where something has already pulled in the
+  question library. A web request usually has; CLI, tasks and web services have
+  not.
+- **A run of six items reported two visible.** The engine caches
+  `get_testitems()` in a store that listens for `changesinadaptivequizattempt`,
+  not for the item-change event that assignment fires. Writing the parameters
+  afterwards left a snapshot taken when the scale held one item fewer, so every
+  scale kept the list from its first item. This is exactly the failure issue #10
+  describes — and this time it was reported rather than hidden.
+- **The adaptive quiz could not be created at all.** `attemptfeedback` and
+  `attemptfeedbackformat` are NOT NULL without a default, and `add_moduleinfo()`
+  writes the module info straight to the database.
+- **Re-provisioning built everything twice.** The course and the section were
+  idempotent, the pool and the activity were not: a second run added six more
+  questions, six more engine items and a second adaptive quiz, leaving two
+  activities for one run. A complete pool is now reused — judged by the same
+  engine retrieval a fresh materialisation uses, so a half-surviving pool is
+  rebuilt rather than trusted.
+
+### Added
+- `testcase_names_test` also rejects the sixteen assertions PHPUnit 10 removed.
+  They are warnings on PHPUnit 9 and fatal from 10 on, so a suite green on
+  Moodle 4.5 can still be dead on 5.0 — which is how `assertObjectHasAttribute`
+  slipped into a test written minutes earlier.
+
+### Verification
+The full chain against local_catquiz 2026082152, mod_adaptivequiz and the
+catquiz cat model: `planned=6 questions=6 items=6 params=6 visible=6 failed=0`,
+container, people, test and attempts stages green, `cli/verify.php` reporting
+6/6/6/6/6 OK, and a second provisioning adding nothing. PHPUnit 393 tests
+(11 skipped, being the no-engine guard paths), Behat 27 scenarios, phpcs and
+PHPDoc clean.
+
+---
+
 ## [0.2.10] — 2026-09-01
 
 Closing the session: the last two result filters and the documentation.

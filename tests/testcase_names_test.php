@@ -73,6 +73,54 @@ final class testcase_names_test extends \advanced_testcase {
     }
 
     /**
+     * Assertions PHPUnit 10 removed.
+     *
+     * @return string[]
+     */
+    public static function removed_assertions(): array {
+        return [
+            'assertObjectHasAttribute', 'assertObjectNotHasAttribute',
+            'assertClassHasAttribute', 'assertClassNotHasAttribute',
+            'assertClassHasStaticAttribute', 'assertClassNotHasStaticAttribute',
+            'assertArraySubset', 'assertInternalType', 'assertNotInternalType',
+            'assertRegExp', 'assertNotRegExp', 'assertEqualXMLStructure',
+            'assertAttributeEquals', 'assertAttributeSame', 'expectDeprecation',
+            'withConsecutive',
+        ];
+    }
+
+    /**
+     * No test uses an assertion PHPUnit 10 removed.
+     *
+     * These are deprecation warnings on PHPUnit 9 and fatal errors from 10 on,
+     * so a suite that is green on Moodle 4.5 can still be dead on 5.0.
+     *
+     * @return void
+     */
+    public function test_no_removed_assertion_is_used(): void {
+        global $CFG;
+        $this->resetAfterTest();
+
+        $directory = $CFG->dirroot . '/local/catquizlab/tests';
+        $files = new \RecursiveIteratorIterator(new \RecursiveDirectoryIterator($directory));
+
+        $offenders = [];
+        foreach ($files as $file) {
+            if ($file->getExtension() !== 'php' || $file->getFilename() === 'testcase_names_test.php') {
+                continue;
+            }
+            $source = file_get_contents($file->getPathname());
+            foreach (self::removed_assertions() as $assertion) {
+                if (strpos($source, '->' . $assertion . '(') !== false) {
+                    $offenders[] = basename($file->getPathname()) . ': ' . $assertion . '()';
+                }
+            }
+        }
+
+        $this->assertSame([], $offenders, 'Assertions removed in PHPUnit 10: ' . implode(', ', $offenders));
+    }
+
+    /**
      * No test file declares a method PHPUnit has made final.
      *
      * @return void

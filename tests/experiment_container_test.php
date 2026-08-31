@@ -211,6 +211,14 @@ final class experiment_container_test extends \advanced_testcase {
         // first or a truncated activity cannot be told from its neighbour.
         $this->assertStringStartsWith('Run #42', $name);
         $this->assertStringContainsString('Rep 4', $name);
+
+        // An experiment without swept factors has no cell key, and the name
+        // must not keep a gap where the condition would have been.
+        $nocell = experiment_container::activity_name(
+            (object) ['id' => 7, 'cellkey' => '', 'replication' => 1]
+        );
+        $this->assertSame('Run #7 – Rep 1', $nocell);
+        $this->assertStringNotContainsString('–  –', $nocell);
     }
 
     /**
