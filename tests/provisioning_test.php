@@ -383,6 +383,115 @@ final class provisioning_test extends \advanced_testcase {
     }
 
     /**
+     * A simulated user can actually log in.
+     *
+     * @return void
+     */
+    public function test_simulated_users_get_a_password(): void {
+        global $DB;
+        $this->resetAfterTest();
+
+        /** @var \local_catquizlab_generator $generator */
+        $generator = $this->getDataGenerator()->get_plugin_generator('local_catquizlab');
+        $run = $generator->create_run();
+        $DB->insert_record('local_catquizlab_person', (object) [
+            'runid'         => $run->id,
+            'twinid'        => 'r001-t00001',
+            'twinindex'     => 1,
+            'severity'      => 'none',
+            'stratum'       => 'conforming',
+            'abilityglobal' => 0.0,
+            'profilejson'   => json_encode(['global' => 0.0, 'categories' => []]),
+            'moodleuserid'  => null,
+            'timecreated'   => time(),
+            'timemodified'  => time(),
+        ]);
+
+        \local_catquizlab\local\user_provisioner::provision((int) $run->id);
+
+        $userid = (int) $DB->get_field('local_catquizlab_person', 'moodleuserid', ['runid' => $run->id]);
+        $user = $DB->get_record('user', ['id' => $userid], '*', MUST_EXIST);
+
+        // Without a password the account is unusable and the worker cannot play
+        // its attempt; nothing noticed because no worker had ever tried.
+        $this->assertNotEmpty($user->password);
+        $this->assertTrue(validate_internal_user_password(
+            $user,
+            \local_catquizlab\local\user_provisioner::password_for($userid)
+        ));
+    }
+
+    /**
+     * A claimed job carries the username, which the worker must not derive.
+     *
+     * @return void
+     */
+    public function test_claimed_job_carries_the_username(): void {
+        global $DB;
+        $this->resetAfterTest();
+        $this->setAdminUser();
+
+        /** @var \local_catquizlab_generator $generator */
+        $generator = $this->getDataGenerator()->get_plugin_generator('local_catquizlab');
+        $run = $generator->create_run();
+        $user = $this->getDataGenerator()->create_user(['username' => 'catlab_r9_p-conforming-0001']);
+        $personid = (int) $DB->insert_record('local_catquizlab_person', (object) [
+            'runid'         => $run->id,
+            'twinid'        => 'r001-t00001',
+            'twinindex'     => 1,
+            'severity'      => 'none',
+            'stratum'       => 'conforming',
+            'abilityglobal' => 0.0,
+            'profilejson'   => json_encode(['global' => 0.0, 'categories' => []]),
+            'moodleuserid'  => $user->id,
+            'timecreated'   => time(),
+            'timemodified'  => time(),
+        ]);
+        $DB->insert_record('local_catquizlab_attempt', (object) [
+            'runid' => $run->id, 'personid' => $personid, 'status' => 0,
+            'tries' => 0, 'timecreated' => time(), 'timemodified' => time(),
+        ]);
+
+        $job = \local_catquizlab\external\job_claim::execute('unit-worker');
+
+        // The provisioner makes usernames unique per run, so any convention the
+        // worker invented — it used catlab_user_<id> — could never match.
+        $this->assertTrue($job['hasjob']);
+        $this->assertSame('catlab_r9_p-conforming-0001', $job['username']);
+    }
+
+    /**
+     * An attempt reported as finished without an engine attempt is not accepted.
+     *
+     * @return void
+     */
+    public function test_finished_without_an_engine_attempt_is_refused(): void {
+        global $DB;
+        $this->resetAfterTest();
+        $this->setAdminUser();
+
+        /** @var \local_catquizlab_generator $generator */
+        $generator = $this->getDataGenerator()->get_plugin_generator('local_catquizlab');
+        $run = $generator->create_run();
+        $attemptid = (int) $DB->insert_record('local_catquizlab_attempt', (object) [
+            'runid' => $run->id, 'personid' => 0, 'status' => 10,
+            'tries' => 1, 'timecreated' => time(), 'timemodified' => time(),
+        ]);
+
+        \local_catquizlab\external\job_complete::execute($attemptid, 'finished', 1200, 0);
+
+        // The mismatch is worth a developer notice: a worker reporting success
+        // with nothing behind it is a bug in the worker, not routine.
+        $this->assertDebuggingCalled();
+
+        // A finished attempt has an engine attempt behind it. Accepting the
+        // report would record a completed attempt with nothing to collect, and
+        // the run would look done while holding no data.
+        $status = (int) $DB->get_field('local_catquizlab_attempt', 'status', ['id' => $attemptid]);
+        $this->assertNotSame(\local_catquizlab\local\attempt_scheduler::STATUS_COLLECTED, $status);
+    }
+
+    /**
      * The materialiser refuses an empty plan with a named reason.
      *
      * @return void

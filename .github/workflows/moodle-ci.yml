@@ -247,13 +247,15 @@ jobs:
           echo "$GITHUB_WORKSPACE/ci/vendor/bin" >> "$GITHUB_PATH"
 
       - name: Fetch the CAT engine
-        run: .github/scripts/fetch-engine.sh
+        run: bash plugin/.github/scripts/fetch-engine.sh
+        env:
+          ENGINE_DIR: ${{ github.workspace }}/engine
 
       - name: Install Moodle, engine and plugin
         run: |
           moodle-plugin-ci install \
             --plugin ./plugin \
-            --extra-plugins ../engine \
+            --extra-plugins "$GITHUB_WORKSPACE/engine" \
             --db-host 127.0.0.1 \
             --db-port ${{ matrix.db.port }} \
             --db-user ${{ matrix.db.user }} \
@@ -319,13 +321,15 @@ jobs:
           echo "$GITHUB_WORKSPACE/ci/vendor/bin" >> "$GITHUB_PATH"
 
       - name: Fetch the CAT engine
-        run: .github/scripts/fetch-engine.sh
+        run: bash plugin/.github/scripts/fetch-engine.sh
+        env:
+          ENGINE_DIR: ${{ github.workspace }}/engine
 
       - name: Install Moodle, engine and plugin
         run: |
           moodle-plugin-ci install \
             --plugin ./plugin \
-            --extra-plugins ../engine \
+            --extra-plugins "$GITHUB_WORKSPACE/engine" \
             --branch ${{ matrix.moodle }} \
             --db-type mariadb \
             --db-host 127.0.0.1 \

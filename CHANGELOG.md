@@ -6,6 +6,67 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.2.14] — 2026-09-01
+
+First worker run against a real installation. Four more defects that only a
+worker actually trying to log in could reveal.
+
+### Fixed
+- **The worker could never have logged in.** It derived the username as
+  `catlab_user_<id>`, while the provisioner makes usernames unique per run and
+  produces names like `catlab_r47_p-conforming-0001`. The username now travels
+  with the claimed job: the worker no longer guesses a name the server is free
+  to choose, and falls back to the old convention only against a server that
+  does not send one.
+- **Simulated users had no password at all.** `user_create_user()` was called
+  without one, so every account was unusable. Nothing noticed because no worker
+  had ever tried. The password is derived from the user id, mirroring the
+  convention the worker already had.
+- **An attempt that answered nothing counted as finished.** The worker reported
+  success after a run in which the answer loop never executed once — the same
+  failure shape as issue #10, one layer further out: the queue would drain,
+  every job would report success, and no trace would ever be collected. The
+  worker now refuses to report an attempt with no answered question or no
+  engine attempt id, and `job_complete` refuses to record one as collected.
+- A type error in the password fix itself: `get_config()` returns `false` for
+  an unset setting, so the cast belonged after the fallback rather than around
+  a false.
+
+### Verification
+Against the real engine and a live Moodle: the worker logs in as the simulated
+user, the web-service claim hands out `catlab_r47_p-conforming-0001` with its
+job, and a browser session confirms the login lands on the dashboard. The
+attempt itself does not yet complete — the activity shows an attempt in
+progress and no question is presented — but that is now reported as a failure
+instead of being counted as a success, which is what the rest of this release
+is about. PHPUnit 396 tests, Behat 27 scenarios, 11 worker unit tests, phpcs
+and PHPDoc clean.
+
+---
+
+## [0.2.13] — 2026-09-01
+
+CI fix for the engine step introduced in 0.2.12.
+
+### Fixed
+- **The engine step could not find its script.** The PHPUnit and Behat jobs
+  check the repository out into `plugin/`, so `.github/scripts/fetch-engine.sh`
+  is not at the working directory — exit code 127 before a single test ran.
+- **`--extra-plugins ../engine` pointed one level above the workspace.** Both
+  the script's target directory and the install option now use an absolute
+  path, so neither depends on where a step happens to start.
+
+### Verification
+The corrected paths were reproduced locally in a copy of the CI layout: the
+script places the four plugins with the cat model inside its host, and
+moodle-plugin-ci resolves all three top-level directories to the components
+`local_catquiz`, `local_wunderbyte_table` and `mod_adaptivequiz` — checked
+against a real moodle-plugin-ci ^4 rather than assumed. Its installer scans the
+extra-plugins directory at depth 0, which is why the subplugin has to travel
+inside `mod_adaptivequiz` and not beside it.
+
+---
+
 ## [0.2.12] — 2026-09-01
 
 The CAT engine in the development environment and in CI.

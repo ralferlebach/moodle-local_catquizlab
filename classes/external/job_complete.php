@@ -88,7 +88,18 @@ class job_complete extends external_api {
             ];
         }
 
-        $finished = ($status === 'finished');
+        // A finished attempt has an engine attempt behind it. Without one there
+        // is nothing to collect a trace from, so accepting the report would
+        // record a completed attempt that produced no data — and the run would
+        // look done while holding nothing.
+        $finished = ($status === 'finished') && $engineattemptid > 0;
+        if ($status === 'finished' && $engineattemptid <= 0) {
+            debugging(
+                'Worker reported attempt ' . $attemptid . ' as finished without an engine attempt id.',
+                DEBUG_DEVELOPER
+            );
+        }
+
         if ($finished) {
             $update = (object) [
                 'id'           => $attemptid,

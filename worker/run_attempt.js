@@ -111,12 +111,13 @@ async function playAttempt(browser, job) {
     let status = 'failed';
 
     try {
-        await login(page, job.userid);
+        await login(page, job.userid, job.username);
         await gotoSettle(page, `${BASE_URL}/mod/adaptivequiz/view.php?id=${job.quizcmid}`);
         await startAttempt(page);
 
         // Answer loop: while a question is on screen, ask the oracle and submit.
         let guard = 0;
+        let answeredCount = 0;
         while (await hasQuestion(page) && guard++ < 1000) {
             const questionId = await currentQuestionId(page);
             const decision = await callWs('local_catquizlab_oracle_answer', {
@@ -131,9 +132,22 @@ async function playAttempt(browser, job) {
                 throw new Error(`No answer option found for question ${questionId}.`);
             }
             await submitQuestion(page);
+            answeredCount++;
         }
 
         engineAttemptId = await readEngineAttemptId(page);
+
+        // An attempt that answered nothing is not a finished attempt. Reporting
+        // one as finished is how a run of empty attempts would look like a
+        // completed experiment: the queue drains, every job reports success and
+        // no trace is ever collected.
+        if (answeredCount === 0) {
+            throw new Error('No question was presented; the attempt never started.');
+        }
+        if (!engineAttemptId) {
+            throw new Error(`Answered ${answeredCount} question(s) but found no engine attempt id.`);
+        }
+
         status = 'finished';
     } catch (error) {
         console.error(`Attempt ${job.attemptid} failed: ${error.message}`);
@@ -158,16 +172,21 @@ async function playAttempt(browser, job) {
  *
  * @param {object} page The Puppeteer page.
  * @param {number} userid The Moodle user id to log in as.
+ * @param {string} username The username the server supplied for this job.
  * @returns {Promise<void>}
  */
-async function login(page, userid) {
+async function login(page, userid, username) {
     if (LOGIN_MODE === 'urltemplate' && LOGIN_URL_TEMPLATE) {
         await gotoSettle(page, loginUrlFor(LOGIN_URL_TEMPLATE, userid));
         return;
     }
 
     await gotoSettle(page, `${BASE_URL}/login/index.php`);
-    await page.type('#username', usernameFor(userid));
+    // The server supplies the username, because the provisioner chooses it and
+    // makes it unique per run. Deriving it here produced catlab_user_<id> and
+    // no such account ever existed. The fallback keeps this working against an
+    // older server that does not send one yet.
+    await page.type('#username', username || usernameFor(userid));
     await page.type('#password', passwordFor(userid, LOGIN_SUFFIX));
     await Promise.all([
         clickFirst(page, ['#loginbtn', 'button[type="submit"]', 'input[type="submit"]']),
