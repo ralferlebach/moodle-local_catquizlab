@@ -196,7 +196,12 @@ class materialiser {
         $errors = [];
 
         foreach ($specs as $spec) {
-            $rendered = question_template::render($spec + ['polytomous' => $polytomous], $template);
+            // The run travels with the spec so the question can carry an ID
+            // number that is unique within its shared question category.
+            $rendered = question_template::render(
+                $spec + ['polytomous' => $polytomous, 'runid' => $runid],
+                $template
+            );
             $questionid = self::create_question($categoryid, $rendered);
             if ($questionid <= 0) {
                 $counts['faileditems']++;
@@ -264,6 +269,53 @@ class materialiser {
             'reason'  => $failed ? self::failure_reason($counts, $errors) : null,
             'errors'  => $errors,
         ];
+    }
+
+    /**
+     * Record the lab's item name on the question, as its ID number.
+     *
+     * Without this the item name lives only in the lab's own table: a question
+     * exported to another site, or simply looked at in the question bank, could
+     * not be traced back to the item it represents. The ID number is where
+     * Moodle keeps exactly that kind of external identifier, and it travels
+     * with the question through XML export and import.
+     *
+     * It has to be unique within the question category, and several runs share
+     * one category, so the run id is part of it.
+     *
+     * @param int $questionid The question.
+     * @param string $idnumber The identifier to record.
+     * @return void
+     */
+    protected static function set_idnumber(int $questionid, string $idnumber): void {
+        global $DB;
+
+        $entryid = $DB->get_field_sql(
+            'SELECT qv.questionbankentryid
+               FROM {question_versions} qv
+              WHERE qv.questionid = :questionid',
+            ['questionid' => $questionid]
+        );
+        if (!$entryid) {
+            return;
+        }
+
+        // A collision would fail the insert, and an item without an ID number
+        // is better than a materialisation that stops over a label.
+        $entry = $DB->get_record('question_bank_entries', ['id' => $entryid]);
+        if (!$entry) {
+            return;
+        }
+        $taken = $DB->record_exists_select(
+            'question_bank_entries',
+            'questioncategoryid = :cat AND idnumber = :idnumber AND id <> :id',
+            ['cat' => $entry->questioncategoryid, 'idnumber' => $idnumber, 'id' => $entry->id]
+        );
+        if ($taken) {
+            return;
+        }
+
+        $DB->set_field('question_bank_entries', 'idnumber', $idnumber, ['id' => $entry->id]);
     }
 
     /**
@@ -597,7 +649,12 @@ class materialiser {
         ];
 
         $saved = \question_bank::get_qtype('multichoice')->save_question($question, $form);
+        $questionid = (int) ($saved->id ?? 0);
 
-        return (int) ($saved->id ?? 0);
+        if ($questionid > 0 && !empty($rendered['idnumber'])) {
+            self::set_idnumber($questionid, (string) $rendered['idnumber']);
+        }
+
+        return $questionid;
     }
 }

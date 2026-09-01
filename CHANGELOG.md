@@ -6,6 +6,61 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.2.25] — 2026-09-01
+
+### Fixed
+- **The test's scale selection had a hole in the middle.** Only the leaves were
+  reported as subscales, so a three-level tree (root → domain → subscale)
+  reached the engine as root plus leaves with the domain missing — while the
+  items hang on the leaves and a leaf is only reachable through its domain.
+  Every scale below the root is selected now.
+
+### Added
+- **`run_verifier::link_report()`** and the `links` section of `cli/verify.php`
+  check, per item, that `question.id = local_catquiz_items.componentid`, that
+  `itemparams.componentid` names the same question, that `activeparamid` points
+  at that parameter set, that `itemparams.itemid` points back at the item, that
+  both share a CAT context, and that the scale lives in it. Row counts per
+  table cannot catch a crossed reference — they agree while a pointer is wrong —
+  so each link gets its own verdict and a failure names the item.
+
+  Verified by crossing a reference on purpose: the report named exactly the two
+  links that broke. The check was also run with the item-parameter sequence
+  pushed ahead deliberately, so the ids could not coincide; without that, all
+  three ids run in lockstep on a fresh site and the join proves less than it
+  appears to.
+
+### Measured
+For the record, against the real engine: 24 distinct question ids, 24 engine
+items, 24 parameter sets, all seven links holding across 400 items and 31 runs.
+The root scale returns 24 items when subscales are included and none without,
+and the attempt's own settings carry `includesubscales: true`.
+
+---
+
+## [0.2.24] — 2026-09-01
+
+### Fixed
+- **Questions did not carry their item name.** The name lived only in the lab's
+  own table, so `<idnumber>` came out empty in an XML export and a question in
+  the bank could not be traced back to the item it represents. The item name is
+  now the question's ID number — which is where Moodle keeps exactly this kind
+  of external identifier, and it travels through export and import — prefixed
+  with the run, because several runs share one question category and an ID
+  number has to be unique within it.
+- **The question name did not mention the item either.** It read
+  `CATLab CATLab run 183 / K1.2 #12`, repeating the scale and omitting the
+  identifier. It now reads `Q-1-2-012 — CATLab run 183 / K1.2`.
+
+### Note on question ids
+High question ids in a demonstration export are accumulation, not a defect: 31
+runs at 24 items each had produced 400 questions in this environment. Each run
+does create exactly its planned items. They all land in a single question
+category, though, which is worth revisiting — one category per experiment would
+mirror the course sections and keep a bank usable after a few sweeps.
+
+---
+
 ## [0.2.23] — 2026-09-01
 
 ### Added

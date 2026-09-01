@@ -647,6 +647,42 @@ final class provisioning_test extends \advanced_testcase {
     }
 
     /**
+     * The test's scale selection covers every level below the root.
+     *
+     * @return void
+     */
+    public function test_scale_selection_covers_the_whole_tree(): void {
+        global $DB;
+        $this->resetAfterTest();
+
+        /** @var \local_catquizlab_generator $generator */
+        $generator = $this->getDataGenerator()->get_plugin_generator('local_catquizlab');
+        $run = $generator->create_run();
+
+        // A three-level tree: the items hang on the leaves, but a leaf is only
+        // reachable through its domain. Reporting the leaves while leaving the
+        // domain out describes a tree with a hole in the middle.
+        foreach ([[0, 900], [1, 901], [2, 902], [2, 903]] as [$level, $scaleid]) {
+            $DB->insert_record('local_catquizlab_scalemap', (object) [
+                'runid'         => $run->id,
+                'level'         => $level,
+                'catscaleid'    => $scaleid,
+                'categoryindex' => $level >= 1 ? 1 : null,
+                'subscaleindex' => $level === 2 ? 1 : null,
+                'timecreated'   => time(),
+            ]);
+        }
+
+        $method = new \ReflectionMethod(run_orchestrator::class, 'subscale_ids');
+        $method->setAccessible(true);
+        $ids = $method->invoke(null, (int) $run->id);
+
+        sort($ids);
+        $this->assertSame([901, 902, 903], $ids);
+        $this->assertNotContains(900, $ids, 'The root is the test scale, not one of its subscales.');
+    }
+
+    /**
      * The materialiser refuses an empty plan with a named reason.
      *
      * @return void

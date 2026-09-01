@@ -92,7 +92,19 @@ foreach ($runids as $runid) {
     }
     cli_writeln('  result: ' . ($report['ok'] ? 'OK' : 'FAILED'));
 
-    if (!$report['ok']) {
+    // The per-item links. Row counts agree while a reference is crossed, so
+    // each link gets its own verdict.
+    $linkfailures = run_verifier::link_failures($runid);
+    if ($linkfailures === []) {
+        cli_writeln('  links: all OK');
+    } else {
+        cli_writeln('  links: FAILED');
+        foreach ($linkfailures as $link => $count) {
+            cli_writeln('    ' . $link . ': ' . $count . ' item(s)');
+        }
+    }
+
+    if (!$report['ok'] || $linkfailures !== []) {
         $failures++;
         cli_writeln('  first failure: ' . $report['firstfailure']);
         foreach ($report['details'] as $detail) {

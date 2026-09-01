@@ -46,7 +46,7 @@ class question_template {
      */
     public static function default_dichotomous(): array {
         return [
-            'name'         => 'CATLab {scalename} #{itemnumber}',
+            'name'         => '{itemname} — {scalename}',
             'questiontext' => 'Skala: {scalename} (#{scalenumber}) — Item {itemname} '
                 . '(#{itemnumber}, ID {itemid}). Parameter: Schwierigkeit b={difficulty}, '
                 . 'Trennschärfe a={discrimination}. Wählen Sie die korrekte Option.',
@@ -93,7 +93,7 @@ class question_template {
         }
 
         return [
-            'name'         => 'CATLab {scalename} #{itemnumber} (poly)',
+            'name'         => '{itemname} — {scalename} (poly)',
             'questiontext' => 'Skala: {scalename} (#{scalenumber}) — Item {itemname} '
                 . '(#{itemnumber}, ID {itemid}). Parameter: Schwierigkeit b={difficulty}, '
                 . 'Trennschärfe a={discrimination}. Wählen Sie die zutreffende Antwortstufe.',
@@ -141,7 +141,35 @@ class question_template {
             'questiontext' => self::substitute((string) ($template['questiontext'] ?? ''), $item),
             'single'       => (bool) ($template['single'] ?? true),
             'answers'      => $answers,
+            // The identifier the question carries into the question bank and
+            // through an XML export. Prefixed with the run, because several
+            // runs share one question category and an ID number has to be
+            // unique within it.
+            'idnumber'     => self::idnumber($item),
         ];
+    }
+
+    /**
+     * The ID number a rendered question carries.
+     *
+     * The lab's item name lives only in its own table otherwise, so a question
+     * exported to another site — or simply looked at in the question bank —
+     * could not be traced back to the item it represents.
+     *
+     * The run id is part of it because several runs share one question
+     * category and an ID number has to be unique within it.
+     *
+     * @param array $item The item spec.
+     * @return string Empty when the item has no name to identify it by.
+     */
+    public static function idnumber(array $item): string {
+        $itemname = trim((string) ($item['itemname'] ?? ''));
+        if ($itemname === '') {
+            return '';
+        }
+        $runid = (int) ($item['runid'] ?? 0);
+
+        return $runid > 0 ? 'r' . $runid . '-' . $itemname : $itemname;
     }
 
     /**

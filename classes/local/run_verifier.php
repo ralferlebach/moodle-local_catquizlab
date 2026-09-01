@@ -171,6 +171,88 @@ class run_verifier {
     }
 
     /**
+     * The join every engine link of a run has to satisfy, row by row.
+     *
+     * Counting rows per table cannot catch a crossed reference: the counts
+     * agree while `activeparamid` points at the wrong parameter set, or a
+     * parameter names another item. This joins the five tables and states a
+     * verdict per link, so a mismatch names the item it belongs to.
+     *
+     * @param int $runid The run.
+     * @return array[] One row per item, with a boolean per link.
+     */
+    public static function link_report(int $runid): array {
+        global $DB;
+
+        $sql = "SELECT
+                    li.id                       AS labitem,
+                    li.itemname,
+                    q.id                        AS questionid,
+                    qbe.idnumber,
+                    ci.id                       AS engineitemid,
+                    ci.componentid              AS itemcomponentid,
+                    ci.catscaleid               AS itemcatscaleid,
+                    ci.contextid                AS itemcontextid,
+                    ci.activeparamid,
+                    ip.id                       AS paramid,
+                    ip.componentid              AS paramcomponentid,
+                    ip.itemid                   AS paramitemid,
+                    ip.contextid                AS paramcontextid,
+                    ip.status                   AS paramstatus,
+                    cs.id                       AS scaleid,
+                    cs.contextid                AS scalecontextid,
+                    cc.id                       AS contextid
+                  FROM {local_catquizlab_item} li
+                  JOIN {question} q ON q.id = li.questionid
+             LEFT JOIN {question_versions} qv ON qv.questionid = q.id
+             LEFT JOIN {question_bank_entries} qbe ON qbe.id = qv.questionbankentryid
+             LEFT JOIN {local_catquiz_items} ci ON ci.componentid = li.questionid
+                                               AND ci.componentname = 'question'
+                                               AND ci.catscaleid = li.assignedcatscaleid
+             LEFT JOIN {local_catquiz_itemparams} ip ON ip.id = ci.activeparamid
+             LEFT JOIN {local_catquiz_catscales} cs ON cs.id = ci.catscaleid
+             LEFT JOIN {local_catquiz_catcontext} cc ON cc.id = ci.contextid
+                 WHERE li.runid = :runid
+              ORDER BY li.id";
+
+        $rows = [];
+        foreach ($DB->get_records_sql($sql, ['runid' => $runid]) as $row) {
+            $rows[] = (array) $row + [
+                'ok_question_matches_item'  => (int) $row->questionid === (int) $row->itemcomponentid,
+                'ok_question_matches_param' => (int) $row->questionid === (int) $row->paramcomponentid,
+                'ok_activeparam_is_param'   => (int) $row->activeparamid === (int) $row->paramid,
+                'ok_param_names_its_item'   => (int) $row->paramitemid === (int) $row->engineitemid,
+                'ok_contexts_agree'         => (int) $row->itemcontextid === (int) $row->paramcontextid,
+                'ok_scale_in_context'       => (int) $row->scalecontextid === (int) $row->contextid,
+                // Below UPDATED_MANUALLY the engine treats the item as a pilot
+                // and learns nothing from it, so this belongs in the report.
+                'ok_parameter_is_known'     => (int) $row->paramstatus >= item_registrar::STATUS_KNOWN,
+            ];
+        }
+
+        return $rows;
+    }
+
+    /**
+     * The links that fail, across a run.
+     *
+     * @param int $runid The run.
+     * @return array<string, int> Link => number of items failing it.
+     */
+    public static function link_failures(int $runid): array {
+        $failures = [];
+        foreach (self::link_report($runid) as $row) {
+            foreach ($row as $key => $value) {
+                if (strpos($key, 'ok_') === 0 && !$value) {
+                    $failures[$key] = ($failures[$key] ?? 0) + 1;
+                }
+            }
+        }
+
+        return $failures;
+    }
+
+    /**
      * Verify every run of an experiment.
      *
      * @param int $experimentid The experiment.

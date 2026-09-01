@@ -650,7 +650,13 @@ class run_orchestrator {
     }
 
     /**
-     * The run's subscale engine scale ids from the scale map.
+     * Every engine scale of the run below the root.
+     *
+     * All of them, not only the leaves. The tree is root → domain → subscale,
+     * and the items hang on the leaves — but a leaf is only reachable through
+     * its domain. Reporting the leaves while leaving the domain out of the
+     * test's scale selection describes a tree with a hole in the middle, and
+     * the engine has to walk through that hole to find any item at all.
      *
      * @param int $runid The run.
      * @return int[]
@@ -658,12 +664,14 @@ class run_orchestrator {
     protected static function subscale_ids(int $runid): array {
         global $DB;
 
-        $rows = $DB->get_records(
+        $rows = $DB->get_records_select(
             'local_catquizlab_scalemap',
-            ['runid' => $runid, 'level' => scale_provisioner::LEVEL_SUBSCALE],
-            '',
+            'runid = :runid AND level > :root',
+            ['runid' => $runid, 'root' => scale_provisioner::LEVEL_ROOT],
+            'level ASC, id ASC',
             'catscaleid'
         );
+
         return array_map('intval', array_keys($rows));
     }
 }
