@@ -25,11 +25,11 @@
 defined('MOODLE_INTERNAL') || die();
 
 $plugin->component    = 'local_catquizlab';
-$plugin->version      = 2026090114;
+$plugin->version      = 2026090115;
 $plugin->requires     = 2024100700;   // Moodle 4.5.0 — hard minimum.
 $plugin->supported    = [405, 502];   // Tested on Moodle 4.5, 5.0 and 5.2; raise as new majors are added to CI.
 $plugin->maturity     = MATURITY_ALPHA;
-$plugin->release      = '0.2.20';
+$plugin->release      = '0.2.21';
 
 // Deliberately NO hard dependencies: the suite drives local_catquiz and
 // mod_adaptivequiz as a black box, but the stub must install stand-alone

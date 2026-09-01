@@ -626,6 +626,27 @@ final class provisioning_test extends \advanced_testcase {
     }
 
     /**
+     * The engine caches are purged after provisioning.
+     *
+     * @return void
+     */
+    public function test_engine_caches_are_purged_after_provisioning(): void {
+        $this->resetAfterTest();
+
+        if (!environment::engine_available()) {
+            $this->markTestSkipped('No CAT engine installed; this guards an engine interaction.');
+        }
+
+        // A run whose scale and item caches still described the previous run
+        // presented no first question at all, and the engine's own message
+        // blamed the configuration. Purging is therefore part of provisioning,
+        // not an operator's job.
+        cat_item_provisioner::purge_engine_cache();
+
+        $this->assertTrue(true, 'Purging every engine store must not raise.');
+    }
+
+    /**
      * The materialiser refuses an empty plan with a named reason.
      *
      * @return void

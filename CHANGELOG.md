@@ -6,6 +6,45 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.2.21] — 2026-09-01
+
+Stale engine caches, and what the per-scale limits actually mean.
+
+### Fixed
+- **A freshly provisioned run could not present its first question.** The
+  engine caches what it knows about scales, contexts and items; a run whose
+  caches still described the previous one showed no question at all, and the
+  engine's own message blamed the configuration. Provisioning now purges every
+  store that describes the pool a test will be played from —
+  `changesintestitems`, `changesincatscales`, `changesincatcontexts` plus the
+  `adaptivequizattempt` and `catscales` stores — as its last act before the
+  test is created. The earlier purge covered only the item stores, which was
+  enough to make items visible and not enough to make a test playable.
+
+### Learned
+`min_attempts_per_scale` and `max_attempts_per_scale` are the number of
+questions asked per scale, not a property of the pool. That makes the two
+budgets a pair that has to add up: with two subscales and a maximum of four
+questions each, a test can ask at most eight — while `minimumquestions` asked
+for ten. The engine then ends with *"minimum number of questions was not
+reached"*, and nothing in either setting looks wrong on its own.
+
+Item counts per scale in the demonstration run: 12 for each of the two
+subscales, none directly on the root or the domain, which is the intended
+shape — items hang on the leaves.
+
+### Verification
+Both queued attempts of a run were played without any manual cache purge, and
+engine attempts 81 and 82 were recorded. PHPUnit 403 tests, Behat 27 scenarios,
+phpcs and PHPDoc clean.
+
+### Not yet
+Each attempt still ends after its first answered question. The engine selects
+no second item although each subscale holds twelve, which is the next thing to
+look at.
+
+---
+
 ## Untersuchungsstand (Stand 0.2.20)
 
 Beobachtungen aus dem Lauf gegen die reale Engine, festgehalten für die

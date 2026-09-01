@@ -610,6 +610,10 @@ class run_orchestrator {
 
         $course = course_provisioner::provision($runid);
 
+        // The last word before the test is created: everything the engine
+        // caches about scales, contexts and items describes this run now.
+        cat_item_provisioner::purge_engine_cache();
+
         return [
             'persons' => $persons,
             'users'   => $users,

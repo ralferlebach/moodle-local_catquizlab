@@ -159,18 +159,27 @@ class cat_item_provisioner {
      *
      * @return void
      */
-    protected static function purge_engine_cache(): void {
+    public static function purge_engine_cache(): void {
         if (!class_exists('\cache_helper')) {
             return;
         }
 
         try {
-            // Both: the event the engine fires for item changes, and the store
-            // that actually holds the retrieval results. Purging the store
-            // directly is safe here because provisioning runs before any
-            // attempt exists, so there is no attempt state to lose.
-            \cache_helper::purge_by_event('changesintestitems');
-            \cache::make('local_catquiz', 'adaptivequizattempt')->purge();
+            // Every store that describes the pool a test will be played from.
+            // Leaving any of them stale is not a slow start but a dead one: a
+            // freshly provisioned run whose caches still held the previous
+            // state presented no first question at all, and the engine's own
+            // message blamed the configuration.
+            //
+            // Purging the stores directly is safe here because provisioning
+            // runs before any attempt exists, so there is no attempt state to
+            // lose.
+            foreach (['changesintestitems', 'changesincatscales', 'changesincatcontexts'] as $event) {
+                \cache_helper::purge_by_event($event);
+            }
+            foreach (['adaptivequizattempt', 'catscales'] as $store) {
+                \cache::make('local_catquiz', $store)->purge();
+            }
         } catch (\Throwable $e) {
             // A cache that cannot be purged is not a reason to fail a
             // materialisation; the retrieval check that follows will notice if
