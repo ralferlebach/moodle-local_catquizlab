@@ -492,6 +492,44 @@ final class provisioning_test extends \advanced_testcase {
     }
 
     /**
+     * A pool smaller than the test's own minimum fails before anything is played.
+     *
+     * @return void
+     */
+    public function test_pool_smaller_than_the_minimum_fails_the_run(): void {
+        $this->resetAfterTest();
+
+        $definition = ['budgets' => ['global' => ['minitems' => 10, 'maxitems' => 25]]];
+
+        // The engine cannot finish a test whose minimum exceeds the items it
+        // can be given: it runs out, reports an error, and the run yields one
+        // item and a stop reason that blames the strategy. The arithmetic is
+        // knowable in advance, so it is checked in advance.
+        $reason = run_orchestrator::budget_feasible($definition, 6);
+        $this->assertNotNull($reason);
+        $this->assertStringContainsString('6 items', $reason);
+        $this->assertStringContainsString('minimum of 10', $reason);
+
+        $this->assertNull(run_orchestrator::budget_feasible($definition, 10));
+        $this->assertNull(run_orchestrator::budget_feasible($definition, 24));
+    }
+
+    /**
+     * Without a stated minimum there is nothing to judge.
+     *
+     * @return void
+     */
+    public function test_budget_feasibility_needs_a_minimum(): void {
+        $this->resetAfterTest();
+
+        $this->assertNull(run_orchestrator::budget_feasible([], 3));
+        $this->assertNull(run_orchestrator::budget_feasible(
+            ['budgets' => ['global' => ['minitems' => 10]]],
+            0
+        ));
+    }
+
+    /**
      * The materialiser refuses an empty plan with a named reason.
      *
      * @return void

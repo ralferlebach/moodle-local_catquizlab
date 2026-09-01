@@ -105,7 +105,17 @@ async function claimJob() {
  */
 async function playAttempt(browser, job) {
     const started = Date.now();
-    const page = await browser.newPage();
+
+    // A context of its own per attempt. Sharing the browser's default context
+    // carries the previous person's session into the next attempt, so the
+    // second simulated person would have sat the test as the first — and the
+    // only reason that did not happen is that the login page, already
+    // authenticated, no longer offered a username field and the worker fell
+    // over. An isolated context makes each attempt genuinely its own person.
+    const context = typeof browser.createBrowserContext === 'function'
+        ? await browser.createBrowserContext()
+        : await browser.createIncognitoBrowserContext();
+    const page = await context.newPage();
     page.setDefaultNavigationTimeout(NAV_TIMEOUT);
     let engineAttemptId = 0;
     let status = 'failed';
@@ -119,17 +129,24 @@ async function playAttempt(browser, job) {
         let guard = 0;
         let answeredCount = 0;
         while (await hasQuestion(page) && guard++ < 1000) {
-            const questionId = await currentQuestionId(page);
+            const {qubaid, slot} = await currentQuestionRef(page);
             const decision = await callWs('local_catquizlab_oracle_answer', {
                 runid: job.runid,
-                questionid: questionId,
+                // The page identifies a question by usage and slot; the browser
+                // never sees a question id, so the server resolves it.
+                questionid: 0,
+                qubaid,
+                slot,
+                // The worker calls with its own token, so the server cannot
+                // infer the simulated person from the logged-in user.
+                attemptid: job.attemptid,
             });
             if (!decision.ready) {
-                throw new Error(`Oracle not ready for question ${questionId}: ${decision.message}`);
+                throw new Error(`Oracle not ready for usage ${qubaid} slot ${slot}: ${decision.message}`);
             }
             const answered = await answerQuestion(page, decision);
             if (!answered) {
-                throw new Error(`No answer option found for question ${questionId}.`);
+                throw new Error(`No answer option found for usage ${qubaid} slot ${slot}.`);
             }
             await submitQuestion(page);
             answeredCount++;
@@ -144,15 +161,16 @@ async function playAttempt(browser, job) {
         if (answeredCount === 0) {
             throw new Error('No question was presented; the attempt never started.');
         }
-        if (!engineAttemptId) {
-            throw new Error(`Answered ${answeredCount} question(s) but found no engine attempt id.`);
-        }
-
+        // A missing engine attempt id is not a failure of the attempt: the
+        // finish page does not always render one, and the server can look it up
+        // from the run and the person. What matters is that questions were
+        // answered, which the check above establishes.
         status = 'finished';
     } catch (error) {
         console.error(`Attempt ${job.attemptid} failed: ${error.message}`);
     } finally {
         await page.close();
+        await context.close();
         await callWs('local_catquizlab_job_complete', {
             attemptid: job.attemptid,
             status,
@@ -182,6 +200,14 @@ async function login(page, userid, username) {
     }
 
     await gotoSettle(page, `${BASE_URL}/login/index.php`);
+
+    // No username field means a session is already open. With an isolated
+    // context that should not happen, so it is reported rather than worked
+    // around: silently continuing would run the test as whoever is logged in.
+    if (!(await page.$('#username'))) {
+        throw new Error('The login page offered no username field; a session is already open.');
+    }
+
     // The server supplies the username, because the provisioner chooses it and
     // makes it unique per run. Deriving it here produced catlab_user_<id> and
     // no such account ever existed. The fallback keeps this working against an
@@ -192,6 +218,18 @@ async function login(page, userid, username) {
         clickFirst(page, ['#loginbtn', 'button[type="submit"]', 'input[type="submit"]']),
         page.waitForNavigation({waitUntil: 'networkidle2'}).catch(() => {}),
     ]);
+
+    // A failed login left the worker on the login page, where its start-attempt
+    // selectors then matched the login button itself: it clicked away, found no
+    // question and reported that the attempt never started. The real cause —
+    // wrong credentials — never appeared anywhere.
+    if (page.url().includes('/login/')) {
+        const notice = await page.evaluate(() => {
+            const el = document.querySelector('.loginerrors, .alert-danger, #loginerrormessage');
+            return el ? el.innerText.trim() : '';
+        });
+        throw new Error(`Login as ${username || usernameFor(userid)} failed${notice ? ': ' + notice : '.'}`);
+    }
 }
 
 /**
@@ -206,9 +244,19 @@ async function startAttempt(page) {
         return;
     }
     const clicked = await clickFirst(page, START_SELECTORS);
-    if (clicked) {
-        await page.waitForNavigation({waitUntil: 'networkidle2'}).catch(() => {});
+    if (!clicked) {
+        throw new Error('No way to start the attempt was found on the activity page.');
     }
+
+    await page.waitForNavigation({waitUntil: 'networkidle2'}).catch(() => {});
+
+    // Waiting for navigation alone is not enough: the catch swallows a timeout,
+    // and on a slow instance the check for a question then runs before the page
+    // has rendered one. The attempt looked as if it had presented nothing, and
+    // the worker moved on with an empty answer loop. Wait for the question
+    // itself, which is the thing the next step actually needs.
+    await page.waitForSelector(QUESTION_SELECTORS.join(', '), {timeout: NAV_TIMEOUT})
+        .catch(() => {});
 }
 
 /**
@@ -227,6 +275,26 @@ async function hasQuestion(page) {
  * @param {object} page The Puppeteer page.
  * @returns {Promise<number>}
  */
+async function currentQuestionRef(page) {
+    const id = await page.evaluate((selectors) => {
+        for (const sel of selectors) {
+            const el = document.querySelector(sel);
+            if (el && el.id) {
+                return el.id;
+            }
+        }
+        return '';
+    }, QUESTION_SELECTORS);
+
+    // Moodle renders question-{qubaid}-{slot}. Taking the first number out of
+    // that and calling it a question id is what made every oracle call fail.
+    const parts = String(id).match(/(\d+)\D+(\d+)/);
+
+    return parts
+        ? {qubaid: parseInt(parts[1], 10), slot: parseInt(parts[2], 10)}
+        : {qubaid: 0, slot: 0};
+}
+
 async function currentQuestionId(page) {
     const id = await page.evaluate((selectors) => {
         for (const sel of selectors) {

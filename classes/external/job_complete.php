@@ -88,6 +88,15 @@ class job_complete extends external_api {
             ];
         }
 
+        // The worker reads the engine attempt id off the finish page, which it
+        // does not always render. The server can look it up instead: it knows
+        // the run's activity and the person's user, which is all the engine
+        // needs. Making the worker scrape a value the server already has was
+        // the fragile half of this contract.
+        if ($status === 'finished' && $engineattemptid <= 0) {
+            $engineattemptid = self::engine_attempt_for($attempt);
+        }
+
         // A finished attempt has an engine attempt behind it. Without one there
         // is nothing to collect a trace from, so accepting the report would
         // record a completed attempt that produced no data — and the run would
@@ -127,6 +136,40 @@ class job_complete extends external_api {
             'acknowledged' => true,
             'message'      => get_string('job:acknowledged', 'local_catquizlab'),
         ];
+    }
+
+    /**
+     * Find the engine attempt of a lab attempt.
+     *
+     * @param \stdClass $attempt The lab attempt row.
+     * @return int The engine attempt id, or 0 when there is none.
+     */
+    protected static function engine_attempt_for(\stdClass $attempt): int {
+        global $DB;
+
+        $userid = (int) $DB->get_field('local_catquizlab_person', 'moodleuserid', ['id' => $attempt->personid]);
+        $run = $DB->get_record('local_catquizlab_run', ['id' => $attempt->runid]);
+        if ($userid <= 0 || !$run || empty($run->testcmid)) {
+            return 0;
+        }
+
+        $cm = get_coursemodule_from_id('adaptivequiz', (int) $run->testcmid, 0, false, IGNORE_MISSING);
+        if (!$cm) {
+            return 0;
+        }
+
+        // The most recent attempt of this user on this activity. A simulated
+        // person sits one test once, so "most recent" is unambiguous here.
+        $rows = $DB->get_records(
+            'adaptivequiz_attempt',
+            ['instance' => (int) $cm->instance, 'userid' => $userid],
+            'id DESC',
+            'id',
+            0,
+            1
+        );
+
+        return $rows ? (int) reset($rows)->id : 0;
     }
 
     /**

@@ -6,6 +6,87 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.2.16] — 2026-09-01
+
+Three defects behind the one-item attempt of 0.2.15, found by reading what the
+engine itself recorded.
+
+### Fixed
+- **A run could be provisioned that no test could finish.** The engine's own
+  record showed `total_number_of_testitems: 6` against
+  `minimumquestions: 10`: the test ran out of items, reported an error, and the
+  run produced a single item and a stop reason that blamed the strategy. The
+  arithmetic is knowable before anything is played, so the pool is now checked
+  against the run's own minimum right after materialisation. The failure names
+  the numbers: *6 items for a minimum of 10*.
+- **The worker shared one browser session across attempts.** The second
+  simulated person would have sat the test as the first; the only thing that
+  prevented it was the already-authenticated login page no longer offering a
+  username field, which made the worker fall over for an unrelated-looking
+  reason. Each attempt gets its own browser context now, and a login page
+  without a username field is reported rather than worked around.
+- **A failed login was invisible.** The worker stayed on the login page, where
+  its start-attempt selectors matched the login button itself: it clicked, found
+  no question, and reported that the attempt never started. Wrong credentials
+  never appeared anywhere. The login is now verified, and the page's own error
+  message is passed through.
+
+### Verification
+With a pool of 24 items the chain provisions green end to end
+(`planned=24 questions=24 items=24 params=24 visible=24 failed=0`) and the
+activity now carries a readable name. PHPUnit 398 tests, Behat 27 scenarios, 11
+worker unit tests, phpcs and PHPDoc clean.
+
+### Not yet
+With the larger pool the worker still reports that no question was presented,
+although a browser session with the same credentials reaches the activity page
+and sees its start button. That is the next thread: the start click, on a
+single-threaded development server, against an activity that already has an
+attempt in progress.
+
+---
+
+## [0.2.15] — 2026-09-01
+
+**A simulated person sat a real adaptive test.** The chain runs end to end:
+provisioning, queue, claim, browser login, question, oracle answer, submission,
+engine attempt, trace collection.
+
+### Fixed
+- **The worker never saw the question it had just triggered.** After starting an
+  attempt it waited for navigation and swallowed the timeout, then checked for a
+  question before the page had rendered one. It waits for the question itself
+  now — the thing the next step actually needs.
+- **Every oracle call failed because the worker sent the wrong id.** Moodle
+  renders `question-{qubaid}-{slot}`; the worker took the first number out of
+  that and sent it as a question id, so the oracle looked up an item that could
+  not exist and reported itself as not ready. The page identifies a question by
+  usage and slot, and the server resolves the question id through the question
+  engine.
+- **The oracle could not identify the person.** It read `$USER`, but the worker
+  drives the browser as the simulated user while calling the web service with
+  its own token — so `$USER` was the worker account and never matched a person.
+  The lab attempt now names the person; the logged-in user remains the fallback.
+- **The engine attempt id was scraped from a page that does not always show
+  it.** The server looks it up from the run and the person instead, which is
+  information it already has. The worker no longer fails an otherwise good
+  attempt over a value it could not read.
+
+### Verification
+Against the real engine on a live Moodle: attempt 44 played through the
+adaptivequiz interface, engine attempt 3 recorded, one item administered
+(question 112), the trace collected and the engine's own person parameters
+written. PHPUnit 396 tests, Behat 27 scenarios, 11 worker unit tests, phpcs and
+PHPDoc clean.
+
+### Not yet
+The test stops after one item rather than exhausting its budget, and the
+recorded stop reason is the engine's "An error occured". That is the next
+thread to pull, and it is now visible precisely because everything before it
+works.
+
+---
+
 ## [0.2.14] — 2026-09-01
 
 First worker run against a real installation. Four more defects that only a

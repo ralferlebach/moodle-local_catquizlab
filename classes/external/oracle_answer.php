@@ -60,6 +60,21 @@ class oracle_answer extends external_api {
         return new external_function_parameters([
             'runid'      => new external_value(PARAM_INT, 'Lab run id the attempt belongs to.'),
             'questionid' => new external_value(PARAM_INT, 'Moodle question id of the presented item.'),
+            'attemptid'  => new external_value(
+                PARAM_INT,
+                'Lab attempt the question belongs to. The worker calls this with its own token, '
+                    . 'so the person cannot be inferred from the logged-in user.',
+                VALUE_DEFAULT,
+                0
+            ),
+            'qubaid'     => new external_value(
+                PARAM_INT,
+                'Question usage id, as rendered in the page markup. With the slot it identifies the '
+                    . 'presented question; the browser never sees a question id.',
+                VALUE_DEFAULT,
+                0
+            ),
+            'slot'       => new external_value(PARAM_INT, 'Slot within the question usage.', VALUE_DEFAULT, 0),
         ]);
     }
 
@@ -67,13 +82,25 @@ class oracle_answer extends external_api {
      * Return the simulated answer for one presented item.
      *
      * @param int $runid Lab run id.
-     * @param int $questionid Moodle question id of the presented item.
+     * @param int $questionid Moodle question id, or 0 to resolve from the usage.
+     * @param int $attemptid The lab attempt, naming the person the worker is playing.
+     * @param int $qubaid Question usage id from the page markup.
+     * @param int $slot Slot within that usage.
      * @return array The oracle response.
      */
-    public static function execute(int $runid, int $questionid): array {
+    public static function execute(
+        int $runid,
+        int $questionid,
+        int $attemptid = 0,
+        int $qubaid = 0,
+        int $slot = 0
+    ): array {
         $params = self::validate_parameters(self::execute_parameters(), [
             'runid'      => $runid,
             'questionid' => $questionid,
+            'attemptid'  => $attemptid,
+            'qubaid'     => $qubaid,
+            'slot'       => $slot,
         ]);
         unset($params);
 
@@ -88,7 +115,16 @@ class oracle_answer extends external_api {
         // The caller is the simulated test-taker driving their own attempt through
         // the UI. Resolve the run's bound test, the person and the presented item;
         // then answer with the seed-deterministic, subscale-aware response oracle.
-        $resolved = self::resolve($runid, $questionid);
+        // The page markup identifies a question by usage and slot, not by
+        // question id: Moodle renders question-{qubaid}-{slot}. The worker used
+        // to read the first number out of that and send it as a question id,
+        // which is the usage id — so the oracle looked up an item that could
+        // not exist and reported itself as not ready at every single question.
+        if ($questionid <= 0 && $qubaid > 0 && $slot > 0) {
+            $questionid = self::question_id_from_usage($qubaid, $slot);
+        }
+
+        $resolved = self::resolve($runid, $questionid, $attemptid);
         if ($resolved === null) {
             return self::not_ready(get_string('oracle:notready', 'local_catquizlab'));
         }
@@ -104,13 +140,35 @@ class oracle_answer extends external_api {
     }
 
     /**
+     * The question id behind a usage and slot.
+     *
+     * @param int $qubaid The question usage id.
+     * @param int $slot The slot within it.
+     * @return int The question id, or 0 when it cannot be resolved.
+     */
+    protected static function question_id_from_usage(int $qubaid, int $slot): int {
+        global $CFG;
+        require_once($CFG->dirroot . '/question/engine/lib.php');
+
+        try {
+            $usage = \question_engine::load_questions_usage_by_activity($qubaid);
+            $question = $usage->get_question($slot);
+        } catch (\Throwable $e) {
+            return 0;
+        }
+
+        return (int) ($question->id ?? 0);
+    }
+
+    /**
      * Resolve the run's test config, the person and the presented item.
      *
      * @param int $runid The lab run id.
      * @param int $questionid The presented question id.
+     * @param int $attemptid The lab attempt naming the person, or 0 to use the logged-in user.
      * @return array|null ['item' => ..., 'person' => ...], or null when not answerable.
      */
-    protected static function resolve(int $runid, int $questionid): ?array {
+    protected static function resolve(int $runid, int $questionid, int $attemptid = 0): ?array {
         global $DB, $USER;
 
         $run = $DB->get_record('local_catquizlab_run', ['id' => $runid]);
@@ -118,7 +176,25 @@ class oracle_answer extends external_api {
             return null;
         }
         $config = test_binder::read_test_config((int) $run->testcmid);
-        $person = $DB->get_record('local_catquizlab_person', ['runid' => $runid, 'moodleuserid' => $USER->id]);
+
+        // The person comes from the attempt when the caller names one. The
+        // worker drives the browser as the simulated user but calls this web
+        // service with its own token, so $USER is the worker account and never
+        // matches a person — the oracle then reported itself as not ready and
+        // every attempt died at its first question. $USER stays as the fallback
+        // for a call that genuinely comes from the test-taker.
+        $person = null;
+        if ($attemptid > 0) {
+            $attempt = $DB->get_record('local_catquizlab_attempt', ['id' => $attemptid, 'runid' => $runid]);
+            if ($attempt) {
+                $person = $DB->get_record('local_catquizlab_person', ['id' => $attempt->personid]);
+            }
+        }
+        if (!$person) {
+            $person = $DB->get_record('local_catquizlab_person', [
+                'runid' => $runid, 'moodleuserid' => $USER->id,
+            ]);
+        }
         if ($config === null || !$person) {
             return null;
         }

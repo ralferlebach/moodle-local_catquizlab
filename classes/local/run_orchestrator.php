@@ -48,6 +48,9 @@ class run_orchestrator {
     /** @var string The effective configuration differs from the manifest. */
     public const REASON_MANIFEST_DRIFT = 'manifest-configuration-drift';
 
+    /** @var string The realised pool is smaller than the test's own minimum. */
+    public const REASON_POOL_TOO_SMALL = 'pool-smaller-than-minimum-questions';
+
     /** @var string Materialise the engine scale tree and context. */
     public const STAGE_SCALES = 'scales';
 
@@ -135,6 +138,21 @@ class run_orchestrator {
             if (self::stage_failed($stage, $stages[$stage])) {
                 $failedstage = $stage;
                 break;
+            }
+
+            // The pool exists now, so the one thing that can still doom the run
+            // arithmetically is knowable: a minimum the pool cannot serve.
+            if ($stage === self::STAGE_MATERIALISE && is_array($stages[$stage])) {
+                $infeasible = self::budget_feasible(
+                    $definition,
+                    (int) ($stages[$stage]['enginevisible'] ?? 0)
+                );
+                if ($infeasible !== null) {
+                    $stages[$stage]['failed'] = true;
+                    $stages[$stage]['reason'] = $infeasible;
+                    $failedstage = $stage;
+                    break;
+                }
             }
         }
 
@@ -306,6 +324,41 @@ class run_orchestrator {
      * is registered with the engine, carries active parameters and can be
      * retrieved through the engine's own path. Anything less is a pool the test
      * cannot actually be played from.
+     *
+     * @param array $result The materialisation stage result.
+     * @return bool
+     */
+    /**
+     * Whether the realised pool can satisfy the run's own item budget.
+     *
+     * A test whose minimum exceeds the number of items it can be given has no
+     * way to finish: the engine runs out and reports an error, and the run
+     * produces a trace of one item and a stop reason that blames the strategy.
+     * The arithmetic is knowable before anything is played, so it is checked
+     * here rather than discovered afterwards.
+     *
+     * @param array $definition The run's normalised definition.
+     * @param int $available How many items the engine can retrieve for the run.
+     * @return string|null A reason when the budget cannot be met, null otherwise.
+     */
+    public static function budget_feasible(array $definition, int $available): ?string {
+        $minimum = (int) ($definition['budgets']['global']['minitems'] ?? 0);
+        if ($minimum <= 0 || $available <= 0) {
+            return null;
+        }
+        if ($available < $minimum) {
+            return self::REASON_POOL_TOO_SMALL . ' (' . $available . ' items for a minimum of ' . $minimum . ')';
+        }
+
+        return null;
+    }
+
+    /**
+     * Whether a materialisation result meets every postcondition of the stage.
+     *
+     * A run may only be scheduled when every planned item exists as a question,
+     * is registered with the engine, carries active parameters and can be
+     * retrieved through the engine's own path.
      *
      * @param array $result The materialisation stage result.
      * @return bool
