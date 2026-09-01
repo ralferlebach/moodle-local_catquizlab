@@ -1,23 +1,44 @@
 ##############################################################################
-# Worker E2E – local_catquizlab (placeholder)
+# Worker CI – local_catquizlab
 #
-# Replaces the Playwright workflow of the mod_vimipad ancestor. Once the
-# attempt runner exists (backlog E3), this workflow will spin up a Moodle
-# site with local_catquiz + mod_adaptivequiz, provision a minimal experiment
-# and let the Puppeteer worker play one full attempt through the real UI.
+# Two jobs with deliberately different requirements.
 #
-# Until then it is manual-only and merely proves the worker toolchain
-# installs (npm ci resolves Puppeteer incl. Chromium download).
+# "toolchain" proves that the Node/Puppeteer toolchain installs and works. It
+# runs on every push and needs no Moodle, no token and no network beyond the
+# checkout and the npm install. Before this, that job "smoke tested" the worker
+# by pointing it at https://example.invalid, which made it start its normal
+# polling loop, call local_catquizlab_job_claim and fail on DNS every single
+# time. A job that is red by construction says nothing about the code, so the
+# real checks — a syntax check, the unit tests and an offline self test that
+# also starts a browser — replace it.
+#
+# "e2e" plays a real attempt through the real UI and therefore needs a running
+# Moodle with the CAT engine installed. It is opt-in, because it cannot work
+# without those plugins being reachable.
 ##############################################################################
 
-name: Worker E2E (placeholder)
+name: Worker CI
 
 on:
+  push:
+    paths:
+      - 'worker/**'
+      - '.github/workflows/worker-e2e.yml'
+  pull_request:
+    paths:
+      - 'worker/**'
+      - '.github/workflows/worker-e2e.yml'
   workflow_dispatch:
+    inputs:
+      run_e2e:
+        description: 'Also run the end-to-end job (needs the CAT engine)'
+        type: boolean
+        default: false
+        required: false
 
 jobs:
   toolchain:
-    name: "Worker toolchain installs"
+    name: "Worker toolchain and unit tests"
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
@@ -30,6 +51,137 @@ jobs:
         working-directory: worker
         run: npm install --no-audit --no-fund
 
-      - name: Invoke worker stub
+      - name: Check worker syntax
         working-directory: worker
-        run: node run_attempt.js --base-url=https://example.invalid --run-id=0 --token=dummy
+        run: npm run check
+
+      - name: Run worker unit tests
+        working-directory: worker
+        run: npm test
+
+      # This is what the old step was actually meant to prove: that Puppeteer
+      # resolved and its Chromium download works on this runner. It contacts no
+      # Moodle instance and claims no job.
+      - name: Worker self test (offline)
+        working-directory: worker
+        run: npm run selftest
+
+  e2e:
+    name: "Worker end-to-end (needs the CAT engine)"
+    runs-on: ubuntu-24.04
+    needs: toolchain
+    if: github.event_name == 'workflow_dispatch' && inputs.run_e2e
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: moodle
+          POSTGRES_DB: moodle
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - name: Check out the plugin
+        uses: actions/checkout@v4
+        with:
+          path: plugin
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.3'
+          extensions: pgsql, gd, soap, intl, mbstring, curl, zip, bcmath
+          ini-values: max_input_vars=8000, memory_limit=1024M
+
+      - name: Check out Moodle
+        run: git clone --depth 1 -b MOODLE_405_STABLE https://github.com/moodle/moodle.git moodle
+
+      - name: Check out the CAT engine and its host activity
+        run: |
+          git clone --depth 1 https://github.com/ralferlebach/moodle-local_catquiz.git \
+              moodle/local/catquiz
+          git clone --depth 1 https://github.com/ralferlebach/moodle-mod_adaptivequiz.git \
+              moodle/mod/adaptivequiz
+          git clone --depth 1 https://github.com/ralferlebach/moodle-adaptivequizcatmodel_catquiz.git \
+              moodle/mod/adaptivequiz/catmodel/catquiz
+          git clone --depth 1 https://github.com/ralferlebach/moodle-local_wunderbyte_table.git \
+              moodle/local/wunderbyte_table
+          cp -r plugin moodle/local/catquizlab
+
+      - name: Configure Moodle
+        run: |
+          mkdir -p "$HOME/moodledata"
+          cat > moodle/config.php <<'PHP'
+          <?php
+          unset($CFG);
+          global $CFG;
+          $CFG = new stdClass();
+          $CFG->dbtype    = 'pgsql';
+          $CFG->dblibrary = 'native';
+          $CFG->dbhost    = '127.0.0.1';
+          $CFG->dbname    = 'moodle';
+          $CFG->dbuser    = 'postgres';
+          $CFG->dbpass    = 'moodle';
+          $CFG->prefix    = 'mdl_';
+          $CFG->dboptions = ['dbpersist' => 0, 'dbport' => 5432, 'dbsocket' => '', 'dbcollation' => ''];
+          $CFG->wwwroot   = 'http://127.0.0.1:8000';
+          $CFG->dataroot  = getenv('HOME') . '/moodledata';
+          $CFG->admin     = 'admin';
+          $CFG->directorypermissions = 0777;
+          require_once(__DIR__ . '/lib/setup.php');
+          PHP
+
+      - name: Install Moodle
+        working-directory: moodle
+        run: |
+          php admin/cli/install_database.php --agree-license \
+              --adminpass='Admin123!' --adminemail=admin@example.com \
+              --fullname="CATLab E2E" --shortname="CATLabE2E"
+
+      # Everything the worker needs is prepared by the plugin's own CLI rather
+      # than assembled in YAML, so the E2E job exercises the same provisioning
+      # path an operator uses.
+      - name: Provision an experiment, a run and a worker token
+        id: prepare
+        working-directory: moodle
+        run: php local/catquizlab/cli/e2e_prepare.php --persons=1 >> "$GITHUB_OUTPUT"
+
+      - name: Start the web server
+        working-directory: moodle
+        run: |
+          nohup php -S 127.0.0.1:8000 -t . > /tmp/webserver.log 2>&1 &
+          for i in $(seq 1 20); do
+            if curl -sf -o /dev/null http://127.0.0.1:8000/; then exit 0; fi
+            sleep 1
+          done
+          echo "The web server did not come up." >&2
+          cat /tmp/webserver.log >&2
+          exit 1
+
+      - name: Install worker dependencies
+        working-directory: moodle/local/catquizlab/worker
+        run: npm install --no-audit --no-fund
+
+      - name: Play one attempt through the real UI
+        working-directory: moodle/local/catquizlab/worker
+        run: |
+          node run_attempt.js \
+              --base-url=http://127.0.0.1:8000 \
+              --token='${{ steps.prepare.outputs.token }}' \
+              --max-jobs=1
+
+      - name: Verify the queue reports the attempt as finished
+        working-directory: moodle
+        run: php local/catquizlab/cli/e2e_prepare.php --verify --runid=${{ steps.prepare.outputs.runid }}
+
+      - name: Collect logs on failure
+        if: failure()
+        run: cat /tmp/webserver.log || true

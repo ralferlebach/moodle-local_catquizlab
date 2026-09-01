@@ -25,6 +25,7 @@
 namespace local_catquizlab;
 
 use local_catquizlab\local\course_provisioner;
+use local_catquizlab\local\experiment_container;
 use local_catquizlab\local\person_generator;
 use local_catquizlab\local\user_provisioner;
 
@@ -59,30 +60,58 @@ final class course_provisioner_test extends \advanced_testcase {
     }
 
     /**
-     * Provisioning creates a course, enrols the users and records the course.
+     * Provisioning enrols the users into the configured experiment course.
+     *
+     * This replaces the former "creates a course per run" test. A sweep of a
+     * hundred replications used to produce a hundred courses for one condition;
+     * the course is now configured once and shared.
      *
      * @return void
      */
-    public function test_provision_creates_course_and_enrols(): void {
+    public function test_provision_enrols_into_the_shared_course(): void {
         global $DB;
         $this->resetAfterTest();
         $this->setAdminUser();
 
+        $course = $this->getDataGenerator()->create_course();
+        set_config('experimentcourseid', $course->id, 'local_catquizlab');
+
+        $runid = $this->run_with_users();
+        $run = $DB->get_record('local_catquizlab_run', ['id' => $runid], '*', MUST_EXIST);
+        experiment_container::provision((int) $run->experimentid);
+
+        $result = course_provisioner::provision($runid);
+
+        $this->assertSame((int) $course->id, $result['courseid']);
+        $this->assertSame(4, $result['enrolled']);
+        $this->assertSame(
+            (string) $course->id,
+            (string) $DB->get_field('local_catquizlab_run', 'courseid', ['id' => $runid])
+        );
+        $this->assertCount(4, get_enrolled_users(\context_course::instance($course->id)));
+    }
+
+    /**
+     * Without a configured course nothing is created and the caller is told.
+     *
+     * @return void
+     */
+    public function test_provision_without_a_configured_course(): void {
+        global $DB;
+        $this->resetAfterTest();
+        $this->setAdminUser();
+
+        $before = $DB->count_records('course');
         $runid = $this->run_with_users();
 
         $result = course_provisioner::provision($runid);
 
-        $this->assertGreaterThan(0, $result['courseid']);
-        $this->assertTrue($DB->record_exists('course', ['id' => $result['courseid']]));
-        $this->assertSame(4, $result['enrolled']);
-
-        $this->assertSame(
-            (string) $result['courseid'],
-            (string) $DB->get_field('local_catquizlab_run', 'courseid', ['id' => $runid])
-        );
-
-        $context = \context_course::instance($result['courseid']);
-        $this->assertCount(4, get_enrolled_users($context));
+        // Inventing a course here is exactly what the shared-course model
+        // stopped doing; a missing configuration is a decision for a person.
+        $this->assertSame(0, $result['courseid']);
+        $this->assertTrue($result['failed']);
+        $this->assertSame(experiment_container::REASON_NO_COURSE, $result['reason']);
+        $this->assertSame($before, $DB->count_records('course'));
     }
 
     /**
@@ -111,6 +140,9 @@ final class course_provisioner_test extends \advanced_testcase {
     public function test_provision_is_idempotent(): void {
         $this->resetAfterTest();
         $this->setAdminUser();
+
+        $course = $this->getDataGenerator()->create_course();
+        set_config('experimentcourseid', $course->id, 'local_catquizlab');
 
         $runid = $this->run_with_users();
         $first = course_provisioner::provision($runid);

@@ -24,6 +24,7 @@
 
 namespace local_catquizlab\local;
 
+
 /**
  * Computes a run's evaluation results from its collected attempts and stores them.
  *
@@ -97,7 +98,7 @@ class result_aggregator {
     protected static function collect_attempts(int $runid): array {
         global $DB;
 
-        $sql = "SELECT a.id, a.tracejson, p.profilejson, p.stratum
+        $sql = "SELECT a.id, a.tracejson, a.runtimems, p.profilejson, p.stratum
                   FROM {local_catquizlab_attempt} a
                   JOIN {local_catquizlab_person} p ON p.id = a.personid
                  WHERE a.runid = :runid AND a.tracejson IS NOT NULL";
@@ -113,12 +114,18 @@ class result_aggregator {
             $items = (isset($trace['items']) && is_array($trace['items'])) ? $trace['items'] : [];
 
             $attempts[] = [
-                'truetheta' => (float) (is_array($profile) ? ($profile['global'] ?? 0.0) : 0.0),
-                'esttheta'  => (float) ($trace['finaltheta'] ?? 0.0),
-                'se'        => isset($trace['finalse']) ? (float) $trace['finalse'] : null,
-                'nitems'    => count($items),
-                'items'     => $items,
-                'stratum'   => (string) $row->stratum,
+                'truetheta'   => (float) (is_array($profile) ? ($profile['global'] ?? 0.0) : 0.0),
+                'esttheta'    => (float) ($trace['finaltheta'] ?? 0.0),
+                'se'          => isset($trace['finalse']) ? (float) $trace['finalse'] : null,
+                'nitems'      => count($items),
+                'items'       => $items,
+                'stratum'     => (string) $row->stratum,
+                // The three outcomes the article requires that were computed
+                // for the screen but never persisted, so nothing downstream
+                // could aggregate them.
+                'stopreason'  => (string) ($trace['stopreason'] ?? ''),
+                'stopreached' => results_query::stop_reached((string) ($trace['stopreason'] ?? '')),
+                'runtimems'   => (int) ($row->runtimems ?? 0),
             ];
         }
         return $attempts;
@@ -139,6 +146,7 @@ class result_aggregator {
         $DB->delete_records('local_catquizlab_result', ['runid' => $runid]);
 
         $count = self::write_scope($runid, 'run', metrics::summarise($attempts, $poolsize), $now);
+        $count += self::write_process_metrics($runid, 'run', $attempts, $now);
 
         $bystratum = [];
         foreach ($attempts as $attempt) {
@@ -146,9 +154,63 @@ class result_aggregator {
         }
         foreach ($bystratum as $stratum => $group) {
             $count += self::write_scope($runid, 'stratum:' . $stratum, metrics::summarise($group, $poolsize), $now);
+            $count += self::write_process_metrics($runid, 'stratum:' . $stratum, $group, $now);
         }
 
         return $count;
+    }
+
+    /**
+     * Write the process outcomes of a scope: stop-rule success and runtime.
+     *
+     * Both are primary outcomes of the design rather than diagnostics. A stop
+     * rule that never bites and one that always does are different procedures,
+     * and the computational cost is what makes a strategy usable in practice.
+     *
+     * @param int $runid The run.
+     * @param string $scope The aggregation scope.
+     * @param array $attempts The attempts of that scope.
+     * @param int $now Timestamp.
+     * @return int The number of rows written.
+     */
+    protected static function write_process_metrics(int $runid, string $scope, array $attempts, int $now): int {
+        $n = count($attempts);
+        if ($n === 0) {
+            return 0;
+        }
+
+        $stopped = 0;
+        $runtimes = [];
+        $reasons = [];
+        foreach ($attempts as $attempt) {
+            if (!empty($attempt['stopreached'])) {
+                $stopped++;
+            }
+            if (($attempt['runtimems'] ?? 0) > 0) {
+                $runtimes[] = (int) $attempt['runtimems'];
+            }
+            $reason = (string) ($attempt['stopreason'] ?? '');
+            if ($reason !== '') {
+                $reasons[$reason] = ($reasons[$reason] ?? 0) + 1;
+            }
+        }
+
+        // The success rate, plus the reasons behind it: a rate of 0.6 says
+        // nothing about whether the other 40% ran out of items or were cut
+        // short by another criterion.
+        self::write_result(
+            $runid,
+            'stopsuccess',
+            $scope,
+            round($stopped / $n, 6),
+            json_encode($reasons, JSON_UNESCAPED_SLASHES),
+            $now
+        );
+
+        $mean = $runtimes === [] ? null : round(array_sum($runtimes) / count($runtimes), 3);
+        self::write_result($runid, 'runtimems', $scope, $mean, null, $now);
+
+        return 2;
     }
 
     /**
@@ -188,8 +250,18 @@ class result_aggregator {
             json_encode($summary['exposure'], JSON_UNESCAPED_SLASHES),
             $now
         );
+        $count++;
 
-        return $count + 1;
+        // Exposure concentration as a figure of its own: a mean rate cannot
+        // tell an evenly used pool from one where a tenth of the items carry
+        // every test, and it is the second that the design cares about.
+        $concentration = $summary['exposure']['concentration'] ?? [];
+        foreach (['gini' => 'concentration', 'hhi' => 'concentrationhhi'] as $key => $metric) {
+            self::write_result($runid, $metric, $scope, $concentration[$key] ?? null, null, $now);
+            $count++;
+        }
+
+        return $count;
     }
 
     /**

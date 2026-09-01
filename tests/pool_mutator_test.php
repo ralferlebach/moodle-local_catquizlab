@@ -112,15 +112,37 @@ final class pool_mutator_test extends \advanced_testcase {
     }
 
     /**
-     * A gap leaves no items inside the band.
+     * A gap leaves no items strictly inside the band, and keeps the item count.
      *
      * @return void
      */
     public function test_gappy(): void {
-        $out = pool_mutator::mutate($this->ideal(), 'gappy', ['gapmin' => -0.5, 'gapmax' => 0.5], 1);
+        $ideal = $this->ideal();
+        $out = pool_mutator::mutate($ideal, 'gappy', ['gapmin' => -0.5, 'gapmax' => 0.5], 1);
+
         foreach ($this->items($out) as $item) {
-            $this->assertTrue($item['difficulty'] < -0.5 || $item['difficulty'] > 0.5);
+            $this->assertTrue($item['difficulty'] <= -0.5 || $item['difficulty'] >= 0.5);
         }
+        // Fixed N: gappy is a badly distributed pool, not a smaller one. The
+        // shrinking disturbance is depleted, and the design keeps them apart.
+        $this->assertSame($ideal['totals']['items'], $out['totals']['items']);
+    }
+
+    /**
+     * The removing gappy mode is still available for schema-1 behaviour.
+     *
+     * @return void
+     */
+    public function test_gappy_remove_mode_reduces_the_pool(): void {
+        $ideal = $this->ideal();
+        $out = pool_mutator::mutate(
+            $ideal,
+            'gappy',
+            ['gapmin' => -0.5, 'gapmax' => 0.5, 'mode' => pool_mutator::GAP_MODE_REMOVE],
+            1
+        );
+
+        $this->assertLessThan($ideal['totals']['items'], $out['totals']['items']);
     }
 
     /**

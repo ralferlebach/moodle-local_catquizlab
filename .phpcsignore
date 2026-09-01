@@ -1,3 +1,8 @@
 # Exclude the external Puppeteer worker from PHP CodeSniffer.
 # It is a Node component (no PHP) and is not part of the Moodle code path.
 /worker/
+
+# Exclude developer tools taken from the plugin template.
+# They are not shipped with the plugin (see .gitattributes export-ignore)
+# and are not required to comply with the Moodle coding standard.
+/tools/

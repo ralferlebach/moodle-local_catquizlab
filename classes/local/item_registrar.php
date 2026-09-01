@@ -28,14 +28,35 @@ namespace local_catquizlab\local;
  * Registers a Moodle question as an engine CAT item with IRT parameters (E2.1).
  *
  * {@see self::build_itemparam()} assembles the local_catquiz_itemparams record
- * for a known (ground-truth) calibration — pure and testable. {@see self::register_item()}
- * links the question to the scale via the engine (catscale::add_or_update_testitem_to_scale),
- * stores the item parameters and marks them active on the item. It needs the
- * engine and is a no-op without it.
+ * for a known (ground-truth) calibration — pure and testable.
+ *
+ * {@see self::register_item()} delegates to {@see cat_item_provisioner}. This
+ * class used to write local_catquiz_items itself when the engine API had not
+ * created a row, which is precisely how a refused assignment turned into an
+ * apparent success: the engine said no, and the lab inserted the row anyway.
+ * The engine now owns its own tables.
  */
 class item_registrar {
     /** @var int Item-parameter status for a known/calculated calibration. */
     public const STATUS_CALCULATED = 1;
+
+    /**
+     * Item-parameter status for a parameter set by hand.
+     *
+     * This is what a lab item is. Its difficulty and discrimination are not
+     * estimated from responses — they are the ground truth the simulation was
+     * built from, which is exactly the case the engine calls "updated
+     * manually".
+     *
+     * The distinction is not cosmetic. The engine treats an item as a pilot
+     * question while its status is below this value and it has fewer responses
+     * than the pilot threshold, and a pilot does not contribute to the ability
+     * estimate. Every lab item therefore counted as a pilot: the engine
+     * administered one, learned nothing from it, and ended the attempt.
+     *
+     * @var int
+     */
+    public const STATUS_KNOWN = 4;
 
     /**
      * Build the item-parameter record for a question.
@@ -49,15 +70,23 @@ class item_registrar {
         $steps = array_values(array_map('floatval', $params['steps'] ?? []));
         $json = $steps !== [] ? json_encode(['steps' => $steps], JSON_UNESCAPED_SLASHES) : '';
 
+        // The model comes from the experiment, resolved through the catalogue.
+        // The old fallback to raschbirnbaum meant a 3PL run silently produced
+        // 2PL item parameters whenever the caller forgot to pass the model.
+        $model = (string) ($params['model'] ?? '');
+        $model = $model !== '' && model_catalog::has($model)
+            ? model_catalog::engine_key($model)
+            : ($model !== '' ? $model : model_catalog::engine_key('2pl'));
+
         return [
             'componentid'    => $questionid,
             'componentname'  => 'question',
             'contextid'      => $contextid,
-            'model'          => (string) ($params['model'] ?? 'raschbirnbaum'),
+            'model'          => $model,
             'difficulty'     => round((float) ($params['difficulty'] ?? 0.0), 5),
             'discrimination' => round((float) ($params['discrimination'] ?? 1.0), 5),
             'guessing'       => round((float) ($params['guessing'] ?? 0.0), 5),
-            'status'         => self::STATUS_CALCULATED,
+            'status'         => self::STATUS_KNOWN,
             'json'           => $json,
         ];
     }
@@ -65,74 +94,26 @@ class item_registrar {
     /**
      * Register a question as an item of a scale and store its parameters.
      *
+     * Delegates to {@see cat_item_provisioner}, which holds the engine boundary
+     * and treats the engine's verdict as binding. This method used to ignore
+     * the result of the engine API and then write the tables itself, so an
+     * assignment the engine had refused still ended up looking successful.
+     *
      * @param int $questionid The Moodle question id.
      * @param int $catscaleid The engine catscale id.
      * @param int $contextid The engine CAT context id.
      * @param array $params The item parameters (see build_itemparam).
-     * @return int|null The item id, or null without the engine.
+     * @param array $options Passed through to the provisioner, e.g. 'verify'.
+     * @return array{ok: bool, itemid: ?int, paramid: ?int, reason: ?string,
+     *               questionid: int, catscaleid: int, engineerror: ?string}
      */
-    public static function register_item(int $questionid, int $catscaleid, int $contextid, array $params): ?int {
-        global $DB;
-
-        if (!environment::engine_available()) {
-            return null;
-        }
-
-        if (class_exists('\local_catquiz\catscale')) {
-            \local_catquiz\catscale::add_or_update_testitem_to_scale($catscaleid, $questionid);
-        }
-
-        $item = self::ensure_item($questionid, $catscaleid, $contextid);
-
-        $now = time();
-        $record = (object) (self::build_itemparam($questionid, $contextid, $params) + [
-            'itemid'       => $item->id,
-            'timecreated'  => $now,
-            'timemodified' => $now,
-        ]);
-        $paramid = $DB->insert_record('local_catquiz_itemparams', $record);
-
-        $DB->update_record('local_catquiz_items', (object) [
-            'id'           => $item->id,
-            'activeparamid' => $paramid,
-            'contextid'    => $contextid,
-        ]);
-
-        return (int) $item->id;
-    }
-
-    /**
-     * Fetch the item row, creating it if the engine API did not.
-     *
-     * @param int $questionid The question id.
-     * @param int $catscaleid The scale id.
-     * @param int $contextid The context id.
-     * @return \stdClass The item row (with id).
-     */
-    protected static function ensure_item(int $questionid, int $catscaleid, int $contextid): \stdClass {
-        global $DB;
-
-        $item = $DB->get_record('local_catquiz_items', [
-            'componentid'   => $questionid,
-            'componentname' => 'question',
-            'catscaleid'    => $catscaleid,
-        ]);
-        if ($item) {
-            return $item;
-        }
-
-        $now = time();
-        $item = (object) [
-            'componentname' => 'question',
-            'componentid'   => $questionid,
-            'catscaleid'    => $catscaleid,
-            'contextid'     => $contextid,
-            'lastupdated'   => $now,
-            'status'        => self::STATUS_CALCULATED,
-            'activeparamid' => 0,
-        ];
-        $item->id = $DB->insert_record('local_catquiz_items', $item);
-
-        return $item;
+    public static function register_item(
+        int $questionid,
+        int $catscaleid,
+        int $contextid,
+        array $params,
+        array $options = []
+    ): array {
+        return cat_item_provisioner::provision($questionid, $catscaleid, $contextid, $params, $options);
     }
 }

@@ -61,7 +61,10 @@ const LOGIN_SUFFIX = args['login-suffix'] || '';
 const LOGIN_MODE = args['login-mode'] || 'password';
 const LOGIN_URL_TEMPLATE = args['login-url-template'] || '';
 
-if (require.main === module && (!BASE_URL || !TOKEN)) {
+const SELF_TEST = args['self-test'] === true;
+
+// The self test never talks to Moodle, so it must not demand credentials.
+if (require.main === module && !SELF_TEST && (!BASE_URL || !TOKEN)) {
     console.error('Missing required --base-url and/or --token.');
     process.exit(2);
 }
@@ -102,40 +105,82 @@ async function claimJob() {
  */
 async function playAttempt(browser, job) {
     const started = Date.now();
-    const page = await browser.newPage();
+
+    // A context of its own per attempt. Sharing the browser's default context
+    // carries the previous person's session into the next attempt, so the
+    // second simulated person would have sat the test as the first — and the
+    // only reason that did not happen is that the login page, already
+    // authenticated, no longer offered a username field and the worker fell
+    // over. An isolated context makes each attempt genuinely its own person.
+    const context = typeof browser.createBrowserContext === 'function'
+        ? await browser.createBrowserContext()
+        : await browser.createIncognitoBrowserContext();
+    const page = await context.newPage();
     page.setDefaultNavigationTimeout(NAV_TIMEOUT);
     let engineAttemptId = 0;
     let status = 'failed';
 
     try {
-        await login(page, job.userid);
+        await login(page, job.userid, job.username);
         await gotoSettle(page, `${BASE_URL}/mod/adaptivequiz/view.php?id=${job.quizcmid}`);
         await startAttempt(page);
 
         // Answer loop: while a question is on screen, ask the oracle and submit.
         let guard = 0;
+        let answeredCount = 0;
         while (await hasQuestion(page) && guard++ < 1000) {
-            const questionId = await currentQuestionId(page);
+            const {qubaid, slot} = await currentQuestionRef(page);
             const decision = await callWs('local_catquizlab_oracle_answer', {
                 runid: job.runid,
-                questionid: questionId,
+                // The page identifies a question by usage and slot; the browser
+                // never sees a question id, so the server resolves it.
+                questionid: 0,
+                qubaid,
+                slot,
+                // The worker calls with its own token, so the server cannot
+                // infer the simulated person from the logged-in user.
+                attemptid: job.attemptid,
             });
             if (!decision.ready) {
-                throw new Error(`Oracle not ready for question ${questionId}: ${decision.message}`);
+                throw new Error(`Oracle not ready for usage ${qubaid} slot ${slot}: ${decision.message}`);
             }
             const answered = await answerQuestion(page, decision);
             if (!answered) {
-                throw new Error(`No answer option found for question ${questionId}.`);
+                throw new Error(`No answer option found for usage ${qubaid} slot ${slot}.`);
             }
             await submitQuestion(page);
+            answeredCount++;
         }
 
         engineAttemptId = await readEngineAttemptId(page);
+
+        // An attempt that answered nothing is not a finished attempt. Reporting
+        // one as finished is how a run of empty attempts would look like a
+        // completed experiment: the queue drains, every job reports success and
+        // no trace is ever collected.
+        if (answeredCount === 0) {
+            throw new Error('No question was presented; the attempt never started.');
+        }
+
+        // The absence of a question is not evidence that the attempt finished.
+        // A failure page, a redirect, or a page that simply has not rendered
+        // yet all look the same from here, and treating them alike turns any of
+        // them into a successful run. Only the activity's own finish page
+        // counts, and anything else is reported with where the browser stood.
+        if (!(await onFinishPage(page))) {
+            const detail = await describePage(page);
+            throw new Error(`Attempt did not reach the finish page after ${answeredCount} answer(s). ${detail}`);
+        }
+        // A missing engine attempt id is not a failure of the attempt: the
+        // finish page does not always render one, and the server can look it up
+        // from the run and the person. What matters is that questions were
+        // answered, which the check above establishes.
         status = 'finished';
     } catch (error) {
         console.error(`Attempt ${job.attemptid} failed: ${error.message}`);
     } finally {
         await page.close();
+        await context.close();
         await callWs('local_catquizlab_job_complete', {
             attemptid: job.attemptid,
             status,
@@ -155,21 +200,46 @@ async function playAttempt(browser, job) {
  *
  * @param {object} page The Puppeteer page.
  * @param {number} userid The Moodle user id to log in as.
+ * @param {string} username The username the server supplied for this job.
  * @returns {Promise<void>}
  */
-async function login(page, userid) {
+async function login(page, userid, username) {
     if (LOGIN_MODE === 'urltemplate' && LOGIN_URL_TEMPLATE) {
         await gotoSettle(page, loginUrlFor(LOGIN_URL_TEMPLATE, userid));
         return;
     }
 
     await gotoSettle(page, `${BASE_URL}/login/index.php`);
-    await page.type('#username', usernameFor(userid));
+
+    // No username field means a session is already open. With an isolated
+    // context that should not happen, so it is reported rather than worked
+    // around: silently continuing would run the test as whoever is logged in.
+    if (!(await page.$('#username'))) {
+        throw new Error('The login page offered no username field; a session is already open.');
+    }
+
+    // The server supplies the username, because the provisioner chooses it and
+    // makes it unique per run. Deriving it here produced catlab_user_<id> and
+    // no such account ever existed. The fallback keeps this working against an
+    // older server that does not send one yet.
+    await page.type('#username', username || usernameFor(userid));
     await page.type('#password', passwordFor(userid, LOGIN_SUFFIX));
     await Promise.all([
         clickFirst(page, ['#loginbtn', 'button[type="submit"]', 'input[type="submit"]']),
         page.waitForNavigation({waitUntil: 'networkidle2'}).catch(() => {}),
     ]);
+
+    // A failed login left the worker on the login page, where its start-attempt
+    // selectors then matched the login button itself: it clicked away, found no
+    // question and reported that the attempt never started. The real cause —
+    // wrong credentials — never appeared anywhere.
+    if (page.url().includes('/login/')) {
+        const notice = await page.evaluate(() => {
+            const el = document.querySelector('.loginerrors, .alert-danger, #loginerrormessage');
+            return el ? el.innerText.trim() : '';
+        });
+        throw new Error(`Login as ${username || usernameFor(userid)} failed${notice ? ': ' + notice : '.'}`);
+    }
 }
 
 /**
@@ -184,9 +254,19 @@ async function startAttempt(page) {
         return;
     }
     const clicked = await clickFirst(page, START_SELECTORS);
-    if (clicked) {
-        await page.waitForNavigation({waitUntil: 'networkidle2'}).catch(() => {});
+    if (!clicked) {
+        throw new Error('No way to start the attempt was found on the activity page.');
     }
+
+    await page.waitForNavigation({waitUntil: 'networkidle2'}).catch(() => {});
+
+    // Waiting for navigation alone is not enough: the catch swallows a timeout,
+    // and on a slow instance the check for a question then runs before the page
+    // has rendered one. The attempt looked as if it had presented nothing, and
+    // the worker moved on with an empty answer loop. Wait for the question
+    // itself, which is the thing the next step actually needs.
+    await page.waitForSelector(QUESTION_SELECTORS.join(', '), {timeout: NAV_TIMEOUT})
+        .catch(() => {});
 }
 
 /**
@@ -205,6 +285,60 @@ async function hasQuestion(page) {
  * @param {object} page The Puppeteer page.
  * @returns {Promise<number>}
  */
+/**
+ * Whether the browser is on the activity's regular attempt-finished page.
+ *
+ * @param {object} page The Puppeteer page.
+ * @returns {Promise<boolean>}
+ */
+async function onFinishPage(page) {
+    if (page.url().includes('attemptfinished.php')) {
+        return true;
+    }
+
+    // Some themes and versions land on the activity view with a summary rather
+    // than on a separate page, so a completion marker there counts too.
+    return page.evaluate(() => {
+        const markers = ['.adaptivequiz-finished', '#adaptivequiz-finished', '.attempt-summary'];
+        return markers.some((selector) => document.querySelector(selector) !== null);
+    });
+}
+
+/**
+ * A short description of where the browser stands, for a failure message.
+ *
+ * @param {object} page The Puppeteer page.
+ * @returns {Promise<string>}
+ */
+async function describePage(page) {
+    const title = await page.title().catch(() => '');
+    const text = await page
+        .evaluate(() => document.body.innerText.replace(/\s+/g, ' ').slice(0, 200))
+        .catch(() => '');
+
+    return `url=${page.url()} title="${title}" page="${text}"`;
+}
+
+async function currentQuestionRef(page) {
+    const id = await page.evaluate((selectors) => {
+        for (const sel of selectors) {
+            const el = document.querySelector(sel);
+            if (el && el.id) {
+                return el.id;
+            }
+        }
+        return '';
+    }, QUESTION_SELECTORS);
+
+    // Moodle renders question-{qubaid}-{slot}. Taking the first number out of
+    // that and calling it a question id is what made every oracle call fail.
+    const parts = String(id).match(/(\d+)\D+(\d+)/);
+
+    return parts
+        ? {qubaid: parseInt(parts[1], 10), slot: parseInt(parts[2], 10)}
+        : {qubaid: 0, slot: 0};
+}
+
 async function currentQuestionId(page) {
     const id = await page.evaluate((selectors) => {
         for (const sel of selectors) {
@@ -453,6 +587,70 @@ function chooseOptionIndex(decision, count) {
 }
 
 /**
+ * Offline self test: proves the toolchain works without touching Moodle.
+ *
+ * A smoke test that pointed the real worker at an unreachable host was not a
+ * smoke test — it exercised the polling loop, hit DNS, and failed by design,
+ * which told nobody anything about the toolchain. This checks what a toolchain
+ * job can actually check: that the arguments parse, that the URL builder
+ * produces a well-formed endpoint, and that Puppeteer loads and can start and
+ * stop a browser. It claims no job and calls no web service.
+ *
+ * @returns {Promise<void>} Resolves when every check passed; rejects on the first failure.
+ */
+async function selfTest() {
+    const failures = [];
+    const check = (label, condition) => {
+        if (condition) {
+            console.log(`ok   ${label}`);
+        } else {
+            failures.push(label);
+            console.error(`FAIL ${label}`);
+        }
+    };
+
+    check('node >= 20', parseInt(process.versions.node.split('.')[0], 10) >= 20);
+    check('fetch is available', typeof fetch === 'function');
+
+    const parsed = parseArgs(['--base-url=http://example.test/moodle/', '--token=t', '--headless']);
+    check('argument parsing', parsed['base-url'] === 'http://example.test/moodle/' && parsed.headless === true);
+    check('base url normalisation', normaliseBaseUrl('http://x/moodle///') === 'http://x/moodle');
+
+    const url = buildWsUrl('http://x/', 'tok', 'local_catquizlab_job_claim', {workerid: 'w1'});
+    check('web service url', url.startsWith('http://x/webservice/rest/server.php?')
+        && url.includes('wsfunction=local_catquizlab_job_claim'));
+
+    check('dichotomous choice', chooseOptionIndex({fraction: 1.0, choice: -1}, 4) === 0);
+    check('polytomous choice', chooseOptionIndex({fraction: 0.5, choice: 2}, 4) === 2);
+
+    // The browser is what the old smoke test was really meant to prove: that
+    // Puppeteer resolved and its Chromium download works on this runner.
+    let puppeteer;
+    try {
+        puppeteer = require('puppeteer');
+        check('puppeteer loads', typeof puppeteer.launch === 'function');
+    } catch (error) {
+        check(`puppeteer loads (${error.message})`, false);
+    }
+
+    if (puppeteer && !args['no-browser']) {
+        try {
+            const browser = await puppeteer.launch({headless: 'new', args: ['--no-sandbox']});
+            const version = await browser.version();
+            await browser.close();
+            check(`browser starts (${version})`, true);
+        } catch (error) {
+            check(`browser starts (${error.message})`, false);
+        }
+    }
+
+    if (failures.length > 0) {
+        throw new Error(`Self test failed: ${failures.join(', ')}`);
+    }
+    console.log('Worker self test passed; no Moodle instance was contacted.');
+}
+
+/**
  * Main polling loop: claim and play attempts until the queue is empty or the
  * job budget is exhausted.
  *
@@ -481,13 +679,15 @@ async function main() {
 }
 
 if (require.main === module) {
-    main().catch((error) => {
+    const entry = SELF_TEST ? selfTest : main;
+    entry().catch((error) => {
         console.error(error);
         process.exit(1);
     });
 }
 
 module.exports = {
+    selfTest,
     parseArgs,
     normaliseBaseUrl,
     buildWsUrl,

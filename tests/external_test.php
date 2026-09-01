@@ -99,8 +99,10 @@ final class external_test extends \advanced_testcase {
         $this->assertSame((int) $second, job_claim::execute('worker-a')['attemptid']);
         $this->assertFalse(job_claim::execute('worker-a')['hasjob']);
 
-        // Completing records the outcome.
-        $complete = job_complete::execute($first, 'finished', 1234, 0);
+        // Completing records the outcome. The engine attempt id is part of the
+        // report: a finished attempt has an engine attempt behind it, and
+        // without one there is nothing to collect a trace from.
+        $complete = job_complete::execute($first, 'finished', 1234, 4711);
         $this->assertTrue($complete['acknowledged']);
         $this->assertSame(
             \local_catquizlab\local\attempt_scheduler::STATUS_COLLECTED,

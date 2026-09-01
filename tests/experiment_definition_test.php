@@ -157,10 +157,15 @@ final class experiment_definition_test extends \advanced_testcase {
         $normalised = experiment_definition::apply_defaults(['name' => 'x']);
 
         $this->assertSame('baseline', $normalised['tier']);
-        $this->assertSame('raschbirnbaum', $normalised['model']);
+        // The engine-side name is accepted on input but normalised away: the
+        // public key is what the rest of the pipeline reads (issue #3).
+        $this->assertSame('2pl', $normalised['model']);
+        $this->assertSame('raschbirnbaum', $normalised['enginemodel']);
         $this->assertSame(1, $normalised['replications']);
         $this->assertSame(10, $normalised['pool']['scales']['categories']);
         $this->assertSame(250, $normalised['budgets']['maxitems']);
+        $this->assertSame(250, $normalised['budgets']['global']['maxitems']);
+        $this->assertSame(0.35, $normalised['budgets']['se']['min']);
         $this->assertSame(60, $normalised['timing']['faildelay']);
     }
 }

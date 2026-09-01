@@ -27,12 +27,16 @@ namespace local_catquizlab\local;
 /**
  * Sets up the course a run's simulated persons sit their attempts in (E2.4).
  *
- * It resolves the course for a run — an existing one when specified, otherwise a
- * new hidden course — enrols the run's provisioned users as students, and
- * records the course on the run. This half uses only core APIs (course and
- * enrolment), so it runs on any Moodle. Creating the actual adaptivequiz CAT
- * test in that course needs the host activity and is left to the engine-side
- * step; when it lands it fills local_catquizlab_run.testcmid.
+ * Since issue #8 it no longer creates anything. A course per run meant a sweep
+ * of a hundred replications produced a hundred courses for one condition, which
+ * is unusable both administratively and for looking at what happened. The
+ * course now comes from {@see experiment_container}, is shared by every run of
+ * an experiment, and is configured by a person rather than invented here.
+ *
+ * What is left is the part that genuinely belongs to a run: enrolling its
+ * simulated users into that course, idempotently, because many runs share it.
+ * The link from a person to its run stays in local_catquizlab_person.runid and
+ * is not implied by the enrolment.
  */
 class course_provisioner {
     /**
@@ -51,6 +55,18 @@ class course_provisioner {
         $run = $DB->get_record('local_catquizlab_run', ['id' => $runid], '*', MUST_EXIST);
 
         $courseid = self::resolve_course($run, $options);
+        if ($courseid <= 0) {
+            // No course to enrol into. Creating one here is exactly what this
+            // class stopped doing, so the caller is told rather than surprised.
+            return [
+                'courseid'  => 0,
+                'enrolled'  => 0,
+                'testcmid'  => 0,
+                'testready' => false,
+                'failed'    => true,
+                'reason'    => experiment_container::REASON_NO_COURSE,
+            ];
+        }
 
         $roleid = (int) $DB->get_field('role', 'id', ['shortname' => (string) ($options['role'] ?? 'student')]);
         $userids = $DB->get_fieldset_select(
@@ -75,12 +91,15 @@ class course_provisioner {
     }
 
     /**
-     * Resolve the course for a run: an option, the run's own course, an existing
-     * course with the target shortname, or a freshly created hidden course.
+     * Resolve the course a run's users are enrolled into.
+     *
+     * An explicit option wins, then the experiment's shared course, then a
+     * course an older run already sits in, then the configured course.
+     * Nothing is created.
      *
      * @param \stdClass $run The run record.
      * @param array $options Provisioning options.
-     * @return int The course id.
+     * @return int The course id, or 0 when none can be resolved.
      */
     protected static function resolve_course(\stdClass $run, array $options): int {
         global $DB;
@@ -88,26 +107,30 @@ class course_provisioner {
         if (!empty($options['courseid']) && $DB->record_exists('course', ['id' => $options['courseid']])) {
             return (int) $options['courseid'];
         }
+
+        // The experiment's shared course, set by the container stage.
+        if (!empty($run->experimentid)) {
+            $container = experiment_container::existing((int) $run->experimentid);
+            if ($container['courseid'] > 0 && $DB->record_exists('course', ['id' => $container['courseid']])) {
+                return $container['courseid'];
+            }
+        }
+
+        // A course an older run already sits in stays valid: the upgrade moves
+        // nothing, so runs provisioned under the previous model keep working.
         if (!empty($run->courseid) && $DB->record_exists('course', ['id' => $run->courseid])) {
             return (int) $run->courseid;
         }
 
-        $shortname = (string) ($options['shortname'] ?? ('catlab_run_' . $run->id));
-        $existing = $DB->get_record('course', ['shortname' => $shortname]);
-        if ($existing) {
-            return (int) $existing->id;
+        // Finally the configured course itself, so enrolling works even when
+        // this is called outside the orchestrator's container stage. Still
+        // nothing is created — an unconfigured site resolves to nothing.
+        $configured = experiment_container::configured_course();
+        if ($configured > 0 && $DB->record_exists('course', ['id' => $configured])) {
+            return $configured;
         }
 
-        $category = (int) ($options['categoryid'] ?? \core_course_category::get_default()->id);
-        $course = create_course((object) [
-            'fullname'  => (string) ($options['fullname'] ?? ('CAT lab run ' . $run->id)),
-            'shortname' => $shortname,
-            'category'  => $category,
-            'format'    => 'topics',
-            'visible'   => 0,
-        ]);
-
-        return (int) $course->id;
+        return 0;
     }
 
     /**

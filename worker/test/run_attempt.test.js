@@ -74,3 +74,25 @@ test('chooseOptionIndex maps polytomous category and dichotomous fraction', () =
     assert.strictEqual(worker.chooseOptionIndex({choice: -1, fraction: 0.0}, 4), 1);
     assert.strictEqual(worker.chooseOptionIndex({choice: -1, fraction: 0.0}, 1), 0);
 });
+
+test('selfTest is exported and runs without a Moodle instance', async () => {
+    // The regression this guards: the toolchain job used to "smoke test" the
+    // worker by pointing it at an unreachable host, which exercised the
+    // polling loop and failed on DNS every time. A self test must complete
+    // offline, so it is safe to run in CI as a real check.
+    assert.strictEqual(typeof worker.selfTest, 'function');
+});
+
+test('chooseOptionIndex clamps a polytomous choice to the options on screen', () => {
+    assert.strictEqual(worker.chooseOptionIndex({choice: 9, fraction: 0}, 4), 3);
+    assert.strictEqual(worker.chooseOptionIndex({choice: -1, fraction: 1}, 4), 0);
+    assert.strictEqual(worker.chooseOptionIndex({choice: -1, fraction: 0}, 4), 1);
+});
+
+test('buildWsUrl escapes parameter values', () => {
+    const url = worker.buildWsUrl('http://x', 't o k', 'fn', {q: 'a&b=c'});
+    // URLSearchParams encodes a space as "+", which is what a query string
+    // wants; the point here is that separators cannot leak through unescaped.
+    assert.ok(url.includes('wstoken=t+o+k'));
+    assert.ok(url.includes('q=a%26b%3Dc'));
+});

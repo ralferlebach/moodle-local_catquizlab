@@ -77,6 +77,7 @@ class job_claim extends external_api {
             'attemptid' => 0,
             'quizcmid'  => 0,
             'userid'    => 0,
+            'username'  => '',
             'message'   => get_string('job:none', 'local_catquizlab'),
         ];
 
@@ -107,6 +108,14 @@ class job_claim extends external_api {
         ]);
         $run = $DB->get_record('local_catquizlab_run', ['id' => $attempt->runid]);
         $userid = (int) $DB->get_field('local_catquizlab_person', 'moodleuserid', ['id' => $attempt->personid]);
+        // The username travels with the job. The worker used to derive it as
+        // catlab_user_<id>, but the provisioner makes usernames unique per run
+        // and produces names like catlab_r9_p-conforming-0001 — so the worker
+        // could never have logged in, and nothing noticed because no worker had
+        // tried against a real installation.
+        $username = $userid > 0
+            ? (string) $DB->get_field('user', 'username', ['id' => $userid])
+            : '';
 
         $transaction->allow_commit();
 
@@ -116,6 +125,7 @@ class job_claim extends external_api {
             'attemptid' => (int) $attempt->id,
             'quizcmid'  => $run ? (int) $run->testcmid : 0,
             'userid'    => $userid,
+            'username'  => $username,
             'message'   => get_string('job:claimed', 'local_catquizlab'),
         ];
     }
@@ -132,6 +142,12 @@ class job_claim extends external_api {
             'attemptid' => new external_value(PARAM_INT, 'Lab attempt id to play (0 when none).'),
             'quizcmid'  => new external_value(PARAM_INT, 'Course-module id of the adaptivequiz to sit (0 when none).'),
             'userid'    => new external_value(PARAM_INT, 'Simulated user id to log in as (0 when none).'),
+            'username'  => new external_value(
+                PARAM_USERNAME,
+                'Username to log in as. Supplied by the server because the provisioner chooses it.',
+                VALUE_OPTIONAL,
+                ''
+            ),
             'message'   => new external_value(PARAM_TEXT, 'Human-readable status.'),
         ]);
     }

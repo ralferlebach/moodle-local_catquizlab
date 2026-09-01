@@ -42,6 +42,203 @@ namespace local_catquizlab\local;
  * true difficulty and true scale intact.
  */
 class pool_mutator {
+    /** @var float The study's shift, in logits. */
+    public const DEFAULT_SHIFT = 1.0;
+
+    /** @var float The study's stretch factor. */
+    public const DEFAULT_STRETCH = 1.25;
+
+    /** @var string Gappy keeps the item count and redistributes difficulties. */
+    public const GAP_MODE_FIXEDN = 'fixedn';
+
+    /** @var string Gappy removes the items inside the band (schema-1 behaviour). */
+    public const GAP_MODE_REMOVE = 'remove';
+
+    /**
+     * The recipe keys each variant accepts, with their defaults.
+     *
+     * Variants whose parameters carry scientific meaning are listed here so a
+     * publication run can be required to state them rather than inherit a
+     * generic code default.
+     *
+     * @var array<string, array<string, mixed>>
+     */
+    protected const RECIPE_DEFAULTS = [
+        'ideal'            => [],
+        'shifted'          => ['shift' => self::DEFAULT_SHIFT],
+        'stretched'        => ['factor' => self::DEFAULT_STRETCH],
+        'gappy'            => ['gapmin' => -0.5, 'gapmax' => 0.5, 'mode' => self::GAP_MODE_FIXEDN],
+        'depleted'         => ['fraction' => 0.5],
+        'calibrationerror' => ['fraction' => 0.1, 'sd' => 0.5],
+        'taggingerror'     => ['fraction' => 0.1],
+        'combined'         => ['steps' => []],
+    ];
+
+    /** @var string[] Variants whose recipe a publication run must state explicitly. */
+    protected const PUBLICATION_REQUIRED = [
+        'shifted'          => ['shift'],
+        'stretched'        => ['factor'],
+        'gappy'            => ['gapmin', 'gapmax'],
+        'depleted'         => ['fraction'],
+        'calibrationerror' => ['fraction', 'sd'],
+        'taggingerror'     => ['fraction'],
+    ];
+
+    /**
+     * Validate a variant recipe.
+     *
+     * @param string $variant The pool variant.
+     * @param array $recipe The recipe as written in the definition.
+     * @param bool $publication Whether this is a publication run.
+     * @return string[] Human-readable errors; empty when the recipe is valid.
+     */
+    public static function validate_recipe(string $variant, array $recipe, bool $publication = false): array {
+        $errors = [];
+        if (!isset(self::RECIPE_DEFAULTS[$variant])) {
+            return [get_string('mutator:unknownvariant', 'local_catquizlab', $variant)];
+        }
+
+        $label = 'pool.recipe';
+        $unknown = array_diff(array_keys($recipe), array_keys(self::RECIPE_DEFAULTS[$variant]));
+        if ($variant !== 'combined' && $unknown !== []) {
+            $errors[] = get_string('def:unknownrecipekey', 'local_catquizlab', (object) [
+                'variant' => $variant,
+                'keys'    => implode(', ', $unknown),
+            ]);
+        }
+
+        foreach (['fraction'] as $key) {
+            if (isset($recipe[$key])) {
+                if (!is_numeric($recipe[$key])) {
+                    $errors[] = get_string('def:numeric', 'local_catquizlab', $label . '.' . $key);
+                } else if ((float) $recipe[$key] < 0.0 || (float) $recipe[$key] > 1.0) {
+                    $errors[] = get_string('def:fraction', 'local_catquizlab', $label . '.' . $key);
+                }
+            }
+        }
+        foreach (['shift', 'factor', 'sd', 'gapmin', 'gapmax'] as $key) {
+            if (isset($recipe[$key]) && !is_numeric($recipe[$key])) {
+                $errors[] = get_string('def:numeric', 'local_catquizlab', $label . '.' . $key);
+            }
+        }
+        if (isset($recipe['factor']) && is_numeric($recipe['factor']) && (float) $recipe['factor'] <= 0.0) {
+            $errors[] = get_string('def:positivefloat', 'local_catquizlab', $label . '.factor');
+        }
+        if (isset($recipe['sd']) && is_numeric($recipe['sd']) && (float) $recipe['sd'] < 0.0) {
+            $errors[] = get_string('def:negative', 'local_catquizlab', $label . '.sd');
+        }
+        if (
+            isset($recipe['gapmin'], $recipe['gapmax'])
+                && is_numeric($recipe['gapmin']) && is_numeric($recipe['gapmax'])
+                && (float) $recipe['gapmin'] > (float) $recipe['gapmax']
+        ) {
+            $errors[] = get_string('def:mingtmax', 'local_catquizlab', $label . '.gap');
+        }
+        if (isset($recipe['mode']) && !in_array($recipe['mode'], [self::GAP_MODE_FIXEDN, self::GAP_MODE_REMOVE], true)) {
+            $errors[] = get_string('def:enum', 'local_catquizlab', $label . '.mode: fixedn|remove');
+        }
+
+        if ($variant === 'combined') {
+            $steps = $recipe['steps'] ?? null;
+            if (!is_array($steps) || $steps === []) {
+                $errors[] = get_string('def:nonemptylist', 'local_catquizlab', $label . '.steps');
+            } else {
+                foreach ($steps as $i => $step) {
+                    $stepvariant = $step['variant'] ?? null;
+                    if (
+                        !is_string($stepvariant) || $stepvariant === 'combined'
+                            || !isset(self::RECIPE_DEFAULTS[$stepvariant])
+                    ) {
+                        $errors[] = get_string('mutator:unknownvariant', 'local_catquizlab', $label
+                            . '.steps[' . $i . ']');
+                        continue;
+                    }
+                    $errors = array_merge(
+                        $errors,
+                        self::validate_recipe($stepvariant, (array) ($step['recipe'] ?? []), $publication)
+                    );
+                }
+            }
+        } else if ($publication) {
+            foreach (self::PUBLICATION_REQUIRED[$variant] ?? [] as $key) {
+                if (!isset($recipe[$key])) {
+                    $errors[] = get_string('def:recipeexplicit', 'local_catquizlab', (object) [
+                        'variant' => $variant,
+                        'key'     => $key,
+                    ]);
+                }
+            }
+        }
+
+        return $errors;
+    }
+
+    /**
+     * Fill a recipe with the documented defaults of its variant.
+     *
+     * @param string $variant The pool variant.
+     * @param array $recipe The recipe from the definition.
+     * @return array
+     */
+    public static function apply_recipe_defaults(string $variant, array $recipe): array {
+        return $recipe + (self::RECIPE_DEFAULTS[$variant] ?? []);
+    }
+
+    /**
+     * The documented default recipe of a variant.
+     *
+     * @param string $variant The pool variant.
+     * @return array
+     */
+    public static function recipe_defaults(string $variant): array {
+        return self::RECIPE_DEFAULTS[$variant] ?? [];
+    }
+
+    /**
+     * All known variant names.
+     *
+     * @return string[]
+     */
+    public static function variants(): array {
+        return array_keys(self::RECIPE_DEFAULTS);
+    }
+
+    /**
+     * Give every item both views: the ground truth and what the engine is told.
+     *
+     * After a mutation some items carry a wrong stored difficulty or a wrong
+     * tag and most do not. Filling the unaffected ones in means the rest of the
+     * pipeline can read one pair of fields for every item, instead of guessing
+     * which annotation a particular variant happens to have written.
+     *
+     * @param array $blueprint The mutated blueprint.
+     * @return array
+     */
+    protected static function finalise_views(array $blueprint): array {
+        foreach ($blueprint['categories'] as &$category) {
+            foreach ($category['subscales'] as &$subscale) {
+                foreach ($subscale['items'] as &$item) {
+                    $item += [
+                        'truecategory'     => $category['index'],
+                        'truesubscale'     => $subscale['index'],
+                        'storeddifficulty' => $item['difficulty'],
+                        'miscalibrated'    => false,
+                        'mistagged'        => false,
+                    ];
+                    $item += [
+                        'assignedcategory' => $item['truecategory'],
+                        'assignedsubscale' => $item['truesubscale'],
+                    ];
+                }
+                unset($item);
+            }
+            unset($subscale);
+        }
+        unset($category);
+
+        return $blueprint;
+    }
+
     /**
      * Apply a named variant to an ideal blueprint.
      *
@@ -62,7 +259,9 @@ class pool_mutator {
 
         mt_srand($seed);
 
-        return self::retotal(self::$method($blueprint, $recipe));
+        $recipe = self::apply_recipe_defaults($variant, $recipe);
+
+        return self::finalise_views(self::retotal(self::$method($blueprint, $recipe)));
     }
 
     /**
@@ -81,11 +280,11 @@ class pool_mutator {
      * Shift every true difficulty by a constant.
      *
      * @param array $blueprint The blueprint.
-     * @param array $recipe Uses 'shift' (default 0.5).
+     * @param array $recipe Uses 'shift' (default +1.0 logit, the study value).
      * @return array
      */
     protected static function variant_shifted(array $blueprint, array $recipe): array {
-        $shift = (float) ($recipe['shift'] ?? 0.5);
+        $shift = (float) ($recipe['shift'] ?? self::DEFAULT_SHIFT);
         return self::map_items($blueprint, static function (array $item) use ($shift): array {
             $item['difficulty'] = round($item['difficulty'] + $shift, 5);
             return $item;
@@ -96,11 +295,11 @@ class pool_mutator {
      * Stretch true difficulties around the pool mean by a factor.
      *
      * @param array $blueprint The blueprint.
-     * @param array $recipe Uses 'factor' (default 1.5).
+     * @param array $recipe Uses 'factor' (default x1.25, the study value).
      * @return array
      */
     protected static function variant_stretched(array $blueprint, array $recipe): array {
-        $factor = (float) ($recipe['factor'] ?? 1.5);
+        $factor = (float) ($recipe['factor'] ?? self::DEFAULT_STRETCH);
         $mean = self::pool_mean($blueprint);
         return self::map_items($blueprint, static function (array $item) use ($factor, $mean): array {
             $item['difficulty'] = round($mean + $factor * ($item['difficulty'] - $mean), 5);
@@ -109,21 +308,42 @@ class pool_mutator {
     }
 
     /**
-     * Remove items whose true difficulty falls inside a gap band.
+     * Open a difficulty gap while keeping the item count constant.
+     *
+     * The design treats gappy and depleted as two different disturbances: a
+     * gappy pool is badly distributed, a depleted pool is small. Removing items
+     * to make a gap would confound the two, so the items inside the band are
+     * pushed out to its nearer edge instead. N stays constant and the pool now
+     * has a hole with a pile-up on each side, which is what a real pool with a
+     * missing difficulty range looks like.
+     *
+     * Setting 'mode' to 'remove' restores the older, N-reducing behaviour for
+     * anyone who needs it; the design does not use it.
      *
      * @param array $blueprint The blueprint.
-     * @param array $recipe Uses 'gapmin' (default -0.5) and 'gapmax' (default 0.5).
+     * @param array $recipe Uses 'gapmin', 'gapmax' and 'mode' (fixedn|remove).
      * @return array
      */
     protected static function variant_gappy(array $blueprint, array $recipe): array {
         $gapmin = (float) ($recipe['gapmin'] ?? -0.5);
         $gapmax = (float) ($recipe['gapmax'] ?? 0.5);
-        return self::map_items($blueprint, static function (array $item) use ($gapmin, $gapmax): ?array {
-            if ($item['difficulty'] >= $gapmin && $item['difficulty'] <= $gapmax) {
-                return null;
+        $mode = (string) ($recipe['mode'] ?? self::GAP_MODE_FIXEDN);
+        $middle = ($gapmin + $gapmax) / 2.0;
+
+        return self::map_items(
+            $blueprint,
+            static function (array $item) use ($gapmin, $gapmax, $middle, $mode): ?array {
+                if ($item['difficulty'] < $gapmin || $item['difficulty'] > $gapmax) {
+                    return $item;
+                }
+                if ($mode === self::GAP_MODE_REMOVE) {
+                    return null;
+                }
+                $item['difficulty'] = round($item['difficulty'] <= $middle ? $gapmin : $gapmax, 5);
+                $item['redistributed'] = true;
+                return $item;
             }
-            return $item;
-        });
+        );
     }
 
     /**
@@ -155,9 +375,14 @@ class pool_mutator {
         $sd = (float) ($recipe['sd'] ?? 0.5);
         return self::map_items($blueprint, static function (array $item) use ($fraction, $sd): array {
             $affected = self::uniform() < $fraction;
-            $item['calibrated'] = $affected
+            $stored = $affected
                 ? round($item['difficulty'] + self::normal(0.0, $sd), 5)
                 : $item['difficulty'];
+            // The storeddifficulty is what the engine is told; difficulty stays the
+            // ground truth the oracle answers against. 'calibrated' is the
+            // schema-1 name for the same value and is kept for compatibility.
+            $item['storeddifficulty'] = $stored;
+            $item['calibrated'] = $stored;
             $item['miscalibrated'] = $affected;
             return $item;
         });

@@ -6,6 +6,1106 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.3.0] — 2026-09-01
+
+**A simulated person completed an adaptive test.** Sixteen items, and the
+estimate lands on the ground truth:
+
+| | true θ | estimated θ | error |
+|---|---|---|---|
+| person 1 | −0.4795 | **−0.4552** | 0.024 |
+| person 2 | −1.7780 | **−1.9777** | 0.200 |
+
+### Fixed
+- **The feedback colour keys were invented, not chosen from the engine's
+  palette.** The palette depends on the number of bands — for two bands the
+  valid keys are `3` and `6`, not `1` and `2` — and an unknown key made
+  `comparetotestaverage` fail on an undefined index.
+
+  The consequence was completely out of proportion to the cause. The failure
+  happens in `update_attemptfeedback()`, which the engine calls *after* it has
+  already selected the next question: `select_question` returned question 632
+  with `iserr=false`, the exception was raised while rendering feedback, and
+  the attempt ended holding a question it could not show. Every diagnosis until
+  now therefore looked at the pool — which was never the problem.
+
+### How it was found
+By instrumenting the engine's preselect chain temporarily and counting
+candidates after every step, as the analysis suggested. The counts settled the
+question in one run:
+
+    initial 24 → removeplayedquestions 23 → ... → filterbyquestionsperscale 23
+    select_question -> question 632, iserr=false
+    update_attemptfeedback THREW: Undefined array key 1
+
+No filter ever emptied the pool. The instrumentation was removed afterwards;
+the engine tree is byte-identical to its checkout.
+
+### Still open
+The trace records `stop="An error occured"` and carries no per-scale abilities,
+standard errors or ability path, so the local diagnostics and the test-flow view
+have no data yet. The global outcome — sixteen items and a recovered θ — is
+there.
+
+---
+
+## [0.2.26] — 2026-09-01
+
+### Fixed
+- **The worker treated the absence of a question as a finished attempt.** A
+  failure page, a redirect and a page that has not rendered yet all look alike
+  from the browser's side, and treating them alike turns any of them into a
+  successful run. It now requires the activity's own finish page and otherwise
+  reports the URL, the title and what the page says.
+
+### Ruled out for the one-question attempt
+Measured against the real engine, not reasoned about:
+
+| Hypothesis | Result |
+|---|---|
+| The worker's DOM handling | **Not the cause.** A manual browser run with no worker code involved ends identically, on `attemptfinished.php`, with "minimum number of questions was not reached". |
+| `remove_uncalculated()` dropping items | **No.** The engine returns 24 items, all with a model, a difficulty and status 4. |
+| `updatepersonability()` failing | **No.** The response arrives (`state: gradedright`, `fraction: 1.000`) and the abilities update from 0 to 0.330 on all three scales — the scale-selection fix of 0.2.25 did that. |
+| Effective maxima being 1 | **No.** `maximumquestions` 250, `max_attempts_per_scale` 8, 24 items. |
+| The SE stop rule biting immediately | **No.** Narrowing the window to 0.05/0.30 changes nothing. |
+| Crossed question/item/param references | **No.** All links hold across 400 items, verified with the id sequences deliberately offset. |
+
+The DOM id format the analysis describes is confirmed — `question-110-1` is
+usage 110, slot 1 — and the worker has read it that way since 0.2.15, sending
+usage and slot for the server to resolve.
+
+What remains, for whoever picks this up: after one answered question the
+abilities are updated and 23 unplayed items with known parameters remain, yet
+mod_adaptivequiz ends the attempt regularly. The candidates left in the shared
+path are `maximumquestionscheck`, `mayberemovescale` and `noremainingquestions`.
+
+---
+
+## [0.2.25] — 2026-09-01
+
+### Fixed
+- **The test's scale selection had a hole in the middle.** Only the leaves were
+  reported as subscales, so a three-level tree (root → domain → subscale)
+  reached the engine as root plus leaves with the domain missing — while the
+  items hang on the leaves and a leaf is only reachable through its domain.
+  Every scale below the root is selected now.
+
+### Added
+- **`run_verifier::link_report()`** and the `links` section of `cli/verify.php`
+  check, per item, that `question.id = local_catquiz_items.componentid`, that
+  `itemparams.componentid` names the same question, that `activeparamid` points
+  at that parameter set, that `itemparams.itemid` points back at the item, that
+  both share a CAT context, and that the scale lives in it. Row counts per
+  table cannot catch a crossed reference — they agree while a pointer is wrong —
+  so each link gets its own verdict and a failure names the item.
+
+  Verified by crossing a reference on purpose: the report named exactly the two
+  links that broke. The check was also run with the item-parameter sequence
+  pushed ahead deliberately, so the ids could not coincide; without that, all
+  three ids run in lockstep on a fresh site and the join proves less than it
+  appears to.
+
+### Measured
+For the record, against the real engine: 24 distinct question ids, 24 engine
+items, 24 parameter sets, all seven links holding across 400 items and 31 runs.
+The root scale returns 24 items when subscales are included and none without,
+and the attempt's own settings carry `includesubscales: true`.
+
+---
+
+## [0.2.24] — 2026-09-01
+
+### Fixed
+- **Questions did not carry their item name.** The name lived only in the lab's
+  own table, so `<idnumber>` came out empty in an XML export and a question in
+  the bank could not be traced back to the item it represents. The item name is
+  now the question's ID number — which is where Moodle keeps exactly this kind
+  of external identifier, and it travels through export and import — prefixed
+  with the run, because several runs share one question category and an ID
+  number has to be unique within it.
+- **The question name did not mention the item either.** It read
+  `CATLab CATLab run 183 / K1.2 #12`, repeating the scale and omitting the
+  identifier. It now reads `Q-1-2-012 — CATLab run 183 / K1.2`.
+
+### Note on question ids
+High question ids in a demonstration export are accumulation, not a defect: 31
+runs at 24 items each had produced 400 questions in this environment. Each run
+does create exactly its planned items. They all land in a single question
+category, though, which is worth revisiting — one category per experiment would
+mirror the course sections and keep a bank usable after a few sweeps.
+
+---
+
+## [0.2.23] — 2026-09-01
+
+### Added
+- **`cli/export_pool.php`** exports a run's pool for inspection elsewhere:
+  the questions as importable Moodle XML, the item parameters as CSV with the
+  lab's ground truth beside the values the engine actually holds, and the scale
+  tree with the item count per scale. The three belong together — questions
+  without parameters are unusable for CAT, parameters without questions
+  describe items that do not exist, and both without the tree carry scale ids
+  that mean nothing on another site.
+
+  The CSV includes `is_known_parameter`, which is the distinction that decides
+  whether the engine learns from an item at all.
+
+---
+
+## [0.2.22] — 2026-09-01
+
+Every lab item counted as a pilot question.
+
+### Fixed
+- **Item parameters were stored with status `CALCULATED` (1).** The engine
+  treats an item as a pilot question while its parameter status is below
+  `UPDATED_MANUALLY` (4) *and* it has fewer responses than the pilot threshold
+  — and a pilot contributes nothing to the ability estimate. Every lab item met
+  both conditions, so the engine administered one, learned nothing from it, and
+  ended the attempt. `catquiz_includepilotquestions = "0"` did not help: the
+  items were not excluded, they were simply uninformative.
+
+  A lab item genuinely is a manually set parameter. Its difficulty and
+  discrimination are the ground truth the simulation was built from, not an
+  estimate from responses, which is exactly the case the engine calls "updated
+  manually". Stored as status 4 now, and the progress snapshot confirms
+  `is_pilot=false`.
+
+### Verification
+The engine's error on finishing an attempt is gone — the stop reason is empty
+rather than "An error occured". PHPUnit 404 tests, Behat 27 scenarios, phpcs
+and PHPDoc clean.
+
+### Next thread
+The attempt still ends after one item, now without an error. Two observations
+from the progress snapshot, for whoever picks this up:
+
+- `activescales` contains only the root scale (246); the two subscales that
+  hold the items (248, 249) are not among them.
+- `abilities` stays at `{"246": 0}` after the answer — the estimate is not
+  updated, so the stop criteria cannot move either.
+
+Both point at the same place: the scales that carry items are not the scales
+the attempt considers active.
+
+---
+
+## [0.2.21] — 2026-09-01
+
+Stale engine caches, and what the per-scale limits actually mean.
+
+### Fixed
+- **A freshly provisioned run could not present its first question.** The
+  engine caches what it knows about scales, contexts and items; a run whose
+  caches still described the previous one showed no question at all, and the
+  engine's own message blamed the configuration. Provisioning now purges every
+  store that describes the pool a test will be played from —
+  `changesintestitems`, `changesincatscales`, `changesincatcontexts` plus the
+  `adaptivequizattempt` and `catscales` stores — as its last act before the
+  test is created. The earlier purge covered only the item stores, which was
+  enough to make items visible and not enough to make a test playable.
+
+### Learned
+`min_attempts_per_scale` and `max_attempts_per_scale` are the number of
+questions asked per scale, not a property of the pool. That makes the two
+budgets a pair that has to add up: with two subscales and a maximum of four
+questions each, a test can ask at most eight — while `minimumquestions` asked
+for ten. The engine then ends with *"minimum number of questions was not
+reached"*, and nothing in either setting looks wrong on its own.
+
+Item counts per scale in the demonstration run: 12 for each of the two
+subscales, none directly on the root or the domain, which is the intended
+shape — items hang on the leaves.
+
+### Verification
+Both queued attempts of a run were played without any manual cache purge, and
+engine attempts 81 and 82 were recorded. PHPUnit 403 tests, Behat 27 scenarios,
+phpcs and PHPDoc clean.
+
+### Not yet
+Each attempt still ends after its first answered question. The engine selects
+no second item although each subscale holds twelve, which is the next thing to
+look at.
+
+---
+
+## Untersuchungsstand (Stand 0.2.20)
+
+Beobachtungen aus dem Lauf gegen die reale Engine, festgehalten für die
+Fortsetzung:
+
+| Strategie | Verhalten |
+|---|---|
+| `classic` (engine 7) | Attempt startet, Frage 1 erscheint, Antwort wird angenommen. Danach Ende mit *„Test result can not be calculated because minimum number of questions was not reached"*, `skip_reason: lastquestionnull`. |
+| `fastest` (engine 1) | Attempt startet nicht; die Seite bricht im Feedback-Pfad ab. |
+
+Gemeinsame Rahmenbedingungen beider Läufe: 24 Items, alle über den
+Engine-Abrufpfad sichtbar, Itemparameter mit Status `CALCULATED`,
+Personenparameter auf allen Skalen gesetzt, `minimumquestions = 10`,
+`maxquestionsscalegroup = 3/4`, `standarderrorgroup = 0.35/1.0`, Feedback mit
+zwei Bändern je Skala.
+
+Auffällig: Die Wurzelskala hat genau ein Kind (`164 → 165`), die eigentlichen
+Subskalen hängen eine Ebene tiefer. `min_attempts_per_scale = 3` und
+`max_attempts_per_scale = 4` beziehen sich möglicherweise auf eine andere
+Ebene, als der Pool sie anbietet.
+
+---
+
+## [0.2.20] — 2026-09-01
+
+The feedback configuration, which the attempt cannot start without.
+
+### Fixed
+- **The quiz settings described no feedback ranges.** The engine reads
+  `numberoffeedbackoptionsselect` and the per-scale
+  `feedback_scaleid_limit_lower/upper_<scaleid>_<n>` keys whenever it builds an
+  attempt's feedback — including at the very first question — so without them
+  the attempt could not start at all. Nothing about the word "feedback"
+  suggests that a test which shows none still needs the settings, which is why
+  this was missed for so long. Each scale now gets two evenly spread bands over
+  the ability range, plus `catquiz_scalereportcheckbox_<scaleid>`, so the
+  engine computes and reports a per-scale ability at all.
+
+  The bands are spread evenly on purpose: the lab measures abilities rather
+  than interpreting them, and any other split would state a judgement the study
+  has not made.
+
+### Verification
+Attempts now start against the real engine: both queued attempts of a run were
+played, engine attempts 12 and 13 were recorded and linked, and traces were
+collected. PHPUnit 402 tests, Behat 27 scenarios, phpcs and PHPDoc clean.
+
+### Not yet
+Each attempt still ends after its first answered question with the engine's
+"An error occured" and no ability path. That is the next step, and it is one
+question further than the last release reached.
+
+---
+
+## [0.2.19] — 2026-09-01
+
+The real error message, and what was hiding it.
+
+### Diagnosis
+With `local_catquiz | store_debug_info` enabled, the `TypeError` reported in
+0.2.17 gives way to the message that actually explains the failure:
+
+    Sorry, but couldn't define the first question to start the attempt,
+    the quiz is possibly misconfigured.
+        mod_adaptivequiz\cat_session::run_item_administration_locked
+
+So the `TypeError` in `get_ability_range()` was never the cause — it is what
+the engine raises while trying to render the feedback for a failure that has
+already happened, and it replaces the diagnosis with a stack trace pointing at
+the wrong place. The upstream issue has been extended accordingly: securing the
+method restores the engine's own error message, which today depends on whether
+debug information is switched on.
+
+Checked and ruled out along the way: item status (`ACTIVE`), item-parameter
+status (`CALCULATED`), engine visibility (24 of 24), person parameters (seeded
+on all four scales in the right context), scale names, and the item budget
+against the pool size. The remaining candidate is the first-question selection
+itself — `firstquestionselector` takes a peer mean or the configured fallback,
+and this is where the run stops.
+
+### Verification
+PHPUnit 401 tests, Behat 27 scenarios, phpcs and PHPDoc clean.
+
+---
+
+## [0.2.18] — 2026-09-01
+
+Starting person parameters, and the upstream issue drafted.
+
+### Added
+- **Simulated persons are given a starting ability of 0.0 on every scale of
+  their run.** The engine expects a person to have one before it chooses a
+  first question; in normal use the activity's entry path establishes it from a
+  peer mean or the configured fallback. A person the worker drops straight into
+  an attempt has never been through that path, so the lab states the value
+  itself. 0.0 is also the right value for an experiment: every simulated person
+  starts at the scale midpoint, so an estimate is shaped by that person's
+  answers rather than by whoever sat the test before them. An ability the
+  engine has since measured is never overwritten — seeding is a starting point,
+  not a reset.
+- `docs/design/issue-catquiz-ability-range-null.md`: a short upstream issue for
+  local_catquiz. `attemptfeedback::update_data()` returns before setting
+  `catscales` when no person abilities exist, and `feedbackgenerator.php:419`
+  reads the key regardless and passes `array_key_first()` — that is, `null` —
+  to a method declaring `int`. The proposal is to fall back to the test's
+  primary scale and to let the signature state the expectation, so a bad call
+  reports where it originates rather than one layer down in a constructor.
+
+### Verification
+Provisioning writes eight parameter rows for two persons over four scales and
+stays green end to end against the real engine. PHPUnit 401 tests, Behat 27
+scenarios, phpcs and PHPDoc clean.
+
+---
+
+## [0.2.17] — 2026-09-01
+
+Named scales, and the attempt failure traced to its source.
+
+### Fixed
+- **Scales had no names.** The root scale took its name from the run's cell key,
+  which is empty when nothing is swept, so the engine recorded a nameless root
+  and children called `" / K1.1"` — unreadable in the CAT manager and carried by
+  the engine into its own feedback structures. Scales are now named after the
+  run, with the cell key appended when there is one.
+
+### Diagnosis
+The one-item attempt of 0.2.15 and the silent start failure of 0.2.16 have the
+same cause, and it is not in this plugin. Starting a fresh attempt raises, in
+the engine:
+
+    local_catquiz\catscale::__construct(): Argument #1 ($catscaleid) must be of
+    type int, null given, called in .../teststrategy/feedback_helper.php:484
+
+`feedbackgenerator.php:419` calls `get_ability_range(array_key_first($catscales))`
+without checking that `$catscales` is non-empty, which it is at the very first
+question of an attempt that has produced no abilities yet. A page that renders
+an exception presents no question, so the worker correctly reports that the
+attempt never started — the message is accurate, the cause simply lies one
+plugin further down.
+
+This wants an upstream issue of its own, alongside the progress-retention one.
+
+### Verification
+Provisioning stays green against the real engine with 24 items
+(`planned=24 questions=24 items=24 params=24 visible=24 failed=0`) and scales
+now read `CATLab run 77 / K1.1`. PHPUnit 398 tests, Behat 27 scenarios, phpcs
+and PHPDoc clean.
+
+---
+
+## [0.2.16] — 2026-09-01
+
+Three defects behind the one-item attempt of 0.2.15, found by reading what the
+engine itself recorded.
+
+### Fixed
+- **A run could be provisioned that no test could finish.** The engine's own
+  record showed `total_number_of_testitems: 6` against
+  `minimumquestions: 10`: the test ran out of items, reported an error, and the
+  run produced a single item and a stop reason that blamed the strategy. The
+  arithmetic is knowable before anything is played, so the pool is now checked
+  against the run's own minimum right after materialisation. The failure names
+  the numbers: *6 items for a minimum of 10*.
+- **The worker shared one browser session across attempts.** The second
+  simulated person would have sat the test as the first; the only thing that
+  prevented it was the already-authenticated login page no longer offering a
+  username field, which made the worker fall over for an unrelated-looking
+  reason. Each attempt gets its own browser context now, and a login page
+  without a username field is reported rather than worked around.
+- **A failed login was invisible.** The worker stayed on the login page, where
+  its start-attempt selectors matched the login button itself: it clicked, found
+  no question, and reported that the attempt never started. Wrong credentials
+  never appeared anywhere. The login is now verified, and the page's own error
+  message is passed through.
+
+### Verification
+With a pool of 24 items the chain provisions green end to end
+(`planned=24 questions=24 items=24 params=24 visible=24 failed=0`) and the
+activity now carries a readable name. PHPUnit 398 tests, Behat 27 scenarios, 11
+worker unit tests, phpcs and PHPDoc clean.
+
+### Not yet
+With the larger pool the worker still reports that no question was presented,
+although a browser session with the same credentials reaches the activity page
+and sees its start button. That is the next thread: the start click, on a
+single-threaded development server, against an activity that already has an
+attempt in progress.
+
+---
+
+## [0.2.15] — 2026-09-01
+
+**A simulated person sat a real adaptive test.** The chain runs end to end:
+provisioning, queue, claim, browser login, question, oracle answer, submission,
+engine attempt, trace collection.
+
+### Fixed
+- **The worker never saw the question it had just triggered.** After starting an
+  attempt it waited for navigation and swallowed the timeout, then checked for a
+  question before the page had rendered one. It waits for the question itself
+  now — the thing the next step actually needs.
+- **Every oracle call failed because the worker sent the wrong id.** Moodle
+  renders `question-{qubaid}-{slot}`; the worker took the first number out of
+  that and sent it as a question id, so the oracle looked up an item that could
+  not exist and reported itself as not ready. The page identifies a question by
+  usage and slot, and the server resolves the question id through the question
+  engine.
+- **The oracle could not identify the person.** It read `$USER`, but the worker
+  drives the browser as the simulated user while calling the web service with
+  its own token — so `$USER` was the worker account and never matched a person.
+  The lab attempt now names the person; the logged-in user remains the fallback.
+- **The engine attempt id was scraped from a page that does not always show
+  it.** The server looks it up from the run and the person instead, which is
+  information it already has. The worker no longer fails an otherwise good
+  attempt over a value it could not read.
+
+### Verification
+Against the real engine on a live Moodle: attempt 44 played through the
+adaptivequiz interface, engine attempt 3 recorded, one item administered
+(question 112), the trace collected and the engine's own person parameters
+written. PHPUnit 396 tests, Behat 27 scenarios, 11 worker unit tests, phpcs and
+PHPDoc clean.
+
+### Not yet
+The test stops after one item rather than exhausting its budget, and the
+recorded stop reason is the engine's "An error occured". That is the next
+thread to pull, and it is now visible precisely because everything before it
+works.
+
+---
+
+## [0.2.14] — 2026-09-01
+
+First worker run against a real installation. Four more defects that only a
+worker actually trying to log in could reveal.
+
+### Fixed
+- **The worker could never have logged in.** It derived the username as
+  `catlab_user_<id>`, while the provisioner makes usernames unique per run and
+  produces names like `catlab_r47_p-conforming-0001`. The username now travels
+  with the claimed job: the worker no longer guesses a name the server is free
+  to choose, and falls back to the old convention only against a server that
+  does not send one.
+- **Simulated users had no password at all.** `user_create_user()` was called
+  without one, so every account was unusable. Nothing noticed because no worker
+  had ever tried. The password is derived from the user id, mirroring the
+  convention the worker already had.
+- **An attempt that answered nothing counted as finished.** The worker reported
+  success after a run in which the answer loop never executed once — the same
+  failure shape as issue #10, one layer further out: the queue would drain,
+  every job would report success, and no trace would ever be collected. The
+  worker now refuses to report an attempt with no answered question or no
+  engine attempt id, and `job_complete` refuses to record one as collected.
+- A type error in the password fix itself: `get_config()` returns `false` for
+  an unset setting, so the cast belonged after the fallback rather than around
+  a false.
+
+### Verification
+Against the real engine and a live Moodle: the worker logs in as the simulated
+user, the web-service claim hands out `catlab_r47_p-conforming-0001` with its
+job, and a browser session confirms the login lands on the dashboard. The
+attempt itself does not yet complete — the activity shows an attempt in
+progress and no question is presented — but that is now reported as a failure
+instead of being counted as a success, which is what the rest of this release
+is about. PHPUnit 396 tests, Behat 27 scenarios, 11 worker unit tests, phpcs
+and PHPDoc clean.
+
+---
+
+## [0.2.13] — 2026-09-01
+
+CI fix for the engine step introduced in 0.2.12.
+
+### Fixed
+- **The engine step could not find its script.** The PHPUnit and Behat jobs
+  check the repository out into `plugin/`, so `.github/scripts/fetch-engine.sh`
+  is not at the working directory — exit code 127 before a single test ran.
+- **`--extra-plugins ../engine` pointed one level above the workspace.** Both
+  the script's target directory and the install option now use an absolute
+  path, so neither depends on where a step happens to start.
+
+### Verification
+The corrected paths were reproduced locally in a copy of the CI layout: the
+script places the four plugins with the cat model inside its host, and
+moodle-plugin-ci resolves all three top-level directories to the components
+`local_catquiz`, `local_wunderbyte_table` and `mod_adaptivequiz` — checked
+against a real moodle-plugin-ci ^4 rather than assumed. Its installer scans the
+extra-plugins directory at depth 0, which is why the subplugin has to travel
+inside `mod_adaptivequiz` and not beside it.
+
+---
+
+## [0.2.12] — 2026-09-01
+
+The CAT engine in the development environment and in CI.
+
+### Changed
+- The **PHPUnit and Behat jobs install the engine**:
+  `.github/scripts/fetch-engine.sh` fetches `local_catquiz`,
+  `mod_adaptivequiz` at `v-3.0`, the `adaptivequizcatmodel_catquiz` bridge and
+  `local_wunderbyte_table`, and moves the cat model into its host activity
+  before the install — installed side by side it would land in the wrong
+  directory and never be found. The lint jobs stay engine-free, so a broken
+  engine checkout can never make the coding standard look red.
+- The development environment now runs the same versions rather than the
+  raised ones the previous release had to fake: mod_adaptivequiz 2026082705 and
+  adaptivequizcatmodel_catquiz 2026082704 from the `v-3.0` branches satisfy the
+  engine's dependency declaration as it stands.
+
+### Fixed
+- An experiment without swept factors produced an activity called
+  `Run #9 –  – Rep 1`, with a gap where the condition should be. A run without
+  conditions simply has none.
+
+### Verification
+The full chain against the real engine versions, without any local
+modification: `planned=6 questions=6 items=6 params=6 visible=6 failed=0`, all
+stages green, `verify` 6/6/6/6/6 OK, the activity carrying `catmodel=catquiz`
+and the engine reporting all six items through its own retrieval path.
+PHPUnit 393 tests, Behat 27 scenarios, phpcs and PHPDoc clean.
+
+---
+
+## [0.2.11] — 2026-09-01
+
+**First run against a real CAT engine.** Five defects that no amount of testing
+without the engine could have found.
+
+### Fixed
+- **A correct engine was reported as too old.** `strategy_catalog::engine_id()`
+  checked for the engine's strategy constants without loading the engine's
+  `lib.php`, where they are defined. Moodle loads a local plugin's library only
+  when something asks for it, and in a CLI run, a scheduled task or a web
+  service nothing has — so provisioning refused to start on a perfectly good
+  installation.
+- **Materialising from the command line died on a missing class.**
+  `question_bank` is autoloaded only where something has already pulled in the
+  question library. A web request usually has; CLI, tasks and web services have
+  not.
+- **A run of six items reported two visible.** The engine caches
+  `get_testitems()` in a store that listens for `changesinadaptivequizattempt`,
+  not for the item-change event that assignment fires. Writing the parameters
+  afterwards left a snapshot taken when the scale held one item fewer, so every
+  scale kept the list from its first item. This is exactly the failure issue #10
+  describes — and this time it was reported rather than hidden.
+- **The adaptive quiz could not be created at all.** `attemptfeedback` and
+  `attemptfeedbackformat` are NOT NULL without a default, and `add_moduleinfo()`
+  writes the module info straight to the database.
+- **Re-provisioning built everything twice.** The course and the section were
+  idempotent, the pool and the activity were not: a second run added six more
+  questions, six more engine items and a second adaptive quiz, leaving two
+  activities for one run. A complete pool is now reused — judged by the same
+  engine retrieval a fresh materialisation uses, so a half-surviving pool is
+  rebuilt rather than trusted.
+
+### Added
+- `testcase_names_test` also rejects the sixteen assertions PHPUnit 10 removed.
+  They are warnings on PHPUnit 9 and fatal from 10 on, so a suite green on
+  Moodle 4.5 can still be dead on 5.0 — which is how `assertObjectHasAttribute`
+  slipped into a test written minutes earlier.
+
+### Verification
+The full chain against local_catquiz 2026082152, mod_adaptivequiz and the
+catquiz cat model: `planned=6 questions=6 items=6 params=6 visible=6 failed=0`,
+container, people, test and attempts stages green, `cli/verify.php` reporting
+6/6/6/6/6 OK, and a second provisioning adding nothing. PHPUnit 393 tests
+(11 skipped, being the no-engine guard paths), Behat 27 scenarios, phpcs and
+PHPDoc clean.
+
+---
+
+## [0.2.10] — 2026-09-01
+
+Closing the session: the last two result filters and the documentation.
+
+### Added
+- **Budget and cell as result filters.** The item budget is offered as one
+  condition ("global 20-25, subscale 3-5 items") rather than as four numbers
+  that only mean something together, and a full factor combination can be
+  selected directly. These were the two filters still missing from the
+  specified set.
+
+### Changed
+- `docs/sessions/session-002.md` carries the whole session: thirty-one phases,
+  the verification state, and a table of the ten issues and eleven sub-findings
+  with their status.
+- `docs/design/status.md` reflects 0.2.9 and names what actually remains — the
+  first real run against an installed CAT engine, since every engine-facing
+  path has so far only been exercised as a guard path.
+
+### Verification
+PHPUnit 390 tests / 2679 assertions, Behat 27 scenarios / 187 steps, phpcs and
+PHPDoc clean, 595 language strings per language, all test classes loading under
+PHPUnit 11.5.
+
+---
+
+## [0.2.9] — 2026-09-01
+
+Issue #9, findings 8 and 9: the full sweep design in the editor, and a run
+lifecycle that says what it means.
+
+### Added
+- **Composite sweep factors.** Model, global budget, subscale budget, the SE
+  window and the disturbance strength can now be varied from the web interface.
+  Budgets and SE windows are swept as pairs rather than as two independent
+  ends: "10 to 15 items" is one condition, and varying the ends separately
+  would also produce 40/15, which describes nothing.
+- **Disturbance strength is its own factor**, so a study can vary the kind of
+  disturbance and its size independently. A strength that does not apply to a
+  cell's variant — an ideal pool takes no shift — is dropped for that cell
+  instead of making a cell the author plainly meant to include invalid.
+- **Three lifecycle states**: ready (provisioned but not queued), aggregating
+  (attempts done, results being computed) and cancelled. Cancelled is
+  deliberately not a kind of failure: one records a decision, the other a
+  defect, and a list where both look alike hides the defects among the
+  decisions. It is also not shown in the colour that means something is wrong.
+- **Status-dependent actions.** A run offers only what its state allows,
+  because a button that cannot work reads as a defect in the suite rather than
+  as a property of the run. A reproduction records which run it came from and
+  links back to it.
+
+### Fixed
+- **A budget swept as a factor produced invalid cells.** The normalised base
+  definition still carried the schema-1 mirrors of the budgets, which then
+  contradicted the level the sweep had just set — so the validator rejected
+  cells for a disagreement the sweep itself had created. The mirrors are
+  dropped when a budget level is applied and rewritten from the new value.
+
+### Verification
+PHPUnit 390 tests / 2679 assertions, Behat 27 scenarios, phpcs and PHPDoc
+clean, all test classes loading under PHPUnit 11.5.
+
+---
+
+## [0.2.8] — 2026-09-01
+
+The remaining findings of issue #9: outcomes 4, 7, 10 and 11.
+
+### Fixed
+- **The outcome pipeline computed but did not persist.** Stop-rule success,
+  exposure concentration and runtime were shown on screen and never written to
+  the result store, so nothing downstream could aggregate them across
+  replications, export them or compare them between cells. All three are
+  result rows now, with the stop reasons kept beside the success rate: a rate
+  of 0.67 says nothing about whether the rest ran out of items or were cut
+  short by another criterion.
+- **A single configured k hid what a strategy achieved.** Finding the single
+  worst subscale and finding the worst five are different results. Top-k,
+  precision, recall and nDCG are evaluated at k = 1, 3, 5 and 10 at once, and
+  a k larger than the number of subscales is left out rather than invented.
+- **The local deviations themselves were not reported**, only their ordering.
+  A strategy can rank the subscales perfectly and still be a logit out on every
+  one of them; local bias and local RMSE are persisted alongside the ranking.
+- **The editor declared the control condition on the author's behalf.**
+  Choosing a constant discrimination set `allowdegenerate` automatically, which
+  defeated the very check it exists for: a run labelled 2PL would quietly be a
+  Rasch run and the validator, which would have said so, was answered before it
+  could ask. The flag is now a deliberate tick box, and the default
+  distribution is log-normal — a model called 2PL should describe a 2PL unless
+  someone decides otherwise.
+- **Import matched experiments on their display name.** Renaming a study lost
+  its history, and two unrelated studies sharing a name collided. The
+  experiment key is the identity now, the version distinguishes stages of it,
+  and the conflict report says which of the two matched. A new version keeps
+  the key and raises the patch level.
+
+### Changed
+- Manifest and JSON export carry the experiment key and version.
+- README, the test-system guide and the CI header no longer describe a stub
+  with a placeholder worker workflow; they describe the worker pipeline that
+  exists, including which job needs a Moodle and which does not.
+
+### Verification
+PHPUnit 376 tests / 2621 assertions, Behat 26 scenarios, worker check and 11
+worker unit tests, phpcs and PHPDoc clean, every test class loading under
+PHPUnit 11.5.
+
+---
+
+## [0.2.7] — 2026-09-01
+
+The three findings from issue #9 that invalidate results rather than annoy.
+
+### Fixed
+- **Every run executed the base definition, not its own cell.**
+  `run_orchestrator::definition_for()` read the experiment's `configjson` back
+  instead of the cell definition the sweep had persisted in the run manifest.
+  A sweep over four strategy/variant cells therefore ran the same condition
+  four times while the cell key and the manifest claimed otherwise — the
+  recorded intervention and the executed one were different things. The cell
+  definition is now authoritative; only a run predating manifested cells falls
+  back, and a configuration that contradicts its manifest fails the run
+  outright rather than producing results attributed to conditions that never
+  held.
+- **Ground truth leaked into the estimated diagnosis.**
+  `subscale_evaluator` classified both true and estimated subscale values
+  against the *true* global ability, so the diagnostic output being evaluated
+  was partly built from the answer it was being scored against. True and
+  estimated deviations now use their own reference — ground truth for the
+  truth, the engine's own global estimate for the estimate — and both are
+  persisted so the separation can be checked rather than trusted.
+- **Replication spread was pooled across experimental conditions.**
+  `trend_analysis::metric_series()` gathered every run of an experiment
+  regardless of cell, so the resulting standard deviation mixed replication
+  noise with the differences between conditions and grew precisely when the
+  experiment had worked. Aggregation is per cell now, the experiment report
+  names its aggregation level, and the old method is deprecated.
+
+### Added
+- `experiment_validity_test`: seven tests covering cell execution, manifest
+  drift, the legacy fallback and the two reference systems. Each was verified
+  by reintroducing the original defect — two tests fail per bug.
+- `report_builder_test` gains the case from the issue: two tight cells far
+  apart must not be reported as one wide spread.
+
+### Verification
+PHPUnit 362 tests / 2580 assertions, Behat 26 scenarios, phpcs and PHPDoc
+clean, every test class loading under PHPUnit 11.5.
+
+---
+
+## [0.2.6] — 2026-09-01
+
+Every PHPUnit job on Moodle 5.0 and above died before running a test.
+
+### Fixed
+- **A test helper named `result()`.** PHPUnit 10 and 11 declare
+  `TestCase::result()` final, so the helper was not a failing test but a fatal
+  error while the file was loaded — which takes the whole suite down. Moodle
+  4.5 still ships PHPUnit 9, where the method is not final, so it passed
+  locally and on the 4.5 matrix and killed 5.0 and 5.2. Renamed to
+  `materialisation()`, which also says what it returns.
+
+### Added
+- `testcase_names_test` checks every test file against the 86 method names
+  PHPUnit 10.5 and 11.5 declare final, taken from their sources rather than
+  from memory. It names the offending file and method, so the next collision is
+  a one-line failure instead of a fatal with no context.
+
+### Verification
+Verified against a real PHPUnit 11.5.56: every test class of the plugin loads
+under it, and reintroducing the original helper name reproduces the exact
+error from the CI log. PHPUnit 354 tests / 2555 assertions on 4.5, phpcs and
+PHPDoc clean.
+
+---
+
+## [0.2.5] — 2026-09-01
+
+Issue #8: one shared experiment course instead of a course per run.
+
+### Fixed
+- **A run could report success with no CAT activity at all.** The pipeline ran
+  `test` before `people`, but `test_provisioner::create()` needs the run's
+  course — which `people` created. So it returned null on every run, the null
+  passed as success, and the CLI printed `Run N: ok` for a course containing no
+  adaptive quiz. The pipeline is now scales → materialise → container → people
+  → test → attempts, and a test stage without an activity fails the run.
+- **A sweep of a hundred replications produced a hundred courses.** The suite
+  no longer creates courses. A person configures one experiment course; every
+  experiment gets one section in it, every run one adaptivequiz in that
+  section. Without a configured course nothing is provisioned and the reason
+  says so, rather than a course being invented.
+- **Activities landed in section 0.** They go into their experiment's section,
+  so a shared course stays readable after more than one sweep.
+- **Run cleanup could have deleted a shared course.** It now refuses to delete
+  the configured experiment course, or any course another run still points at.
+- **The course picker broke every admin page.** Building the option list in
+  settings.php ran during the admin-tree build, and formatting a course name
+  there set up the filter subsystem, which asked for the tree again —
+  surfacing as "Duplicate admin page name: adminnotifications" site-wide. The
+  choices load lazily now, which is what `load_choices()` is for.
+
+### Added
+- `experiment_container` resolves the shared course and the experiment section,
+  idempotently: provisioning the same experiment twice reuses its section.
+- The landing page shows the configured course, or says that none is set and
+  links to the setting.
+- Section names carry the experiment's creation time rather than the
+  provisioning time, so the same experiment always names its section the same
+  way. Activity names lead with the run id, which survives truncation in course
+  listings.
+- Eleven container tests, including the original bug as an assertion about
+  stage order.
+
+### Changed
+- `course_provisioner` no longer creates anything; it enrols a run's users into
+  the resolved course, idempotently, since many runs share it.
+- The former "creates a course per run" test is replaced by one asserting the
+  shared-course behaviour, as the issue requires.
+
+### Database
+`local_catquizlab_experiment` gains nullable `courseid` and `sectionid`.
+Existing runs keep their own course; the upgrade moves nothing. Savepoint
+2026083109.
+
+### Verification
+PHPUnit 353 tests / 2554 assertions, Behat 26 scenarios, phpcs and PHPDoc
+clean, fresh install without debugging output.
+
+---
+
+## [0.2.4] — 2026-08-31
+
+CI fix.
+
+### Fixed
+- **Every matrix job failed at the install step.** Three CHAR NOT NULL columns
+  declared `DEFAULT=""`. Moodle rejects an empty-string default on a character
+  column, rewrites it to NULL and prints a debugging message — and
+  moodle-plugin-ci treats any debugging output during installation as a
+  failure. So `itemname`, `fingerprint` and `twinid` took the whole matrix down
+  over three attributes that had no effect in the first place.
+- **`twinid` could not have been added to a populated table.** It was NOT NULL
+  without a usable default, which works on a fresh site and fails on every real
+  one. It is nullable now, which is also the honest value: a person generated
+  before the paired design existed has no twin.
+- **Three capabilities had no language strings.** `:edit`, `:execute` and
+  `:export` would have shown up in the roles UI as raw identifiers, and
+  `moodle-plugin-ci validate` refuses a plugin in that state.
+- The CI workflow header still described a plugin with no templates and a
+  worker stub; both stopped being true.
+
+### Added
+Four schema tests that catch this class of mistake before CI does: no column
+declares a default Moodle will reject, no upgrade step adds a NOT NULL column
+without a default, every capability is named, and the two language packs
+describe the same sorted set of strings. Each was checked by reintroducing the
+original defect and confirming the test goes red.
+
+### Verification
+PHPUnit 341 tests / 2520 assertions, Behat 24 scenarios, phpcs and PHPDoc
+clean, and a fresh PHPUnit install now runs without a single debugging message.
+
+---
+
+## [0.2.3] — 2026-08-31
+
+Reusable building blocks, the rebuilt landing page and editor, and the results
+views. The release number stays in the 0.2 line: the plugin has not been run
+against a live CAT engine yet, so none of this is field-proven.
+
+### Added
+- **Reusable building blocks** (`preset_library`, `presets.php`): an item-pool
+  structure or a person model is saved once and cited by any number of
+  experiments. Each block carries a fingerprint over its sorted payload,
+  recorded in the run manifest, so two experiments can be shown to have used
+  the same blueprint rather than two that merely look alike. A block cited by
+  an experiment that has runs is locked. Deliberately not part of a block: the
+  pool variant and its recipe, which belong to the study rather than to the
+  pool it disturbs, and the person count, which is a design decision.
+- **Landing page rebuilt to the mockup**: overview panel counting experiments
+  and runs by state, primary actions above the fold, experiment table with
+  per-row actions, the ten most recent runs with progress bars. It previously
+  put everything into collapsed sections, so a first-time visitor saw three
+  closed triangles and no way in.
+- **Editor rebuilt to the mockup**: numbered section navigation with a one-line
+  summary of each section, and a validation panel that stays visible while
+  scrolling — a definition can be invalid in eight places at once, and a list
+  at the top of a long form leaves the author hunting for the field. Study
+  metadata added: description, a stable experiment key, version, tags.
+- **Results views** (`results.php`) with eight tabs, all reading through one
+  data source so a figure in a chart and the same figure in the table below it
+  cannot disagree: Overview, Global metrics, Subscales, Deficit detection,
+  Robustness, Test flow, Raw data, Export.
+- **`scatter_chart`**: Moodle's chart API has no scatter and the design needs
+  several, so this draws static inline SVG with labelled axes, units, reference
+  lines and an accompanying summary table, since an SVG alone is unreadable to
+  a screen reader.
+- **`metrics::concentration`**: exposure inequality as Gini and Herfindahl. A
+  mean exposure rate cannot distinguish an evenly used pool from one where a
+  tenth of the items carry every test; items never shown count as zero, so an
+  unused remainder raises the concentration instead of vanishing.
+- **`local_analysis`**: local diagnostics on deviations rather than absolute
+  subscale abilities. A test that places every subscale one logit too high has
+  recovered the local structure and missed the global level; comparing absolute
+  abilities would report the local diagnostics as failing too.
+- **`robustness_analysis`**: deltas against the ideal pool under otherwise
+  identical conditions, with the disturbance strength as its own coordinate.
+- **`test_flow`**: the step-by-step course of one attempt, and a feasibility
+  verdict — a precision target implies an information I = 1/SE², and a budget
+  that cannot deliver it would have ended on exhaustion however well the items
+  were chosen.
+- **`results_export`**: four flat levels (run, attempt, subscale, item) taking
+  the filter that is on screen, with the filter, level and versions travelling
+  in the file's metadata and name.
+- **`schema_test`**: compares the installed schema against the columns the code
+  actually touches.
+
+### Fixed
+- **install.xml and upgrade.php had drifted.** twinid, twinindex and severity
+  were added to the upgrade only, so every freshly installed site lost the
+  digital-twin identity — the thing the paired design rests on.
+- **`parse_debug_info` read only the last step snapshot**, discarding the
+  ability trajectory the test-flow view exists to show.
+- **`stop_reached()` matched 'error' as a substring**, filing 'standarderror' —
+  the precision criterion doing its job — as the test running out of items.
+- **`json_encode` dropped zero fractions**, so a discrimination of 1.0 came
+  back as int 1 and silently changed type between saving and reuse.
+- **`$row + [...]` in index.php** left the status label unused, because the `+`
+  operator keeps the left operand.
+- Two dropdowns had only an aria-label, and two results tabs showed nothing but
+  "no data" without saying what they would have contained.
+
+### Corrected documentation
+Earlier notes claimed the engine deletes `local_catquiz_progress` when an
+attempt finishes. It does not: `progress::delete()` is never called in the
+production path, and the row is removed only when the activity is deleted. See
+`docs/design/issue-catquiz-progress-retention.md` for the upstream issue this
+raised.
+
+### Database
+New tables `local_catquizlab_preset`; `local_catquizlab_person` gains twinid,
+twinindex and severity in install.xml as well as in the upgrade. Savepoint
+2026083102.
+
+### Verification
+PHPUnit 324 tests / 2439 assertions, Behat 24 scenarios / 167 steps with
+accessibility checks enabled, phpcs and PHPDoc clean.
+
+---
+
+## [0.2.1] — 2026-08-31
+
+Worker CI: the toolchain job no longer fails by construction.
+
+### Fixed
+- **The "Worker toolchain installs" job was red every single time.** It "smoke
+  tested" the worker by starting it against `https://example.invalid` with
+  dummy credentials. The worker does not read that as a self test: it started
+  its normal polling loop, called `local_catquizlab_job_claim` and died on
+  `getaddrinfo ENOTFOUND`. The failure was deterministic and said nothing about
+  the worker. The job now runs `npm run check`, `npm test` and an offline self
+  test, needs no Moodle instance, no token and no external host.
+
+### Added
+- **`--self-test`** in `worker/run_attempt.js` (`npm run selftest`): checks
+  argument parsing, URL normalisation, the web-service URL builder, the
+  dichotomous and polytomous option choice, that Puppeteer loads and that a
+  browser starts — which is what the old step was really meant to prove. It
+  claims no job and calls no web service. `--no-browser` skips the browser
+  start on runners without a Chromium download.
+- **A real end-to-end job**, separate from the toolchain job and opt-in via
+  `workflow_dispatch`. It provisions PostgreSQL, Moodle, the CAT engine and its
+  host activity, prepares an experiment and a queued attempt, issues a worker
+  token, plays one attempt through the real UI and verifies the queue
+  afterwards.
+- **`cli/e2e_prepare.php`**: prepares and verifies such a run through the
+  ordinary services, so the end-to-end job cannot drift into a second
+  provisioning path. It prints `key=value` lines for `$GITHUB_OUTPUT`, exits 1
+  when the engine is absent, and its `--verify` mode fails unless every queued
+  attempt actually finished — a worker that played nothing is not a success.
+- Three further worker unit tests (self-test export, choice clamping, parameter
+  escaping); eleven in total.
+
+### Changed
+- `cli/orchestrate.php` loses its `--polytomous` switch. Since 0.2.0 polytomy
+  follows from the model in the experiment definition, and a separate setup
+  parameter meant a run was not reconstructible from `configjson + seed` alone.
+- The worker workflow runs on pushes touching `worker/**` instead of being
+  manual-only, since it no longer needs anything unavailable in CI.
+
+### Verification
+`npm run check`, `npm test` (11 tests) and `npm run selftest` all pass locally,
+including a real browser start (Chrome 148). Each was also checked to fail on a
+deliberately broken syntax, a failing assertion and a broken helper, so a red
+pipeline still means a real defect. PHPUnit 249 tests, phpcs and PHPDoc clean.
+
+---
+
+## [0.2.0] — 2026-08-31
+
+Session 002: the experiment definition now drives the run, and there is a web
+interface for it. Closes issues #1–#7.
+
+### Added
+- **Catalogues as single sources of truth**: `strategy_catalog` (internal key →
+  engine constant → publication label) and `model_catalog` (1PL/2PL/3PL/PCM/
+  GPCM/GRM/GGRM → engine catmodel key, required item parameters, oracle family).
+  Engine ids are read from the engine's own constants at runtime; an installed
+  but too old engine is refused with a readable message instead of being mapped
+  silently. (#1, #3, #5, #6)
+- **`distribution`**: declarative, seed-deterministic distributions for the
+  discrimination and guessing parameters a 2PL/3PL run needs. (#3)
+- **`seed_domains`**: separate random sources for person base, person deviation,
+  pool, mutation and response. The person seed no longer depends on the cell
+  key, so twins survive a change of strategy or pool variant. (#4)
+- **Definition schema 2**: split global and per-subscale budgets, separate
+  SE_min and SE_max, model parameters, variant recipes, person severity and
+  twin settings, explicit `schema`/`schemaversion`. Schema-1 definitions keep
+  validating; their keys are normalised and mirrored. (#1, #2, #3, #4)
+- **`local_catquizlab_item`**: per-item ground truth kept apart from what the
+  engine was told, which is what makes calibration and tagging errors real
+  robustness conditions. (#2)
+- **`experiment_service`**: the layer CLI, web UI and API share — validate,
+  save, duplicate, preview, expand. UI preview and CLI expansion provably yield
+  the same cells. (#7)
+- **`experiment_io`**: JSON export in a declarative and a normalised variant,
+  import with size limit, schema check, deterministic schema-1 migration and
+  explicit conflict resolution. An import never starts a sweep. (#7)
+- **Web interface**: experiment editor with field-level validation and sweep
+  preview, JSON import page, run overview with filters, run detail with the
+  reproducibility manifest, and a cell comparison with mean, SD and a 95%
+  interval. (#7)
+- **`run_registry`**: resolves a run's experimental coordinates from its
+  manifest and aggregates replications into comparable cells. (#7)
+- **Capabilities** `:edit`, `:execute` and `:export`, separate from `:manage`.
+  Every state change is POST + sesskey + the capability for that action. (#7)
+- **Behat**: nine scenarios covering the editor, validation, sweep preview,
+  sweep creation, run filtering, the manifest and the import page, plus a data
+  generator and a step for sweep expansion. (#7)
+- **From the plugin template**: `tests/coverage.php`, `tools/`, `pix/`,
+  `db/removed_files.txt` and the session prompt templates.
+- **`docs/dev/environment-setup.md`**: the verification environment as actually
+  built, including the failure modes met along the way.
+
+### Fixed
+- **The definition did not reach the run.** `stage_test()` passed only the test
+  name, so two experimentally different cells ran with identical CAT settings
+  and an unconfigured run silently became a weakest-subscale run via the
+  numeric default 4. Strategy, both budget levels and both SE bounds now come
+  from the definition. (#1)
+- **Pool variants had no effect.** `pool_mutator::mutate()` was never called at
+  runtime: a robustness cell ran on the ideal pool and still reported success.
+  It is now wired into materialisation, and a mutation that cannot be realised
+  fails the run instead of passing as scheduled. (#2)
+- **`gappy` and `depleted` were the same disturbance.** Gappy is now a fixed-N
+  redistribution — the item count stays constant and a gap with a pile-up on
+  each side appears; depleted remains the variant that removes items. Study
+  values corrected to +1.0 logit and ×1.25. (#2)
+- **Calibration and tagging errors cancelled themselves out.** True and stored
+  difficulty, and true and assigned subscale, are now kept apart end to end.
+  The oracle answers against the truth, the engine works from the stored value.
+  (#2)
+- **2PL and 3PL materialised as 1PL.** `plan_items()` hardcoded
+  `discrimination = 1.0` and `guessing = 0.0`, and `item_registrar` fell back to
+  `raschbirnbaum` whenever no model was passed. Item parameters now follow the
+  declared model. (#3)
+- **Stratum 3 removed the variation of stratum 2.** `subscalevariation` was
+  `[0.0, 0.5]`, which made the strata alternatives rather than a progression;
+  it is now cumulative. `chaotic` became its own generator mode whose subscale
+  abilities hang off the global value, so the hierarchy assumption is genuinely
+  stressed rather than merely noisier. (#4)
+- **GPCM was materialised as `grmgeneralized`.** The model now selects the
+  engine key, and the oracle picks its response family through the catalogue
+  rather than by looking for the substring "grm". (#5)
+- **Polytomous questions had a fixed four options.** With five categories the
+  fifth was unreachable and the item silently truncated; the option count now
+  follows the model. (#5)
+- **The management page was a dead end.** It now offers "New experiment" and
+  "Import settings" instead of pointing at the CLI. (#7)
+- **`$row + [...]` in `index.php`** left the status label unused, because the
+  `+` operator keeps the left operand; the overview showed the numeric status.
+
+### Changed
+- `test_provisioner::DEFAULT_STRATEGY` is deprecated and no longer consulted.
+- The run manifest records the effective CAT parameters, the target information
+  `I = 1/SE²`, the model with its engine key, the variant with its resolved
+  recipe, and which factors each derived seed depends on. (#1, #6)
+- Exports carry `twinid`, `stratum` and `severity`, and a new item dataset with
+  true beside stored parameters. (#2, #4, #6)
+- Severity and model are usable as sweep factors. (#4)
+
+### Database
+- New table `local_catquizlab_item`; `local_catquizlab_pool` gains `runid`,
+  `poolseed`, `mutationseed` and `itemcount` and is now used in the run
+  lifecycle; `local_catquizlab_person` gains `twinid`, `twinindex` and
+  `severity`; `local_catquizlab_run` gains `masterseed`. Savepoint 2026083100.
+
+### Verification
+PHPUnit 249 tests / 1774 assertions, Behat 14 scenarios / 79 steps (with the
+accessibility checks enabled), phpcs clean, PHPDoc without findings.
+
+---
+
 ## [0.1.50] — 2026-08-11
 
 Session close: documentation finalised and a testing guide.

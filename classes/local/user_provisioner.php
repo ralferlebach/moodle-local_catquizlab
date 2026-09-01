@@ -105,7 +105,127 @@ class user_provisioner {
             'email'     => $username . '@' . $domain,
         ];
 
-        return user_create_user($user, false, false);
+        $userid = user_create_user($user, false, false);
+
+        // A simulated person has to be able to log in, or the worker cannot
+        // play its attempt. Without a password the account was unusable, and
+        // nothing noticed because no worker had ever tried. The password is
+        // derived from the user id so the worker can compute it, and the
+        // accounts exist only inside an experiment installation.
+        self::set_password($userid);
+
+        return $userid;
+    }
+
+    /**
+     * Write the starting person parameters of a run's simulated users.
+     *
+     * The engine expects a person to have an ability on every scale of the test
+     * before the first question is chosen. In normal use that comes from the
+     * activity's own entry path — a peer mean, or the configured fallback. A
+     * simulated person is dropped straight into the attempt by the worker, so
+     * nothing has established one, and the engine then works with an empty
+     * ability set: at the first question it asks for the ability range of
+     * `array_key_first($catscales)` on an empty array, the page raises, and no
+     * question is ever presented.
+     *
+     * Seeding 0.0 is the same value the engine's own fallback would use and
+     * makes the starting point explicit rather than incidental: every simulated
+     * person begins at the scale midpoint, which is what an experiment wants —
+     * a person's estimate should be shaped by their answers, not by who
+     * happened to sit the test before them.
+     *
+     * @param int $runid The run whose persons are seeded.
+     * @param float $ability The starting ability on every scale.
+     * @return int How many parameter rows were written.
+     */
+    public static function seed_person_parameters(int $runid, float $ability = 0.0): int {
+        global $DB;
+
+        if (!environment::engine_available()) {
+            return 0;
+        }
+
+        $scales = $DB->get_records('local_catquizlab_scalemap', ['runid' => $runid]);
+        $persons = $DB->get_records_select(
+            'local_catquizlab_person',
+            'runid = :runid AND moodleuserid IS NOT NULL',
+            ['runid' => $runid]
+        );
+        if ($scales === [] || $persons === []) {
+            return 0;
+        }
+
+        // The CAT context of the run, taken from the scales it created.
+        $first = reset($scales);
+        $contextid = \local_catquiz\catscale::get_context_id((int) $first->catscaleid);
+
+        $now = time();
+        $written = 0;
+        foreach ($persons as $person) {
+            foreach ($scales as $scale) {
+                $existing = $DB->get_record('local_catquiz_personparams', [
+                    'userid'     => (int) $person->moodleuserid,
+                    'catscaleid' => (int) $scale->catscaleid,
+                    'contextid'  => $contextid,
+                ]);
+                if ($existing) {
+                    // Never overwrite an ability the engine has since measured:
+                    // seeding is a starting point, not a reset.
+                    continue;
+                }
+                $DB->insert_record('local_catquiz_personparams', (object) [
+                    'userid'        => (int) $person->moodleuserid,
+                    'catscaleid'    => (int) $scale->catscaleid,
+                    'contextid'     => $contextid,
+                    'ability'       => $ability,
+                    'standarderror' => null,
+                    'status'        => 0,
+                    'timecreated'   => $now,
+                    'timemodified'  => $now,
+                ]);
+                $written++;
+            }
+        }
+
+        return $written;
+    }
+
+    /**
+     * Give a simulated user the password the worker will use.
+     *
+     * @param int $userid The new user's id.
+     * @param string|null $suffix The login suffix, or null to read the setting.
+     * @return void
+     */
+    protected static function set_password(int $userid, ?string $suffix = null): void {
+        global $DB, $CFG;
+        require_once($CFG->dirroot . '/user/lib.php');
+
+        // The function get_config() returns false for an unset setting, so the
+        // fallback has to come before the cast rather than around a false.
+        if ($suffix === null) {
+            $configured = get_config('local_catquizlab', 'worker_login_suffix');
+            $suffix = is_string($configured) ? $configured : '';
+        }
+        $user = $DB->get_record('user', ['id' => $userid], '*', MUST_EXIST);
+
+        update_internal_user_password($user, self::password_for($userid, $suffix));
+    }
+
+    /**
+     * The password of a simulated user.
+     *
+     * Mirrors the worker's own convention, which is why it is a function of the
+     * user id rather than a random string: the worker has the id from the job
+     * and can derive the rest.
+     *
+     * @param int $userid The Moodle user id.
+     * @param string $suffix The configured login suffix.
+     * @return string
+     */
+    public static function password_for(int $userid, string $suffix = ''): string {
+        return $userid . $suffix;
     }
 
     /**

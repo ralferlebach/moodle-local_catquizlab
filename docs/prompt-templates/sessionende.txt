@@ -1,0 +1,12 @@
+# Session end — local_catquizlab
+
+Before finishing:
+1. Create a new `docs/sessions/session-NNN.md`; never overwrite history.
+2. Record changed files, capabilities/entry points, API contracts used, tests and unresolved risks.
+3. Verify no direct domain-table writes were introduced.
+4. Verify every mutation is POST + sesskey + command-specific capability.
+5. Run `make check` and relevant PHPUnit/Behat tests; record skips honestly.
+6. Update blueprint/backlog when a public auth/enrol API contract changed.
+7. Build and inspect the work ZIP.
+
+Access-key diagnostics may show only required/effective scope (none|system|course). Never request, log, render or export cleartext/hash values.

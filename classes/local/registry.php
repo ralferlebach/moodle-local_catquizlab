@@ -50,6 +50,74 @@ class registry {
     /** @var int Status: failed. */
     public const STATUS_FAILED = 40;
 
+    /** @var int Status: provisioned and ready, not yet queued for a worker. */
+    public const STATUS_READY = 15;
+
+    /** @var int Status: attempts are done, results are being aggregated. */
+    public const STATUS_AGGREGATING = 25;
+
+    /**
+     * Status: stopped by a person.
+     *
+     * Kept apart from failed on purpose. A cancelled run tells you a decision
+     * was made; a failed one tells you something is wrong. Reading a list where
+     * both look the same means investigating cancellations and overlooking
+     * defects.
+     *
+     * @var int
+     */
+    public const STATUS_CANCELLED = 50;
+
+    /**
+     * The statuses a run can be in, in lifecycle order.
+     *
+     * @return int[]
+     */
+    public static function run_statuses(): array {
+        return [
+            self::STATUS_DRAFT,
+            self::STATUS_SCHEDULED,
+            self::STATUS_READY,
+            self::STATUS_RUNNING,
+            self::STATUS_AGGREGATING,
+            self::STATUS_FINISHED,
+            self::STATUS_FAILED,
+            self::STATUS_CANCELLED,
+        ];
+    }
+
+    /**
+     * Whether a run in this status has finished moving.
+     *
+     * @param int $status The status.
+     * @return bool
+     */
+    public static function is_terminal(int $status): bool {
+        return in_array($status, [self::STATUS_FINISHED, self::STATUS_FAILED, self::STATUS_CANCELLED], true);
+    }
+
+    /**
+     * The actions a run in a given status allows.
+     *
+     * Offering an action that cannot work is worse than not offering it: a
+     * button that does nothing looks like a defect in the suite rather than a
+     * property of the run.
+     *
+     * @param int $status The status.
+     * @return array{cancel: bool, reproduce: bool, results: bool}
+     */
+    public static function allowed_actions(int $status): array {
+        return [
+            'cancel'    => in_array(
+                $status,
+                [self::STATUS_SCHEDULED, self::STATUS_READY, self::STATUS_RUNNING, self::STATUS_AGGREGATING],
+                true
+            ),
+            'reproduce' => self::is_terminal($status),
+            'results'   => in_array($status, [self::STATUS_FINISHED, self::STATUS_AGGREGATING], true),
+        ];
+    }
+
     /**
      * Persist a sweep expansion as one experiment and its runs.
      *

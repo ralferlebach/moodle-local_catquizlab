@@ -46,7 +46,7 @@ class question_template {
      */
     public static function default_dichotomous(): array {
         return [
-            'name'         => 'CATLab {scalename} #{itemnumber}',
+            'name'         => '{itemname} — {scalename}',
             'questiontext' => 'Skala: {scalename} (#{scalenumber}) — Item {itemname} '
                 . '(#{itemnumber}, ID {itemid}). Parameter: Schwierigkeit b={difficulty}, '
                 . 'Trennschärfe a={discrimination}. Wählen Sie die korrekte Option.',
@@ -61,31 +61,46 @@ class question_template {
     }
 
     /**
-     * Default multi-choice (polytomous) template: 3 correct of 6, malus on wrong.
+     * Default ordered-category (polytomous) template.
      *
-     * The three correct options share full credit (1/3 each) and the three
-     * distractors carry an equal negative malus, matching Moodle's multi-answer
-     * grading.
-     *
+     * @param int $categories The number of response categories the model declares.
      * @return array
      */
-    public static function default_polytomous(): array {
+    public static function default_polytomous(int $categories = 4): array {
+        $categories = max(2, $categories);
+        $top = $categories - 1;
+
+        // One option per ordered response category, ascending by credit, so the
+        // category k the oracle picks is the k-th option. The number of
+        // categories follows the model, because a GPCM item with five
+        // categories cannot be answered on a four-option question — the fifth
+        // category would be unreachable and the item silently truncated.
+        $labels = [
+            0 => 'keine',
+            1 => 'teilweise',
+            2 => 'überwiegend',
+            3 => 'weitgehend',
+            4 => 'nahezu vollständig',
+        ];
+
+        $options = [];
+        for ($k = 0; $k <= $top; $k++) {
+            $label = $k === $top ? 'vollständig' : ($labels[$k] ?? ('Stufe ' . $k));
+            $options[] = [
+                'text'     => 'Stufe ' . $k . ' — ' . $label . ' ({scalename} #{itemnumber})',
+                'fraction' => $top > 0 ? round($k / $top, 7) : 0.0,
+            ];
+        }
+
         return [
-            'name'         => 'CATLab {scalename} #{itemnumber} (poly)',
+            'name'         => '{itemname} — {scalename} (poly)',
             'questiontext' => 'Skala: {scalename} (#{scalenumber}) — Item {itemname} '
                 . '(#{itemnumber}, ID {itemid}). Parameter: Schwierigkeit b={difficulty}, '
                 . 'Trennschärfe a={discrimination}. Wählen Sie die zutreffende Antwortstufe.',
-            // Single-select ordered response categories (a graded/partial-credit item):
-            // one option per category, ascending by credit, so the engine's chosen
-            // category k maps to the k-th option. Shuffling is disabled on save, so the
-            // definition order is the on-screen order.
+            // Shuffling is disabled on save, so the definition order is the
+            // on-screen order and category k stays the k-th option.
             'single'       => true,
-            'options'      => [
-                ['text' => 'Stufe 0 — keine ({scalename} #{itemnumber})', 'fraction' => 0.0],
-                ['text' => 'Stufe 1 — teilweise ({scalename} #{itemnumber})', 'fraction' => round(1.0 / 3.0, 7)],
-                ['text' => 'Stufe 2 — überwiegend ({scalename} #{itemnumber})', 'fraction' => round(2.0 / 3.0, 7)],
-                ['text' => 'Stufe 3 — vollständig ({scalename} #{itemnumber})', 'fraction' => 1.0],
-            ],
+            'options'      => $options,
         ];
     }
 
@@ -100,7 +115,17 @@ class question_template {
      */
     public static function render(array $item, ?array $template = null): array {
         if ($template === null) {
-            $template = !empty($item['polytomous']) ? self::default_polytomous() : self::default_dichotomous();
+            $polytomous = !empty($item['polytomous'])
+                || (isset($item['model']) && model_catalog::has((string) $item['model'])
+                    && model_catalog::is_polytomous((string) $item['model']));
+            // Categories come from the model when the item carries them, from
+            // the threshold count when it carries steps, and otherwise from the
+            // documented default of four.
+            $steps = (array) ($item['steps'] ?? []);
+            $categories = (int) ($item['categories'] ?? ($steps !== [] ? count($steps) + 1 : 4));
+            $template = $polytomous
+                ? self::default_polytomous($categories)
+                : self::default_dichotomous();
         }
 
         $answers = [];
@@ -116,7 +141,35 @@ class question_template {
             'questiontext' => self::substitute((string) ($template['questiontext'] ?? ''), $item),
             'single'       => (bool) ($template['single'] ?? true),
             'answers'      => $answers,
+            // The identifier the question carries into the question bank and
+            // through an XML export. Prefixed with the run, because several
+            // runs share one question category and an ID number has to be
+            // unique within it.
+            'idnumber'     => self::idnumber($item),
         ];
+    }
+
+    /**
+     * The ID number a rendered question carries.
+     *
+     * The lab's item name lives only in its own table otherwise, so a question
+     * exported to another site — or simply looked at in the question bank —
+     * could not be traced back to the item it represents.
+     *
+     * The run id is part of it because several runs share one question
+     * category and an ID number has to be unique within it.
+     *
+     * @param array $item The item spec.
+     * @return string Empty when the item has no name to identify it by.
+     */
+    public static function idnumber(array $item): string {
+        $itemname = trim((string) ($item['itemname'] ?? ''));
+        if ($itemname === '') {
+            return '';
+        }
+        $runid = (int) ($item['runid'] ?? 0);
+
+        return $runid > 0 ? 'r' . $runid . '-' . $itemname : $itemname;
     }
 
     /**

@@ -6,18 +6,22 @@
 #
 # Matrix: Moodle 4.5 · 5.0 · 5.2  ×  PHP 8.1–8.3  ×  mariadb · pgsql
 #
-# The stub declares NO hard plugin dependencies: local_catquiz and
-# mod_adaptivequiz are detected at runtime (classes/local/environment.php),
-# so nothing extra is installed here. Once the attempt runner lands and the
-# dependencies become hard (see version.php), add
-#   --add-plugin Wunderbyte-GmbH/moodle-local_catquiz
-#   --add-plugin Wunderbyte-GmbH/moodle-mod_adaptivequiz
-# (plus local_wunderbyte_table) to every `moodle-plugin-ci install` call.
+# The plugin declares NO hard plugin dependencies: local_catquiz and
+# mod_adaptivequiz are detected at runtime (classes/local/environment.php), so
+# the plugin installs stand-alone. The PHPUnit and Behat jobs nevertheless
+# install the engine (see .github/scripts/fetch-engine.sh), because the guard
+# paths are not the interesting ones: a run against a real local_catquiz found
+# five defects that no amount of testing without it could show — a correct
+# engine reported as too old, a missing question library, a stale retrieval
+# cache, a NOT NULL column of the host activity, and provisioning that was not
+# idempotent. The lint jobs stay engine-free, so a broken engine checkout can
+# never make the coding standard look red.
 #
-# Removed vs. the mod_vimipad ancestor: the bundle-reproducibility job, all
-# Grunt/AMD steps and the Mustache lint (this plugin ships no JS bundle, no
-# AMD modules and no templates yet), and the jMeter/k6 load workflow. The
-# Playwright workflow was replaced by worker-check (Puppeteer worker stub).
+# The plugin ships Mustache templates (templates/) but no JS bundle and no AMD
+# modules, so the Mustache lint runs and the bundle-reproducibility job does
+# not. The jMeter/k6 load workflow is not used. The Puppeteer worker has its
+# own workflow (worker-e2e.yml), which separates a network-free toolchain job
+# from a real end-to-end run.
 ##############################################################################
 
 name: Moodle Plugin CI
@@ -37,9 +41,10 @@ env:
 
 jobs:
 
-  # ── 0. Worker stub ──────────────────────────────────────────────────────
-  # The Puppeteer worker is plain Node (no AMD, no bundle). Until real E2E
-  # runs exist (backlog E3), CI only guards its syntax and manifest.
+  # ── 0. Worker ───────────────────────────────────────────────────────────
+  # A fast syntax and manifest guard on every push. The worker's own unit
+  # tests, its offline self test and the real end-to-end run live in
+  # worker-e2e.yml, so this job stays cheap enough to run in every matrix.
   worker-check:
     name: "Worker syntax check"
     runs-on: ubuntu-24.04
@@ -241,10 +246,16 @@ jobs:
           echo "$GITHUB_WORKSPACE/ci/bin"        >> "$GITHUB_PATH"
           echo "$GITHUB_WORKSPACE/ci/vendor/bin" >> "$GITHUB_PATH"
 
-      - name: Install Moodle and plugin
+      - name: Fetch the CAT engine
+        run: bash plugin/.github/scripts/fetch-engine.sh
+        env:
+          ENGINE_DIR: ${{ github.workspace }}/engine
+
+      - name: Install Moodle, engine and plugin
         run: |
           moodle-plugin-ci install \
             --plugin ./plugin \
+            --extra-plugins "$GITHUB_WORKSPACE/engine" \
             --db-host 127.0.0.1 \
             --db-port ${{ matrix.db.port }} \
             --db-user ${{ matrix.db.user }} \
@@ -309,10 +320,16 @@ jobs:
           echo "$GITHUB_WORKSPACE/ci/bin"        >> "$GITHUB_PATH"
           echo "$GITHUB_WORKSPACE/ci/vendor/bin" >> "$GITHUB_PATH"
 
-      - name: Install Moodle and plugin
+      - name: Fetch the CAT engine
+        run: bash plugin/.github/scripts/fetch-engine.sh
+        env:
+          ENGINE_DIR: ${{ github.workspace }}/engine
+
+      - name: Install Moodle, engine and plugin
         run: |
           moodle-plugin-ci install \
             --plugin ./plugin \
+            --extra-plugins "$GITHUB_WORKSPACE/engine" \
             --branch ${{ matrix.moodle }} \
             --db-type mariadb \
             --db-host 127.0.0.1 \

@@ -49,8 +49,53 @@ class sweep {
     protected const FACTOR_PATHS = [
         'variant'  => ['pool', 'variant'],
         'stratum'  => ['persons', 'stratum'],
+        // Severity is a factor in its own right: the design compares the same
+        // stratum at mild, medium and strong, which only works if a sweep can
+        // vary it without varying anything else.
+        'severity' => ['persons', 'severity'],
         'strategy' => ['strategy'],
+        'model'    => ['model'],
     ];
+
+    /**
+     * Factors whose level is a block rather than a single value.
+     *
+     * A budget is a pair: "10 to 15 items" is one experimental condition, and
+     * varying the minimum and the maximum independently would produce cells
+     * like 40/15 that describe nothing. The same holds for the SE window. Each
+     * level is therefore written as a small array and merged into the
+     * definition whole.
+     *
+     * @var array<string, string[]> Factor name => path to the block it fills.
+     */
+    protected const COMPOSITE_FACTORS = [
+        'globalbudget'   => ['budgets', 'global'],
+        'subscalebudget' => ['budgets', 'subscale'],
+        'se'             => ['budgets', 'se'],
+        // The recipe of the pool variant: how strong the disturbance is. The
+        // variant itself stays a separate factor, because a study varies the
+        // kind of disturbance and its strength independently.
+        'recipe'         => ['pool', 'recipe'],
+    ];
+
+    /**
+     * Every factor name a sweep understands.
+     *
+     * @return string[]
+     */
+    public static function factor_names(): array {
+        return array_merge(array_keys(self::FACTOR_PATHS), array_keys(self::COMPOSITE_FACTORS));
+    }
+
+    /**
+     * Whether a factor's levels are blocks rather than single values.
+     *
+     * @param string $name The factor name.
+     * @return bool
+     */
+    public static function is_composite(string $name): bool {
+        return isset(self::COMPOSITE_FACTORS[$name]);
+    }
 
     /**
      * Expand a sweep specification.
@@ -69,7 +114,7 @@ class sweep {
     public static function expand(array $spec): array {
         $factors = $spec['factors'] ?? [];
         foreach ($factors as $name => $levels) {
-            if (!isset(self::FACTOR_PATHS[$name])) {
+            if (!isset(self::FACTOR_PATHS[$name]) && !isset(self::COMPOSITE_FACTORS[$name])) {
                 throw new \invalid_parameter_exception(
                     get_string('sweep:unknownfactor', 'local_catquizlab', $name)
                 );
@@ -78,6 +123,15 @@ class sweep {
                 throw new \invalid_parameter_exception(
                     get_string('sweep:emptyfactor', 'local_catquizlab', $name)
                 );
+            }
+            if (isset(self::COMPOSITE_FACTORS[$name])) {
+                foreach ($levels as $level) {
+                    if (!is_array($level)) {
+                        throw new \invalid_parameter_exception(
+                            get_string('sweep:compositelevel', 'local_catquizlab', $name)
+                        );
+                    }
+                }
             }
         }
 
@@ -214,6 +268,19 @@ class sweep {
      * @return string
      */
     protected static function cellkey(array $combo): string {
+        foreach ($combo as $name => $level) {
+            if (is_array($level)) {
+                // A block renders as its values in key order, so two cells that
+                // differ only in a budget still have distinguishable keys.
+                ksort($level);
+                $parts = [];
+                foreach ($level as $key => $value) {
+                    $parts[] = $key . '-' . (is_scalar($value) ? (string) $value : json_encode($value));
+                }
+                $combo[$name] = implode('_', $parts);
+            }
+        }
+
         $parts = [];
         foreach ($combo as $name => $level) {
             $parts[] = $name . '=' . $level;
@@ -231,7 +298,31 @@ class sweep {
      */
     protected static function apply_factors(array $base, array $combo): array {
         $definition = $base;
+
         foreach ($combo as $name => $level) {
+            if (isset(self::COMPOSITE_FACTORS[$name])) {
+                [$outer, $inner] = self::COMPOSITE_FACTORS[$name];
+                $definition[$outer] = ($definition[$outer] ?? []);
+                // Replaced, not merged: a budget level is a complete condition,
+                // and keeping leftovers from the base would silently mix two.
+                $definition[$outer][$inner] = (array) $level;
+
+                // The base was normalised, so it still carries the schema-1
+                // mirrors of the budgets. Left in place they would contradict
+                // the level just set, and the validator would reject the cell
+                // for a disagreement the sweep itself created. Dropping them
+                // lets normalisation rewrite them from the new value.
+                if ($outer === 'budgets') {
+                    unset(
+                        $definition['budgets']['minitems'],
+                        $definition['budgets']['maxitems'],
+                        $definition['budgets']['setarget'],
+                        $definition['budgets']['fromlegacy']
+                    );
+                }
+                continue;
+            }
+
             $path = self::FACTOR_PATHS[$name];
             if (count($path) === 1) {
                 $definition[$path[0]] = $level;
@@ -241,6 +332,20 @@ class sweep {
                 $definition[$outer][$inner] = $level;
             }
         }
+
+        // A recipe belongs to its variant. Sweeping both means some cells pair
+        // a recipe with a variant that does not accept it — an ideal pool takes
+        // no shift — so the recipe is dropped where it does not apply rather
+        // than making the cell invalid.
+        if (isset($combo['recipe'])) {
+            $variant = (string) ($definition['pool']['variant'] ?? 'ideal');
+            $accepted = pool_mutator::recipe_defaults($variant);
+            $definition['pool']['recipe'] = array_intersect_key(
+                (array) $definition['pool']['recipe'],
+                $accepted
+            );
+        }
+
         return $definition;
     }
 

@@ -46,34 +46,41 @@ tested is described in [`docs/dev/testen.md`](docs/dev/testen.md).
 
 ## Status
 
-**0.1.1 — stub** (`MATURITY_ALPHA`). Round **E0 (plugin foundation) is
-complete**: plugin structure, settings page (master switch, node/hub
-instance role, engine environment status), the four base plus worker/hub
-capabilities, the **full lab-store schema** (eight tables) with an upgrade
-path, the **five web services** (response oracle, job queue claim/complete,
-hub submit/fetch) grouped into two disabled restricted-user services, the
-**run-manifest builder**, a test data generator and PHPUnit/Behat coverage
-of exactly that scope, the Puppeteer worker stub under `worker/`, and the CI
-pipeline. **It still does nothing at runtime beyond installing cleanly and
-exposing the (disabled) services** — provisioning, orchestration, oracle
-logic, metrics and export follow per the backlog (E1–E7).
+**0.2.0** (`MATURITY_ALPHA`). The whole chain — definition, sweep expansion,
+provisioning, execution, evaluation and export — is implemented and covered by
+tests. Since 0.2.0 the **experiment definition is the sole source for what a
+run does**: strategy, item budgets, SE bounds, IRT model with its item
+parameters, and the pool variant with its recipe all come from the stored
+definition and are recorded in the run manifest. Nothing falls back on silent
+defaults.
+
+A **web interface** covers the workflow end to end: define an experiment,
+validate it, preview the sweep, expand it into runs, watch and filter them,
+compare cells, and exchange settings as JSON. The command line
+(`cli/sweep.php`) and the web interface use the same service layer, so an
+identical definition expands to identical cells either way.
+
+What remains instance-dependent is the first real run against an installed
+engine: the four engine-facing points (materialisation, test creation, attempt,
+trace collection) are so far exercised only with the engine absent.
 
 ## Requirements
 
 - Moodle **4.5+** (developed and CI-tested against 4.5, 5.0 and 5.2 on
   PHP 8.1–8.3 with MariaDB and PostgreSQL).
-- For actual experiment runs (not needed for the stub install):
+- For actual experiment runs (not needed to install the plugin):
   [`local_catquiz`](https://github.com/Wunderbyte-GmbH/moodle-local_catquiz)
   and the Wunderbyte fork of `mod_adaptivequiz` including the
   `adaptivequizcatmodel_catquiz` bridge, plus their own dependency
   `local_wunderbyte_table`.
-- For the worker (later milestones): Node.js 20+ on the worker host.
+- For the Puppeteer worker: Node.js 20+ on the worker host.
 
-The engine plugins are **deliberately not declared as hard dependencies**
-yet: the stub detects them at runtime (`classes/local/environment.php`) and
-shows the result on the settings page, so it installs stand-alone — notably
-in CI. This will be revisited once the attempt runner lands (see
-`version.php`).
+The engine plugins are **deliberately not declared as hard dependencies**:
+the suite detects them at runtime (`classes/local/environment.php`) and shows
+the result on the settings page, so it installs stand-alone — notably in CI,
+where the engine is absent and every engine-facing path is a guard path.
+Without the engine the plugin is installable and testable but cannot
+provision or play a run.
 
 ## Installation
 
@@ -104,6 +111,19 @@ Both open the same page (`local/catquizlab/index.php`). Plugin *settings*
 (master switch, instance role, environment status) stay under *Local plugins*
 as above.
 
+From there the workflow continues through four further pages:
+
+    index.php        experiment and run overview, "New experiment", JSON import
+    experiment.php   the editor: validation, sweep preview, sweep creation, export
+    import.php       JSON import with a preview before anything is stored
+    runs.php         run overview with filters; run detail with the manifest
+    compare.php      cells side by side, with a chart and a CSV export
+
+Four capabilities separate what a user may do: `:view` reads, `:edit` creates
+and changes definitions, `:execute` starts and cancels runs, `:export` takes
+data off the instance. Every state-changing action is a POST guarded by
+`sesskey` and the capability belonging to that specific action.
+
 ## Repository layout
 
     version.php                     component, version, dependencies
@@ -118,6 +138,15 @@ as above.
     classes/local/person_generator.php  seed-deterministic ground-truth profiles (E2.3)
     classes/local/pool_planner.php  ideal-pool item blueprint (E2.1)
     classes/local/pool_mutator.php  deterministic pool variants (E2.2)
+    classes/local/strategy_catalog.php   strategy key -> engine constant -> label
+    classes/local/model_catalog.php      model name -> engine catmodel key + parameters
+    classes/local/distribution.php       declarative item-parameter distributions
+    classes/local/seed_domains.php       one seed per random source (digital twins)
+    classes/local/experiment_service.php the layer CLI, web and API share
+    classes/local/experiment_io.php      JSON export/import with schema versioning
+    classes/local/run_registry.php       run listing, filtering and cell comparison
+    classes/form/experiment_form.php     the experiment editor form
+    classes/form/import_form.php         the JSON upload form
     classes/local/user_provisioner.php  create Moodle users from profiles (E2.3)
     classes/local/course_provisioner.php  course + enrolment per run (E2.4)
     classes/local/run_cleanup.php        reset/remove a run's residue (E2.5)
@@ -156,7 +185,7 @@ as above.
     classes/local/response_oracle.php    IRT answer model incl. GPCM/GRM (E3.4)
     cli/sweep.php                   CLI: expand a sweep spec, persist or list runs
     classes/external/*.php          five web-service functions (oracle, jobs, hub)
-    classes/privacy/provider.php    null provider (stub stores no personal data)
+    classes/privacy/provider.php    privacy provider for the lab store
     db/install.xml                  lab-store schema (eight tables)
     db/upgrade.php                  upgrade path for existing installs
     db/services.php                 worker and hub web services
@@ -179,9 +208,27 @@ as above.
     make worker-setup   # npm install for the Puppeteer worker
 
 CI (GitHub Actions) runs PHPCS, PHPDoc, structure validation, savepoints,
-PHPUnit and Behat across the Moodle/PHP/DB matrix, plus a syntax check of
-the worker. `worker-e2e.yml` is a manual placeholder until the attempt
-runner exists.
+PHPUnit and Behat across the Moodle/PHP/DB matrix, plus a syntax check of the
+worker.
+
+The PHPUnit and Behat jobs install the CAT engine as well
+(`.github/scripts/fetch-engine.sh` fetches `local_catquiz`,
+`mod_adaptivequiz` at `v-3.0`, the `adaptivequizcatmodel_catquiz` bridge and
+`local_wunderbyte_table`). The plugin still installs without them — the lint
+jobs run engine-free on purpose — but the guard paths are not the interesting
+ones: the first run against a real engine found five defects that testing
+without it could not have shown.
+
+`worker-e2e.yml` holds the worker's own pipeline and keeps two things apart
+that answer different questions. Its toolchain job needs no Moodle, no token
+and no network beyond the checkout: a syntax check, the unit tests over the
+worker's pure helpers, and an offline self test that also starts a browser.
+Its end-to-end job is opt-in and provisions PostgreSQL, Moodle, the CAT engine
+and its host activity, prepares a run with a queued attempt, issues a worker
+token, plays one attempt through the real `mod_adaptivequiz` interface and
+verifies the queue afterwards. The preparation lives in
+`cli/e2e_prepare.php`, so the end-to-end path uses the same provisioning an
+operator does.
 
 ## License
 

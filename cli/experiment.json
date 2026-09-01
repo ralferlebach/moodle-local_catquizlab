@@ -1,0 +1,75 @@
+{
+  "base": {
+    "name": "Baseline Rasch Classic",
+    "tier": "baseline",
+    "model": "raschbirnbaum",
+
+    "replications": 1,
+    "seed": 4711,
+
+    "pool": {
+      "scales": {
+        "categories": 10,
+        "subcategories": 10,
+        "itemspersubscale": 25
+      },
+      "questiontemplate": {
+        "type": "multichoice",
+        "blanks": {
+          "stem": "{category}/{subscale} item {index}"
+        }
+      },
+      "itemnaming": {
+        "pattern": "Q-{category}-{subscale}-{index:03d}"
+      }
+    },
+
+    "persons": {
+      "count": 50,
+      "naming": {
+        "pattern": "P-{stratum}-{index:04d}"
+      }
+    },
+
+    "budgets": {
+      "minitems": 10,
+      "maxitems": 50,
+      "setarget": 0.35
+    },
+
+    "timing": {
+      "spacingseconds": 0,
+      "faildelay": 60
+    },
+
+    "courses": [
+      {
+        "shortname": "catlab-baseline",
+        "reference": null
+      }
+    ],
+
+    "tests": [
+      {
+        "name": "Baseline CAT",
+        "reference": null
+      }
+    ]
+  },
+
+  "factors": {
+    "variant": [
+      "ideal"
+    ],
+    "stratum": [
+      "conforming"
+    ],
+    "strategy": [
+      "classic"
+    ]
+  },
+
+  "replications": 10,
+  "seed": 4711,
+  "estimatedsecondsperattempt": 120
+}

@@ -37,8 +37,87 @@ namespace local_catquizlab\local;
  * host activity and is a no-op without them (CI and stand-alone stay green).
  */
 class test_provisioner {
-    /** @var int The default CAT selection strategy (matches the engine demo). */
+    /**
+     * The fallback CAT selection strategy.
+     *
+     * @deprecated since 0.2.0. The strategy comes from the experiment
+     * definition via {@see strategy_catalog}; a numeric default here is what
+     * made every unconfigured run a weakest-subscale run. Kept so existing
+     * callers do not fatal, and no longer consulted by build_quizsettings().
+     * @var int
+     */
     public const DEFAULT_STRATEGY = 4;
+
+    /**
+     * Translate a normalised experiment definition into provisioning options.
+     *
+     * This is the join the pipeline was missing: strategy, item budgets and SE
+     * bounds are experimental factors, so they have to come from the definition
+     * rather than from defaults in this class. Anything the definition does not
+     * fix (the naming of the activity, the timing penalty) may still default.
+     *
+     * @param array $definition The normalised experiment definition.
+     * @param array $extra Options that are not part of the definition, e.g. 'name'.
+     * @return array Options for {@see self::build_quizsettings()} and {@see self::create()}.
+     */
+    public static function options_from_definition(array $definition, array $extra = []): array {
+        $budgets = (array) ($definition['budgets'] ?? []);
+        $global = (array) ($budgets['global'] ?? []);
+        $subscale = (array) ($budgets['subscale'] ?? []);
+        $se = (array) ($budgets['se'] ?? []);
+        $strategy = (string) ($definition['strategy'] ?? 'fastest');
+
+        return $extra + [
+            'strategykey'             => $strategy,
+            'teststrategy'            => strategy_catalog::engine_id($strategy),
+            'minquestions'            => (int) ($global['minitems'] ?? 10),
+            'maxquestions'            => (int) ($global['maxitems'] ?? 15),
+            'minquestionspersubscale' => (int) ($subscale['minitems'] ?? 3),
+            'maxquestionspersubscale' => (int) ($subscale['maxitems'] ?? 4),
+            'se_min'                  => (float) ($se['min'] ?? 0.35),
+            'se_max'                  => (float) ($se['max'] ?? 1.0),
+        ];
+    }
+
+    /**
+     * The effective CAT parameters of a run, for the manifest.
+     *
+     * The relation the article uses between a precision target and the
+     * information needed to reach it is I_target = 1 / SE_target^2. The engine
+     * applies it; the lab only has to hand over the right SE bounds and record
+     * what it handed over, which is what this returns.
+     *
+     * @param array $definition The normalised experiment definition.
+     * @return array The effective parameters, ready to be serialised.
+     */
+    public static function effective_parameters(array $definition): array {
+        $options = self::options_from_definition($definition);
+        $semin = (float) $options['se_min'];
+        $semax = (float) $options['se_max'];
+
+        return [
+            'strategy'         => [
+                'key'      => $options['strategykey'],
+                'engineid' => $options['teststrategy'],
+                'label'    => strategy_catalog::label($options['strategykey']),
+            ],
+            'budgets'          => [
+                'global'   => [
+                    'minitems' => $options['minquestions'],
+                    'maxitems' => $options['maxquestions'],
+                ],
+                'subscale' => [
+                    'minitems' => $options['minquestionspersubscale'],
+                    'maxitems' => $options['maxquestionspersubscale'],
+                ],
+            ],
+            'se'               => ['min' => $semin, 'max' => $semax],
+            'targetinformation' => [
+                'min' => $semax > 0 ? round(1.0 / ($semax * $semax), 5) : null,
+                'max' => $semin > 0 ? round(1.0 / ($semin * $semin), 5) : null,
+            ],
+        ];
+    }
 
     /**
      * Build the catquiz settings fields for the activity form.
@@ -54,7 +133,8 @@ class test_provisioner {
             'name'                                   => $name,
             'catmodel'                               => 'catquiz',
             'catquiz_catscales'                      => (string) $catscaleid,
-            'catquiz_selectteststrategy'             => (string) ($options['teststrategy'] ?? self::DEFAULT_STRATEGY),
+            'catquiz_selectteststrategy'             => (string) ($options['teststrategy']
+                ?? strategy_catalog::engine_id((string) ($options['strategykey'] ?? 'fastest'))),
             'catquiz_selectfirstquestion'            => (string) ($options['selectfirstquestion'] ?? '0'),
             'catquiz_includepilotquestions'          => '0',
             'catquiz_firstquestionreuseexistingdata' => '1',
@@ -83,7 +163,97 @@ class test_provisioner {
             $settings['catquiz_subscalecheckbox_' . (int) $subscaleid] = '1';
         }
 
+        // The feedback configuration. The engine reads it whenever it builds an
+        // attempt's feedback — including at the very first question — and a
+        // missing number of ranges leaves it without the structure it needs.
+        // A lab test shows no feedback to anyone, but the settings still have
+        // to describe a valid one.
+        $settings += self::feedback_settings(
+            array_merge([$catscaleid], array_map('intval', $subscaleids)),
+            $options
+        );
+
         return $settings;
+    }
+
+    /**
+     * The feedback ranges of every scale of a test.
+     *
+     * The engine divides each scale's ability range into a number of bands and
+     * expects, per scale and band, a lower and an upper limit. It reads them
+     * through `$quizsettings->numberoffeedbackoptionsselect` and the
+     * `feedback_scaleid_limit_*` keys; without them there is nothing to build a
+     * feedback structure from.
+     *
+     * The bands are spread evenly over the scale range, which is the neutral
+     * choice for an experiment: the lab does not interpret abilities, it
+     * measures them, and any other split would state a judgement the study has
+     * not made.
+     *
+     * @param int[] $scaleids Every scale of the test, root first.
+     * @param array $options Optional 'feedbackranges', 'scalemin', 'scalemax'.
+     * @return array The feedback settings.
+     */
+    protected static function feedback_settings(array $scaleids, array $options = []): array {
+        $ranges = max(2, (int) ($options['feedbackranges'] ?? 2));
+        $min = (float) ($options['scalemin'] ?? -3.0);
+        $max = (float) ($options['scalemax'] ?? 3.0);
+        $step = ($max - $min) / $ranges;
+
+        $settings = ['numberoffeedbackoptionsselect' => (string) $ranges];
+
+        foreach ($scaleids as $scaleid) {
+            $scaleid = (int) $scaleid;
+            // Report every scale: a lab run wants the per-scale abilities the
+            // engine only computes for scales it is asked to report on.
+            $settings['catquiz_scalereportcheckbox_' . $scaleid] = '1';
+
+            for ($i = 1; $i <= $ranges; $i++) {
+                $lower = $min + ($i - 1) * $step;
+                $upper = $min + $i * $step;
+
+                $settings['feedback_scaleid_limit_lower_' . $scaleid . '_' . $i] = (string) $lower;
+                $settings['feedback_scaleid_limit_upper_' . $scaleid . '_' . $i] = (string) $upper;
+                $settings['feedbackeditor_scaleid_' . $scaleid . '_' . $i] = [
+                    'text'   => '',
+                    'format' => FORMAT_HTML,
+                ];
+                $settings['feedbacklegend_scaleid_' . $scaleid . '_' . $i] = '';
+                // The colour key has to be one the engine knows. Its palette is
+                // chosen by the number of bands — for two bands the valid keys
+                // are 3 and 6, not 1 and 2 — and an unknown key made the
+                // feedback renderer fail on an undefined array index. That
+                // happened after a question had already been selected, so the
+                // attempt ended with a question in hand and no way to show it.
+                $settings['wb_colourpicker_' . $scaleid . '_' . $i] = self::colour_key($ranges, $i);
+                $settings['enrolment_message_checkbox_' . $scaleid . '_' . $i] = '0';
+            }
+        }
+
+        return $settings;
+    }
+
+    /**
+     * A colour key the engine's palette actually contains.
+     *
+     * The palette depends on the number of feedback bands, so the keys are not
+     * simply 1..n. Mirrors local_catquiz's own selection.
+     *
+     * @param int $ranges How many bands the test defines.
+     * @param int $index The band, counting from one.
+     * @return string
+     */
+    protected static function colour_key(int $ranges, int $index): string {
+        $palettes = [
+            1 => ['3'],
+            2 => ['3', '6'],
+            3 => ['3', '5', '6'],
+            4 => ['3', '4', '5', '6'],
+            5 => ['2', '3', '4', '5', '6'],
+        ];
+        $palette = $palettes[$ranges] ?? $palettes[2];
+
+        return $palette[$index - 1] ?? end($palette);
     }
 
     /**
@@ -150,12 +320,21 @@ class test_provisioner {
             'modulename'      => 'adaptivequiz',
             'module'          => $moduleid,
             'course'          => $course->id,
-            'section'         => 0,
+            // The experiment's own section, not section 0: every run activity
+            // of an experiment belongs together, and a shared course with
+            // everything in section 0 is unreadable after two sweeps.
+            'section'         => (int) ($options['section'] ?? 0),
             'visible'         => 1,
             'cmidnumber'      => '',
             'name'            => $name,
             'intro'           => $options['intro'] ?? '',
             'introformat'     => FORMAT_HTML,
+            // The adaptivequiz module declares these NOT NULL without a default, and
+            // add_moduleinfo() passes the module info straight to the database.
+            // Leaving them out failed the insert on the first real run; without
+            // the host activity installed nothing had ever exercised this.
+            'attemptfeedback'       => '',
+            'attemptfeedbackformat' => FORMAT_HTML,
             'attempts'        => 0,
             'password'        => '',
             'browsersecurity' => 0,

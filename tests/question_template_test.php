@@ -105,4 +105,44 @@ final class question_template_test extends \advanced_testcase {
         $this->assertSame('no Algebra', $q['answers'][1]['text']);
         $this->assertEqualsWithDelta(-0.5, $q['answers'][1]['fraction'], 1e-9);
     }
+
+    /**
+     * A rendered question carries the item name into the question bank.
+     *
+     * @return void
+     */
+    public function test_rendered_question_carries_the_item_name(): void {
+        $this->resetAfterTest();
+
+        $rendered = question_template::render([
+            'itemname'   => 'Q-1-1-001',
+            'scalename'  => 'CATLab / K1.1',
+            'itemnumber' => 1,
+            'runid'      => 7,
+        ]);
+
+        // Without this the item name lives only in the lab's table: a question
+        // exported elsewhere, or looked at in the question bank, could not be
+        // traced back to the item it represents.
+        $this->assertStringContainsString('Q-1-1-001', $rendered['name']);
+        $this->assertSame('r7-Q-1-1-001', $rendered['idnumber']);
+    }
+
+    /**
+     * The ID number is unique per run, since runs share a question category.
+     *
+     * @return void
+     */
+    public function test_idnumber_is_scoped_to_the_run(): void {
+        $this->resetAfterTest();
+
+        $first = question_template::idnumber(['itemname' => 'Q-1-1-001', 'runid' => 7]);
+        $second = question_template::idnumber(['itemname' => 'Q-1-1-001', 'runid' => 8]);
+
+        $this->assertNotSame($first, $second);
+
+        // An item without a name has no identifier to offer, and an empty ID
+        // number is better than a made-up one.
+        $this->assertSame('', question_template::idnumber(['itemname' => '']));
+    }
 }
