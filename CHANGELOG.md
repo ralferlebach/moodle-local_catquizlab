@@ -6,6 +6,22 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.2.23] — 2026-09-01
+
+### Added
+- **`cli/export_pool.php`** exports a run's pool for inspection elsewhere:
+  the questions as importable Moodle XML, the item parameters as CSV with the
+  lab's ground truth beside the values the engine actually holds, and the scale
+  tree with the item count per scale. The three belong together — questions
+  without parameters are unusable for CAT, parameters without questions
+  describe items that do not exist, and both without the tree carry scale ids
+  that mean nothing on another site.
+
+  The CSV includes `is_known_parameter`, which is the distinction that decides
+  whether the engine learns from an item at all.
+
+---
+
 ## [0.2.22] — 2026-09-01
 
 Every lab item counted as a pilot question.
