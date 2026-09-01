@@ -119,7 +119,9 @@ class attempt_collector {
             $engine['stopreason']
         );
         $debug = $engine['debug'] ?? [];
-        $trace['scaleabilities'] = $debug['scaleabilities'] ?? [];
+        // The debug_info blob comes first, since it carries the whole path; the
+        // attempt row is the fallback that exists on every site.
+        $trace['scaleabilities'] = $debug['scaleabilities'] ?: ($engine['finalabilities'] ?? []);
         $trace['questionsperscale'] = $debug['questionsperscale'] ?? [];
         $trace['abilitypath'] = $debug['abilitypath'] ?? [];
         $trace['steps'] = $debug['steps'] ?? 0;
@@ -203,6 +205,11 @@ class attempt_collector {
             'stopreason' => (string) ($aq->attemptstopcriteria ?? ''),
             'debug'      => self::parse_debug_info((string) ($catquiz->debug_info ?? '')),
             'scalestandarderrors' => self::read_scale_standarderrors($catquiz),
+            // The engine records the final per-scale abilities on its own
+            // attempt row. debug_info holds them too, but only when the site
+            // has debug information switched on, so a plain run collected
+            // nothing and every local diagnostic was left without data.
+            'finalabilities' => self::read_final_abilities($catquiz),
         ];
     }
 
@@ -272,6 +279,24 @@ class attempt_collector {
     }
 
     /**
+     * The final per-scale abilities the engine recorded for an attempt.
+     *
+     * @param \stdClass|false $catquiz The engine attempt row.
+     * @return array<int, float> Ability keyed by engine scale id.
+     */
+    protected static function read_final_abilities($catquiz): array {
+        if (!$catquiz || empty($catquiz->json)) {
+            return [];
+        }
+        $decoded = json_decode((string) $catquiz->json, true);
+        if (!is_array($decoded)) {
+            return [];
+        }
+
+        return self::normalise_abilities($decoded['personabilities'] ?? []);
+    }
+
+    /**
      * Read the per-scale standard errors of a finished attempt.
      *
      * local_catquiz_personparams carries one row per scale with the ability and
@@ -293,12 +318,25 @@ class attempt_collector {
             return [];
         }
 
+        // Keyed by attempt where the engine records one. It does not always:
+        // a completed attempt left its person parameters with a null attemptid,
+        // so asking by attempt alone found nothing at all. The user and context
+        // of the attempt identify the same rows.
         $rows = $DB->get_records(
             'local_catquiz_personparams',
             ['attemptid' => (int) $catquiz->attemptid],
             '',
             'id, catscaleid, standarderror'
         );
+
+        if (!$rows && !empty($catquiz->userid) && !empty($catquiz->contextid)) {
+            $rows = $DB->get_records(
+                'local_catquiz_personparams',
+                ['userid' => (int) $catquiz->userid, 'contextid' => (int) $catquiz->contextid],
+                '',
+                'id, catscaleid, standarderror'
+            );
+        }
 
         $out = [];
         foreach ($rows as $row) {

@@ -6,6 +6,41 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.3.1] — 2026-09-01
+
+**The full DPF evaluation runs against real data.** A person with subscale
+deviations was measured, and the local diagnostics have something to work with:
+
+    twin r001-t00001 (subscalevariation): true -0.4795  est -1.9777
+      K1.1: true delta +0.1833   estimated +0.7677
+      K1.2: true delta -0.5800   estimated -0.3823
+    local recovery: n=4, bias +0.976, RMSE 1.178, r 0.369
+    ranking: Spearman 1.0, top-1 agreement 1.0
+
+### Fixed
+- **The per-scale abilities never reached the trace.** They were read from
+  `debug_info`, which a site only writes with debug information switched on, so
+  a plain run collected nothing and every local diagnostic was left without
+  data. The engine also records them on its own attempt row, and that is the
+  fallback now — `scaleabilities` went from 0 to 4 per attempt.
+- **Per-scale standard errors were looked up by attempt id only.** A completed
+  attempt left its person parameters with a null attempt id, so the lookup
+  found nothing at all. The user and context of the attempt identify the same
+  rows.
+- **"An error occured" counted as the stop rule succeeding.** The host activity
+  reports it whenever the engine returns no question — including when every
+  subscale has simply reached its own maximum, which is what ends a healthy run
+  here. Counting it as a success would have inflated the stop-rule rate with
+  runs that ran out of room.
+
+### Note
+A test ends after 16 items because `maxquestionspersubscale` is 8 and there are
+two subscales. That is the configuration working, not a defect — but the
+engine's stop reason does not say so, which is why the figure is now reported
+as an unsuccessful stop rather than a successful one.
+
+---
+
 ## [0.3.0] — 2026-09-01
 
 **A simulated person completed an adaptive test.** Sixteen items, and the
