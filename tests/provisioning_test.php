@@ -587,6 +587,45 @@ final class provisioning_test extends \advanced_testcase {
     }
 
     /**
+     * The quiz settings describe a complete feedback configuration.
+     *
+     * @return void
+     */
+    public function test_quiz_settings_carry_the_feedback_ranges(): void {
+        $this->resetAfterTest();
+
+        $method = new \ReflectionMethod(
+            \local_catquizlab\local\test_provisioner::class,
+            'feedback_settings'
+        );
+        $method->setAccessible(true);
+        $settings = $method->invoke(null, [10, 11], []);
+
+        // The engine reads the number of ranges and the per-scale limits
+        // whenever it builds an attempt's feedback — including at the first
+        // question. Without them the attempt cannot start at all, which is not
+        // obvious from anything the word "feedback" suggests.
+        $this->assertSame('2', $settings['numberoffeedbackoptionsselect']);
+
+        foreach ([10, 11] as $scaleid) {
+            $this->assertSame('1', $settings['catquiz_scalereportcheckbox_' . $scaleid]);
+            for ($i = 1; $i <= 2; $i++) {
+                $this->assertArrayHasKey('feedback_scaleid_limit_lower_' . $scaleid . '_' . $i, $settings);
+                $this->assertArrayHasKey('feedback_scaleid_limit_upper_' . $scaleid . '_' . $i, $settings);
+            }
+        }
+
+        // The bands cover the scale range without a gap: the upper limit of one
+        // is the lower limit of the next.
+        $this->assertSame('-3', $settings['feedback_scaleid_limit_lower_10_1']);
+        $this->assertSame(
+            $settings['feedback_scaleid_limit_upper_10_1'],
+            $settings['feedback_scaleid_limit_lower_10_2']
+        );
+        $this->assertSame('3', $settings['feedback_scaleid_limit_upper_10_2']);
+    }
+
+    /**
      * The materialiser refuses an empty plan with a named reason.
      *
      * @return void

@@ -6,6 +6,60 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## Untersuchungsstand (Stand 0.2.20)
+
+Beobachtungen aus dem Lauf gegen die reale Engine, festgehalten für die
+Fortsetzung:
+
+| Strategie | Verhalten |
+|---|---|
+| `classic` (engine 7) | Attempt startet, Frage 1 erscheint, Antwort wird angenommen. Danach Ende mit *„Test result can not be calculated because minimum number of questions was not reached"*, `skip_reason: lastquestionnull`. |
+| `fastest` (engine 1) | Attempt startet nicht; die Seite bricht im Feedback-Pfad ab. |
+
+Gemeinsame Rahmenbedingungen beider Läufe: 24 Items, alle über den
+Engine-Abrufpfad sichtbar, Itemparameter mit Status `CALCULATED`,
+Personenparameter auf allen Skalen gesetzt, `minimumquestions = 10`,
+`maxquestionsscalegroup = 3/4`, `standarderrorgroup = 0.35/1.0`, Feedback mit
+zwei Bändern je Skala.
+
+Auffällig: Die Wurzelskala hat genau ein Kind (`164 → 165`), die eigentlichen
+Subskalen hängen eine Ebene tiefer. `min_attempts_per_scale = 3` und
+`max_attempts_per_scale = 4` beziehen sich möglicherweise auf eine andere
+Ebene, als der Pool sie anbietet.
+
+---
+
+## [0.2.20] — 2026-09-01
+
+The feedback configuration, which the attempt cannot start without.
+
+### Fixed
+- **The quiz settings described no feedback ranges.** The engine reads
+  `numberoffeedbackoptionsselect` and the per-scale
+  `feedback_scaleid_limit_lower/upper_<scaleid>_<n>` keys whenever it builds an
+  attempt's feedback — including at the very first question — so without them
+  the attempt could not start at all. Nothing about the word "feedback"
+  suggests that a test which shows none still needs the settings, which is why
+  this was missed for so long. Each scale now gets two evenly spread bands over
+  the ability range, plus `catquiz_scalereportcheckbox_<scaleid>`, so the
+  engine computes and reports a per-scale ability at all.
+
+  The bands are spread evenly on purpose: the lab measures abilities rather
+  than interpreting them, and any other split would state a judgement the study
+  has not made.
+
+### Verification
+Attempts now start against the real engine: both queued attempts of a run were
+played, engine attempts 12 and 13 were recorded and linked, and traces were
+collected. PHPUnit 402 tests, Behat 27 scenarios, phpcs and PHPDoc clean.
+
+### Not yet
+Each attempt still ends after its first answered question with the engine's
+"An error occured" and no ability path. That is the next step, and it is one
+question further than the last release reached.
+
+---
+
 ## [0.2.19] — 2026-09-01
 
 The real error message, and what was hiding it.

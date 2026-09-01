@@ -163,6 +163,67 @@ class test_provisioner {
             $settings['catquiz_subscalecheckbox_' . (int) $subscaleid] = '1';
         }
 
+        // The feedback configuration. The engine reads it whenever it builds an
+        // attempt's feedback — including at the very first question — and a
+        // missing number of ranges leaves it without the structure it needs.
+        // A lab test shows no feedback to anyone, but the settings still have
+        // to describe a valid one.
+        $settings += self::feedback_settings(
+            array_merge([$catscaleid], array_map('intval', $subscaleids)),
+            $options
+        );
+
+        return $settings;
+    }
+
+    /**
+     * The feedback ranges of every scale of a test.
+     *
+     * The engine divides each scale's ability range into a number of bands and
+     * expects, per scale and band, a lower and an upper limit. It reads them
+     * through `$quizsettings->numberoffeedbackoptionsselect` and the
+     * `feedback_scaleid_limit_*` keys; without them there is nothing to build a
+     * feedback structure from.
+     *
+     * The bands are spread evenly over the scale range, which is the neutral
+     * choice for an experiment: the lab does not interpret abilities, it
+     * measures them, and any other split would state a judgement the study has
+     * not made.
+     *
+     * @param int[] $scaleids Every scale of the test, root first.
+     * @param array $options Optional 'feedbackranges', 'scalemin', 'scalemax'.
+     * @return array The feedback settings.
+     */
+    protected static function feedback_settings(array $scaleids, array $options = []): array {
+        $ranges = max(2, (int) ($options['feedbackranges'] ?? 2));
+        $min = (float) ($options['scalemin'] ?? -3.0);
+        $max = (float) ($options['scalemax'] ?? 3.0);
+        $step = ($max - $min) / $ranges;
+
+        $settings = ['numberoffeedbackoptionsselect' => (string) $ranges];
+
+        foreach ($scaleids as $scaleid) {
+            $scaleid = (int) $scaleid;
+            // Report every scale: a lab run wants the per-scale abilities the
+            // engine only computes for scales it is asked to report on.
+            $settings['catquiz_scalereportcheckbox_' . $scaleid] = '1';
+
+            for ($i = 1; $i <= $ranges; $i++) {
+                $lower = $min + ($i - 1) * $step;
+                $upper = $min + $i * $step;
+
+                $settings['feedback_scaleid_limit_lower_' . $scaleid . '_' . $i] = (string) $lower;
+                $settings['feedback_scaleid_limit_upper_' . $scaleid . '_' . $i] = (string) $upper;
+                $settings['feedbackeditor_scaleid_' . $scaleid . '_' . $i] = [
+                    'text'   => '',
+                    'format' => FORMAT_HTML,
+                ];
+                $settings['feedbacklegend_scaleid_' . $scaleid . '_' . $i] = '';
+                $settings['wb_colourpicker_' . $scaleid . '_' . $i] = (string) $i;
+                $settings['enrolment_message_checkbox_' . $scaleid . '_' . $i] = '0';
+            }
+        }
+
         return $settings;
     }
 
