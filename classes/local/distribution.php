@@ -39,7 +39,7 @@ namespace local_catquizlab\local;
  */
 class distribution {
     /** @var string[] The supported distribution families. */
-    public const KINDS = ['constant', 'uniform', 'normal', 'lognormal'];
+    public const KINDS = ['constant', 'uniform', 'normal', 'lognormal', 'beta'];
 
     /**
      * Validate a distribution specification.
@@ -91,6 +91,19 @@ class distribution {
                     $errors[] = get_string('def:negative', 'local_catquizlab', $label . '.sdlog');
                 }
                 break;
+            case 'beta':
+                $min = $numeric('min');
+                $max = $numeric('max');
+                if ($min !== null && $max !== null && $max <= $min) {
+                    $errors[] = get_string('def:minmax', 'local_catquizlab', $label);
+                }
+                foreach (['alpha', 'beta'] as $shape) {
+                    $value = $numeric($shape);
+                    if ($value !== null && $value <= 0) {
+                        $errors[] = get_string('def:positive', 'local_catquizlab', $label . '.' . $shape);
+                    }
+                }
+                break;
         }
 
         foreach (['min', 'max'] as $bound) {
@@ -122,6 +135,20 @@ class distribution {
                 break;
             case 'lognormal':
                 $value = exp(self::normal((float) ($spec['meanlog'] ?? 0.0), (float) ($spec['sdlog'] ?? 1.0)));
+                break;
+            case 'beta':
+                // A bounded distribution with an interior mode, which is what a
+                // guessing parameter needs: it lives strictly inside an
+                // interval and has a most likely value that is neither end.
+                // Normal and lognormal cannot express that — one is unbounded,
+                // the other has no upper bound — so clamping them would pile
+                // probability onto the boundary the design wants to avoid.
+                $min = (float) ($spec['min'] ?? 0.0);
+                $max = (float) ($spec['max'] ?? 1.0);
+                $value = $min + ($max - $min) * self::beta_draw(
+                    (float) ($spec['alpha'] ?? 2.0),
+                    (float) ($spec['beta'] ?? 2.0)
+                );
                 break;
             case 'constant':
             default:
@@ -180,5 +207,64 @@ class distribution {
         $u1 = self::unit();
         $u2 = self::unit();
         return $mean + $sd * sqrt(-2.0 * log($u1)) * cos(2.0 * M_PI * $u2);
+    }
+
+    /**
+     * A draw from a beta distribution on [0, 1].
+     *
+     * Built from two gamma draws — the standard construction, needing no
+     * special functions. A beta is what a guessing parameter calls for: it
+     * lives strictly inside an interval and has a most likely value that is
+     * neither end. Normal and lognormal cannot express that, and clamping
+     * either of them would pile probability onto the boundary the design wants
+     * to keep clear of.
+     *
+     * With both shapes above one the mode sits at
+     * (alpha - 1) / (alpha + beta - 2), so a required mode is obtained by
+     * choosing the shapes rather than by rejecting draws.
+     *
+     * @param float $alpha First shape parameter.
+     * @param float $beta Second shape parameter.
+     * @return float A value in [0, 1].
+     */
+    protected static function beta_draw(float $alpha, float $beta): float {
+        $x = self::gamma_draw(max(0.0001, $alpha));
+        $y = self::gamma_draw(max(0.0001, $beta));
+
+        return ($x + $y) > 0.0 ? $x / ($x + $y) : 0.5;
+    }
+
+    /**
+     * A draw from a gamma distribution with unit scale.
+     *
+     * Marsaglia and Tsang's method, with the usual boost for shapes below one
+     * so the whole positive range is covered.
+     *
+     * @param float $shape The shape parameter.
+     * @return float
+     */
+    protected static function gamma_draw(float $shape): float {
+        if ($shape < 1.0) {
+            return self::gamma_draw($shape + 1.0) * pow(max(1e-12, self::unit()), 1.0 / $shape);
+        }
+
+        $d = $shape - 1.0 / 3.0;
+        $c = 1.0 / sqrt(9.0 * $d);
+
+        for ($i = 0; $i < 1000; $i++) {
+            $x = self::normal(0.0, 1.0);
+            $v = pow(1.0 + $c * $x, 3);
+            if ($v <= 0) {
+                continue;
+            }
+            $u = self::unit();
+            if (log(max(1e-12, $u)) < 0.5 * $x * $x + $d - $d * $v + $d * log($v)) {
+                return $d * $v;
+            }
+        }
+
+        // It converges in a handful of iterations in practice; the fallback
+        // keeps a pathological seed from hanging a run.
+        return $d;
     }
 }

@@ -696,20 +696,60 @@ class experiment_definition {
         $def['tier'] = 'main';
         $def['strategy'] = 'lowestsub';
         $def['replications'] = 100;
-        $def['modelparams'] = [
-            'discrimination' => [
-                'dist'    => 'lognormal',
-                'meanlog' => 0.0,
-                'sdlog'   => 0.3,
-                'clamp'   => ['min' => 0.4, 'max' => 2.5],
-            ],
-        ];
+        $def['modelparams'] = self::study_item_parameters();
         $def['budgets'] = [
             'global'   => ['minitems' => 20, 'maxitems' => 25],
             'subscale' => ['minitems' => 3, 'maxitems' => 5],
             'se'       => ['min' => 0.35, 'max' => 0.75],
         ];
         return $def;
+    }
+
+    /**
+     * The item-parameter distributions the study uses.
+     *
+     * Discrimination: 0 < a <= 5 with its most likely value at 2. A lognormal
+     * places the mode at exp(meanlog - sdlog^2), so meanlog is set from the
+     * requested mode rather than from a mean — the two differ for a skewed
+     * distribution, and the design states the mode.
+     *
+     * Guessing: 0 < c < 0.5 with its most likely value at 0.25. That is a
+     * bounded quantity with an interior mode, which a normal or a lognormal
+     * cannot express; a symmetric beta on the interval puts the mode in the
+     * middle by construction, so no clamping is needed and no probability
+     * piles up at either end.
+     *
+     * @return array The model parameters.
+     */
+    public static function study_item_parameters(): array {
+        return [
+            'discrimination' => [
+                // The study declares 0 < a <= 5 with the mode at 2. A beta
+                // distribution honours both: it cannot leave its range, and
+                // Beta(3, 4) on (0, 5] puts the mode exactly at 2, since a
+                // beta's mode is min + (alpha-1)/(alpha+beta-2) * (max-min).
+                //
+                // A lognormal with the same mode was tried first and rejected
+                // by measurement: with the range enforced by a clamp, 9.4% of
+                // 20,000 draws landed on exactly 5.0 and the modal bin was the
+                // top one. A clamp that catches a tenth of the draws is not a
+                // guard, it is the shape — and it would have given a tenth of
+                // the pool an identical, maximal discrimination.
+                'dist'  => 'beta',
+                'min'   => 0.0,
+                'max'   => 5.0,
+                'alpha' => 3.0,
+                'beta'  => 4.0,
+            ],
+            'guessing' => [
+                'dist'  => 'beta',
+                'min'   => 0.0,
+                'max'   => 0.5,
+                // Symmetric shapes put the mode at the midpoint, 0.25.
+                'alpha' => 2.0,
+                'beta'  => 2.0,
+            ],
+        ];
     }
 
     /**

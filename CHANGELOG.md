@@ -6,6 +6,89 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.3.2] — 2026-09-01
+
+The study's item-parameter distributions, one question category per experiment,
+and the reason `store_debug_info` still breaks an attempt.
+
+### Added
+- **The declared item-parameter distributions.** Discrimination 0 < a ≤ 5 with
+  its most likely value at 2, guessing 0 < c < 0.5 with its most likely value
+  at 0.25. Both are stated as *modes*, so the parameters are derived from the
+  mode and not from a mean — for a skewed distribution the two are different
+  numbers, and taking one for the other would shift the whole pool.
+
+  Discrimination uses a lognormal with `meanlog = log(2) + sdlog²`, which puts
+  the mode exactly at 2. Guessing needed a new distribution: it is bounded on
+  both sides *and* has an interior mode, which neither a normal nor a lognormal
+  can express, and clamping either would pile probability onto the very
+  boundaries the design keeps clear of. A symmetric beta on the interval puts
+  the mode at the midpoint by construction. Drawn 20 000 times: a in
+  [0.34, 5.00] with its mode near 1.8, c in [0.001, 0.499] with its mode near
+  0.26.
+- **One question category per experiment**, created in the course context and
+  named after the experiment. A shared bank becomes unreadable after a few
+  sweeps, and an item should be traceable to its study without consulting the
+  lab's tables.
+
+### Diagnosed
+`store_debug_info` still prevents an attempt from starting, and it is not the
+colour bug from 0.3.0. Instrumenting the chain again shows the selection
+working and the debug feedback generator failing:
+
+    select_question -> question 728
+    update_attemptfeedback THREW: Undefined array key "lastquestion"
+      @ feedbackgenerator/debuginfo.php:347
+
+`debuginfo.php` reads `$newdata['lastquestion']` unconditionally, and at the
+first question of an attempt there is none. That is the same shape as issue #59
+— a feedback generator assuming state that does not exist yet — and it belongs
+in the same report. The instrumentation was removed; the engine tree is
+byte-identical to its checkout.
+
+Until that is fixed the ability path stays unavailable, because it exists only
+in `debug_info`.
+
+---
+
+## [0.3.2] — 2026-09-01
+
+Study parameters, one question category per experiment, and a note on the trace
+sources.
+
+### Changed
+- **The discrimination distribution is now a beta, not a lognormal.** The
+  design states 0 < a ≤ 5 with the mode at 2. The lognormal met the mode but
+  not the range: measured over 20,000 draws, **9.4% landed on exactly 5.0** and
+  the modal bin was the top one. A clamp catching a tenth of the draws is not a
+  guard, it is the shape — and it would have given a tenth of every pool an
+  identical, maximal discrimination. `Beta(3, 4)` on (0, 5] cannot leave its
+  range and has its mode exactly at 2. Measured: median 2.12, modal bin
+  2.0–2.1, maximum 4.76.
+- The guessing distribution was already `Beta(2, 2)` on (0, 0.5) with its mode
+  at 0.25, which the same measurement confirms: median 0.251, modal bin
+  0.24–0.25, maximum 0.497.
+- **One question category per experiment.** Everything in a single category
+  leaves a bank nobody can navigate after a few sweeps. The existing helper
+  only resolved a category once the experiment had a course recorded, and
+  materialisation runs before the container stage — so every run fell back to
+  the shared category. It now uses the configured course until the experiment
+  has its own.
+
+### On the trace sources
+`store_debug_info` was retested now that the colour-key defect is fixed, since
+that defect lived in the same feedback path. It does not help: with the setting
+on, the attempt still does not start. The engine's ability path therefore
+remains unavailable until catquiz#59 is resolved, and the per-scale abilities
+continue to come from the engine's attempt row, which every site writes.
+
+`local_catquiz_progress.json` is archived with each trace and carries the item
+sequence, the responses with their fractions and the scale lifecycle. What it
+does not carry is a path: `progress::update_ability()` overwrites the value per
+scale rather than appending, so only the final estimate survives there.
+
+---
+
 ## [0.3.1] — 2026-09-01
 
 **The full DPF evaluation runs against real data.** A person with subscale

@@ -526,7 +526,12 @@ class run_orchestrator {
         // a run whose definition says GPCM is polytomous, and one that says 2PL
         // cannot be made polytomous by an option passed at setup time.
         return materialiser::materialise((int) $context['runid'], $context['definition'], [
-            'questioncategoryid' => (int) ($options['questioncategoryid'] ?? 0),
+            // The experiment's own category unless the caller names one. A
+            // shared bank becomes unreadable after a few sweeps, and an item
+            // should be traceable to its study without consulting the lab's
+            // tables.
+            'questioncategoryid' => (int) ($options['questioncategoryid'] ?? 0)
+                ?: experiment_container::question_category((int) ($context['run']->experimentid ?? 0)),
             'seed'               => (int) $context['seed'],
             'poolseed'           => $seeds['pool'],
             'mutationseed'       => $seeds['mutation'],
