@@ -6,6 +6,81 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.3.0] — 2026-09-01
+
+**A simulated person completed an adaptive test.** Sixteen items, and the
+estimate lands on the ground truth:
+
+| | true θ | estimated θ | error |
+|---|---|---|---|
+| person 1 | −0.4795 | **−0.4552** | 0.024 |
+| person 2 | −1.7780 | **−1.9777** | 0.200 |
+
+### Fixed
+- **The feedback colour keys were invented, not chosen from the engine's
+  palette.** The palette depends on the number of bands — for two bands the
+  valid keys are `3` and `6`, not `1` and `2` — and an unknown key made
+  `comparetotestaverage` fail on an undefined index.
+
+  The consequence was completely out of proportion to the cause. The failure
+  happens in `update_attemptfeedback()`, which the engine calls *after* it has
+  already selected the next question: `select_question` returned question 632
+  with `iserr=false`, the exception was raised while rendering feedback, and
+  the attempt ended holding a question it could not show. Every diagnosis until
+  now therefore looked at the pool — which was never the problem.
+
+### How it was found
+By instrumenting the engine's preselect chain temporarily and counting
+candidates after every step, as the analysis suggested. The counts settled the
+question in one run:
+
+    initial 24 → removeplayedquestions 23 → ... → filterbyquestionsperscale 23
+    select_question -> question 632, iserr=false
+    update_attemptfeedback THREW: Undefined array key 1
+
+No filter ever emptied the pool. The instrumentation was removed afterwards;
+the engine tree is byte-identical to its checkout.
+
+### Still open
+The trace records `stop="An error occured"` and carries no per-scale abilities,
+standard errors or ability path, so the local diagnostics and the test-flow view
+have no data yet. The global outcome — sixteen items and a recovered θ — is
+there.
+
+---
+
+## [0.2.26] — 2026-09-01
+
+### Fixed
+- **The worker treated the absence of a question as a finished attempt.** A
+  failure page, a redirect and a page that has not rendered yet all look alike
+  from the browser's side, and treating them alike turns any of them into a
+  successful run. It now requires the activity's own finish page and otherwise
+  reports the URL, the title and what the page says.
+
+### Ruled out for the one-question attempt
+Measured against the real engine, not reasoned about:
+
+| Hypothesis | Result |
+|---|---|
+| The worker's DOM handling | **Not the cause.** A manual browser run with no worker code involved ends identically, on `attemptfinished.php`, with "minimum number of questions was not reached". |
+| `remove_uncalculated()` dropping items | **No.** The engine returns 24 items, all with a model, a difficulty and status 4. |
+| `updatepersonability()` failing | **No.** The response arrives (`state: gradedright`, `fraction: 1.000`) and the abilities update from 0 to 0.330 on all three scales — the scale-selection fix of 0.2.25 did that. |
+| Effective maxima being 1 | **No.** `maximumquestions` 250, `max_attempts_per_scale` 8, 24 items. |
+| The SE stop rule biting immediately | **No.** Narrowing the window to 0.05/0.30 changes nothing. |
+| Crossed question/item/param references | **No.** All links hold across 400 items, verified with the id sequences deliberately offset. |
+
+The DOM id format the analysis describes is confirmed — `question-110-1` is
+usage 110, slot 1 — and the worker has read it that way since 0.2.15, sending
+usage and slot for the server to resolve.
+
+What remains, for whoever picks this up: after one answered question the
+abilities are updated and 23 unplayed items with known parameters remain, yet
+mod_adaptivequiz ends the attempt regularly. The candidates left in the shared
+path are `maximumquestionscheck`, `mayberemovescale` and `noremainingquestions`.
+
+---
+
 ## [0.2.25] — 2026-09-01
 
 ### Fixed

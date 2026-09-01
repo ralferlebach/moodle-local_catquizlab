@@ -219,12 +219,41 @@ class test_provisioner {
                     'format' => FORMAT_HTML,
                 ];
                 $settings['feedbacklegend_scaleid_' . $scaleid . '_' . $i] = '';
-                $settings['wb_colourpicker_' . $scaleid . '_' . $i] = (string) $i;
+                // The colour key has to be one the engine knows. Its palette is
+                // chosen by the number of bands — for two bands the valid keys
+                // are 3 and 6, not 1 and 2 — and an unknown key made the
+                // feedback renderer fail on an undefined array index. That
+                // happened after a question had already been selected, so the
+                // attempt ended with a question in hand and no way to show it.
+                $settings['wb_colourpicker_' . $scaleid . '_' . $i] = self::colour_key($ranges, $i);
                 $settings['enrolment_message_checkbox_' . $scaleid . '_' . $i] = '0';
             }
         }
 
         return $settings;
+    }
+
+    /**
+     * A colour key the engine's palette actually contains.
+     *
+     * The palette depends on the number of feedback bands, so the keys are not
+     * simply 1..n. Mirrors local_catquiz's own selection.
+     *
+     * @param int $ranges How many bands the test defines.
+     * @param int $index The band, counting from one.
+     * @return string
+     */
+    protected static function colour_key(int $ranges, int $index): string {
+        $palettes = [
+            1 => ['3'],
+            2 => ['3', '6'],
+            3 => ['3', '5', '6'],
+            4 => ['3', '4', '5', '6'],
+            5 => ['2', '3', '4', '5', '6'],
+        ];
+        $palette = $palettes[$ranges] ?? $palettes[2];
+
+        return $palette[$index - 1] ?? end($palette);
     }
 
     /**

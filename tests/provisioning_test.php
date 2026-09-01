@@ -683,6 +683,50 @@ final class provisioning_test extends \advanced_testcase {
     }
 
     /**
+     * Feedback colours use keys the engine's palette contains.
+     *
+     * @return void
+     */
+    public function test_feedback_colours_come_from_the_engine_palette(): void {
+        $this->resetAfterTest();
+
+        $method = new \ReflectionMethod(
+            \local_catquizlab\local\test_provisioner::class,
+            'feedback_settings'
+        );
+        $method->setAccessible(true);
+        $settings = $method->invoke(null, [10], []);
+
+        // The engine picks its palette by the number of bands, so the keys are
+        // not 1..n: for two bands they are 3 and 6. An unknown key made the
+        // feedback renderer fail on an undefined index — after a question had
+        // already been selected, so the attempt ended holding a question it
+        // could not show, and the run looked as if the pool had run dry.
+        $this->assertSame('3', $settings['wb_colourpicker_10_1']);
+        $this->assertSame('6', $settings['wb_colourpicker_10_2']);
+    }
+
+    /**
+     * The palette is chosen per band count, not fixed.
+     *
+     * @return void
+     */
+    public function test_colour_palette_follows_the_band_count(): void {
+        $this->resetAfterTest();
+
+        $method = new \ReflectionMethod(
+            \local_catquizlab\local\test_provisioner::class,
+            'colour_key'
+        );
+        $method->setAccessible(true);
+
+        $this->assertSame('3', $method->invoke(null, 1, 1));
+        $this->assertSame('6', $method->invoke(null, 2, 2));
+        $this->assertSame('5', $method->invoke(null, 3, 2));
+        $this->assertSame('4', $method->invoke(null, 4, 2));
+    }
+
+    /**
      * The materialiser refuses an empty plan with a named reason.
      *
      * @return void

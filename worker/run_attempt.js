@@ -161,6 +161,16 @@ async function playAttempt(browser, job) {
         if (answeredCount === 0) {
             throw new Error('No question was presented; the attempt never started.');
         }
+
+        // The absence of a question is not evidence that the attempt finished.
+        // A failure page, a redirect, or a page that simply has not rendered
+        // yet all look the same from here, and treating them alike turns any of
+        // them into a successful run. Only the activity's own finish page
+        // counts, and anything else is reported with where the browser stood.
+        if (!(await onFinishPage(page))) {
+            const detail = await describePage(page);
+            throw new Error(`Attempt did not reach the finish page after ${answeredCount} answer(s). ${detail}`);
+        }
         // A missing engine attempt id is not a failure of the attempt: the
         // finish page does not always render one, and the server can look it up
         // from the run and the person. What matters is that questions were
@@ -275,6 +285,40 @@ async function hasQuestion(page) {
  * @param {object} page The Puppeteer page.
  * @returns {Promise<number>}
  */
+/**
+ * Whether the browser is on the activity's regular attempt-finished page.
+ *
+ * @param {object} page The Puppeteer page.
+ * @returns {Promise<boolean>}
+ */
+async function onFinishPage(page) {
+    if (page.url().includes('attemptfinished.php')) {
+        return true;
+    }
+
+    // Some themes and versions land on the activity view with a summary rather
+    // than on a separate page, so a completion marker there counts too.
+    return page.evaluate(() => {
+        const markers = ['.adaptivequiz-finished', '#adaptivequiz-finished', '.attempt-summary'];
+        return markers.some((selector) => document.querySelector(selector) !== null);
+    });
+}
+
+/**
+ * A short description of where the browser stands, for a failure message.
+ *
+ * @param {object} page The Puppeteer page.
+ * @returns {Promise<string>}
+ */
+async function describePage(page) {
+    const title = await page.title().catch(() => '');
+    const text = await page
+        .evaluate(() => document.body.innerText.replace(/\s+/g, ' ').slice(0, 200))
+        .catch(() => '');
+
+    return `url=${page.url()} title="${title}" page="${text}"`;
+}
+
 async function currentQuestionRef(page) {
     const id = await page.evaluate((selectors) => {
         for (const sel of selectors) {
