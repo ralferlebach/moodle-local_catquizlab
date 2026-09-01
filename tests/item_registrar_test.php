@@ -48,11 +48,36 @@ final class item_registrar_test extends \advanced_testcase {
         $this->assertEqualsWithDelta(0.75, $param['difficulty'], 1e-9);
         $this->assertEqualsWithDelta(1.0, $param['discrimination'], 1e-9);
         $this->assertEqualsWithDelta(0.0, $param['guessing'], 1e-9);
-        $this->assertSame(item_registrar::STATUS_CALCULATED, $param['status']);
+        // Known ground truth, not an estimate: the engine would otherwise treat
+        // the item as a pilot question and learn nothing from it.
+        $this->assertSame(item_registrar::STATUS_KNOWN, $param['status']);
     }
 
     /**
      * Registration is a no-op without the engine.
+     *
+     * @return void
+     */
+    public function test_known_parameters_are_not_pilots(): void {
+        $this->resetAfterTest();
+
+        // The engine treats an item as a pilot question while its parameter
+        // status is below UPDATED_MANUALLY and it has fewer responses than the
+        // pilot threshold — and a pilot contributes nothing to the ability
+        // estimate. With CALCULATED every lab item counted as a pilot: the
+        // engine administered one, learned nothing, and ended the attempt.
+        //
+        // A lab item is genuinely a manually set parameter: its difficulty is
+        // the ground truth the simulation was built from, not an estimate.
+        $this->assertSame(4, item_registrar::STATUS_KNOWN);
+        $this->assertGreaterThan(item_registrar::STATUS_CALCULATED, item_registrar::STATUS_KNOWN);
+
+        $param = item_registrar::build_itemparam(1, 2, ['difficulty' => 0.5]);
+        $this->assertSame(item_registrar::STATUS_KNOWN, $param['status']);
+    }
+
+    /**
+     * Registration without the engine is refused explicitly.
      *
      * @return void
      */

@@ -6,6 +6,44 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.2.22] — 2026-09-01
+
+Every lab item counted as a pilot question.
+
+### Fixed
+- **Item parameters were stored with status `CALCULATED` (1).** The engine
+  treats an item as a pilot question while its parameter status is below
+  `UPDATED_MANUALLY` (4) *and* it has fewer responses than the pilot threshold
+  — and a pilot contributes nothing to the ability estimate. Every lab item met
+  both conditions, so the engine administered one, learned nothing from it, and
+  ended the attempt. `catquiz_includepilotquestions = "0"` did not help: the
+  items were not excluded, they were simply uninformative.
+
+  A lab item genuinely is a manually set parameter. Its difficulty and
+  discrimination are the ground truth the simulation was built from, not an
+  estimate from responses, which is exactly the case the engine calls "updated
+  manually". Stored as status 4 now, and the progress snapshot confirms
+  `is_pilot=false`.
+
+### Verification
+The engine's error on finishing an attempt is gone — the stop reason is empty
+rather than "An error occured". PHPUnit 404 tests, Behat 27 scenarios, phpcs
+and PHPDoc clean.
+
+### Next thread
+The attempt still ends after one item, now without an error. Two observations
+from the progress snapshot, for whoever picks this up:
+
+- `activescales` contains only the root scale (246); the two subscales that
+  hold the items (248, 249) are not among them.
+- `abilities` stays at `{"246": 0}` after the answer — the estimate is not
+  updated, so the stop criteria cannot move either.
+
+Both point at the same place: the scales that carry items are not the scales
+the attempt considers active.
+
+---
+
 ## [0.2.21] — 2026-09-01
 
 Stale engine caches, and what the per-scale limits actually mean.

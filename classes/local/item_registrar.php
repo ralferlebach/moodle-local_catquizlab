@@ -41,6 +41,24 @@ class item_registrar {
     public const STATUS_CALCULATED = 1;
 
     /**
+     * Item-parameter status for a parameter set by hand.
+     *
+     * This is what a lab item is. Its difficulty and discrimination are not
+     * estimated from responses — they are the ground truth the simulation was
+     * built from, which is exactly the case the engine calls "updated
+     * manually".
+     *
+     * The distinction is not cosmetic. The engine treats an item as a pilot
+     * question while its status is below this value and it has fewer responses
+     * than the pilot threshold, and a pilot does not contribute to the ability
+     * estimate. Every lab item therefore counted as a pilot: the engine
+     * administered one, learned nothing from it, and ended the attempt.
+     *
+     * @var int
+     */
+    public const STATUS_KNOWN = 4;
+
+    /**
      * Build the item-parameter record for a question.
      *
      * @param int $questionid The Moodle question id.
@@ -68,7 +86,7 @@ class item_registrar {
             'difficulty'     => round((float) ($params['difficulty'] ?? 0.0), 5),
             'discrimination' => round((float) ($params['discrimination'] ?? 1.0), 5),
             'guessing'       => round((float) ($params['guessing'] ?? 0.0), 5),
-            'status'         => self::STATUS_CALCULATED,
+            'status'         => self::STATUS_KNOWN,
             'json'           => $json,
         ];
     }
