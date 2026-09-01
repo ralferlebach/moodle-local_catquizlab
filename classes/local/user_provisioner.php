@@ -118,6 +118,80 @@ class user_provisioner {
     }
 
     /**
+     * Write the starting person parameters of a run's simulated users.
+     *
+     * The engine expects a person to have an ability on every scale of the test
+     * before the first question is chosen. In normal use that comes from the
+     * activity's own entry path — a peer mean, or the configured fallback. A
+     * simulated person is dropped straight into the attempt by the worker, so
+     * nothing has established one, and the engine then works with an empty
+     * ability set: at the first question it asks for the ability range of
+     * `array_key_first($catscales)` on an empty array, the page raises, and no
+     * question is ever presented.
+     *
+     * Seeding 0.0 is the same value the engine's own fallback would use and
+     * makes the starting point explicit rather than incidental: every simulated
+     * person begins at the scale midpoint, which is what an experiment wants —
+     * a person's estimate should be shaped by their answers, not by who
+     * happened to sit the test before them.
+     *
+     * @param int $runid The run whose persons are seeded.
+     * @param float $ability The starting ability on every scale.
+     * @return int How many parameter rows were written.
+     */
+    public static function seed_person_parameters(int $runid, float $ability = 0.0): int {
+        global $DB;
+
+        if (!environment::engine_available()) {
+            return 0;
+        }
+
+        $scales = $DB->get_records('local_catquizlab_scalemap', ['runid' => $runid]);
+        $persons = $DB->get_records_select(
+            'local_catquizlab_person',
+            'runid = :runid AND moodleuserid IS NOT NULL',
+            ['runid' => $runid]
+        );
+        if ($scales === [] || $persons === []) {
+            return 0;
+        }
+
+        // The CAT context of the run, taken from the scales it created.
+        $first = reset($scales);
+        $contextid = \local_catquiz\catscale::get_context_id((int) $first->catscaleid);
+
+        $now = time();
+        $written = 0;
+        foreach ($persons as $person) {
+            foreach ($scales as $scale) {
+                $existing = $DB->get_record('local_catquiz_personparams', [
+                    'userid'     => (int) $person->moodleuserid,
+                    'catscaleid' => (int) $scale->catscaleid,
+                    'contextid'  => $contextid,
+                ]);
+                if ($existing) {
+                    // Never overwrite an ability the engine has since measured:
+                    // seeding is a starting point, not a reset.
+                    continue;
+                }
+                $DB->insert_record('local_catquiz_personparams', (object) [
+                    'userid'        => (int) $person->moodleuserid,
+                    'catscaleid'    => (int) $scale->catscaleid,
+                    'contextid'     => $contextid,
+                    'ability'       => $ability,
+                    'standarderror' => null,
+                    'status'        => 0,
+                    'timecreated'   => $now,
+                    'timemodified'  => $now,
+                ]);
+                $written++;
+            }
+        }
+
+        return $written;
+    }
+
+    /**
      * Give a simulated user the password the worker will use.
      *
      * @param int $userid The new user's id.

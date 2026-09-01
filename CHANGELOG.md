@@ -6,6 +6,103 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.2.19] — 2026-09-01
+
+The real error message, and what was hiding it.
+
+### Diagnosis
+With `local_catquiz | store_debug_info` enabled, the `TypeError` reported in
+0.2.17 gives way to the message that actually explains the failure:
+
+    Sorry, but couldn't define the first question to start the attempt,
+    the quiz is possibly misconfigured.
+        mod_adaptivequiz\cat_session::run_item_administration_locked
+
+So the `TypeError` in `get_ability_range()` was never the cause — it is what
+the engine raises while trying to render the feedback for a failure that has
+already happened, and it replaces the diagnosis with a stack trace pointing at
+the wrong place. The upstream issue has been extended accordingly: securing the
+method restores the engine's own error message, which today depends on whether
+debug information is switched on.
+
+Checked and ruled out along the way: item status (`ACTIVE`), item-parameter
+status (`CALCULATED`), engine visibility (24 of 24), person parameters (seeded
+on all four scales in the right context), scale names, and the item budget
+against the pool size. The remaining candidate is the first-question selection
+itself — `firstquestionselector` takes a peer mean or the configured fallback,
+and this is where the run stops.
+
+### Verification
+PHPUnit 401 tests, Behat 27 scenarios, phpcs and PHPDoc clean.
+
+---
+
+## [0.2.18] — 2026-09-01
+
+Starting person parameters, and the upstream issue drafted.
+
+### Added
+- **Simulated persons are given a starting ability of 0.0 on every scale of
+  their run.** The engine expects a person to have one before it chooses a
+  first question; in normal use the activity's entry path establishes it from a
+  peer mean or the configured fallback. A person the worker drops straight into
+  an attempt has never been through that path, so the lab states the value
+  itself. 0.0 is also the right value for an experiment: every simulated person
+  starts at the scale midpoint, so an estimate is shaped by that person's
+  answers rather than by whoever sat the test before them. An ability the
+  engine has since measured is never overwritten — seeding is a starting point,
+  not a reset.
+- `docs/design/issue-catquiz-ability-range-null.md`: a short upstream issue for
+  local_catquiz. `attemptfeedback::update_data()` returns before setting
+  `catscales` when no person abilities exist, and `feedbackgenerator.php:419`
+  reads the key regardless and passes `array_key_first()` — that is, `null` —
+  to a method declaring `int`. The proposal is to fall back to the test's
+  primary scale and to let the signature state the expectation, so a bad call
+  reports where it originates rather than one layer down in a constructor.
+
+### Verification
+Provisioning writes eight parameter rows for two persons over four scales and
+stays green end to end against the real engine. PHPUnit 401 tests, Behat 27
+scenarios, phpcs and PHPDoc clean.
+
+---
+
+## [0.2.17] — 2026-09-01
+
+Named scales, and the attempt failure traced to its source.
+
+### Fixed
+- **Scales had no names.** The root scale took its name from the run's cell key,
+  which is empty when nothing is swept, so the engine recorded a nameless root
+  and children called `" / K1.1"` — unreadable in the CAT manager and carried by
+  the engine into its own feedback structures. Scales are now named after the
+  run, with the cell key appended when there is one.
+
+### Diagnosis
+The one-item attempt of 0.2.15 and the silent start failure of 0.2.16 have the
+same cause, and it is not in this plugin. Starting a fresh attempt raises, in
+the engine:
+
+    local_catquiz\catscale::__construct(): Argument #1 ($catscaleid) must be of
+    type int, null given, called in .../teststrategy/feedback_helper.php:484
+
+`feedbackgenerator.php:419` calls `get_ability_range(array_key_first($catscales))`
+without checking that `$catscales` is non-empty, which it is at the very first
+question of an attempt that has produced no abilities yet. A page that renders
+an exception presents no question, so the worker correctly reports that the
+attempt never started — the message is accurate, the cause simply lies one
+plugin further down.
+
+This wants an upstream issue of its own, alongside the progress-retention one.
+
+### Verification
+Provisioning stays green against the real engine with 24 items
+(`planned=24 questions=24 items=24 params=24 visible=24 failed=0`) and scales
+now read `CATLab run 77 / K1.1`. PHPUnit 398 tests, Behat 27 scenarios, phpcs
+and PHPDoc clean.
+
+---
+
 ## [0.2.16] — 2026-09-01
 
 Three defects behind the one-item attempt of 0.2.15, found by reading what the

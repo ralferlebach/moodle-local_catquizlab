@@ -57,7 +57,14 @@ class scale_provisioner {
     public static function plan_scales(array $blueprint): array {
         $categories = max(0, (int) ($blueprint['categories'] ?? 0));
         $subcategories = max(0, (int) ($blueprint['subcategories'] ?? 0));
-        $rootname = (string) ($blueprint['name'] ?? 'CATLab');
+        // An empty name is not a name. A run with no swept factors has an empty
+        // cell key, which reached this as '' and produced a nameless root scale
+        // and children called " / K1.1" — unreadable in the CAT manager, and
+        // the engine carries the name into its own feedback structures.
+        $rootname = trim((string) ($blueprint['name'] ?? ''));
+        if ($rootname === '') {
+            $rootname = 'CATLab';
+        }
 
         $nodes = [[
             'level'         => self::LEVEL_ROOT,

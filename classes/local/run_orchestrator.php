@@ -499,7 +499,13 @@ class run_orchestrator {
     protected static function stage_scales(array $context): ?array {
         $scales = $context['definition']['pool']['scales'] ?? [];
         $blueprint = [
-            'name'          => (string) ($context['run']->cellkey ?? 'CATLab'),
+            // The run identifies the scale tree; the cell key alone is empty
+            // when nothing is swept, and identical across replications when it
+            // is not.
+            'name'          => 'CATLab run ' . (int) $context['runid']
+                . (trim((string) ($context['run']->cellkey ?? '')) !== ''
+                    ? ' – ' . $context['run']->cellkey
+                    : ''),
             'categories'    => (int) ($scales['categories'] ?? 0),
             'subcategories' => (int) ($scales['subcategories'] ?? 0),
         ];
@@ -596,8 +602,20 @@ class run_orchestrator {
             ]
         );
         $users = user_provisioner::provision($runid);
+
+        // The starting ability of every simulated person on every scale of the
+        // run. The engine needs one before it can choose a first question, and
+        // a person the worker drops straight into an attempt has none.
+        $seeded = user_provisioner::seed_person_parameters($runid);
+
         $course = course_provisioner::provision($runid);
-        return ['persons' => $persons, 'users' => $users, 'course' => $course];
+
+        return [
+            'persons' => $persons,
+            'users'   => $users,
+            'seeded'  => $seeded,
+            'course'  => $course,
+        ];
     }
 
     /**

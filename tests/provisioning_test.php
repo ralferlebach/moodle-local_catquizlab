@@ -530,6 +530,63 @@ final class provisioning_test extends \advanced_testcase {
     }
 
     /**
+     * Scales always carry a readable name.
+     *
+     * @return void
+     */
+    public function test_scales_are_named(): void {
+        $this->resetAfterTest();
+
+        // An empty name is not a name. A run with no swept factors has an empty
+        // cell key, which reached the planner as '' and produced a nameless
+        // root scale with children called " / K1.1" — unreadable in the CAT
+        // manager, and the engine carries the name into its own structures.
+        $plan = \local_catquizlab\local\scale_provisioner::plan_scales([
+            'categories' => 1, 'subcategories' => 2, 'name' => '',
+        ]);
+
+        foreach ($plan as $node) {
+            $this->assertNotSame('', trim($node['name']));
+            $this->assertStringNotContainsString('  ', $node['name']);
+            $this->assertStringStartsNotWith('/', trim($node['name']));
+        }
+        $this->assertSame('CATLab', $plan[0]['name']);
+    }
+
+    /**
+     * Simulated persons start with a stated ability on every scale.
+     *
+     * @return void
+     */
+    public function test_person_parameters_are_seeded(): void {
+        $this->resetAfterTest();
+
+        if (!environment::engine_available()) {
+            $this->markTestSkipped('No CAT engine installed; seeding writes to its tables.');
+        }
+
+        // The engine needs an ability before it can choose a first question. In
+        // normal use the activity's entry path establishes one; a person the
+        // worker drops straight into an attempt has none, so the lab states it.
+        $this->assertSame(0, \local_catquizlab\local\user_provisioner::seed_person_parameters(0));
+    }
+
+    /**
+     * Seeding is a no-op without the engine.
+     *
+     * @return void
+     */
+    public function test_seeding_without_the_engine(): void {
+        $this->resetAfterTest();
+
+        if (environment::engine_available()) {
+            $this->markTestSkipped('Engine present; the guard path is not exercised.');
+        }
+
+        $this->assertSame(0, \local_catquizlab\local\user_provisioner::seed_person_parameters(1));
+    }
+
+    /**
      * The materialiser refuses an empty plan with a named reason.
      *
      * @return void
