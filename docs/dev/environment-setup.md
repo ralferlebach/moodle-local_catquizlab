@@ -263,3 +263,25 @@ Die Testumgebung steht auf der ersten Zeile, weil ohne Verlauf die halbe
 Auswertung leer bleibt. Für Arbeit am Plugin selbst lohnt das Umschalten —
 Moodles eigene Entwicklerprüfungen sind zu wertvoll, um dauerhaft darauf zu
 verzichten.
+
+## Stand der Engine-Defekte (geprüft am 2026-09-02)
+
+Gegen `moodle-local_catquiz` **2026083025** (Branch `main`) nachgemessen:
+
+| Punkt | Stand |
+|---|---|
+| `progressretention` / `progressretentiondays` | **umgesetzt** — die Aufbewahrung der Progress-Zeilen ist jetzt konfigurierbar |
+| catquiz#59 (`get_ability_range(array_key_first(...))`) | offen, `feedbackgenerator.php:446` unverändert |
+| `debuginfo.php` liest `lastquestion` ungeprüft | offen, Zeile 347 unverändert |
+| `local_catquiz_personparams.standarderror` | wird weiterhin leer geschrieben |
+
+`tests/engine_defects_test.php` hält diesen Stand fest. Jeder dieser Tests
+schlägt fehl, sobald der jeweilige Punkt behoben ist — das ist beabsichtigt:
+Eine Umgehung, die ihre Ursache überlebt, verbirgt das reparierte Verhalten und
+hält eine Einschränkung in der Dokumentation, die es nicht mehr gibt. Die
+Fehlermeldung sagt jeweils, was zu entfernen ist.
+
+Praktische Folge für die Entwicklungsumgebung: `$CFG->debug = DEBUG_DEVELOPER`
+und `local_catquiz | store_debug_info = 1` schließen einander aus, solange der
+`lastquestion`-Zugriff ungeprüft ist. Wer die θ-Trajektorie einsammeln will,
+setzt für diesen Lauf `$CFG->debug = 0`.

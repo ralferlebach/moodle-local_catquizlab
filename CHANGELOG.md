@@ -6,6 +6,70 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.4.2] — 2026-09-02
+
+**A study at a size where the dispersion means something.** Three pool variants
+× five replications × six persons = 90 attempts, all played through the
+browser.
+
+### Result
+
+| variant | n | items | SE | bias | 95% CI |
+|---|---|---|---|---|---|
+| ideal | 30 | 16.0 | 0.913 | +0.706 | [+0.256; +1.156] |
+| calibration error | 30 | 16.0 | 0.937 | +0.512 | [+0.044; +0.980] |
+| depleted | 30 | 11.2 | 1.071 | +0.659 | [+0.173; +1.145] |
+
+The three confidence intervals overlap almost completely, so **no disturbance
+shows a demonstrable effect on the bias** at this size. That is the honest
+reading, and it is why the interface reports the interval beside the point
+estimate: the ΔRMSE of −0.039 and +0.065 against the ideal pool are a fraction
+of a standard error apart and mean nothing on their own.
+
+What the disturbances *do* show is elsewhere. A depleted pool cannot fill the
+test — 11.2 items instead of 16 — and pays for it in precision: SE 1.071
+against 0.913. That is a real, interpretable effect, and it appears in the
+length and precision columns rather than in the bias.
+
+Local diagnostics over 180 subscale observations: bias −0.030, RMSE 1.776,
+1-SE coverage 52.2%, 2-SE coverage 80.6%.
+
+### Verified
+All eight tabs render on 90 attempts, including robustness with a full ideal
+reference for the first time. Raw data lists 90 rows; the exports produce 16,
+91, 181 and 299 lines.
+
+---
+
+## [0.4.1] — 2026-09-02
+
+Engine updated to `main` (2026083025) and its defects pinned by test.
+
+### Checked against the new engine
+
+| Point | State |
+|---|---|
+| `progressretention` / `progressretentiondays` | **implemented** — progress-row retention is configurable now, which was the first thing this suite asked for upstream |
+| catquiz#59, `get_ability_range(array_key_first(...))` | open, `feedbackgenerator.php:446` unchanged |
+| `debuginfo.php` reading `lastquestion` unguarded | open, line 347 unchanged |
+| `local_catquiz_personparams.standarderror` | still written empty |
+
+Measured, not read: with `DEBUG_DEVELOPER` and `store_debug_info` both on, an
+attempt still does not start on the new engine.
+
+### Added
+- **`tests/engine_defects_test.php`** pins each of the four points. Every pin
+  fails once the engine is fixed — deliberately. A workaround that outlives its
+  cause is not free: it hides the repaired behaviour and keeps a limitation in
+  the documentation that no longer exists. Each failure message names what to
+  remove. The tests skip where no engine is installed, so CI stays green.
+- `docs/dev/environment-setup.md` records the state and the practical
+  consequence: `DEBUG_DEVELOPER` and `store_debug_info` exclude each other
+  until the `lastquestion` access is guarded, so collecting the ability path
+  means setting `$CFG->debug = 0` for that run.
+
+---
+
 ## [0.4.0] — 2026-09-02
 
 The three remaining gaps, closed.
