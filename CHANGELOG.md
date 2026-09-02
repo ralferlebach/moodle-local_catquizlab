@@ -6,6 +6,93 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.4.0] — 2026-09-02
+
+The three remaining gaps, closed.
+
+### Added
+- **Standard errors computed from the items a person actually saw.** The engine
+  records one on its own attempt row but leaves
+  `local_catquiz_personparams.standarderror` empty, so nothing downstream could
+  say how precise an estimate was — and a diagnosis without a precision is a
+  number without a claim.
+
+  The lab can compute it, because it knows the true item parameters it
+  generated: Fisher information per item, summed over the administered items,
+  SE = 1/√I. This is the identity the feasibility view already used in the
+  other direction. Two limits are stated in the class: the information is
+  evaluated at the *estimated* ability, which is what an operational test can
+  do, and it assumes the model the items were generated under.
+
+  Measured on the sweep: global SE 0.538 from I = 3.456 over 16 items;
+  per-scale 0.752 and 0.768; 23 of 24 subscale observations now carry a local
+  SE, giving 1-SE coverage 43.5% and 2-SE coverage 87.0%. The engine's own
+  values are still preferred where it writes any — empty means "nothing
+  usable", not "no rows", since it writes rows full of nulls.
+
+- **`docs/design/issue-catquiz-debuginfo-lastquestion.md`**, short: the
+  unguarded `lastquestion` access is a PHP notice, and only `DEBUG_DEVELOPER`
+  turns it into an exception that aborts the attempt.
+
+### Verified
+- **The robustness tab, with data for the first time.** A sweep over three pool
+  variants with everything else held constant — the only way a difference is
+  attributable to the disturbance rather than to the strategy:
+
+  | variant | items | RMSE | ΔRMSE vs. ideal | Δbias |
+  |---|---|---|---|---|
+  | ideal | 24 | 0.769 | — | — |
+  | calibration error | 24 | 0.905 | **+0.136** | −0.118 |
+  | depleted | 10 | 0.694 | −0.075 | −0.436 |
+
+  A miscalibrated pool costs precision, which is what the design predicts. The
+  depleted pool comes out slightly better, which at three attempts per cell
+  says nothing — and the interface reports the dispersion beside it rather than
+  the point estimate alone.
+
+### Verification
+PHPUnit 419 tests / 2748 assertions, phpcs and PHPDoc clean.
+
+---
+
+## [0.3.6] — 2026-09-02
+
+**The results interface walked through with real data.** All eight tabs render
+without an exception and without a missing language string, on the twelve
+attempts of the two-strategy sweep:
+
+| tab | tables | rows | charts |
+|---|---|---|---|
+| Overview | 3 | 6 | — |
+| Global metrics | 4 | 13 | 3 |
+| Subscales | 3 | 9 | 1 |
+| Deficit detection | 4 | 10 | — |
+| Robustness | — | — | — |
+| Test flow | 3 | 24 | 1 |
+| Raw data | 1 | 12 | — |
+| Export | 1 | 4 | — |
+
+Every tab names its aggregation: *"Aggregated over 12 attempts in 4 runs and 2
+replications. Dispersion: 95% confidence interval over replications."*
+
+The global tab reports bias 0.960 [0.257; 1.663], RMSE 1.5289 and a correlation
+with ground truth of 0.7506, beside a scatter plot with labelled axes and a
+y = x reference.
+
+Robustness is empty on purpose and says why: *"Only ideal-pool runs match this
+filter, so there is nothing to compare."* The sweep varied the strategy, not
+the pool, so a robustness figure would have compared conditions that differ in
+something else — which is exactly what the tab refuses to do.
+
+### Note for operators
+Every page returned "Section error!" until the plugin upgrade was run. A version
+bump without `admin/cli/upgrade.php` leaves Moodle unable to load the plugin's
+`settings.php`, so the admin page it registers does not exist and every URL
+under it fails. Nothing in the plugin causes it, but it looks alarming and
+costs time to trace, so it is written down here.
+
+---
+
 ## [0.3.5] — 2026-09-02
 
 ### Changed

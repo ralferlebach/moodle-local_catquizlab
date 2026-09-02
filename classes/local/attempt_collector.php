@@ -122,6 +122,20 @@ class attempt_collector {
         // The debug_info blob comes first, since it carries the whole path; the
         // attempt row is the fallback that exists on every site.
         $trace['scaleabilities'] = $debug['scaleabilities'] ?: ($engine['finalabilities'] ?? []);
+
+        // The precision the administered items imply, globally and per scale.
+        // The engine's own standard errors would be preferred; they are absent,
+        // and this is computable from what the lab generated.
+        $precision = precision::for_attempt(
+            (int) $attempt->runid,
+            (array) ($trace['items'] ?? []),
+            (float) ($trace['finaltheta'] ?? 0.0),
+            (array) $trace['scaleabilities']
+        );
+        $trace['information'] = $precision['information'];
+        if (($trace['finalse'] ?? null) === null) {
+            $trace['finalse'] = $precision['global'];
+        }
         $trace['questionsperscale'] = $debug['questionsperscale'] ?? [];
         $trace['abilitypath'] = $debug['abilitypath'] ?? [];
         $trace['steps'] = $debug['steps'] ?? 0;
@@ -130,7 +144,23 @@ class attempt_collector {
         // the estimated deviation within one or two standard errors of the true
         // one — cannot be computed at all, and guessing a value would turn a
         // missing measurement into a fabricated one.
-        $trace['scalestandarderrors'] = $engine['scalestandarderrors'] ?? [];
+        // The engine's own values first, and what they leave out is filled from
+        // the computed precision. Empty means "nothing usable", not "no rows":
+        // the engine writes person parameters with a null standard error, so
+        // the array arrives populated and useless.
+        $engineerrors = array_filter(
+            (array) ($engine['scalestandarderrors'] ?? []),
+            static fn($value): bool => $value !== null
+        );
+        if ($engineerrors === []) {
+            $engineerrors = [];
+            foreach ($precision['scales'] as $scaleid => $scale) {
+                if ($scale['se'] !== null) {
+                    $engineerrors[$scaleid] = $scale['se'];
+                }
+            }
+        }
+        $trace['scalestandarderrors'] = $engineerrors;
         // The progress row carries what debug_info does not: which scales were
         // active, dropped or locked, and the item sequence. It survives the
         // attempt today, but only until the activity is deleted, and the engine
@@ -208,6 +238,10 @@ class attempt_collector {
                 (int) ($catquiz->contextid ?? 0)
             ),
             'scalestandarderrors' => self::read_scale_standarderrors($catquiz),
+            // Computed from the items the person actually saw, because the
+            // engine leaves the person parameters' standard error empty and a
+            // diagnosis without a precision is a number without a claim.
+            'precision' => null,
             // The engine records the final per-scale abilities on its own
             // attempt row. debug_info holds them too, but only when the site
             // has debug information switched on, so a plain run collected
