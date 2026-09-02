@@ -6,6 +6,35 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.3.3] — 2026-09-01
+
+### Answered
+**Why `local_catquiz_attempts.debug_info` stays empty even with
+`local_catquiz | store_debug_info = 1`.** Measured in isolation on a fresh run:
+with the setting on, no attempt starts at all — the first question never
+appears and the activity reports "couldn't define the first question". With the
+setting off and everything else identical, the same test plays 16 items.
+
+The cause is in the engine and is the same shape as the colour-key defect fixed
+in 0.3.0: an exception in the feedback path aborts the question selection, and
+the visible message points somewhere else. `debuginfo.php:347` reads
+`$newdata['lastquestion']` without checking it exists, while every neighbouring
+field in the same structure is guarded with `isset()`. At the first question of
+an attempt there is no last question, so the access throws, the exception is
+caught in `return_next_testitem()` and turned into a general error.
+
+`lastquestion` is also removed from the attempt data on purpose in
+`catquiz.php:1874`, so the key is missing systematically rather than only on
+the first call.
+
+Drafted as `docs/design/issue-catquiz-debuginfo-lastquestion.md`. Until it is
+resolved, `debug_info` is unreachable — the field is only written when the
+setting is on — and the engine's ability path stays unavailable with it.
+
+The engine tree was restored byte-identically after the measurement.
+
+---
+
 ## [0.3.2] — 2026-09-01
 
 The study's item-parameter distributions, one question category per experiment,
