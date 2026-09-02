@@ -1,9 +1,18 @@
-# [BUG] `store_debug_info` verhindert den Start jedes Attempts: ungeprüfter Zugriff auf `lastquestion`
+# [BUG] Ungeprüfter Zugriff auf `lastquestion` bricht bei Developer-Debugging den Attempt ab
 
 ## Kontext
 
-Ist `local_catquiz | store_debug_info` gesetzt, lässt sich kein Attempt mehr
-starten. Die erste Frage erscheint nicht, stattdessen:
+**Umfang zuerst:** Auf einer Instanz mit `$CFG->debug = DEBUG_DEVELOPER` lässt
+sich mit gesetztem `local_catquiz | store_debug_info` kein Attempt starten. Auf
+einer Instanz mit normaler Debug-Stufe tritt der Fehler **nicht** auf — dort
+läuft derselbe Test durch und `debug_info` wird korrekt befüllt. Beides
+nachgemessen, mit sonst identischem Zustand.
+
+Betroffen ist damit die Entwicklungs- und Testsituation, nicht der
+Produktivbetrieb. Der ungeprüfte Zugriff bleibt trotzdem einer, und er trifft
+genau die Umgebung, in der man ihn am wenigsten gebrauchen kann.
+
+Bei Developer-Debugging erscheint statt der ersten Frage:
 
 ```text
 Sorry, but couldn't define the first question to start the attempt,
@@ -38,8 +47,11 @@ Undefined array key "lastquestion"
     .../classes/teststrategy/feedbackgenerator/debuginfo.php:347
 ```
 
-Die Ausnahme wird in `strategy::return_next_testitem()` gefangen und in einen
-allgemeinen Fehler übersetzt. Nach außen sieht das aus, als habe die
+Bei normaler Debug-Stufe ist das eine Notice: `(array) null` ergibt ein leeres
+Array und der Ablauf geht weiter. Bei Developer-Debugging wandelt Moodles
+Fehlerbehandlung die Notice in eine Ausnahme um; sie wird in
+`strategy::return_next_testitem()` gefangen und in einen allgemeinen Fehler
+übersetzt. Nach außen sieht das aus, als habe die
 Itemauswahl keine Frage gefunden — deshalb die irreführende Meldung über eine
 vermeintlich falsche Testkonfiguration.
 
@@ -67,21 +79,25 @@ Der Schlüssel fehlt also nicht nur beim ersten Aufruf, sondern systematisch.
 
 ## Reproduktion
 
-1. `local_catquiz | store_debug_info` aktivieren.
-2. Caches leeren.
-3. Einen CAT-Test mit gültigem Itempool aufrufen und einen Attempt starten.
+1. `$CFG->debug = DEBUG_DEVELOPER` setzen.
+2. `local_catquiz | store_debug_info` aktivieren.
+3. Caches leeren.
+4. Einen CAT-Test mit gültigem Itempool aufrufen und einen Attempt starten.
 
 Erwartet: die erste Frage.
 Beobachtet: `couldn't define the first question`.
 
-Mit `store_debug_info = 0` und sonst identischem Zustand startet derselbe
-Attempt normal.
+Gegenprobe, beide nachgemessen: mit `store_debug_info = 0` startet derselbe
+Attempt bei Developer-Debugging normal, und mit `$CFG->debug = 0` startet er
+auch bei aktivierter Debug-Speicherung — dann werden 17 Schritte in
+`debug_info` geschrieben.
 
 ## Ziel
 
 Die Debug-Einstellung soll Debug-Informationen sammeln, nicht den Testablauf
-verändern. Ein fehlendes Feld in einer Diagnosestruktur darf keinen Attempt
-verhindern.
+verändern — und schon gar nicht abhängig davon, wie die Instanz ihre
+Fehlerbehandlung konfiguriert hat. Ein fehlendes Feld in einer
+Diagnosestruktur darf keinen Attempt verhindern.
 
 ## Vorschlag
 
@@ -99,8 +115,8 @@ wird.
 
 ## Akzeptanzkriterien
 
-- [ ] Mit gesetztem `store_debug_info` startet ein Attempt und zeigt die erste
-      Frage.
+- [ ] Mit gesetztem `store_debug_info` startet ein Attempt auch bei
+      `DEBUG_DEVELOPER` und zeigt die erste Frage.
 - [ ] `local_catquiz_attempts.debug_info` enthält danach die Schrittdaten.
 - [ ] Ein fehlendes `lastquestion` führt zu einem neutralen Eintrag, nicht zu
       einer Ausnahme.

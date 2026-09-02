@@ -203,7 +203,10 @@ class attempt_collector {
             'finalse'    => $finalse,
             'responses'  => self::read_responses((int) $aq->uniqueid),
             'stopreason' => (string) ($aq->attemptstopcriteria ?? ''),
-            'debug'      => self::parse_debug_info((string) ($catquiz->debug_info ?? '')),
+            'debug'      => self::parse_debug_info(
+                (string) ($catquiz->debug_info ?? ''),
+                (int) ($catquiz->contextid ?? 0)
+            ),
             'scalestandarderrors' => self::read_scale_standarderrors($catquiz),
             // The engine records the final per-scale abilities on its own
             // attempt row. debug_info holds them too, but only when the site
@@ -349,6 +352,60 @@ class attempt_collector {
     }
 
     /**
+     * Parse an ability line of the form "Scale name: 0.42, Other scale: -1.3".
+     *
+     * @param string $line The rendered line, possibly wrapped in quotes.
+     * @param array $scalenames Scale name => engine scale id.
+     * @return array<int, float> Ability keyed by scale id; names that cannot be
+     *         resolved are left out rather than guessed at.
+     */
+    protected static function abilities_from_line(string $line, array $scalenames): array {
+        $line = trim($line, "\" \t\n\r");
+        if ($line === '' || $scalenames === []) {
+            return [];
+        }
+
+        $out = [];
+        // Split on the comma that precedes a name, not on any comma: a scale
+        // name may contain one, and a decimal separator never does here.
+        foreach (explode(',', $line) as $part) {
+            $position = strrpos($part, ':');
+            if ($position === false) {
+                continue;
+            }
+            $name = trim(substr($part, 0, $position));
+            $value = trim(substr($part, $position + 1));
+            if (!is_numeric($value) || !isset($scalenames[$name])) {
+                continue;
+            }
+            $out[(int) $scalenames[$name]] = (float) $value;
+        }
+
+        return $out;
+    }
+
+    /**
+     * The engine scale names of a CAT context, for translating ability lines.
+     *
+     * @param int $contextid The CAT context.
+     * @return array<string, int> Scale name => scale id.
+     */
+    protected static function scale_names(int $contextid): array {
+        global $DB;
+
+        if ($contextid <= 0 || !$DB->get_manager()->table_exists('local_catquiz_catscales')) {
+            return [];
+        }
+
+        $names = [];
+        foreach ($DB->get_records('local_catquiz_catscales', ['contextid' => $contextid], '', 'id, name') as $row) {
+            $names[(string) $row->name] = (int) $row->id;
+        }
+
+        return $names;
+    }
+
+    /**
      * Extract the per-scale ability path and exposure from an engine debug_info blob.
      *
      * The engine records debug_info as a JSON list of per-step snapshots; the last
@@ -357,9 +414,12 @@ class attempt_collector {
      * the subscale-level estimates the DPF diagnostics compare against the truth.
      *
      * @param string $json The debug_info JSON.
+     * @param int $contextid The CAT context, used to translate scale names.
      * @return array{steps: int, scaleabilities: array<int, float>, questionsperscale: array}
      */
-    public static function parse_debug_info(string $json): array {
+    public static function parse_debug_info(string $json, int $contextid = 0): array {
+        $scalenames = self::scale_names($contextid);
+
         $empty = ['steps' => 0, 'scaleabilities' => [], 'questionsperscale' => []];
         if ($json === '') {
             return $empty;
@@ -388,13 +448,13 @@ class attempt_collector {
             }
             $path[] = [
                 'step'      => $index + 1,
-                'abilities' => self::normalise_abilities($row['personabilities']),
+                'abilities' => self::normalise_abilities($row['personabilities'], $scalenames),
             ];
         }
 
         return [
             'steps'             => count($rows),
-            'scaleabilities'    => self::normalise_abilities($last['personabilities'] ?? []),
+            'scaleabilities'    => self::normalise_abilities($last['personabilities'] ?? [], $scalenames),
             'abilitypath'       => $path,
             'questionsperscale' => is_array($last['numquestionsperscale'] ?? null)
                 ? $last['numquestionsperscale']
@@ -408,9 +468,19 @@ class attempt_collector {
      * Accepts a map keyed by scale id or a list of rows with a scale id and value.
      *
      * @param mixed $abilities The raw personabilities value.
+     * @param array $scalenames Scale name => engine scale id, for rendered lines.
      * @return array<int, float>
      */
-    protected static function normalise_abilities($abilities): array {
+    protected static function normalise_abilities($abilities, array $scalenames = []): array {
+        // The engine's debug rows carry the abilities as a rendered line —
+        // '"Scale A: 0.5, Scale A / K1: 0.4"' — rather than as a map. It reads
+        // well in a report and says nothing a machine can use, so the names are
+        // translated back into scale ids here. Without the translation the
+        // whole ability path was silently dropped.
+        if (is_string($abilities)) {
+            return self::abilities_from_line($abilities, $scalenames);
+        }
+
         if (!is_array($abilities)) {
             return [];
         }

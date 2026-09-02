@@ -6,6 +6,42 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.3.4] — 2026-09-02
+
+**The step-by-step ability path is collected.** A full adaptive test, one θ
+estimate per step:
+
+    step  1  question 880  ability -0.4600
+    step  2  question 881  ability -0.4752
+    step  3  question 882  ability -0.6992
+    ...
+    step 16  question 899  ability -0.2774
+    true θ -0.4795
+
+### Corrected
+My previous finding was half right, and Ralf's counter-observation settled it.
+The unguarded access to `lastquestion` in `debuginfo.php:347` is real, but it
+only aborts an attempt on an instance running `DEBUG_DEVELOPER`, where Moodle
+turns the PHP notice into an exception. On a normal instance `(array) null`
+becomes an empty array and the test runs — which is why it works in a full
+environment. Measured both ways with everything else identical. The upstream
+issue now states the scope first, and its title says "at developer debugging"
+rather than claiming attempts are broken in general.
+
+### Fixed
+- **The ability path was parsed as a map and is a rendered line.** The engine
+  writes `"Scale: 0.5, Scale / K1: 0.4"` into each debug row — readable in a
+  report, useless to a machine. Without translating the names back into scale
+  ids the entire path was dropped silently, which is why `path: 0` persisted
+  even where `debug_info` was present. A name the run does not know is skipped
+  rather than guessed at.
+
+### Verification
+17 debug rows collected, 16 flow steps with an ability each, `scaleabilities`
+4 per attempt. PHPUnit 414 tests, phpcs and PHPDoc clean.
+
+---
+
 ## [0.3.3] — 2026-09-01
 
 ### Answered
