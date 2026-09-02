@@ -241,3 +241,25 @@ die verfügbaren Modelle unter `local_catquiz/catmodel/`.
 | „ChromeDriver only supports Chrome version N" | fremdes Chrome im Pfad; `binary` in `behat_profiles` setzen |
 | phpcs lokal grün, CI rot | Plugin außerhalb des Moodle-Baums geprüft |
 | „max_input_vars must be at least 5000" | PHP-Default 1000 nicht erhöht |
+
+## Debug-Stufe und `store_debug_info`
+
+Die beiden vertragen sich derzeit nicht. `local_catquiz | store_debug_info`
+füllt `local_catquiz_attempts.debug_info` — die Quelle für den
+Fähigkeitsverlauf je Schritt. Auf einer Instanz mit
+`$CFG->debug = DEBUG_DEVELOPER` bricht damit aber jeder Attempt beim ersten
+Frageaufruf ab: Ein ungeprüfter Zugriff auf `lastquestion` in der
+Debug-Ausgabe der Engine ist dort eine Ausnahme statt einer Notice
+(siehe `docs/design/issue-catquiz-debuginfo-lastquestion.md`).
+
+Für Sammelläufe gilt deshalb:
+
+| Zweck | `$CFG->debug` | `store_debug_info` |
+|---|---|---|
+| Attempts spielen, Verlauf einsammeln | `0` | `1` |
+| Plugin-Code entwickeln, PHPUnit, Behat | `DEBUG_DEVELOPER` | `0` |
+
+Die Testumgebung steht auf der ersten Zeile, weil ohne Verlauf die halbe
+Auswertung leer bleibt. Für Arbeit am Plugin selbst lohnt das Umschalten —
+Moodles eigene Entwicklerprüfungen sind zu wertvoll, um dauerhaft darauf zu
+verzichten.

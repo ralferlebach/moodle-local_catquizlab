@@ -6,6 +6,61 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.3.5] — 2026-09-02
+
+### Changed
+- The upstream issue on `lastquestion` is now a short one, and it leads with
+  the condition rather than the symptom: the unguarded access is a PHP notice,
+  and only `DEBUG_DEVELOPER` turns it into an exception. On a normal instance
+  `(array) null` becomes `[]` and nothing happens.
+- `docs/dev/environment-setup.md` states the consequence for this environment.
+  The two settings do not currently combine, so a choice has to be made:
+
+  | Purpose | `$CFG->debug` | `store_debug_info` |
+  |---|---|---|
+  | Play attempts, collect the ability path | `0` | `1` |
+  | Work on the plugin, PHPUnit, Behat | `DEBUG_DEVELOPER` | `0` |
+
+  The environment now sits on the first row, since without the path half the
+  evaluation stays empty. The `config.php` line says why, so the next person
+  does not switch it back and lose the traces.
+
+### Note on collection runs
+A sweep of four runs with three persons each provisions cleanly (24 items
+engine-visible per run), but playing twelve attempts through a real browser
+takes longer than a single command in this environment allows — roughly half a
+minute per attempt against the built-in PHP server, which also drops
+connections under parallel sessions. Collecting a full sweep needs either a
+longer-running worker outside the session or a proper web server.
+
+---
+
+## [0.3.5] — 2026-09-02
+
+**First sweep with real data.** Two strategies, two replications, three persons
+each — twelve attempts played through the browser, then evaluated:
+
+| strategy | items | error (mean) | runtime |
+|---|---|---|---|
+| Estimate global ability (MFI) | 8.0 | +0.84 | 16.0 s |
+| Fixed-form baseline | 16.0 | +1.08 | 26.3 s |
+
+MFI reaches a slightly smaller error with half the items and in two thirds of
+the time, which is the behaviour the design predicts. Exposure: 63 of 96 items
+used, 33 never shown, maximum rate 0.25, Gini 0.475. Local diagnostics: 24
+subscale observations with true and estimated deltas.
+
+The four export levels produce 5, 13, 25 and 97 lines respectively.
+
+### Added
+- `docs/design/issue-catquiz-debuginfo-lastquestion.md`, shortened to the point:
+  the unguarded `lastquestion` access is a PHP notice, and only at
+  `DEBUG_DEVELOPER` does Moodle turn it into an exception that aborts the
+  attempt. On a normal instance `(array) null` becomes `[]` and nothing
+  happens. Scope first, then cause, then the one-line fix.
+
+---
+
 ## [0.3.4] — 2026-09-02
 
 **The step-by-step ability path is collected.** A full adaptive test, one θ
