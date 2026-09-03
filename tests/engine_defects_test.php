@@ -57,36 +57,36 @@ final class engine_defects_test extends \advanced_testcase {
     }
 
     /**
-     * catquiz#59: the ability range is asked for without checking the scales.
+     * catquiz#59 stays fixed: the ability range declares the type it needs.
      *
      * @return void
      */
-    public function test_ability_range_is_still_called_unchecked(): void {
+    public function test_ability_range_declares_int(): void {
         $this->resetAfterTest();
 
-        $source = $this->engine_source('classes/teststrategy/feedbackgenerator.php');
+        $source = $this->engine_source('classes/teststrategy/feedback_helper.php');
         if ($source === null) {
             $this->markTestSkipped('No CAT engine installed.');
         }
 
-        // See https://github.com/ralferlebach/moodle-local_catquiz/issues/59 —
-        // array_key_first() on an empty array is null, and get_ability_range()
-        // declares int. At the first question of an attempt the scales are
-        // empty, so the call raises and the selection is aborted.
+        // Fixed in 2026090204. The pin turned around when it did: it now holds
+        // the repair in place rather than the defect, because a signature that
+        // silently loosens again would bring back an abort that points at the
+        // wrong place. See issues/59.
         $this->assertStringContainsString(
-            'get_ability_range(array_key_first($catscales))',
+            'function get_ability_range(int $catscaleid)',
             $source,
-            'catquiz#59 appears to be fixed. Re-test whether the lab still needs its guards, '
-                . 'and update docs/design/issue-catquiz-ability-range-null.md.'
+            'get_ability_range no longer declares int. catquiz#59 may have regressed: at the '
+                . 'first question array_key_first() on an empty scale list is null.'
         );
     }
 
     /**
-     * The debug generator reads `lastquestion` without checking it exists.
+     * catquiz#62 stays fixed: `lastquestion` is read defensively.
      *
      * @return void
      */
-    public function test_debuginfo_still_reads_lastquestion_unchecked(): void {
+    public function test_debuginfo_guards_lastquestion(): void {
         $this->resetAfterTest();
 
         $source = $this->engine_source('classes/teststrategy/feedbackgenerator/debuginfo.php');
@@ -94,15 +94,40 @@ final class engine_defects_test extends \advanced_testcase {
             $this->markTestSkipped('No CAT engine installed.');
         }
 
-        // A PHP notice on a normal site, an exception at DEBUG_DEVELOPER — and
-        // there it aborts every attempt while store_debug_info is on, which is
-        // why the ability path cannot be collected in a development
-        // environment.
+        // Fixed in 2026090204, and verified by running an attempt with
+        // DEBUG_DEVELOPER and store_debug_info both on: 16 items, 17 debug rows,
+        // the ability path collected. Before the fix that combination started
+        // no attempt at all. See issues/62.
         $this->assertStringContainsString(
-            '(array) $newdata[\'lastquestion\']',
+            '$newdata[\'lastquestion\'] ?? []',
             $source,
-            'The lastquestion access appears to be guarded now. Re-test store_debug_info at '
-                . 'DEBUG_DEVELOPER and update docs/design/issue-catquiz-debuginfo-lastquestion.md.'
+            'The lastquestion access is unguarded again. At DEBUG_DEVELOPER the notice becomes '
+                . 'an exception and no attempt starts while store_debug_info is on.'
+        );
+    }
+
+    /**
+     * The engine records why a selection came back empty.
+     *
+     * @return void
+     */
+    public function test_stage_counts_are_recorded(): void {
+        $this->resetAfterTest();
+
+        $source = $this->engine_source('classes/teststrategy/strategy.php');
+        if ($source === null) {
+            $this->markTestSkipped('No CAT engine installed.');
+        }
+
+        // Added in 2026090204 for issue #64. The status alone says a selection
+        // found nothing; the per-stage counts say which stage emptied the pool.
+        // The lab reads them through enginediagnosis.php, in the session of the
+        // person whose attempt it was — they live in a session cache, so a CLI
+        // script or a call under the worker's own token sees nothing.
+        $this->assertStringContainsString(
+            "cache->set('catquizstagecounts'",
+            $source,
+            'The engine no longer records stage counts; enginediagnosis.php has nothing to read.'
         );
     }
 

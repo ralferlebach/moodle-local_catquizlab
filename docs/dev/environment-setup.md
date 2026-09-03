@@ -271,8 +271,8 @@ Gegen `moodle-local_catquiz` **2026083025** (Branch `main`) nachgemessen:
 | Punkt | Stand |
 |---|---|
 | `progressretention` / `progressretentiondays` | **umgesetzt** — die Aufbewahrung der Progress-Zeilen ist jetzt konfigurierbar |
-| catquiz#59 (`get_ability_range(array_key_first(...))`) | offen, `feedbackgenerator.php:446` unverändert |
-| `debuginfo.php` liest `lastquestion` ungeprüft | offen, Zeile 347 unverändert |
+| catquiz#59 (`get_ability_range`) | **behoben** in 2026090204: die Methode deklariert `int` |
+| catquiz#62 (`lastquestion` ungeprüft) | **behoben** in 2026090204: `?? []` |
 | `local_catquiz_personparams.standarderror` | wird weiterhin leer geschrieben |
 
 `tests/engine_defects_test.php` hält diesen Stand fest. Jeder dieser Tests
@@ -281,7 +281,9 @@ Eine Umgehung, die ihre Ursache überlebt, verbirgt das reparierte Verhalten und
 hält eine Einschränkung in der Dokumentation, die es nicht mehr gibt. Die
 Fehlermeldung sagt jeweils, was zu entfernen ist.
 
-Praktische Folge für die Entwicklungsumgebung: `$CFG->debug = DEBUG_DEVELOPER`
-und `local_catquiz | store_debug_info = 1` schließen einander aus, solange der
-`lastquestion`-Zugriff ungeprüft ist. Wer die θ-Trajektorie einsammeln will,
-setzt für diesen Lauf `$CFG->debug = 0`.
+**Überholt seit 2026090204:** Bis dahin schlossen `$CFG->debug =
+DEBUG_DEVELOPER` und `local_catquiz | store_debug_info = 1` einander aus. Das
+gilt nicht mehr — nachgemessen: mit beiden aktiv laufen 16 Items durch, 17
+Debug-Zeilen werden geschrieben und die θ-Trajektorie wird eingesammelt. Die
+Entwicklungsumgebung kann Developer-Debugging und Debug-Speicherung dauerhaft
+zusammen führen.

@@ -6,6 +6,59 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.5.0] — 2026-09-03
+
+Verified against `local_catquiz` 2026090204 (`improve-performance-testadministration`).
+
+### The claim that was overtaken
+> "`$CFG->debug = DEBUG_DEVELOPER` schließt `local_catquiz | store_debug_info = 1`
+> derzeit aus."
+
+**No longer true.** With both active, an attempt now plays 16 items, writes
+10,954 characters of `debug_info` across 17 rows, and the ability path is
+collected (`path: 17`). Both engine defects this suite reported are fixed in
+2026090204: `get_ability_range()` declares `int` (catquiz#59) and `debuginfo.php`
+reads `$newdata['lastquestion'] ?? []` (catquiz#62).
+
+The pins in `tests/engine_defects_test.php` did their job: they failed on the
+new engine and their messages named what to update. They now hold the repairs
+in place instead of the defects — a signature that loosens again would bring
+back an abort that points at the wrong place.
+
+### Reproduction of catquiz#64, and what the new diagnosis shows
+
+1. `local_catquiz` 2026090204 installed.
+2. Reproduced with `maxquestionspersubscale = 1`: the attempt stops after **2
+   answered questions** of a required minimum of 10, with 22 unplayed items
+   left in the pool. `mod_adaptivequiz` records `attemptstopcriteria = "An error
+   occured"`.
+3. From the attempt's cache: **both keys are absent.**
+
+```json
+{"available": false, "error": null, "stagecounts": null,
+ "reason": "stage-counts-not-recorded-by-this-engine"}
+```
+
+The engine's own attempt row explains why: `catquizerror = false`. The
+selection never reported a failure, so `after_error()` — the only place that
+writes `catquizerror` and `catquizstagecounts` — does not run. **The diagnosis
+added for #64 is not set for the abort #64 describes.**
+
+That is the finding, and it is a useful one: without it, any statement about
+which stage empties the pool would be guesswork, which is exactly what the
+counts were meant to end. Writing them on every completed selection, not only
+in the error path, would close the gap.
+
+### Added
+- **`enginediagnosis.php`** reads `catquizerror` and `catquizstagecounts` from
+  the attempt's session cache. It has to run in the browser session of the
+  person whose attempt it was — the cache is session-scoped, so a CLI script or
+  a call under the worker's own token sees an empty cache. It distinguishes "no
+  counts recorded" from "a stage counted zero", because those point at
+  completely different things.
+
+---
+
 ## [0.4.3] — 2026-09-02
 
 Release documentation.
