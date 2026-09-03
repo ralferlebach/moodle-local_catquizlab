@@ -6,6 +6,21 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.4.3] — 2026-09-02
+
+Release documentation.
+
+### Changed
+- `docs/sessions/session-003.md` records the session end to end: issue #9 with
+  its eleven sub-findings, the first real engine integration, the chain of
+  defects between a queued attempt and a completed one, the study parameters,
+  and the closing study.
+- `docs/design/status.md` describes 0.4.2 and names what remains — two engine
+  defects held by test, and a replication count that needs to grow well beyond
+  five before the pool variants can be told apart.
+
+---
+
 ## [0.4.2] — 2026-09-02
 
 **A study at a size where the dispersion means something.** Three pool variants

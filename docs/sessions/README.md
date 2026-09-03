@@ -17,3 +17,10 @@ Aufbau eines Protokolls:
 Feinkörnige Änderungshistorie gehört in `CHANGELOG.md`, der Arbeitsvorrat in
 `docs/design/backlog.md`; das Sitzungsprotokoll hält Entscheidungen und
 Begründungen der jeweiligen Chat-Session fest.
+
+## Session 003 — Engine-Integration und erstes Studienergebnis
+
+Von 0.2.6 auf 0.4.2. Issue #9 mit elf Teilbefunden, die Engine erstmals wirklich
+installiert und angebunden, der Weg zum ersten vollständig durchgespielten
+adaptiven Test, die Studienparameter festgelegt und eine Robustheitsstudie über
+90 Attempts ausgewertet. Siehe `session-003.md`.
