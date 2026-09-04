@@ -6,6 +6,30 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.5.1] — 2026-09-03
+
+CI fix for the engine pins added in 0.5.0.
+
+### Fixed
+- **The pins failed in CI because they assumed an engine version.** They were
+  written against `local_catquiz` 2026090204, where the fixes for catquiz#59,
+  #62 and the #64 stage counts landed, but CI installs the engine's `main` —
+  currently 2026083025, which predates all three. Every PHPUnit job in the
+  matrix went red reporting a regression that had not happened, which is the
+  worst kind of red build: it trains people to ignore the colour.
+
+  The pins now read the engine's version and skip below 2026090204 with a
+  message saying so. A guard on a repair can only speak about a release that
+  has the repair.
+
+### Verification
+Both directions measured with the engine's version switched by hand: on
+2026090204 all five pins run and pass; on 2026083025 the three version-gated
+ones skip and the suite stays green. PHPUnit 424 tests, phpcs and PHPDoc clean,
+all test classes loading under PHPUnit 11.5.
+
+---
+
 ## [0.5.0] — 2026-09-03
 
 Verified against `local_catquiz` 2026090204 (`improve-performance-testadministration`).

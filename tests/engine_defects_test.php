@@ -42,6 +42,9 @@ use local_catquizlab\local\environment;
  * @coversNothing
  */
 final class engine_defects_test extends \advanced_testcase {
+    /** @var int The engine release that carries the fixes pinned below. */
+    protected const FIXED_IN = 2026090204;
+
     /**
      * Read a file from the installed engine.
      *
@@ -57,12 +60,54 @@ final class engine_defects_test extends \advanced_testcase {
     }
 
     /**
+     * The installed engine's version, or null when it is absent.
+     *
+     * @return int|null
+     */
+    protected function engine_version(): ?int {
+        $source = $this->engine_source('version.php');
+        if ($source === null) {
+            return null;
+        }
+
+        return preg_match('/\$plugin->version\s*=\s*(\d+)/', $source, $m) ? (int) $m[1] : null;
+    }
+
+    /**
+     * Skip unless the installed engine is new enough to carry a fix.
+     *
+     * A pin on a repair is a regression guard, and a guard can only speak about
+     * a release that has the repair. CI installs the engine's `main`, which may
+     * well be older than the branch a fix landed on, and failing there would
+     * report a regression that has not happened — the worst kind of red build,
+     * because it trains people to ignore the colour.
+     *
+     * @param string $what What the fix is, for the skip message.
+     * @return void
+     */
+    protected function require_fixed_engine(string $what): void {
+        $version = $this->engine_version();
+        if ($version === null) {
+            $this->markTestSkipped('No CAT engine installed.');
+        }
+        if ($version < self::FIXED_IN) {
+            $this->markTestSkipped(sprintf(
+                'Engine %d predates the fix for %s (landed in %d); nothing to guard yet.',
+                $version,
+                $what,
+                self::FIXED_IN
+            ));
+        }
+    }
+
+    /**
      * catquiz#59 stays fixed: the ability range declares the type it needs.
      *
      * @return void
      */
     public function test_ability_range_declares_int(): void {
         $this->resetAfterTest();
+        $this->require_fixed_engine('catquiz#59');
 
         $source = $this->engine_source('classes/teststrategy/feedback_helper.php');
         if ($source === null) {
@@ -88,6 +133,7 @@ final class engine_defects_test extends \advanced_testcase {
      */
     public function test_debuginfo_guards_lastquestion(): void {
         $this->resetAfterTest();
+        $this->require_fixed_engine('catquiz#62');
 
         $source = $this->engine_source('classes/teststrategy/feedbackgenerator/debuginfo.php');
         if ($source === null) {
@@ -113,6 +159,7 @@ final class engine_defects_test extends \advanced_testcase {
      */
     public function test_stage_counts_are_recorded(): void {
         $this->resetAfterTest();
+        $this->require_fixed_engine('the catquiz#64 stage counts');
 
         $source = $this->engine_source('classes/teststrategy/strategy.php');
         if ($source === null) {
