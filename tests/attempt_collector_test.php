@@ -190,4 +190,42 @@ final class attempt_collector_test extends \advanced_testcase {
             (int) $DB->get_field('local_catquizlab_attempt', 'status', ['id' => $attemptid])
         );
     }
+
+    /**
+     * The engine's rendered ability line is translated back into scale ids.
+     *
+     * @return void
+     */
+    public function test_ability_line_is_translated(): void {
+        $this->resetAfterTest();
+
+        // The debug_info rows carry the abilities as a rendered line rather than
+        // as a map: "Scale: 0.5, Scale / K1: 0.4". That reads well in a report and
+        // says nothing a machine can use, so without translating the names the
+        // whole ability path was silently dropped.
+        $method = new \ReflectionMethod(attempt_collector::class, 'abilities_from_line');
+        $method->setAccessible(true);
+
+        $names = ['CATLab run 1' => 10, 'CATLab run 1 / K1' => 11, 'CATLab run 1 / K1.1' => 12];
+        $line = '"CATLab run 1: -0.46, CATLab run 1 / K1: -0.4752, CATLab run 1 / K1.1: -3"';
+
+        $this->assertSame([10 => -0.46, 11 => -0.4752, 12 => -3.0], $method->invoke(null, $line, $names));
+    }
+
+    /**
+     * A name the run does not know is left out rather than guessed at.
+     *
+     * @return void
+     */
+    public function test_unknown_scale_names_are_skipped(): void {
+        $this->resetAfterTest();
+
+        $method = new \ReflectionMethod(attempt_collector::class, 'abilities_from_line');
+        $method->setAccessible(true);
+
+        $result = $method->invoke(null, '"Known: 1.5, Stranger: 2.5"', ['Known' => 7]);
+
+        $this->assertSame([7 => 1.5], $result);
+        $this->assertSame([], $method->invoke(null, '', ['Known' => 7]));
+    }
 }

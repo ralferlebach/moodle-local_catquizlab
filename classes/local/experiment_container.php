@@ -173,6 +173,71 @@ class experiment_container {
     }
 
     /**
+     * The question category an experiment's items live in.
+     *
+     * One category per experiment, for the same reason there is one section per
+     * experiment: a shared category becomes unreadable after a few sweeps, and
+     * an item cannot be traced to the study it belongs to without consulting
+     * the lab's own tables. It also lets the item name stand on its own, since
+     * uniqueness only has to hold within the category.
+     *
+     * Created under the course context, so it is removed with the course rather
+     * than outliving it in the system context.
+     *
+     * @param int $experimentid The experiment.
+     * @return int The category id, or 0 when there is no container to put it in.
+     */
+    public static function question_category(int $experimentid): int {
+        global $DB, $CFG;
+        require_once($CFG->libdir . '/questionlib.php');
+
+        $experiment = $DB->get_record('local_catquizlab_experiment', ['id' => $experimentid]);
+        if (!$experiment) {
+            return 0;
+        }
+
+        // The experiment's course, or the configured one when it has not been
+        // provisioned yet. Materialisation runs before the container stage, so
+        // requiring the course to be recorded already left every run without a
+        // category and the whole stage returned nothing.
+        $courseid = (int) ($experiment->courseid ?: self::configured_course());
+        if ($courseid <= 0) {
+            return 0;
+        }
+
+        $context = \context_course::instance($courseid, IGNORE_MISSING);
+        if (!$context) {
+            return 0;
+        }
+
+        $name = get_string('container:questioncategory', 'local_catquizlab', (object) [
+            'id'   => (int) $experiment->id,
+            'name' => format_string($experiment->name),
+        ]);
+
+        $existing = $DB->get_record('question_categories', [
+            'contextid' => $context->id,
+            'name'      => $name,
+        ]);
+        if ($existing) {
+            return (int) $existing->id;
+        }
+
+        $parent = $DB->get_record('question_categories', ['contextid' => $context->id, 'parent' => 0]);
+
+        return (int) $DB->insert_record('question_categories', (object) [
+            'name'         => $name,
+            'contextid'    => $context->id,
+            'info'         => get_string('container:questioncategoryinfo', 'local_catquizlab'),
+            'infoformat'   => FORMAT_HTML,
+            'stamp'        => make_unique_id_code(),
+            'parent'       => $parent ? (int) $parent->id : 0,
+            'sortorder'    => 999,
+            'idnumber'     => null,
+        ]);
+    }
+
+    /**
      * The section name of an experiment.
      *
      * The creation time rather than the current time, so the name of a section

@@ -6,6 +6,487 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.5.1] — 2026-09-03
+
+CI fix for the engine pins added in 0.5.0.
+
+### Fixed
+- **The pins failed in CI because they assumed an engine version.** They were
+  written against `local_catquiz` 2026090204, where the fixes for catquiz#59,
+  #62 and the #64 stage counts landed, but CI installs the engine's `main` —
+  currently 2026083025, which predates all three. Every PHPUnit job in the
+  matrix went red reporting a regression that had not happened, which is the
+  worst kind of red build: it trains people to ignore the colour.
+
+  The pins now read the engine's version and skip below 2026090204 with a
+  message saying so. A guard on a repair can only speak about a release that
+  has the repair.
+
+### Verification
+Both directions measured with the engine's version switched by hand: on
+2026090204 all five pins run and pass; on 2026083025 the three version-gated
+ones skip and the suite stays green. PHPUnit 424 tests, phpcs and PHPDoc clean,
+all test classes loading under PHPUnit 11.5.
+
+---
+
+## [0.5.0] — 2026-09-03
+
+Verified against `local_catquiz` 2026090204 (`improve-performance-testadministration`).
+
+### The claim that was overtaken
+> "`$CFG->debug = DEBUG_DEVELOPER` schließt `local_catquiz | store_debug_info = 1`
+> derzeit aus."
+
+**No longer true.** With both active, an attempt now plays 16 items, writes
+10,954 characters of `debug_info` across 17 rows, and the ability path is
+collected (`path: 17`). Both engine defects this suite reported are fixed in
+2026090204: `get_ability_range()` declares `int` (catquiz#59) and `debuginfo.php`
+reads `$newdata['lastquestion'] ?? []` (catquiz#62).
+
+The pins in `tests/engine_defects_test.php` did their job: they failed on the
+new engine and their messages named what to update. They now hold the repairs
+in place instead of the defects — a signature that loosens again would bring
+back an abort that points at the wrong place.
+
+### Reproduction of catquiz#64, and what the new diagnosis shows
+
+1. `local_catquiz` 2026090204 installed.
+2. Reproduced with `maxquestionspersubscale = 1`: the attempt stops after **2
+   answered questions** of a required minimum of 10, with 22 unplayed items
+   left in the pool. `mod_adaptivequiz` records `attemptstopcriteria = "An error
+   occured"`.
+3. From the attempt's cache: **both keys are absent.**
+
+```json
+{"available": false, "error": null, "stagecounts": null,
+ "reason": "stage-counts-not-recorded-by-this-engine"}
+```
+
+The engine's own attempt row explains why: `catquizerror = false`. The
+selection never reported a failure, so `after_error()` — the only place that
+writes `catquizerror` and `catquizstagecounts` — does not run. **The diagnosis
+added for #64 is not set for the abort #64 describes.**
+
+That is the finding, and it is a useful one: without it, any statement about
+which stage empties the pool would be guesswork, which is exactly what the
+counts were meant to end. Writing them on every completed selection, not only
+in the error path, would close the gap.
+
+### Added
+- **`enginediagnosis.php`** reads `catquizerror` and `catquizstagecounts` from
+  the attempt's session cache. It has to run in the browser session of the
+  person whose attempt it was — the cache is session-scoped, so a CLI script or
+  a call under the worker's own token sees an empty cache. It distinguishes "no
+  counts recorded" from "a stage counted zero", because those point at
+  completely different things.
+
+---
+
+## [0.4.3] — 2026-09-02
+
+Release documentation.
+
+### Changed
+- `docs/sessions/session-003.md` records the session end to end: issue #9 with
+  its eleven sub-findings, the first real engine integration, the chain of
+  defects between a queued attempt and a completed one, the study parameters,
+  and the closing study.
+- `docs/design/status.md` describes 0.4.2 and names what remains — two engine
+  defects held by test, and a replication count that needs to grow well beyond
+  five before the pool variants can be told apart.
+
+---
+
+## [0.4.2] — 2026-09-02
+
+**A study at a size where the dispersion means something.** Three pool variants
+× five replications × six persons = 90 attempts, all played through the
+browser.
+
+### Result
+
+| variant | n | items | SE | bias | 95% CI |
+|---|---|---|---|---|---|
+| ideal | 30 | 16.0 | 0.913 | +0.706 | [+0.256; +1.156] |
+| calibration error | 30 | 16.0 | 0.937 | +0.512 | [+0.044; +0.980] |
+| depleted | 30 | 11.2 | 1.071 | +0.659 | [+0.173; +1.145] |
+
+The three confidence intervals overlap almost completely, so **no disturbance
+shows a demonstrable effect on the bias** at this size. That is the honest
+reading, and it is why the interface reports the interval beside the point
+estimate: the ΔRMSE of −0.039 and +0.065 against the ideal pool are a fraction
+of a standard error apart and mean nothing on their own.
+
+What the disturbances *do* show is elsewhere. A depleted pool cannot fill the
+test — 11.2 items instead of 16 — and pays for it in precision: SE 1.071
+against 0.913. That is a real, interpretable effect, and it appears in the
+length and precision columns rather than in the bias.
+
+Local diagnostics over 180 subscale observations: bias −0.030, RMSE 1.776,
+1-SE coverage 52.2%, 2-SE coverage 80.6%.
+
+### Verified
+All eight tabs render on 90 attempts, including robustness with a full ideal
+reference for the first time. Raw data lists 90 rows; the exports produce 16,
+91, 181 and 299 lines.
+
+---
+
+## [0.4.1] — 2026-09-02
+
+Engine updated to `main` (2026083025) and its defects pinned by test.
+
+### Checked against the new engine
+
+| Point | State |
+|---|---|
+| `progressretention` / `progressretentiondays` | **implemented** — progress-row retention is configurable now, which was the first thing this suite asked for upstream |
+| catquiz#59, `get_ability_range(array_key_first(...))` | open, `feedbackgenerator.php:446` unchanged |
+| `debuginfo.php` reading `lastquestion` unguarded | open, line 347 unchanged |
+| `local_catquiz_personparams.standarderror` | still written empty |
+
+Measured, not read: with `DEBUG_DEVELOPER` and `store_debug_info` both on, an
+attempt still does not start on the new engine.
+
+### Added
+- **`tests/engine_defects_test.php`** pins each of the four points. Every pin
+  fails once the engine is fixed — deliberately. A workaround that outlives its
+  cause is not free: it hides the repaired behaviour and keeps a limitation in
+  the documentation that no longer exists. Each failure message names what to
+  remove. The tests skip where no engine is installed, so CI stays green.
+- `docs/dev/environment-setup.md` records the state and the practical
+  consequence: `DEBUG_DEVELOPER` and `store_debug_info` exclude each other
+  until the `lastquestion` access is guarded, so collecting the ability path
+  means setting `$CFG->debug = 0` for that run.
+
+---
+
+## [0.4.0] — 2026-09-02
+
+The three remaining gaps, closed.
+
+### Added
+- **Standard errors computed from the items a person actually saw.** The engine
+  records one on its own attempt row but leaves
+  `local_catquiz_personparams.standarderror` empty, so nothing downstream could
+  say how precise an estimate was — and a diagnosis without a precision is a
+  number without a claim.
+
+  The lab can compute it, because it knows the true item parameters it
+  generated: Fisher information per item, summed over the administered items,
+  SE = 1/√I. This is the identity the feasibility view already used in the
+  other direction. Two limits are stated in the class: the information is
+  evaluated at the *estimated* ability, which is what an operational test can
+  do, and it assumes the model the items were generated under.
+
+  Measured on the sweep: global SE 0.538 from I = 3.456 over 16 items;
+  per-scale 0.752 and 0.768; 23 of 24 subscale observations now carry a local
+  SE, giving 1-SE coverage 43.5% and 2-SE coverage 87.0%. The engine's own
+  values are still preferred where it writes any — empty means "nothing
+  usable", not "no rows", since it writes rows full of nulls.
+
+- **`docs/design/issue-catquiz-debuginfo-lastquestion.md`**, short: the
+  unguarded `lastquestion` access is a PHP notice, and only `DEBUG_DEVELOPER`
+  turns it into an exception that aborts the attempt.
+
+### Verified
+- **The robustness tab, with data for the first time.** A sweep over three pool
+  variants with everything else held constant — the only way a difference is
+  attributable to the disturbance rather than to the strategy:
+
+  | variant | items | RMSE | ΔRMSE vs. ideal | Δbias |
+  |---|---|---|---|---|
+  | ideal | 24 | 0.769 | — | — |
+  | calibration error | 24 | 0.905 | **+0.136** | −0.118 |
+  | depleted | 10 | 0.694 | −0.075 | −0.436 |
+
+  A miscalibrated pool costs precision, which is what the design predicts. The
+  depleted pool comes out slightly better, which at three attempts per cell
+  says nothing — and the interface reports the dispersion beside it rather than
+  the point estimate alone.
+
+### Verification
+PHPUnit 419 tests / 2748 assertions, phpcs and PHPDoc clean.
+
+---
+
+## [0.3.6] — 2026-09-02
+
+**The results interface walked through with real data.** All eight tabs render
+without an exception and without a missing language string, on the twelve
+attempts of the two-strategy sweep:
+
+| tab | tables | rows | charts |
+|---|---|---|---|
+| Overview | 3 | 6 | — |
+| Global metrics | 4 | 13 | 3 |
+| Subscales | 3 | 9 | 1 |
+| Deficit detection | 4 | 10 | — |
+| Robustness | — | — | — |
+| Test flow | 3 | 24 | 1 |
+| Raw data | 1 | 12 | — |
+| Export | 1 | 4 | — |
+
+Every tab names its aggregation: *"Aggregated over 12 attempts in 4 runs and 2
+replications. Dispersion: 95% confidence interval over replications."*
+
+The global tab reports bias 0.960 [0.257; 1.663], RMSE 1.5289 and a correlation
+with ground truth of 0.7506, beside a scatter plot with labelled axes and a
+y = x reference.
+
+Robustness is empty on purpose and says why: *"Only ideal-pool runs match this
+filter, so there is nothing to compare."* The sweep varied the strategy, not
+the pool, so a robustness figure would have compared conditions that differ in
+something else — which is exactly what the tab refuses to do.
+
+### Note for operators
+Every page returned "Section error!" until the plugin upgrade was run. A version
+bump without `admin/cli/upgrade.php` leaves Moodle unable to load the plugin's
+`settings.php`, so the admin page it registers does not exist and every URL
+under it fails. Nothing in the plugin causes it, but it looks alarming and
+costs time to trace, so it is written down here.
+
+---
+
+## [0.3.5] — 2026-09-02
+
+### Changed
+- The upstream issue on `lastquestion` is now a short one, and it leads with
+  the condition rather than the symptom: the unguarded access is a PHP notice,
+  and only `DEBUG_DEVELOPER` turns it into an exception. On a normal instance
+  `(array) null` becomes `[]` and nothing happens.
+- `docs/dev/environment-setup.md` states the consequence for this environment.
+  The two settings do not currently combine, so a choice has to be made:
+
+  | Purpose | `$CFG->debug` | `store_debug_info` |
+  |---|---|---|
+  | Play attempts, collect the ability path | `0` | `1` |
+  | Work on the plugin, PHPUnit, Behat | `DEBUG_DEVELOPER` | `0` |
+
+  The environment now sits on the first row, since without the path half the
+  evaluation stays empty. The `config.php` line says why, so the next person
+  does not switch it back and lose the traces.
+
+### Note on collection runs
+A sweep of four runs with three persons each provisions cleanly (24 items
+engine-visible per run), but playing twelve attempts through a real browser
+takes longer than a single command in this environment allows — roughly half a
+minute per attempt against the built-in PHP server, which also drops
+connections under parallel sessions. Collecting a full sweep needs either a
+longer-running worker outside the session or a proper web server.
+
+---
+
+## [0.3.5] — 2026-09-02
+
+**First sweep with real data.** Two strategies, two replications, three persons
+each — twelve attempts played through the browser, then evaluated:
+
+| strategy | items | error (mean) | runtime |
+|---|---|---|---|
+| Estimate global ability (MFI) | 8.0 | +0.84 | 16.0 s |
+| Fixed-form baseline | 16.0 | +1.08 | 26.3 s |
+
+MFI reaches a slightly smaller error with half the items and in two thirds of
+the time, which is the behaviour the design predicts. Exposure: 63 of 96 items
+used, 33 never shown, maximum rate 0.25, Gini 0.475. Local diagnostics: 24
+subscale observations with true and estimated deltas.
+
+The four export levels produce 5, 13, 25 and 97 lines respectively.
+
+### Added
+- `docs/design/issue-catquiz-debuginfo-lastquestion.md`, shortened to the point:
+  the unguarded `lastquestion` access is a PHP notice, and only at
+  `DEBUG_DEVELOPER` does Moodle turn it into an exception that aborts the
+  attempt. On a normal instance `(array) null` becomes `[]` and nothing
+  happens. Scope first, then cause, then the one-line fix.
+
+---
+
+## [0.3.4] — 2026-09-02
+
+**The step-by-step ability path is collected.** A full adaptive test, one θ
+estimate per step:
+
+    step  1  question 880  ability -0.4600
+    step  2  question 881  ability -0.4752
+    step  3  question 882  ability -0.6992
+    ...
+    step 16  question 899  ability -0.2774
+    true θ -0.4795
+
+### Corrected
+My previous finding was half right, and Ralf's counter-observation settled it.
+The unguarded access to `lastquestion` in `debuginfo.php:347` is real, but it
+only aborts an attempt on an instance running `DEBUG_DEVELOPER`, where Moodle
+turns the PHP notice into an exception. On a normal instance `(array) null`
+becomes an empty array and the test runs — which is why it works in a full
+environment. Measured both ways with everything else identical. The upstream
+issue now states the scope first, and its title says "at developer debugging"
+rather than claiming attempts are broken in general.
+
+### Fixed
+- **The ability path was parsed as a map and is a rendered line.** The engine
+  writes `"Scale: 0.5, Scale / K1: 0.4"` into each debug row — readable in a
+  report, useless to a machine. Without translating the names back into scale
+  ids the entire path was dropped silently, which is why `path: 0` persisted
+  even where `debug_info` was present. A name the run does not know is skipped
+  rather than guessed at.
+
+### Verification
+17 debug rows collected, 16 flow steps with an ability each, `scaleabilities`
+4 per attempt. PHPUnit 414 tests, phpcs and PHPDoc clean.
+
+---
+
+## [0.3.3] — 2026-09-01
+
+### Answered
+**Why `local_catquiz_attempts.debug_info` stays empty even with
+`local_catquiz | store_debug_info = 1`.** Measured in isolation on a fresh run:
+with the setting on, no attempt starts at all — the first question never
+appears and the activity reports "couldn't define the first question". With the
+setting off and everything else identical, the same test plays 16 items.
+
+The cause is in the engine and is the same shape as the colour-key defect fixed
+in 0.3.0: an exception in the feedback path aborts the question selection, and
+the visible message points somewhere else. `debuginfo.php:347` reads
+`$newdata['lastquestion']` without checking it exists, while every neighbouring
+field in the same structure is guarded with `isset()`. At the first question of
+an attempt there is no last question, so the access throws, the exception is
+caught in `return_next_testitem()` and turned into a general error.
+
+`lastquestion` is also removed from the attempt data on purpose in
+`catquiz.php:1874`, so the key is missing systematically rather than only on
+the first call.
+
+Drafted as `docs/design/issue-catquiz-debuginfo-lastquestion.md`. Until it is
+resolved, `debug_info` is unreachable — the field is only written when the
+setting is on — and the engine's ability path stays unavailable with it.
+
+The engine tree was restored byte-identically after the measurement.
+
+---
+
+## [0.3.2] — 2026-09-01
+
+The study's item-parameter distributions, one question category per experiment,
+and the reason `store_debug_info` still breaks an attempt.
+
+### Added
+- **The declared item-parameter distributions.** Discrimination 0 < a ≤ 5 with
+  its most likely value at 2, guessing 0 < c < 0.5 with its most likely value
+  at 0.25. Both are stated as *modes*, so the parameters are derived from the
+  mode and not from a mean — for a skewed distribution the two are different
+  numbers, and taking one for the other would shift the whole pool.
+
+  Discrimination uses a lognormal with `meanlog = log(2) + sdlog²`, which puts
+  the mode exactly at 2. Guessing needed a new distribution: it is bounded on
+  both sides *and* has an interior mode, which neither a normal nor a lognormal
+  can express, and clamping either would pile probability onto the very
+  boundaries the design keeps clear of. A symmetric beta on the interval puts
+  the mode at the midpoint by construction. Drawn 20 000 times: a in
+  [0.34, 5.00] with its mode near 1.8, c in [0.001, 0.499] with its mode near
+  0.26.
+- **One question category per experiment**, created in the course context and
+  named after the experiment. A shared bank becomes unreadable after a few
+  sweeps, and an item should be traceable to its study without consulting the
+  lab's tables.
+
+### Diagnosed
+`store_debug_info` still prevents an attempt from starting, and it is not the
+colour bug from 0.3.0. Instrumenting the chain again shows the selection
+working and the debug feedback generator failing:
+
+    select_question -> question 728
+    update_attemptfeedback THREW: Undefined array key "lastquestion"
+      @ feedbackgenerator/debuginfo.php:347
+
+`debuginfo.php` reads `$newdata['lastquestion']` unconditionally, and at the
+first question of an attempt there is none. That is the same shape as issue #59
+— a feedback generator assuming state that does not exist yet — and it belongs
+in the same report. The instrumentation was removed; the engine tree is
+byte-identical to its checkout.
+
+Until that is fixed the ability path stays unavailable, because it exists only
+in `debug_info`.
+
+---
+
+## [0.3.2] — 2026-09-01
+
+Study parameters, one question category per experiment, and a note on the trace
+sources.
+
+### Changed
+- **The discrimination distribution is now a beta, not a lognormal.** The
+  design states 0 < a ≤ 5 with the mode at 2. The lognormal met the mode but
+  not the range: measured over 20,000 draws, **9.4% landed on exactly 5.0** and
+  the modal bin was the top one. A clamp catching a tenth of the draws is not a
+  guard, it is the shape — and it would have given a tenth of every pool an
+  identical, maximal discrimination. `Beta(3, 4)` on (0, 5] cannot leave its
+  range and has its mode exactly at 2. Measured: median 2.12, modal bin
+  2.0–2.1, maximum 4.76.
+- The guessing distribution was already `Beta(2, 2)` on (0, 0.5) with its mode
+  at 0.25, which the same measurement confirms: median 0.251, modal bin
+  0.24–0.25, maximum 0.497.
+- **One question category per experiment.** Everything in a single category
+  leaves a bank nobody can navigate after a few sweeps. The existing helper
+  only resolved a category once the experiment had a course recorded, and
+  materialisation runs before the container stage — so every run fell back to
+  the shared category. It now uses the configured course until the experiment
+  has its own.
+
+### On the trace sources
+`store_debug_info` was retested now that the colour-key defect is fixed, since
+that defect lived in the same feedback path. It does not help: with the setting
+on, the attempt still does not start. The engine's ability path therefore
+remains unavailable until catquiz#59 is resolved, and the per-scale abilities
+continue to come from the engine's attempt row, which every site writes.
+
+`local_catquiz_progress.json` is archived with each trace and carries the item
+sequence, the responses with their fractions and the scale lifecycle. What it
+does not carry is a path: `progress::update_ability()` overwrites the value per
+scale rather than appending, so only the final estimate survives there.
+
+---
+
+## [0.3.1] — 2026-09-01
+
+**The full DPF evaluation runs against real data.** A person with subscale
+deviations was measured, and the local diagnostics have something to work with:
+
+    twin r001-t00001 (subscalevariation): true -0.4795  est -1.9777
+      K1.1: true delta +0.1833   estimated +0.7677
+      K1.2: true delta -0.5800   estimated -0.3823
+    local recovery: n=4, bias +0.976, RMSE 1.178, r 0.369
+    ranking: Spearman 1.0, top-1 agreement 1.0
+
+### Fixed
+- **The per-scale abilities never reached the trace.** They were read from
+  `debug_info`, which a site only writes with debug information switched on, so
+  a plain run collected nothing and every local diagnostic was left without
+  data. The engine also records them on its own attempt row, and that is the
+  fallback now — `scaleabilities` went from 0 to 4 per attempt.
+- **Per-scale standard errors were looked up by attempt id only.** A completed
+  attempt left its person parameters with a null attempt id, so the lookup
+  found nothing at all. The user and context of the attempt identify the same
+  rows.
+- **"An error occured" counted as the stop rule succeeding.** The host activity
+  reports it whenever the engine returns no question — including when every
+  subscale has simply reached its own maximum, which is what ends a healthy run
+  here. Counting it as a success would have inflated the stop-rule rate with
+  runs that ran out of room.
+
+### Note
+A test ends after 16 items because `maxquestionspersubscale` is 8 and there are
+two subscales. That is the configuration working, not a defect — but the
+engine's stop reason does not say so, which is why the figure is now reported
+as an unsuccessful stop rather than a successful one.
+
+---
+
 ## [0.3.0] — 2026-09-01
 
 **A simulated person completed an adaptive test.** Sixteen items, and the

@@ -241,3 +241,49 @@ die verfügbaren Modelle unter `local_catquiz/catmodel/`.
 | „ChromeDriver only supports Chrome version N" | fremdes Chrome im Pfad; `binary` in `behat_profiles` setzen |
 | phpcs lokal grün, CI rot | Plugin außerhalb des Moodle-Baums geprüft |
 | „max_input_vars must be at least 5000" | PHP-Default 1000 nicht erhöht |
+
+## Debug-Stufe und `store_debug_info`
+
+Die beiden vertragen sich derzeit nicht. `local_catquiz | store_debug_info`
+füllt `local_catquiz_attempts.debug_info` — die Quelle für den
+Fähigkeitsverlauf je Schritt. Auf einer Instanz mit
+`$CFG->debug = DEBUG_DEVELOPER` bricht damit aber jeder Attempt beim ersten
+Frageaufruf ab: Ein ungeprüfter Zugriff auf `lastquestion` in der
+Debug-Ausgabe der Engine ist dort eine Ausnahme statt einer Notice
+(siehe `docs/design/issue-catquiz-debuginfo-lastquestion.md`).
+
+Für Sammelläufe gilt deshalb:
+
+| Zweck | `$CFG->debug` | `store_debug_info` |
+|---|---|---|
+| Attempts spielen, Verlauf einsammeln | `0` | `1` |
+| Plugin-Code entwickeln, PHPUnit, Behat | `DEBUG_DEVELOPER` | `0` |
+
+Die Testumgebung steht auf der ersten Zeile, weil ohne Verlauf die halbe
+Auswertung leer bleibt. Für Arbeit am Plugin selbst lohnt das Umschalten —
+Moodles eigene Entwicklerprüfungen sind zu wertvoll, um dauerhaft darauf zu
+verzichten.
+
+## Stand der Engine-Defekte (geprüft am 2026-09-02)
+
+Gegen `moodle-local_catquiz` **2026083025** (Branch `main`) nachgemessen:
+
+| Punkt | Stand |
+|---|---|
+| `progressretention` / `progressretentiondays` | **umgesetzt** — die Aufbewahrung der Progress-Zeilen ist jetzt konfigurierbar |
+| catquiz#59 (`get_ability_range`) | **behoben** in 2026090204: die Methode deklariert `int` |
+| catquiz#62 (`lastquestion` ungeprüft) | **behoben** in 2026090204: `?? []` |
+| `local_catquiz_personparams.standarderror` | wird weiterhin leer geschrieben |
+
+`tests/engine_defects_test.php` hält diesen Stand fest. Jeder dieser Tests
+schlägt fehl, sobald der jeweilige Punkt behoben ist — das ist beabsichtigt:
+Eine Umgehung, die ihre Ursache überlebt, verbirgt das reparierte Verhalten und
+hält eine Einschränkung in der Dokumentation, die es nicht mehr gibt. Die
+Fehlermeldung sagt jeweils, was zu entfernen ist.
+
+**Überholt seit 2026090204:** Bis dahin schlossen `$CFG->debug =
+DEBUG_DEVELOPER` und `local_catquiz | store_debug_info = 1` einander aus. Das
+gilt nicht mehr — nachgemessen: mit beiden aktiv laufen 16 Items durch, 17
+Debug-Zeilen werden geschrieben und die θ-Trajektorie wird eingesammelt. Die
+Entwicklungsumgebung kann Developer-Debugging und Debug-Speicherung dauerhaft
+zusammen führen.

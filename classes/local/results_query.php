@@ -205,6 +205,12 @@ class results_query {
         $exhausted = [
             'maxquestions', 'maxitems', 'nomoreitems', 'noremainingquestions',
             'nomorequestions', 'abort', 'cancelled', 'timeout',
+            // The host activity reports "An error occured" whenever the engine
+            // returns no question — including when every subscale has simply
+            // reached its own maximum. That is not the stop rule succeeding,
+            // and counting it as such would inflate the success rate with runs
+            // that ran out of room.
+            'an error occured', 'error occurred',
         ];
         foreach ($exhausted as $needle) {
             if (stripos($reason, $needle) !== false) {

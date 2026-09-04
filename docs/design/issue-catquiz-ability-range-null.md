@@ -87,6 +87,33 @@ Die Absicherung der Methode behebt damit nicht nur einen Typfehler, sondern
 stellt die Diagnosefähigkeit her: Die Fehlermeldung der Engine sollte nicht
 davon abhängen, ob Debug-Informationen aktiviert sind.
 
+## Gleiche Fehlerform an einer zweiten Stelle
+
+Derselbe Aufbau — ein Feedback-Generator setzt Zustand voraus, den es beim
+ersten Frageaufruf noch nicht gibt — tritt mit aktiviertem
+`local_catquiz | store_debug_info` auf:
+
+```text
+select_question -> question 728          (die Auswahl funktioniert)
+update_attemptfeedback THREW: Undefined array key "lastquestion"
+    .../classes/teststrategy/feedbackgenerator/debuginfo.php:347
+```
+
+Dort steht:
+
+```php
+'lastquestion' => (array) $newdata['lastquestion'],
+```
+
+Beim ersten Aufruf eines Attempts existiert der Schlüssel nicht. Die Folge ist
+dieselbe wie oben: Die Frage ist bereits ausgewählt, das Rendern des Feedbacks
+bricht ab, und der Attempt endet mit einer Frage, die er nicht anzeigen kann.
+
+Praktisch bedeutet das, dass `store_debug_info` derzeit nicht aktiviert werden
+kann, ohne dass Attempts unstartbar werden — und damit auch nicht als
+Aufzeichnungsquelle für Testverläufe dient. Ein `?? []` bzw. eine Prüfung auf
+`isset()` genügt.
+
 ## Ziel
 
 Der Aufruf soll auch dann definiert enden, wenn noch keine Fähigkeiten
@@ -162,3 +189,5 @@ davon unberührt sinnvoll.
 - [ ] Kein `TypeError` mehr auf dem beschriebenen Reproduktionsweg.
 - [ ] Eine fehlgeschlagene Erstfragenauswahl meldet ihre eigene Ursache,
       unabhängig von `store_debug_info`.
+- [ ] Mit aktiviertem `store_debug_info` startet ein Attempt normal; der
+      Debug-Generator kommt ohne vorherige Frage aus.

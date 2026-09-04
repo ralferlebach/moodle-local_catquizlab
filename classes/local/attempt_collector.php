@@ -119,7 +119,23 @@ class attempt_collector {
             $engine['stopreason']
         );
         $debug = $engine['debug'] ?? [];
-        $trace['scaleabilities'] = $debug['scaleabilities'] ?? [];
+        // The debug_info blob comes first, since it carries the whole path; the
+        // attempt row is the fallback that exists on every site.
+        $trace['scaleabilities'] = $debug['scaleabilities'] ?: ($engine['finalabilities'] ?? []);
+
+        // The precision the administered items imply, globally and per scale.
+        // The engine's own standard errors would be preferred; they are absent,
+        // and this is computable from what the lab generated.
+        $precision = precision::for_attempt(
+            (int) $attempt->runid,
+            (array) ($trace['items'] ?? []),
+            (float) ($trace['finaltheta'] ?? 0.0),
+            (array) $trace['scaleabilities']
+        );
+        $trace['information'] = $precision['information'];
+        if (($trace['finalse'] ?? null) === null) {
+            $trace['finalse'] = $precision['global'];
+        }
         $trace['questionsperscale'] = $debug['questionsperscale'] ?? [];
         $trace['abilitypath'] = $debug['abilitypath'] ?? [];
         $trace['steps'] = $debug['steps'] ?? 0;
@@ -128,7 +144,23 @@ class attempt_collector {
         // the estimated deviation within one or two standard errors of the true
         // one — cannot be computed at all, and guessing a value would turn a
         // missing measurement into a fabricated one.
-        $trace['scalestandarderrors'] = $engine['scalestandarderrors'] ?? [];
+        // The engine's own values first, and what they leave out is filled from
+        // the computed precision. Empty means "nothing usable", not "no rows":
+        // the engine writes person parameters with a null standard error, so
+        // the array arrives populated and useless.
+        $engineerrors = array_filter(
+            (array) ($engine['scalestandarderrors'] ?? []),
+            static fn($value): bool => $value !== null
+        );
+        if ($engineerrors === []) {
+            $engineerrors = [];
+            foreach ($precision['scales'] as $scaleid => $scale) {
+                if ($scale['se'] !== null) {
+                    $engineerrors[$scaleid] = $scale['se'];
+                }
+            }
+        }
+        $trace['scalestandarderrors'] = $engineerrors;
         // The progress row carries what debug_info does not: which scales were
         // active, dropped or locked, and the item sequence. It survives the
         // attempt today, but only until the activity is deleted, and the engine
@@ -201,8 +233,20 @@ class attempt_collector {
             'finalse'    => $finalse,
             'responses'  => self::read_responses((int) $aq->uniqueid),
             'stopreason' => (string) ($aq->attemptstopcriteria ?? ''),
-            'debug'      => self::parse_debug_info((string) ($catquiz->debug_info ?? '')),
+            'debug'      => self::parse_debug_info(
+                (string) ($catquiz->debug_info ?? ''),
+                (int) ($catquiz->contextid ?? 0)
+            ),
             'scalestandarderrors' => self::read_scale_standarderrors($catquiz),
+            // Computed from the items the person actually saw, because the
+            // engine leaves the person parameters' standard error empty and a
+            // diagnosis without a precision is a number without a claim.
+            'precision' => null,
+            // The engine records the final per-scale abilities on its own
+            // attempt row. debug_info holds them too, but only when the site
+            // has debug information switched on, so a plain run collected
+            // nothing and every local diagnostic was left without data.
+            'finalabilities' => self::read_final_abilities($catquiz),
         ];
     }
 
@@ -272,6 +316,24 @@ class attempt_collector {
     }
 
     /**
+     * The final per-scale abilities the engine recorded for an attempt.
+     *
+     * @param \stdClass|false $catquiz The engine attempt row.
+     * @return array<int, float> Ability keyed by engine scale id.
+     */
+    protected static function read_final_abilities($catquiz): array {
+        if (!$catquiz || empty($catquiz->json)) {
+            return [];
+        }
+        $decoded = json_decode((string) $catquiz->json, true);
+        if (!is_array($decoded)) {
+            return [];
+        }
+
+        return self::normalise_abilities($decoded['personabilities'] ?? []);
+    }
+
+    /**
      * Read the per-scale standard errors of a finished attempt.
      *
      * local_catquiz_personparams carries one row per scale with the ability and
@@ -293,12 +355,25 @@ class attempt_collector {
             return [];
         }
 
+        // Keyed by attempt where the engine records one. It does not always:
+        // a completed attempt left its person parameters with a null attemptid,
+        // so asking by attempt alone found nothing at all. The user and context
+        // of the attempt identify the same rows.
         $rows = $DB->get_records(
             'local_catquiz_personparams',
             ['attemptid' => (int) $catquiz->attemptid],
             '',
             'id, catscaleid, standarderror'
         );
+
+        if (!$rows && !empty($catquiz->userid) && !empty($catquiz->contextid)) {
+            $rows = $DB->get_records(
+                'local_catquiz_personparams',
+                ['userid' => (int) $catquiz->userid, 'contextid' => (int) $catquiz->contextid],
+                '',
+                'id, catscaleid, standarderror'
+            );
+        }
 
         $out = [];
         foreach ($rows as $row) {
@@ -311,6 +386,60 @@ class attempt_collector {
     }
 
     /**
+     * Parse an ability line of the form "Scale name: 0.42, Other scale: -1.3".
+     *
+     * @param string $line The rendered line, possibly wrapped in quotes.
+     * @param array $scalenames Scale name => engine scale id.
+     * @return array<int, float> Ability keyed by scale id; names that cannot be
+     *         resolved are left out rather than guessed at.
+     */
+    protected static function abilities_from_line(string $line, array $scalenames): array {
+        $line = trim($line, "\" \t\n\r");
+        if ($line === '' || $scalenames === []) {
+            return [];
+        }
+
+        $out = [];
+        // Split on the comma that precedes a name, not on any comma: a scale
+        // name may contain one, and a decimal separator never does here.
+        foreach (explode(',', $line) as $part) {
+            $position = strrpos($part, ':');
+            if ($position === false) {
+                continue;
+            }
+            $name = trim(substr($part, 0, $position));
+            $value = trim(substr($part, $position + 1));
+            if (!is_numeric($value) || !isset($scalenames[$name])) {
+                continue;
+            }
+            $out[(int) $scalenames[$name]] = (float) $value;
+        }
+
+        return $out;
+    }
+
+    /**
+     * The engine scale names of a CAT context, for translating ability lines.
+     *
+     * @param int $contextid The CAT context.
+     * @return array<string, int> Scale name => scale id.
+     */
+    protected static function scale_names(int $contextid): array {
+        global $DB;
+
+        if ($contextid <= 0 || !$DB->get_manager()->table_exists('local_catquiz_catscales')) {
+            return [];
+        }
+
+        $names = [];
+        foreach ($DB->get_records('local_catquiz_catscales', ['contextid' => $contextid], '', 'id, name') as $row) {
+            $names[(string) $row->name] = (int) $row->id;
+        }
+
+        return $names;
+    }
+
+    /**
      * Extract the per-scale ability path and exposure from an engine debug_info blob.
      *
      * The engine records debug_info as a JSON list of per-step snapshots; the last
@@ -319,9 +448,12 @@ class attempt_collector {
      * the subscale-level estimates the DPF diagnostics compare against the truth.
      *
      * @param string $json The debug_info JSON.
+     * @param int $contextid The CAT context, used to translate scale names.
      * @return array{steps: int, scaleabilities: array<int, float>, questionsperscale: array}
      */
-    public static function parse_debug_info(string $json): array {
+    public static function parse_debug_info(string $json, int $contextid = 0): array {
+        $scalenames = self::scale_names($contextid);
+
         $empty = ['steps' => 0, 'scaleabilities' => [], 'questionsperscale' => []];
         if ($json === '') {
             return $empty;
@@ -350,13 +482,13 @@ class attempt_collector {
             }
             $path[] = [
                 'step'      => $index + 1,
-                'abilities' => self::normalise_abilities($row['personabilities']),
+                'abilities' => self::normalise_abilities($row['personabilities'], $scalenames),
             ];
         }
 
         return [
             'steps'             => count($rows),
-            'scaleabilities'    => self::normalise_abilities($last['personabilities'] ?? []),
+            'scaleabilities'    => self::normalise_abilities($last['personabilities'] ?? [], $scalenames),
             'abilitypath'       => $path,
             'questionsperscale' => is_array($last['numquestionsperscale'] ?? null)
                 ? $last['numquestionsperscale']
@@ -370,9 +502,19 @@ class attempt_collector {
      * Accepts a map keyed by scale id or a list of rows with a scale id and value.
      *
      * @param mixed $abilities The raw personabilities value.
+     * @param array $scalenames Scale name => engine scale id, for rendered lines.
      * @return array<int, float>
      */
-    protected static function normalise_abilities($abilities): array {
+    protected static function normalise_abilities($abilities, array $scalenames = []): array {
+        // The engine's debug rows carry the abilities as a rendered line —
+        // '"Scale A: 0.5, Scale A / K1: 0.4"' — rather than as a map. It reads
+        // well in a report and says nothing a machine can use, so the names are
+        // translated back into scale ids here. Without the translation the
+        // whole ability path was silently dropped.
+        if (is_string($abilities)) {
+            return self::abilities_from_line($abilities, $scalenames);
+        }
+
         if (!is_array($abilities)) {
             return [];
         }
