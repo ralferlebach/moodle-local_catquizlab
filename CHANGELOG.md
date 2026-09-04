@@ -6,6 +6,37 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.6.0] — 2026-09-03
+
+**Beta.** `MATURITY_ALPHA` → `MATURITY_BETA`.
+
+The whole chain has been exercised end to end against a real CAT engine, not
+only against guard paths: a simulated person sits an adaptive test through the
+`mod_adaptivequiz` interface, the trace is collected, and the recovered ability
+is compared with the ground truth that person was generated from. A study of 90
+attempts across three pool variants has been run through it, and all eight tabs
+of the results interface render on it.
+
+What beta means here, stated so nobody has to guess: the function is complete
+and measured; what is missing is field use. Replication counts in a real study
+need to be well above the five used so far — at 30 attempts per cell the
+confidence intervals of the pool variants still overlap almost completely.
+
+### Note on the engine
+Checked at release time: `local_catquiz` `main` is at 2026083025 and does not
+yet carry the fixes for catquiz#59, #62 and the #64 stage counts — the last
+commit there is `fc76efb`. The version-gated pins in
+`tests/engine_defects_test.php` therefore skip against `main` and take effect
+by themselves once the merge lands, without a change here.
+
+### Verification
+PHPUnit 424 tests / 2753 assertions, Behat 27 scenarios / 187 steps, worker
+check and 11 worker tests, phpcs and PHPDoc clean, 600 language strings per
+language, all test classes loading under PHPUnit 11.5, savepoint below the
+version ceiling.
+
+---
+
 ## [0.5.1] — 2026-09-03
 
 CI fix for the engine pins added in 0.5.0.
