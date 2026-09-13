@@ -615,7 +615,30 @@ async function selfTest() {
         }
     };
 
+    // Which user, and with which paths. A self-test run by hand passes as the
+    // interactive user and the same worker fails from cron as the web server
+    // user, so the context has to be part of the output — otherwise the two
+    // runs are indistinguishable in a report.
+    console.log(`info user=${process.env.USER || process.env.LOGNAME || '(unset)'} uid=${typeof process.getuid === 'function' ? process.getuid() : '?'}`);
+    console.log(`info HOME=${process.env.HOME || '(unset)'}`);
+    console.log(`info PUPPETEER_CACHE_DIR=${process.env.PUPPETEER_CACHE_DIR || '(unset)'}`);
+    console.log(`info XDG_CONFIG_HOME=${process.env.XDG_CONFIG_HOME || '(unset)'}`);
+
     check('node >= 20', parseInt(process.versions.node.split('.')[0], 10) >= 20);
+    check('home is writable', (() => {
+        // The failure this catches reads as EACCES on mkdir deep inside
+        // Puppeteer, which looks like a plugin problem and is not.
+        try {
+            const fs = require('fs');
+            const home = process.env.HOME;
+            if (!home) { return false; }
+            fs.mkdirSync(home, {recursive: true});
+            fs.accessSync(home, fs.constants.W_OK);
+            return true;
+        } catch (e) {
+            return false;
+        }
+    })());
     check('fetch is available', typeof fetch === 'function');
 
     const parsed = parseArgs(['--base-url=http://example.test/moodle/', '--token=t', '--headless']);

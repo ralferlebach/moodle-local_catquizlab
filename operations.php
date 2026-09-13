@@ -63,6 +63,18 @@ if ($action !== '') {
         );
     }
 
+    if ($action === 'installbrowser') {
+        $result = worker_launcher::install_browser(worker_launcher::config_from_settings());
+        $SESSION->catquizlab_selftest = $result;
+        redirect($pageurl);
+    }
+
+    if ($action === 'selftest') {
+        $result = worker_launcher::self_test(worker_launcher::config_from_settings());
+        $SESSION->catquizlab_selftest = $result;
+        redirect($pageurl);
+    }
+
     if ($action === 'reap') {
         $reaped = worker_registry::reap();
         redirect(
@@ -195,6 +207,22 @@ echo $OUTPUT->render_from_template('local_catquizlab/operations', [
     'sesskey'    => sesskey(),
     'actionurl'  => $pageurl->out(false),
     'cantoken'   => system_health::worker_token() === null,
+    // Kept for one page load: a self-test result is worth reading once, and
+    // storing it would turn a diagnostic into state to maintain.
+    'selftest'   => (static function () {
+        global $SESSION;
+        $result = $SESSION->catquizlab_selftest ?? null;
+        unset($SESSION->catquizlab_selftest);
+        if ($result === null) {
+            return null;
+        }
+
+        return [
+            'ok'      => (int) $result['exitcode'] === 0,
+            'output'  => $result['output'],
+            'command' => $result['command'],
+        ];
+    })(),
 ]);
 
 echo $OUTPUT->footer();

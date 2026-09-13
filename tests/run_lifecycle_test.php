@@ -79,6 +79,66 @@ final class run_lifecycle_test extends \advanced_testcase {
     }
 
     /**
+     * Give a run a pool its CAT configuration could actually start from.
+     *
+     * The readiness check reads the engine's tables, so a run that exists only
+     * as a row cannot pass it — correctly, because such a run would queue jobs
+     * that fail before the first question. Tests about the lifecycle after
+     * provisioning therefore have to look like a provisioned run.
+     *
+     * @param int $runid The run.
+     * @param int $peritem Usable items per subscale.
+     * @return void
+     */
+    protected function give_the_run_a_pool(int $runid, int $peritem = 12): void {
+        global $DB;
+
+        if (!\local_catquizlab\local\environment::catquiz_available()) {
+            // Without the engine the check stands down, so there is nothing to
+            // satisfy and nothing to fake.
+            return;
+        }
+
+        $definition = ['budgets' => [
+            'global'   => ['minitems' => 4, 'maxitems' => 20],
+            'subscale' => ['minitems' => 1, 'maxitems' => 10],
+        ]];
+        $run = $DB->get_record('local_catquizlab_run', ['id' => $runid]);
+        $manifest = json_decode((string) $run->manifestjson, true) ?: [];
+        $manifest['config']['definition'] = array_merge(
+            $manifest['config']['definition'] ?? [],
+            $definition
+        );
+        $DB->set_field('local_catquizlab_run', 'manifestjson', json_encode($manifest), ['id' => $runid]);
+
+        foreach ([1, 2] as $index) {
+            $scaleid = $runid * 1000 + $index;
+            $DB->insert_record('local_catquizlab_scalemap', (object) [
+                'runid'         => $runid,
+                'level'         => \local_catquizlab\local\scale_provisioner::LEVEL_SUBSCALE,
+                'catscaleid'    => $scaleid,
+                'categoryindex' => 1,
+                'subscaleindex' => $index,
+                'timecreated'   => time(),
+            ]);
+
+            for ($i = 0; $i < $peritem; $i++) {
+                $paramid = $DB->insert_record('local_catquiz_itemparams', (object) [
+                    'componentid' => 0, 'componentname' => 'question', 'contextid' => 1,
+                    'model' => 'raschbirnbaum', 'difficulty' => 0, 'discrimination' => 1,
+                    'guessing' => 0, 'status' => \local_catquizlab\local\cat_readiness::STATUS_KNOWN,
+                    'timecreated' => time(), 'timemodified' => time(),
+                ]);
+                $DB->insert_record('local_catquiz_items', (object) [
+                    'componentid' => 0, 'componentname' => 'question', 'catscaleid' => $scaleid,
+                    'contextid' => 1, 'activeparamid' => $paramid, 'status' => 0,
+                    'timecreated' => time(), 'timemodified' => time(),
+                ]);
+            }
+        }
+    }
+
+    /**
      * Skip a test that needs a start to actually go through.
      *
      * Starting a run requires the engine and the host activity, because a run
@@ -331,6 +391,7 @@ final class run_lifecycle_test extends \advanced_testcase {
 
         $runs = $this->run_ids($this->experiment_with_runs());
 
+        $this->give_the_run_a_pool($runs[0]);
         $this->pretend_started($runs[0]);
         run_lifecycle::provisioned($runs[0], true);
         $this->assertSame(registry::STATUS_READY, $this->run_status($runs[0]));
@@ -359,6 +420,7 @@ final class run_lifecycle_test extends \advanced_testcase {
         $this->satisfy_preflight();
 
         $runid = $this->run_ids($this->experiment_with_runs())[0];
+        $this->give_the_run_a_pool($runid);
         $this->pretend_started($runid);
         run_lifecycle::provisioned($runid, true);
 
@@ -381,6 +443,7 @@ final class run_lifecycle_test extends \advanced_testcase {
         $this->satisfy_preflight();
 
         $runid = $this->run_ids($this->experiment_with_runs())[0];
+        $this->give_the_run_a_pool($runid);
         $this->pretend_started($runid);
         run_lifecycle::provisioned($runid, true);
         run_lifecycle::attempt_claimed($runid);
@@ -403,6 +466,7 @@ final class run_lifecycle_test extends \advanced_testcase {
         $this->satisfy_preflight();
 
         $runid = $this->run_ids($this->experiment_with_runs())[0];
+        $this->give_the_run_a_pool($runid);
         $this->pretend_started($runid);
         run_lifecycle::provisioned($runid, true);
         run_lifecycle::attempt_claimed($runid);
@@ -432,6 +496,7 @@ final class run_lifecycle_test extends \advanced_testcase {
         $this->satisfy_preflight();
 
         $runid = $this->run_ids($this->experiment_with_runs())[0];
+        $this->give_the_run_a_pool($runid);
         $this->pretend_started($runid);
         run_lifecycle::provisioned($runid, true);
         run_lifecycle::attempt_claimed($runid);
@@ -473,6 +538,7 @@ final class run_lifecycle_test extends \advanced_testcase {
         $this->satisfy_preflight();
 
         $runid = $this->run_ids($this->experiment_with_runs())[0];
+        $this->give_the_run_a_pool($runid);
         $this->pretend_started($runid);
         run_lifecycle::provisioned($runid, true);
         run_lifecycle::attempt_claimed($runid);
@@ -502,6 +568,7 @@ final class run_lifecycle_test extends \advanced_testcase {
         $seen = [];
         $seen[] = $this->run_status($runs[0]);
 
+        $this->give_the_run_a_pool($runs[0]);
         $this->pretend_started($runs[0]);
         $seen[] = $this->run_status($runs[0]);
 
@@ -612,5 +679,179 @@ final class run_lifecycle_test extends \advanced_testcase {
         // attempts wait for a worker that may be started later.
         $this->assertNotEmpty($check['warnings']);
         $this->assertNotSame('', preflight::summary($check));
+    }
+
+    /**
+     * A run whose pool cannot serve its minimum never reaches ready.
+     *
+     * @return void
+     */
+    public function test_a_run_that_cannot_start_is_not_queued(): void {
+        $this->resetAfterTest();
+        $this->setAdminUser();
+        $this->satisfy_preflight();
+
+        if (!\local_catquizlab\local\environment::catquiz_available()) {
+            $this->markTestSkipped('No CAT engine installed; readiness stands down.');
+        }
+
+        $runid = $this->run_ids($this->experiment_with_runs())[0];
+        // Two items against a minimum of four: the test can never finish, and
+        // every queued attempt would fail the same way.
+        $this->give_the_run_a_pool($runid, 1);
+        $this->pretend_started($runid);
+
+        run_lifecycle::provisioned($runid, true);
+
+        $this->assertSame(registry::STATUS_FAILED, $this->run_status($runid));
+        $this->assertFalse(run_lifecycle::has_open_attempts($runid));
+    }
+
+    /**
+     * The refusal names the arithmetic rather than only failing.
+     *
+     * @return void
+     */
+    public function test_readiness_states_why_a_run_cannot_start(): void {
+        global $DB;
+        $this->resetAfterTest();
+        $this->setAdminUser();
+
+        if (!\local_catquizlab\local\environment::catquiz_available()) {
+            $this->markTestSkipped('No CAT engine installed; readiness stands down.');
+        }
+
+        $runid = $this->run_ids($this->experiment_with_runs())[0];
+        $this->give_the_run_a_pool($runid, 1);
+
+        $result = \local_catquizlab\local\cat_readiness::check($runid);
+
+        $this->assertFalse($result['ok']);
+        $this->assertNotEmpty($result['reasons']);
+        // A message like "2 usable items against a minimum of 4" is actionable,
+        // where "not ready" is not: the reader still has to open the database.
+        $this->assertStringContainsString('2', \local_catquizlab\local\cat_readiness::summary($result));
+        $this->assertSame(2, $result['facts']['usable']);
+    }
+
+    /**
+     * Items the engine treats as pilots do not count as a pool.
+     *
+     * @return void
+     */
+    public function test_a_pool_of_pilot_questions_is_not_ready(): void {
+        global $DB;
+        $this->resetAfterTest();
+        $this->setAdminUser();
+
+        if (!\local_catquizlab\local\environment::catquiz_available()) {
+            $this->markTestSkipped('No CAT engine installed; readiness stands down.');
+        }
+
+        $runid = $this->run_ids($this->experiment_with_runs())[0];
+        $this->give_the_run_a_pool($runid, 12);
+
+        // Demote every parameter below the threshold at which the engine stops
+        // treating an item as a pilot. A pilot is administered and teaches the
+        // estimate nothing, so twenty-four of them are an empty pool.
+        $DB->execute('UPDATE {local_catquiz_itemparams} SET status = 1');
+
+        $result = \local_catquizlab\local\cat_readiness::check($runid);
+
+        $this->assertFalse($result['ok']);
+        $this->assertSame(0, $result['facts']['usable']);
+        $this->assertGreaterThan(0, $result['facts']['items']);
+    }
+
+    /**
+     * Per-subscale maxima cap the whole test.
+     *
+     * @return void
+     */
+    public function test_subscale_caps_are_checked_against_the_global_minimum(): void {
+        global $DB;
+        $this->resetAfterTest();
+        $this->setAdminUser();
+
+        if (!\local_catquizlab\local\environment::catquiz_available()) {
+            $this->markTestSkipped('No CAT engine installed; readiness stands down.');
+        }
+
+        $runid = $this->run_ids($this->experiment_with_runs())[0];
+        $this->give_the_run_a_pool($runid, 12);
+
+        // Two subscales capped at one question each allow two questions; the
+        // test asks for twenty. Neither number looks wrong on its own, which is
+        // exactly why this has to be computed rather than eyeballed.
+        $run = $DB->get_record('local_catquizlab_run', ['id' => $runid]);
+        $manifest = json_decode((string) $run->manifestjson, true);
+        $manifest['config']['definition']['budgets'] = [
+            'global'   => ['minitems' => 20, 'maxitems' => 25],
+            'subscale' => ['minitems' => 1, 'maxitems' => 1],
+        ];
+        $DB->set_field('local_catquizlab_run', 'manifestjson', json_encode($manifest), ['id' => $runid]);
+
+        $result = \local_catquizlab\local\cat_readiness::check($runid);
+
+        $this->assertFalse($result['ok']);
+        $this->assertStringContainsString('20', \local_catquizlab\local\cat_readiness::summary($result));
+    }
+
+    /**
+     * Per-subscale minima multiply against the global maximum.
+     *
+     * @return void
+     */
+    public function test_subscale_floors_are_checked_against_the_global_maximum(): void {
+        global $DB;
+        $this->resetAfterTest();
+        $this->setAdminUser();
+
+        if (!\local_catquizlab\local\environment::catquiz_available()) {
+            $this->markTestSkipped('No CAT engine installed; readiness stands down.');
+        }
+
+        $runid = $this->run_ids($this->experiment_with_runs())[0];
+        $this->give_the_run_a_pool($runid, 12);
+
+        // Two subscales demanding five questions each need ten; the test allows
+        // four. This is the shape the reported configuration had, with twenty
+        // subscales at three questions each.
+        $run = $DB->get_record('local_catquizlab_run', ['id' => $runid]);
+        $manifest = json_decode((string) $run->manifestjson, true);
+        $manifest['config']['definition']['budgets'] = [
+            'global'   => ['minitems' => 2, 'maxitems' => 4],
+            'subscale' => ['minitems' => 5, 'maxitems' => 8],
+        ];
+        $DB->set_field('local_catquizlab_run', 'manifestjson', json_encode($manifest), ['id' => $runid]);
+
+        $result = \local_catquizlab\local\cat_readiness::check($runid);
+
+        $this->assertFalse($result['ok']);
+        $this->assertStringContainsString('10', \local_catquizlab\local\cat_readiness::summary($result));
+    }
+
+    /**
+     * A sound configuration passes.
+     *
+     * @return void
+     */
+    public function test_a_sound_configuration_is_ready(): void {
+        $this->resetAfterTest();
+        $this->setAdminUser();
+
+        if (!\local_catquizlab\local\environment::catquiz_available()) {
+            $this->markTestSkipped('No CAT engine installed; readiness stands down.');
+        }
+
+        $runid = $this->run_ids($this->experiment_with_runs())[0];
+        $this->give_the_run_a_pool($runid, 12);
+
+        $result = \local_catquizlab\local\cat_readiness::check($runid);
+
+        // The check has to let good configurations through, or it is just a
+        // more elaborate way of refusing to run.
+        $this->assertTrue($result['ok'], \local_catquizlab\local\cat_readiness::summary($result));
+        $this->assertSame(24, $result['facts']['usable']);
     }
 }

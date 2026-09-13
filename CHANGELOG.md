@@ -6,6 +6,68 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.6.5] — 2026-09-13
+
+Two P0 defects from real operation: issues #23 and #24.
+
+### #24 — Runs are queued only once the CAT test can actually start
+
+A structurally complete preflight passed — scales present, person parameters
+present, enrolments present — and 1600 attempts were queued against a test that
+could never select item one. Every job was going to fail identically before the
+first question.
+
+`cat_readiness` checks the arithmetic that decides this, before attempts are
+queued:
+
+- a test cannot ask more questions than its pool can answer;
+- per-subscale minima multiply — twenty subscales at three questions each is
+  sixty questions, whatever the global maximum says;
+- per-subscale maxima cap the total the same way, so a global minimum above
+  that sum is unreachable;
+- an item the engine still treats as a pilot contributes nothing to the
+  estimate, so a pool of pilots is an empty pool as far as selection goes.
+
+Item counts come from the engine's own tables rather than from the lab's record
+of what it created: the question is what the selection will see, not what was
+intended. A run that fails the check goes to FAILED with the arithmetic in its
+manifest — "2 usable items against a minimum of 4" is actionable where "not
+ready" is not.
+
+### #23 — The browser runtime is pinned, and fixable from the interface
+
+A self-test passed as the interactive user while the worker failed as the web
+server user with `Could not find Chrome`. Puppeteer resolves its cache from the
+runtime of whoever runs it, so the two were never looking in the same place.
+
+- `worker_launcher::runtime_environment()` pins `HOME`, `PUPPETEER_CACHE_DIR`
+  and the three XDG paths, and creates the directories rather than assuming
+  them — the failure they cause otherwise is an `EACCES` deep inside Puppeteer
+  that reads as a plugin problem. Both launch paths and the self-test use it,
+  which is what makes a green self-test mean something about the worker.
+- **Run worker self-test** and **Install browser for the worker** on the
+  operations page. The self-test now prints the user, uid and paths it ran
+  with, so a run by hand and a run from cron are distinguishable in a report.
+
+Verified end to end on this instance: the self-test first reproduced
+`FAIL browser starts (Could not find Chrome …)`, the install action placed
+Chrome in the worker's own cache, and the same self-test then reported
+`ok browser starts (Chrome/148.0.7778.97)`.
+
+### Tests
+Eight more: a run whose pool cannot serve its minimum never reaching ready, the
+refusal naming the arithmetic, a pool of pilot questions counted as empty,
+subscale caps checked against the global minimum and floors against the global
+maximum, a sound configuration passing, and the runtime being explicit rather
+than inherited.
+
+### Verification
+PHPUnit 469 tests / 2910 assertions, Behat 32 scenarios / 229 steps, phpcs and
+PHPDoc clean, 689 language strings per language, upgrade path replayed from the
+previous version.
+
+---
+
 ## [0.6.4] — 2026-09-13
 
 Operating the suite from the plugin. Completes issues #14, #15 and the

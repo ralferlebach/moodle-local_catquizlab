@@ -95,12 +95,152 @@ class worker_launcher {
      * @param array $config The worker config (see config_from_settings).
      * @return array|null exitcode and output, or null when not launched.
      */
+    /**
+     * Run the worker's self-test the way the worker itself will be run.
+     *
+     * The point is the context, not the checks: the reported installation had a
+     * self-test that passed as the interactive user and a worker that could not
+     * find Chrome as the web server user. Running it from here — same process
+     * owner, same environment, same binary — is what makes the two comparable.
+     *
+     * @param array $config The worker configuration.
+     * @return array{exitcode: int, output: string, command: string}
+     */
+    public static function self_test(array $config): array {
+        $node = (string) ($config['node'] ?? get_config('local_catquizlab', 'worker_node_path'));
+        $script = (string) ($config['script'] ?? ($GLOBALS['CFG']->dirroot . '/local/catquizlab/worker/run_attempt.js'));
+
+        $command = self::command_with_environment($config, [$node, $script, '--self-test']);
+
+        $output = [];
+        $exitcode = 0;
+        @exec($command . ' 2>&1', $output, $exitcode);
+
+        return [
+            'exitcode' => (int) $exitcode,
+            'output'   => implode("\n", $output),
+            // Shown so the same command can be repeated in a shell when the
+            // result needs to be taken further.
+            'command'  => $command,
+        ];
+    }
+
+    /**
+     * Install the browser into the cache the worker will actually read.
+     *
+     * Puppeteer resolves its cache from the runtime of whoever runs it, so a
+     * browser installed by the interactive user is invisible to the web server
+     * user — which is the whole of the reported defect. Installing through the
+     * same environment the worker gets puts it where the worker looks, and
+     * doing it from the interface keeps an operator out of a shell for what is
+     * a one-line command with one easily-missed precondition.
+     *
+     * @param array $config The worker configuration.
+     * @return array{exitcode: int, output: string, command: string}
+     */
+    public static function install_browser(array $config): array {
+        global $CFG;
+
+        $node = (string) ($config['node'] ?? get_config('local_catquizlab', 'worker_node_path'));
+        $npx = dirname($node) . '/npx';
+        if (!is_executable($npx)) {
+            return [
+                'exitcode' => 127,
+                'output'   => get_string('ops:nonpx', 'local_catquizlab', $npx),
+                'command'  => '',
+            ];
+        }
+
+        $argv = [$npx, '--yes', 'puppeteer', 'browsers', 'install', 'chrome'];
+        $command = 'cd ' . escapeshellarg($CFG->dirroot . '/local/catquizlab/worker') . ' && '
+            . self::command_with_environment($config, $argv);
+
+        $output = [];
+        $exitcode = 0;
+        @exec($command . ' 2>&1', $output, $exitcode);
+
+        return [
+            'exitcode' => (int) $exitcode,
+            'output'   => implode("\n", $output),
+            'command'  => $command,
+        ];
+    }
+
+    /**
+     * One shell command, with the browser's environment in front of it.
+     *
+     * @param array $config The worker configuration.
+     * @param string[] $argv The argument vector.
+     * @return string
+     */
+    protected static function command_with_environment(array $config, array $argv): string {
+        $env = array_map('escapeshellarg', self::runtime_environment($config));
+
+        return 'env ' . implode(' ', $env) . ' ' . implode(' ', array_map('escapeshellarg', $argv));
+    }
+
+    /**
+     * The environment a headless browser needs to start at all.
+     *
+     * Puppeteer resolves its cache from the runtime environment of the unix
+     * user that runs it. A worker started by hand runs as the interactive user
+     * and finds the browser; the same worker started from cron runs as the web
+     * server user, whose HOME may not exist, and reports that Chrome cannot be
+     * found — after a self-test that passed. Chrome then needs XDG paths for
+     * its crash handler, which fails with "--database is required" when they
+     * point nowhere writable.
+     *
+     * Setting these explicitly makes the two contexts the same one. The
+     * directories are created here rather than assumed, because the failure
+     * they cause otherwise (EACCES on mkdir) reads as a permissions problem
+     * with the plugin.
+     *
+     * @param array $config The worker configuration.
+     * @return string[] name=value pairs for the command prefix.
+     */
+    public static function runtime_environment(array $config): array {
+        global $CFG;
+
+        $home = trim((string) ($config['home'] ?? get_config('local_catquizlab', 'worker_home')));
+        if ($home === '') {
+            // Under the plugin's own data directory: it belongs to the web
+            // server user by construction, which is the user that will run the
+            // worker from cron.
+            $home = $CFG->dataroot . '/local_catquizlab/worker-home';
+        }
+
+        $cache = trim((string) get_config('local_catquizlab', 'worker_cache_dir'));
+        if ($cache === '') {
+            $cache = $home . '/.cache/puppeteer';
+        }
+
+        foreach ([$home, $cache, $home . '/.config', $home . '/.local/share'] as $dir) {
+            if (!is_dir($dir)) {
+                @mkdir($dir, 0777, true);
+            }
+        }
+
+        return [
+            'HOME=' . $home,
+            'PUPPETEER_CACHE_DIR=' . $cache,
+            'XDG_CACHE_HOME=' . $home . '/.cache',
+            'XDG_CONFIG_HOME=' . $home . '/.config',
+            'XDG_DATA_HOME=' . $home . '/.local/share',
+        ];
+    }
+
+    /**
+     * Run one worker in the foreground and return what it reported.
+     *
+     * @param array $config The worker configuration.
+     * @return array{exitcode: int, output: string}|null Null when not configured.
+     */
     public static function launch(array $config): ?array {
         if (empty($config['enabled']) || !self::is_configured($config)) {
             return null;
         }
 
-        $command = implode(' ', array_map('escapeshellarg', self::build_command($config)));
+        $command = self::command_with_environment($config, self::build_command($config));
         $output = [];
         $exitcode = 0;
         exec($command . ' 2>&1', $output, $exitcode);
@@ -171,9 +311,9 @@ class worker_launcher {
                 continue;
             }
 
-            $command = implode(
-                ' ',
-                array_map('escapeshellarg', self::build_command(['workerid' => $workerid] + $config))
+            $command = self::command_with_environment(
+                $config,
+                self::build_command(['workerid' => $workerid] + $config)
             );
 
             // Detached: the caller must not wait for a worker that plays

@@ -133,7 +133,7 @@ function xmldb_local_catquizlab_upgrade($oldversion): bool {
         upgrade_plugin_savepoint(true, 2026083109, 'local', 'catquizlab');
     }
 
-    if ($oldversion < 2026091400) {
+    if ($oldversion < 2026091301) {
         // A claim needs an owner and an expiry. Recovery used to key on
         // timemodified, which a worker refreshes while it works, so a genuinely
         // stuck attempt and a slow one looked alike.
@@ -176,7 +176,7 @@ function xmldb_local_catquizlab_upgrade($oldversion): bool {
             $dbman->create_table($table);
         }
 
-        upgrade_plugin_savepoint(true, 2026091400, 'local', 'catquizlab');
+        upgrade_plugin_savepoint(true, 2026091301, 'local', 'catquizlab');
     }
 
     return true;

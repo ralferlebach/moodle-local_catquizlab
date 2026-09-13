@@ -147,6 +147,17 @@ class run_lifecycle {
             return;
         }
 
+        // Provisioning succeeding says the objects exist, not that the test can
+        // start. A structurally complete run whose configuration cannot select
+        // a first question produces one failing job per person — the reported
+        // case was 1600 of them, all failing identically before question one.
+        $readiness = cat_readiness::check($runid);
+        if (!$readiness['ok']) {
+            self::fail($runid, 'cat-not-ready: ' . cat_readiness::summary($readiness));
+
+            return;
+        }
+
         $DB->update_record('local_catquizlab_run', (object) [
             'id'           => $runid,
             'status'       => registry::STATUS_READY,

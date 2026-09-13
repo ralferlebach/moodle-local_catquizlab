@@ -520,4 +520,59 @@ final class worker_registry_test extends \advanced_testcase {
         // Creating it twice must not mint a second one.
         $this->assertFalse(\local_catquizlab\local\worker_setup::ensure_token());
     }
+
+    /**
+     * The worker runtime is pinned rather than inherited.
+     *
+     * @return void
+     */
+    public function test_the_browser_runtime_is_explicit(): void {
+        global $CFG;
+        $this->resetAfterTest();
+
+        $env = \local_catquizlab\local\worker_launcher::runtime_environment([]);
+        $keys = array_map(static fn(string $pair): string => explode('=', $pair, 2)[0], $env);
+
+        // Puppeteer resolves its cache from the runtime of whoever runs it, so
+        // a worker started by hand and the same worker started from cron look
+        // in different places. Pinning these makes the two contexts one.
+        foreach (['HOME', 'PUPPETEER_CACHE_DIR', 'XDG_CACHE_HOME', 'XDG_CONFIG_HOME', 'XDG_DATA_HOME'] as $name) {
+            $this->assertContains($name, $keys, $name . ' is left to the environment.');
+        }
+
+        $home = null;
+        foreach ($env as $pair) {
+            [$name, $value] = explode('=', $pair, 2);
+            if ($name === 'HOME') {
+                $home = $value;
+            }
+        }
+
+        // Under dataroot on purpose: it belongs to the web server user by
+        // construction, which is the user cron will run the worker as.
+        $this->assertNotNull($home);
+        $this->assertStringStartsWith($CFG->dataroot, $home);
+        $this->assertDirectoryExists($home, 'The runtime directory is assumed rather than created.');
+    }
+
+    /**
+     * A configured worker command carries that runtime with it.
+     *
+     * @return void
+     */
+    public function test_the_launch_command_carries_the_runtime(): void {
+        $this->resetAfterTest();
+
+        $method = new \ReflectionMethod(\local_catquizlab\local\worker_launcher::class, 'command_with_environment');
+        $method->setAccessible(true);
+
+        $command = $method->invoke(null, [], ['/usr/bin/node', '/tmp/run.js', '--self-test']);
+
+        // Without the prefix the self-test and the worker run in different
+        // environments, which is how a green self-test coexisted with a worker
+        // that could not find Chrome.
+        $this->assertStringStartsWith('env ', $command);
+        $this->assertStringContainsString('PUPPETEER_CACHE_DIR', $command);
+        $this->assertStringContainsString('run.js', $command);
+    }
 }

@@ -84,6 +84,16 @@
             <input type="hidden" name="action" value="reap">
             <button type="submit" class="btn btn-secondary">{{#str}}ops:reap, local_catquizlab{{/str}}</button>
         </form>
+        <form method="post" action="{{actionurl}}" class="d-inline">
+            <input type="hidden" name="sesskey" value="{{sesskey}}">
+            <input type="hidden" name="action" value="selftest">
+            <button type="submit" class="btn btn-secondary">{{#str}}ops:selftest, local_catquizlab{{/str}}</button>
+        </form>
+        <form method="post" action="{{actionurl}}" class="d-inline">
+            <input type="hidden" name="sesskey" value="{{sesskey}}">
+            <input type="hidden" name="action" value="installbrowser">
+            <button type="submit" class="btn btn-secondary">{{#str}}ops:installbrowser, local_catquizlab{{/str}}</button>
+        </form>
         {{#cantoken}}
             <form method="post" action="{{actionurl}}" class="d-inline">
                 <input type="hidden" name="sesskey" value="{{sesskey}}">
@@ -91,6 +101,12 @@
                 <button type="submit" class="btn btn-secondary">{{#str}}ops:createtoken, local_catquizlab{{/str}}</button>
             </form>
         {{/cantoken}}
+        {{#selftest}}
+            <div class="alert {{#ok}}alert-success{{/ok}}{{^ok}}alert-danger{{/ok}} mt-3" role="status">
+                <strong>{{#str}}ops:selftestresult, local_catquizlab{{/str}}</strong>
+                <pre class="mb-0 small">{{output}}</pre>
+            </div>
+        {{/selftest}}
     </div>
 </div>
 
