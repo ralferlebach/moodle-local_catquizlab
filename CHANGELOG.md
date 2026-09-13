@@ -6,6 +6,45 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.6.2] — 2026-09-13
+
+CI fix: the engine outgrew the Moodle releases this suite supports.
+
+### Fixed
+- **Every PHPUnit and Behat job failed before a single test ran.**
+  `mod_adaptivequiz` on the `v-3.0` branch now declares
+  `requires = 2025100600`, which only Moodle 5.2 meets. Moodle aborts the whole
+  installation with `pluginrequirementsnotmet`, so the 4.5 and 5.0 jobs died
+  during setup — not on anything this plugin does.
+
+  `fetch-engine.sh` now reads the requirement out of the engine's own
+  `version.php` files and compares it with the release the job is installing.
+  Where the release cannot carry the engine, the directory is left empty and the
+  job proceeds without it: the suite installs stand-alone by design, and its
+  engine-facing tests skip when none is present. The check is made across all
+  the engine's plugins at once, because they depend on each other — installing
+  some of them is not a smaller engine, it is a broken one.
+
+- **Three lifecycle tests assumed an engine.** They called
+  `run_lifecycle::start()`, which the preflight correctly refuses without one —
+  a run queued without an engine would look started and never move. Those three
+  now skip where no engine is installed; the transition tests were rewritten to
+  set up the post-start state directly, so the lifecycle itself stays covered on
+  a site without an engine. Verified both ways by removing the engine and
+  running the suite: 442 tests green with it and without it.
+
+- `phpcs.xml` excludes `.github/`. CI helpers run before Moodle exists and
+  cannot satisfy the `MOODLE_INTERNAL` check the Moodle standard requires of
+  plugin code.
+
+### Verification
+PHPUnit 442 tests with the engine (12 skipped) and without it (11 skipped),
+Behat 31 scenarios / 219 steps, phpcs and PHPDoc clean. `fetch-engine.sh`
+exercised for both `MOODLE_405_STABLE` (engine skipped, with the reason stated)
+and `MOODLE_502_STABLE` (engine placed).
+
+---
+
 ## [0.6.1] — 2026-09-13
 
 The web workflow closed end to end, from the reported lifecycle report.

@@ -250,6 +250,7 @@ jobs:
         run: bash plugin/.github/scripts/fetch-engine.sh
         env:
           ENGINE_DIR: ${{ github.workspace }}/engine
+          MOODLE_BRANCH: ${{ matrix.moodle }}
 
       - name: Install Moodle, engine and plugin
         run: |
@@ -324,6 +325,7 @@ jobs:
         run: bash plugin/.github/scripts/fetch-engine.sh
         env:
           ENGINE_DIR: ${{ github.workspace }}/engine
+          MOODLE_BRANCH: ${{ matrix.moodle }}
 
       - name: Install Moodle, engine and plugin
         run: |

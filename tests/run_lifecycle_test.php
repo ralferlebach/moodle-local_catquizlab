@@ -68,8 +68,6 @@ final class run_lifecycle_test extends \advanced_testcase {
      * @return int The course id.
      */
     protected function satisfy_preflight(): int {
-        global $DB;
-
         $course = $this->getDataGenerator()->create_course();
         set_config('experimentcourseid', $course->id, 'local_catquizlab');
 
@@ -78,6 +76,39 @@ final class run_lifecycle_test extends \advanced_testcase {
         set_config('workernodepath', '/usr/bin/node', 'local_catquizlab');
 
         return (int) $course->id;
+    }
+
+    /**
+     * Skip a test that needs a start to actually go through.
+     *
+     * Starting a run requires the engine and the host activity, because a run
+     * queued without them would look started and never move — that refusal is
+     * the point of the preflight. CI installs the suite without an engine on
+     * releases the engine does not support, and there a start cannot be
+     * exercised. The lifecycle transitions themselves are tested without one.
+     *
+     * @return void
+     */
+    protected function require_startable_site(): void {
+        if (!\local_catquizlab\local\environment::engine_available()) {
+            $this->markTestSkipped('No CAT engine installed; a start is refused by design.');
+        }
+    }
+
+    /**
+     * Put a run into the state a successful start would leave it in.
+     *
+     * Used by the tests that are about what happens after a start rather than
+     * about the start itself, so they run on a site without an engine too.
+     *
+     * @param int $runid The run.
+     * @return void
+     */
+    protected function pretend_started(int $runid): void {
+        global $DB;
+
+        $DB->set_field('local_catquizlab_run', 'status', registry::STATUS_SCHEDULED, ['id' => $runid]);
+        run_lifecycle::refresh_experiment($runid);
     }
 
     /**
@@ -190,6 +221,7 @@ final class run_lifecycle_test extends \advanced_testcase {
         $this->resetAfterTest();
         $this->setAdminUser();
         $this->satisfy_preflight();
+        $this->require_startable_site();
 
         $runid = $this->run_ids($this->experiment_with_runs())[0];
 
@@ -274,6 +306,7 @@ final class run_lifecycle_test extends \advanced_testcase {
         $this->resetAfterTest();
         $this->setAdminUser();
         $this->satisfy_preflight();
+        $this->require_startable_site();
 
         $experimentid = $this->experiment_with_runs();
         $result = run_lifecycle::start_drafts($experimentid);
@@ -298,11 +331,11 @@ final class run_lifecycle_test extends \advanced_testcase {
 
         $runs = $this->run_ids($this->experiment_with_runs());
 
-        run_lifecycle::start($runs[0]);
+        $this->pretend_started($runs[0]);
         run_lifecycle::provisioned($runs[0], true);
         $this->assertSame(registry::STATUS_READY, $this->run_status($runs[0]));
 
-        run_lifecycle::start($runs[1]);
+        $this->pretend_started($runs[1]);
         run_lifecycle::provisioned($runs[1], false, 'stage:materialise (pool-too-small)');
         $this->assertSame(registry::STATUS_FAILED, $this->run_status($runs[1]));
 
@@ -326,7 +359,7 @@ final class run_lifecycle_test extends \advanced_testcase {
         $this->satisfy_preflight();
 
         $runid = $this->run_ids($this->experiment_with_runs())[0];
-        run_lifecycle::start($runid);
+        $this->pretend_started($runid);
         run_lifecycle::provisioned($runid, true);
 
         $this->assertTrue(run_lifecycle::attempt_claimed($runid));
@@ -348,7 +381,7 @@ final class run_lifecycle_test extends \advanced_testcase {
         $this->satisfy_preflight();
 
         $runid = $this->run_ids($this->experiment_with_runs())[0];
-        run_lifecycle::start($runid);
+        $this->pretend_started($runid);
         run_lifecycle::provisioned($runid, true);
         run_lifecycle::attempt_claimed($runid);
 
@@ -370,7 +403,7 @@ final class run_lifecycle_test extends \advanced_testcase {
         $this->satisfy_preflight();
 
         $runid = $this->run_ids($this->experiment_with_runs())[0];
-        run_lifecycle::start($runid);
+        $this->pretend_started($runid);
         run_lifecycle::provisioned($runid, true);
         run_lifecycle::attempt_claimed($runid);
         $this->add_attempt($runid, attempt_scheduler::STATUS_COLLECTED);
@@ -399,7 +432,7 @@ final class run_lifecycle_test extends \advanced_testcase {
         $this->satisfy_preflight();
 
         $runid = $this->run_ids($this->experiment_with_runs())[0];
-        run_lifecycle::start($runid);
+        $this->pretend_started($runid);
         run_lifecycle::provisioned($runid, true);
         run_lifecycle::attempt_claimed($runid);
         $this->add_attempt($runid, attempt_scheduler::STATUS_FAILED);
@@ -440,7 +473,7 @@ final class run_lifecycle_test extends \advanced_testcase {
         $this->satisfy_preflight();
 
         $runid = $this->run_ids($this->experiment_with_runs())[0];
-        run_lifecycle::start($runid);
+        $this->pretend_started($runid);
         run_lifecycle::provisioned($runid, true);
         run_lifecycle::attempt_claimed($runid);
         $this->add_attempt($runid, attempt_scheduler::STATUS_COLLECTED);
@@ -469,7 +502,7 @@ final class run_lifecycle_test extends \advanced_testcase {
         $seen = [];
         $seen[] = $this->run_status($runs[0]);
 
-        run_lifecycle::start($runs[0]);
+        $this->pretend_started($runs[0]);
         $seen[] = $this->run_status($runs[0]);
 
         run_lifecycle::provisioned($runs[0], true);
@@ -537,6 +570,7 @@ final class run_lifecycle_test extends \advanced_testcase {
         $this->resetAfterTest();
         $this->setAdminUser();
         $this->satisfy_preflight();
+        $this->require_startable_site();
 
         // Reported: experiment "Executed", 16 runs all Draft at 0%, no results.
         // Each half of that is now impossible on its own.

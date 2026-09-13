@@ -19,6 +19,39 @@ set -euo pipefail
 
 ENGINE_DIR="${ENGINE_DIR:-engine}"
 
+# The Moodle release this job installs, as its stable branch name. The engine's
+# plugins declare what they require, and a plugin whose requirement the branch
+# does not meet cannot be installed at all: Moodle aborts the whole installation
+# with pluginrequirementsnotmet, taking the job with it before a single test
+# runs. The suite installs without the engine by design, so the honest answer is
+# to skip it on a release it does not support rather than to fail the build.
+MOODLE_BRANCH="${MOODLE_BRANCH:-${1:-}}"
+
+# Branch name to the version Moodle reports for it. Kept here rather than
+# derived, because the mapping is not computable from the branch name.
+branch_version() {
+    case "$1" in
+        MOODLE_405_STABLE) echo 2024100700 ;;
+        MOODLE_500_STABLE) echo 2025041400 ;;
+        MOODLE_501_STABLE) echo 2025100000 ;;
+        MOODLE_502_STABLE) echo 2025100600 ;;
+        *)                 echo 0 ;;
+    esac
+}
+
+# The highest requirement across the plugins we are about to place.
+max_required() {
+    local highest=0 file required
+    for file in "$@"; do
+        required=$(grep -oE '\$plugin->requires[[:space:]]*=[[:space:]]*[0-9]+' "$file" \
+            | grep -oE '[0-9]+' | head -1)
+        if [ -n "${required:-}" ] && [ "$required" -gt "$highest" ]; then
+            highest=$required
+        fi
+    done
+    echo "$highest"
+}
+
 # Plugin directory name -> repository and ref. The directory name is what
 # moodle-plugin-ci uses to place the plugin, so it has to match the component.
 declare -A PLUGINS=(
@@ -57,6 +90,22 @@ if [ -d "${ENGINE_DIR}/adaptivequizcatmodel_catquiz" ]; then
     mkdir -p "${ENGINE_DIR}/mod_adaptivequiz/catmodel"
     mv "${ENGINE_DIR}/adaptivequizcatmodel_catquiz" "${ENGINE_DIR}/mod_adaptivequiz/catmodel/catquiz"
     echo "== adaptivequizcatmodel_catquiz moved into mod_adaptivequiz/catmodel/catquiz"
+fi
+
+# Now that every plugin is in place, check the release can carry them. The
+# check happens here rather than per plugin, because the engine's parts depend
+# on each other: installing some of them is not a smaller engine, it is a broken
+# one.
+BRANCH_VERSION=$(branch_version "${MOODLE_BRANCH}")
+REQUIRED=$(max_required $(find "${ENGINE_DIR}" -name version.php))
+
+if [ "${BRANCH_VERSION}" -gt 0 ] && [ "${REQUIRED}" -gt "${BRANCH_VERSION}" ]; then
+    echo "== The engine requires Moodle ${REQUIRED}; ${MOODLE_BRANCH} is ${BRANCH_VERSION}."
+    echo "== Skipping it for this job: the suite installs without the engine, and"
+    echo "== its engine-facing tests skip when none is present."
+    rm -rf "${ENGINE_DIR:?}"/*
+    mkdir -p "${ENGINE_DIR}"
+    exit 0
 fi
 
 echo "Engine ready in ${ENGINE_DIR}:"
