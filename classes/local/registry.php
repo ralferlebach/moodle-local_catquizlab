@@ -49,6 +49,17 @@ class registry {
     public const SETTINGS_SECTION = 'local_catquizlab_settings';
 
     /**
+     * The admin page id the plugin's own pages hang from.
+     *
+     * Declared here for the same reason as the settings section: every page
+     * passes it to admin_externalpage_setup(), and a literal repeated across
+     * eight files is a literal that will disagree with itself eventually.
+     *
+     * @var string
+     */
+    public const ADMIN_PAGE = 'local_catquizlab_manage';
+
+    /**
      * The URL of the plugin's settings page.
      *
      * @param string|null $anchor Optional setting to jump to.

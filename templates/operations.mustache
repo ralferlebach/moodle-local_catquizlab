@@ -1,0 +1,165 @@
+{{!
+    @template local_catquizlab/operations
+
+    Operations view: health, workers, queue and recovery actions.
+
+    Every action here replaces a shell command that used to be the only way to
+    do it. The health list leads each failed check to the page that fixes it,
+    because a check that only reports a problem leaves the work undone.
+
+    Context variables required for this template:
+    * health - status, checks with label/detail/status flags
+    * workers - hasany, rows
+    * queue - queued, running, collected, failed
+    * stuck - hasany, rows
+    * inflight - hasany, rows
+    * sesskey, actionurl, cantoken
+
+    Example context (json):
+    {
+        "health": {"status": "ok", "checks": [], "blockers": 0, "warnings": 0},
+        "workers": {"hasany": false, "rows": []},
+        "queue": {"queued": 0, "running": 0, "collected": 0, "failed": 0},
+        "stuck": {"hasany": false, "rows": []},
+        "inflight": {"hasany": false, "rows": []},
+        "sesskey": "abc123",
+        "actionurl": "/local/catquizlab/operations.php",
+        "cantoken": false
+    }
+}}
+<div class="card mb-3">
+    <div class="card-body">
+        <h3 class="h5">{{#str}}ops:system, local_catquizlab{{/str}}</h3>
+        <ul class="list-unstyled mb-0">
+            {{#health.checks}}
+                <li class="mb-1">
+                    <span class="badge {{#ok}}badge-success{{/ok}}{{#warn}}badge-warning{{/warn}}{{#fail}}badge-danger{{/fail}}">
+                        {{#ok}}OK{{/ok}}{{#warn}}!{{/warn}}{{#fail}}&times;{{/fail}}
+                    </span>
+                    <strong>{{label}}</strong>
+                    <span class="text-muted">{{detail}}</span>
+                    {{#actionurl}}<a href="{{actionurl}}">{{#str}}settings, core{{/str}}</a>{{/actionurl}}
+                </li>
+            {{/health.checks}}
+        </ul>
+    </div>
+</div>
+
+<div class="card mb-3">
+    <div class="card-body">
+        <h3 class="h5">{{#str}}ops:workers, local_catquizlab{{/str}}</h3>
+        {{#workers.hasany}}
+            <table class="table table-sm">
+                <thead>
+                    <tr>
+                        <th scope="col">{{#str}}ops:worker, local_catquizlab{{/str}}</th>
+                        <th scope="col">{{#str}}ops:slot, local_catquizlab{{/str}}</th>
+                        <th scope="col">{{#str}}ops:jobsdone, local_catquizlab{{/str}}</th>
+                        <th scope="col">{{#str}}ops:heartbeat, local_catquizlab{{/str}}</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {{#workers.rows}}
+                        <tr>
+                            <td>{{workerid}}</td>
+                            <td>{{slot}}</td>
+                            <td>{{jobsdone}}</td>
+                            <td>{{heartbeat}}</td>
+                        </tr>
+                    {{/workers.rows}}
+                </tbody>
+            </table>
+        {{/workers.hasany}}
+        {{^workers.hasany}}
+            <p class="text-muted">{{#str}}health:workersnone, local_catquizlab{{/str}}</p>
+        {{/workers.hasany}}
+
+        <form method="post" action="{{actionurl}}" class="d-inline">
+            <input type="hidden" name="sesskey" value="{{sesskey}}">
+            <input type="hidden" name="action" value="startworkers">
+            <button type="submit" class="btn btn-primary">{{#str}}ops:startworkers, local_catquizlab{{/str}}</button>
+        </form>
+        <form method="post" action="{{actionurl}}" class="d-inline">
+            <input type="hidden" name="sesskey" value="{{sesskey}}">
+            <input type="hidden" name="action" value="reap">
+            <button type="submit" class="btn btn-secondary">{{#str}}ops:reap, local_catquizlab{{/str}}</button>
+        </form>
+        {{#cantoken}}
+            <form method="post" action="{{actionurl}}" class="d-inline">
+                <input type="hidden" name="sesskey" value="{{sesskey}}">
+                <input type="hidden" name="action" value="createtoken">
+                <button type="submit" class="btn btn-secondary">{{#str}}ops:createtoken, local_catquizlab{{/str}}</button>
+            </form>
+        {{/cantoken}}
+    </div>
+</div>
+
+<div class="card mb-3">
+    <div class="card-body">
+        <h3 class="h5">{{#str}}ops:queue, local_catquizlab{{/str}}</h3>
+        <p>{{#str}}worker:queue, local_catquizlab{{/str}}
+            {{queue.queued}} / {{queue.running}} / {{queue.collected}} / {{queue.failed}}</p>
+
+        <h4 class="h6">{{#str}}ops:stuckattempts, local_catquizlab{{/str}}</h4>
+        {{#stuck.hasany}}
+            <table class="table table-sm">
+                <thead>
+                    <tr>
+                        <th scope="col">{{#str}}ops:attempt, local_catquizlab{{/str}}</th>
+                        <th scope="col">{{#str}}ops:worker, local_catquizlab{{/str}}</th>
+                        <th scope="col">{{#str}}worker:tries, local_catquizlab{{/str}}</th>
+                        <th scope="col">{{#str}}ops:heartbeat, local_catquizlab{{/str}}</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {{#stuck.rows}}
+                        <tr>
+                            <td>#{{attemptid}} (run {{runid}})</td>
+                            <td>{{owner}}</td>
+                            <td>{{tries}}</td>
+                            <td>{{since}}</td>
+                        </tr>
+                        {{#lasterror}}<tr><td colspan="4" class="small text-muted">{{lasterror}}</td></tr>{{/lasterror}}
+                    {{/stuck.rows}}
+                </tbody>
+            </table>
+        {{/stuck.hasany}}
+        {{^stuck.hasany}}
+            <p class="text-muted">{{#str}}ops:nostuck, local_catquizlab{{/str}}</p>
+        {{/stuck.hasany}}
+
+        <form method="post" action="{{actionurl}}">
+            <input type="hidden" name="sesskey" value="{{sesskey}}">
+            <input type="hidden" name="action" value="releaseorphans">
+            <button type="submit" class="btn btn-secondary">{{#str}}ops:releaseorphans, local_catquizlab{{/str}}</button>
+        </form>
+    </div>
+</div>
+
+<div class="card mb-3">
+    <div class="card-body">
+        <h3 class="h5">{{#str}}ops:runs, local_catquizlab{{/str}}</h3>
+        {{#inflight.hasany}}
+            <table class="table table-sm">
+                <tbody>
+                    {{#inflight.rows}}
+                        <tr>
+                            <td>#{{runid}} {{cellkey}}</td>
+                            <td>{{status}}</td>
+                            <td>{{collected}}/{{total}}</td>
+                            <td>
+                                <a href="{{pauseurl}}" class="btn btn-sm btn-outline-secondary">
+                                    {{#paused}}{{#str}}ops:resumerun, local_catquizlab{{/str}}{{/paused}}
+                                    {{^paused}}{{#str}}ops:pauserun, local_catquizlab{{/str}}{{/paused}}
+                                </a>
+                            </td>
+                        </tr>
+                    {{/inflight.rows}}
+                </tbody>
+            </table>
+        {{/inflight.hasany}}
+        {{^inflight.hasany}}
+            <p class="text-muted mb-0">{{#str}}ops:nothinginflight, local_catquizlab{{/str}}</p>
+        {{/inflight.hasany}}
+    </div>
+</div>

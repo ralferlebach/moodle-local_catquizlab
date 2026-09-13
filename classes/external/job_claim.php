@@ -84,6 +84,10 @@ class job_claim extends external_api {
         // cannot pick up the same one.
         $transaction = $DB->start_delegated_transaction();
 
+        // Attempts of paused runs are skipped rather than filtered out
+        // afterwards: a pause that still hands work out is not a pause, and
+        // checking here is what makes it one. The candidate window is small
+        // because runs are paused rarely.
         $queued = $DB->get_records_select(
             'local_catquizlab_attempt',
             'status = :status AND nextruntime <= :now',
@@ -91,9 +95,16 @@ class job_claim extends external_api {
             'nextruntime ASC, timecreated ASC, id ASC',
             '*',
             0,
-            1
+            50
         );
-        $attempt = reset($queued);
+
+        $attempt = null;
+        foreach ($queued as $candidate) {
+            if (!\local_catquizlab\local\run_lifecycle::is_paused((int) $candidate->runid)) {
+                $attempt = $candidate;
+                break;
+            }
+        }
         if (!$attempt) {
             $transaction->allow_commit();
 

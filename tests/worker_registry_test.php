@@ -365,4 +365,159 @@ final class worker_registry_test extends \advanced_testcase {
         $this->assertSame(worker_registry::STATUS_CRASHED, (int) $row->status);
         $this->assertStringContainsString('exited with code 1', (string) $row->lasterror);
     }
+
+    /**
+     * A paused run hands out nothing.
+     *
+     * @return void
+     */
+    public function test_a_paused_run_hands_out_no_work(): void {
+        global $DB;
+        $this->resetAfterTest();
+        $this->setAdminUser();
+
+        $attemptid = $this->add_attempt(attempt_scheduler::STATUS_QUEUED);
+        $runid = (int) $DB->get_field('local_catquizlab_attempt', 'runid', ['id' => $attemptid]);
+
+        $this->assertTrue(\local_catquizlab\external\job_claim::execute('w')['hasjob']);
+
+        \local_catquizlab\local\run_lifecycle::set_paused($runid, true);
+        $DB->set_field('local_catquizlab_attempt', 'status', attempt_scheduler::STATUS_QUEUED, ['id' => $attemptid]);
+        $DB->set_field('local_catquizlab_attempt', 'nextruntime', 0, ['id' => $attemptid]);
+
+        // A pause that still hands work out is not a pause.
+        $this->assertFalse(\local_catquizlab\external\job_claim::execute('w')['hasjob']);
+
+        \local_catquizlab\local\run_lifecycle::set_paused($runid, false);
+        $this->assertTrue(\local_catquizlab\external\job_claim::execute('w')['hasjob']);
+    }
+
+    /**
+     * A run failing over and over pauses itself.
+     *
+     * @return void
+     */
+    public function test_a_failing_run_pauses_itself(): void {
+        global $DB;
+        $this->resetAfterTest();
+
+        /** @var \local_catquizlab_generator $generator */
+        $generator = $this->getDataGenerator()->get_plugin_generator('local_catquizlab');
+        $run = $generator->create_run();
+        $runid = (int) $run->id;
+
+        // One short of the limit: a run that is merely unlucky keeps going.
+        for ($i = 1; $i < \local_catquizlab\local\run_lifecycle::FAILURE_STREAK_LIMIT; $i++) {
+            $DB->insert_record('local_catquizlab_attempt', (object) [
+                'runid' => $runid, 'personid' => 0, 'status' => attempt_scheduler::STATUS_FAILED,
+                'tries' => 3, 'timecreated' => time(), 'timemodified' => time() + $i,
+            ]);
+        }
+        $this->assertFalse(\local_catquizlab\local\run_lifecycle::check_failure_streak($runid));
+        $this->assertFalse(\local_catquizlab\local\run_lifecycle::is_paused($runid));
+
+        $DB->insert_record('local_catquizlab_attempt', (object) [
+            'runid' => $runid, 'personid' => 0, 'status' => attempt_scheduler::STATUS_FAILED,
+            'tries' => 3, 'timecreated' => time(), 'timemodified' => time() + 100,
+        ]);
+
+        // Retrying 1600 attempts that all fail the same way exhausts the queue
+        // and leaves nothing to diagnose.
+        $this->assertTrue(\local_catquizlab\local\run_lifecycle::check_failure_streak($runid));
+        $this->assertTrue(\local_catquizlab\local\run_lifecycle::is_paused($runid));
+        $this->assertStringContainsString(
+            (string) \local_catquizlab\local\run_lifecycle::FAILURE_STREAK_LIMIT,
+            \local_catquizlab\local\run_lifecycle::pause_reason($runid)
+        );
+    }
+
+    /**
+     * A recent success breaks the streak.
+     *
+     * @return void
+     */
+    public function test_a_success_breaks_the_failure_streak(): void {
+        global $DB;
+        $this->resetAfterTest();
+
+        /** @var \local_catquizlab_generator $generator */
+        $generator = $this->getDataGenerator()->get_plugin_generator('local_catquizlab');
+        $runid = (int) $generator->create_run()->id;
+
+        for ($i = 1; $i <= \local_catquizlab\local\run_lifecycle::FAILURE_STREAK_LIMIT; $i++) {
+            $DB->insert_record('local_catquizlab_attempt', (object) [
+                'runid' => $runid, 'personid' => 0, 'status' => attempt_scheduler::STATUS_FAILED,
+                'tries' => 3, 'timecreated' => time(), 'timemodified' => time() + $i,
+            ]);
+        }
+        // The most recent one succeeded: the run is producing results, so the
+        // streak is over and the history does not count against it.
+        $DB->insert_record('local_catquizlab_attempt', (object) [
+            'runid' => $runid, 'personid' => 0, 'status' => attempt_scheduler::STATUS_COLLECTED,
+            'tries' => 1, 'timecreated' => time(), 'timemodified' => time() + 999,
+        ]);
+
+        $this->assertFalse(\local_catquizlab\local\run_lifecycle::check_failure_streak($runid));
+        $this->assertFalse(\local_catquizlab\local\run_lifecycle::is_paused($runid));
+    }
+
+    /**
+     * The health view answers what used to need a shell.
+     *
+     * @return void
+     */
+    public function test_health_reports_every_operational_question(): void {
+        $this->resetAfterTest();
+        $this->setAdminUser();
+
+        $health = \local_catquizlab\local\system_health::health();
+        $ids = array_column($health['checks'], 'id');
+
+        // Is the worker ready? Is one running? Is the pipeline blocked or just
+        // slow? Each of these had to be answered over SSH.
+        foreach (['engine', 'activity', 'course', 'workertoken', 'node', 'workermodules', 'workerfleet', 'pipeline'] as $id) {
+            $this->assertContains($id, $ids, 'The health view says nothing about: ' . $id);
+        }
+
+        foreach ($health['checks'] as $check) {
+            $this->assertNotSame('', $check['detail'], $check['id'] . ' reports a status without a finding.');
+        }
+    }
+
+    /**
+     * Waiting work with no worker is named as a blocker, not left to inference.
+     *
+     * @return void
+     */
+    public function test_a_stalled_pipeline_is_named(): void {
+        $this->resetAfterTest();
+        $this->setAdminUser();
+
+        $this->add_attempt(attempt_scheduler::STATUS_QUEUED);
+
+        $checks = array_column(\local_catquizlab\local\system_health::health()['checks'], null, 'id');
+
+        // Attempts waiting with nobody to play them is the one combination that
+        // never resolves itself — the state the reported installation sat in.
+        $this->assertSame(\local_catquizlab\local\system_health::FAIL, $checks['pipeline']['status']);
+    }
+
+    /**
+     * The worker token can be created from the plugin.
+     *
+     * @return void
+     */
+    public function test_the_worker_token_can_be_created_in_the_plugin(): void {
+        $this->resetAfterTest();
+        $this->setAdminUser();
+
+        $this->assertNull(\local_catquizlab\local\system_health::worker_token());
+
+        // This was the one step that forced an operator out of the workflow.
+        $this->assertTrue(\local_catquizlab\local\worker_setup::ensure_token());
+        $this->assertNotNull(\local_catquizlab\local\system_health::worker_token());
+
+        // Creating it twice must not mint a second one.
+        $this->assertFalse(\local_catquizlab\local\worker_setup::ensure_token());
+    }
 }

@@ -6,7 +6,64 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
-## [0.7.0] — 2026-09-13
+## [0.6.4] — 2026-09-13
+
+Operating the suite from the plugin. Completes issues #14, #15 and the
+circuit-breaker half of #17.
+
+### The rule this release is about
+Running, diagnosing and recovering an experiment has to be possible from the
+plugin's own pages. A shell and a database client are how one investigates a
+defect, not how one operates a plugin — and the reported installation needed
+both to find out why 1600 queued attempts were not moving.
+
+### Added
+- **An operations view** (Reports → Operations) with four sections: system
+  health, workers, the attempt queue and the runs in flight. Every question
+  that previously needed SSH is answered there: is the worker ready, is one
+  running, how many attempts wait, which one is stuck and since when, which run
+  it belongs to, how many tries it has had, what the last error was, and
+  whether the pipeline is blocked or merely slow.
+
+- **`system_health`** — eight checks, each reporting three things: whether it
+  passes, what it found, and where to go to fix it. A check that only says
+  "failed" moves the work to the reader rather than doing it. Among them the
+  Node major version, because a worker that starts on Node 18 and dies on its
+  first dependency is worse than one that refuses to start: the queue looks
+  served.
+
+- **`worker_setup::ensure_token()`** — the worker token was the one piece that
+  forced an operator out of the workflow entirely. It now enables web services
+  and REST, authorises the account in the restricted service, mints the token
+  and writes it into the plugin setting, so the worker command the interface
+  shows is complete as it stands.
+
+- **Recovery actions in the interface**: start workers, check for dead workers,
+  release orphaned claims without waiting out a timeout, and pause or resume an
+  individual run.
+
+- **A circuit breaker.** Ten consecutive failures pause a run by themselves. A
+  run whose attempts all fail the same way does not improve by being retried
+  1600 times — it exhausts the queue and leaves nothing to diagnose. The streak
+  is counted over the most recent attempts, so a run that failed early and
+  recovered is not punished for its history, and a paused run hands out
+  nothing: a pause that still gives work away is not a pause.
+
+### Tests
+Six more in `worker_registry_test`: a paused run handing out no work, a failing
+run pausing itself at the limit and not one attempt earlier, a recent success
+breaking the streak, every operational question having a health check, the
+stalled pipeline named as a blocker rather than left to inference, and the
+token created from the plugin without minting a second one.
+
+### Verification
+PHPUnit 461 tests / 2884 assertions, Behat 32 scenarios / 229 steps, phpcs and
+PHPDoc clean, 675 language strings per language. The operations view rendered
+against the live instance with real figures.
+
+---
+
+## [0.6.3] — 2026-09-13 (part 2)
 
 Worker operation: slots, leases, heartbeats and visible failure reasons.
 Addresses the reported issues #13, #16, #17 and #18, and the observable half of
@@ -74,7 +131,7 @@ same slot returns nothing.
 
 ---
 
-## [0.6.3] — 2026-09-13
+## [0.6.3] — 2026-09-13 (part 1)
 
 The engine comes from one coordinated branch again.
 

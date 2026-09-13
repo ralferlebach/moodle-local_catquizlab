@@ -156,6 +156,141 @@ class run_lifecycle {
     }
 
     /**
+     * How many consecutive failures pause a run by themselves.
+     *
+     * A run whose attempts all fail the same way does not get better by being
+     * retried 1600 times. Stopping it early keeps the queue free for work that
+     * can succeed and leaves a diagnosable state instead of an exhausted one.
+     *
+     * @var int
+     */
+    public const FAILURE_STREAK_LIMIT = 10;
+
+    /**
+     * Hold a run's attempts back, or let them go again.
+     *
+     * A paused run keeps everything it has: its attempts stay queued and are
+     * simply not handed out. Pausing is a decision an operator takes, so it
+     * survives until it is taken back.
+     *
+     * @param int $runid The run.
+     * @param bool $paused Whether it should be paused.
+     * @param string $reason Why, when the pause is automatic.
+     * @return void
+     */
+    public static function set_paused(int $runid, bool $paused, string $reason = ''): void {
+        global $DB;
+
+        $run = $DB->get_record('local_catquizlab_run', ['id' => $runid]);
+        if (!$run) {
+            return;
+        }
+
+        $manifest = json_decode((string) $run->manifestjson, true) ?: [];
+        if ($paused) {
+            $manifest['lifecycle']['paused'] = true;
+            $manifest['lifecycle']['pausedtime'] = time();
+            $manifest['lifecycle']['pausedreason'] = $reason;
+        } else {
+            unset(
+                $manifest['lifecycle']['paused'],
+                $manifest['lifecycle']['pausedtime'],
+                $manifest['lifecycle']['pausedreason']
+            );
+        }
+
+        $DB->update_record('local_catquizlab_run', (object) [
+            'id'           => $runid,
+            'manifestjson' => json_encode($manifest, JSON_UNESCAPED_SLASHES),
+            'timemodified' => time(),
+        ]);
+    }
+
+    /**
+     * Whether a run is holding its attempts back.
+     *
+     * @param int $runid The run.
+     * @return bool
+     */
+    public static function is_paused(int $runid): bool {
+        global $DB;
+
+        $manifest = json_decode(
+            (string) $DB->get_field('local_catquizlab_run', 'manifestjson', ['id' => $runid]),
+            true
+        ) ?: [];
+
+        return !empty($manifest['lifecycle']['paused']);
+    }
+
+    /**
+     * Why a run was paused, when it was paused automatically.
+     *
+     * @param int $runid The run.
+     * @return string
+     */
+    public static function pause_reason(int $runid): string {
+        global $DB;
+
+        $manifest = json_decode(
+            (string) $DB->get_field('local_catquizlab_run', 'manifestjson', ['id' => $runid]),
+            true
+        ) ?: [];
+
+        return (string) ($manifest['lifecycle']['pausedreason'] ?? '');
+    }
+
+    /**
+     * Pause a run that is failing its way through the queue.
+     *
+     * Called after each failed attempt. The streak is counted over the most
+     * recent attempts rather than over all of them, so a run that failed early
+     * and recovered is not punished for its history.
+     *
+     * @param int $runid The run.
+     * @return bool Whether this call paused the run.
+     */
+    public static function check_failure_streak(int $runid): bool {
+        global $DB;
+
+        if (self::is_paused($runid)) {
+            return false;
+        }
+
+        $recent = $DB->get_records_select(
+            'local_catquizlab_attempt',
+            'runid = :runid AND status IN (:collected, :failed)',
+            [
+                'runid'     => $runid,
+                'collected' => attempt_scheduler::STATUS_COLLECTED,
+                'failed'    => attempt_scheduler::STATUS_FAILED,
+            ],
+            'timemodified DESC',
+            'id, status',
+            0,
+            self::FAILURE_STREAK_LIMIT
+        );
+
+        if (count($recent) < self::FAILURE_STREAK_LIMIT) {
+            return false;
+        }
+
+        foreach ($recent as $attempt) {
+            if ((int) $attempt->status !== attempt_scheduler::STATUS_FAILED) {
+                return false;
+            }
+        }
+
+        self::set_paused(
+            $runid,
+            true,
+            get_string('ops:autopaused', 'local_catquizlab', self::FAILURE_STREAK_LIMIT)
+        );
+
+        return true;
+    }
+
+    /**
      * Move a run to RUNNING when a worker claims its first attempt.
      *
      * Idempotent: later claims of the same run change nothing, and a run that

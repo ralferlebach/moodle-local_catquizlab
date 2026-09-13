@@ -37,7 +37,7 @@ use local_catquizlab\local\environment;
 // the Reports list even without full site-config rights; the capability on the
 // page controls access. The same URL backs the navbar button (see lib.php).
 $ADMIN->add('reports', new admin_externalpage(
-    'local_catquizlab_manage',
+    \local_catquizlab\local\registry::ADMIN_PAGE,
     get_string('manage:pagetitle', 'local_catquizlab'),
     new moodle_url('/local/catquizlab/index.php'),
     'local/catquizlab:manage'
@@ -45,6 +45,15 @@ $ADMIN->add('reports', new admin_externalpage(
 
 if ($hassiteconfig) {
     $component = 'local_catquizlab';
+
+    // The operations view sits beside the management page: running and
+    // diagnosing an experiment belongs in the plugin, not in a shell.
+    $ADMIN->add('reports', new admin_externalpage(
+        'local_catquizlab_operations',
+        get_string('ops:heading', 'local_catquizlab'),
+        new moodle_url('/local/catquizlab/operations.php'),
+        'local/catquizlab:view'
+    ));
 
     $settings = new admin_settingpage(
         \local_catquizlab\local\registry::SETTINGS_SECTION,
