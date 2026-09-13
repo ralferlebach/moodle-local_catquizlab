@@ -29,6 +29,7 @@
 require(__DIR__ . '/../../config.php');
 require_once($CFG->libdir . '/adminlib.php');
 
+use local_catquizlab\local\attempt_scheduler;
 use local_catquizlab\local\environment;
 use local_catquizlab\local\experiment_container;
 use local_catquizlab\local\experiment_definition;
@@ -157,6 +158,33 @@ $counts = [
     'finished'    => $DB->count_records('local_catquizlab_run', ['status' => registry::STATUS_FINISHED]),
     'failed'      => $DB->count_records('local_catquizlab_run', ['status' => registry::STATUS_FAILED]),
 ];
+// The worker fleet and the attempt queue, beside the experiments. A pipeline
+// that has stalled looks exactly like one that is merely slow unless the page
+// says how many workers are alive and how long the queue is.
+$workers = \local_catquizlab\local\worker_registry::summary();
+$queue = [
+    'queued'    => $DB->count_records('local_catquizlab_attempt', ['status' => attempt_scheduler::STATUS_QUEUED]),
+    'running'   => $DB->count_records('local_catquizlab_attempt', ['status' => attempt_scheduler::STATUS_RUNNING]),
+    'collected' => $DB->count_records('local_catquizlab_attempt', ['status' => attempt_scheduler::STATUS_COLLECTED]),
+    'failed'    => $DB->count_records('local_catquizlab_attempt', ['status' => attempt_scheduler::STATUS_FAILED]),
+];
+
+// Work waiting with nobody to do it is the one combination that never resolves
+// itself, so it is named rather than left to be inferred from two numbers.
+$queue['stalled'] = $queue['queued'] > 0 && $workers['live'] === 0;
+
+// The most recent failure reasons, because a rising retry count without a
+// reason tells an operator nothing they can act on.
+$recenterrors = array_values($DB->get_records_select(
+    'local_catquizlab_attempt',
+    'lasterror IS NOT NULL',
+    [],
+    'timemodified DESC',
+    'id, runid, tries, lasterror',
+    0,
+    5
+));
+
 $overview = [
     [
         'count' => $counts['experiments'],
@@ -211,6 +239,16 @@ $templatecontext = [
     'environment' => ['items' => $envitems],
     'disabled'    => !get_config($component, 'enabled'),
     'experiments' => ['hasany' => $experimentrows !== [], 'rows' => $experimentrows],
+    'workers'     => $workers + ['queue' => $queue, 'hasslot' => $workers['live'] > 0],
+    'queue'       => $queue,
+    'recenterrors' => $recenterrors === [] ? null : ['rows' => array_map(static function ($row): array {
+        return [
+            'attemptid' => (int) $row->id,
+            'runid'     => (int) $row->runid,
+            'tries'     => (int) $row->tries,
+            'lasterror' => (string) $row->lasterror,
+        ];
+    }, $recenterrors)],
     'runs'        => [
         'hasany'     => $runrows !== [],
         'hassummary' => $recent['total'] > count($runrows),

@@ -119,6 +119,7 @@ async function playAttempt(browser, job) {
     page.setDefaultNavigationTimeout(NAV_TIMEOUT);
     let engineAttemptId = 0;
     let status = 'failed';
+    let failure = '';
 
     try {
         await login(page, job.userid, job.username);
@@ -177,11 +178,16 @@ async function playAttempt(browser, job) {
         // answered, which the check above establishes.
         status = 'finished';
     } catch (error) {
+        failure = error.message;
         console.error(`Attempt ${job.attemptid} failed: ${error.message}`);
     } finally {
         await page.close();
         await context.close();
         await callWs('local_catquizlab_job_complete', {
+            // The reason travels with the report. Without it the server sees a
+            // failed attempt and no explanation, and the retry count is all
+            // anyone has to go on.
+            message: failure ? String(failure).slice(0, 500) : '',
             attemptid: job.attemptid,
             status,
             runtimems: Date.now() - started,

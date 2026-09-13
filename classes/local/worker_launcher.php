@@ -142,19 +142,54 @@ class worker_launcher {
             return null;
         }
 
-        $ids = self::worker_ids((string) ($config['workerid'] ?? 'catquizlab-exec'), (int) ($config['concurrency'] ?? 1));
-        $last = array_pop($ids);
+        $concurrency = max(1, (int) ($config['concurrency'] ?? 1));
+        $prefix = (string) ($config['workerid'] ?? 'catquizlab-exec');
 
-        foreach ($ids as $id) {
-            $command = implode(' ', array_map('escapeshellarg', self::build_command(['workerid' => $id] + $config)));
-            exec($command . ' > /dev/null 2>&1 &');
+        // Only the slots nobody holds. Before this every dispatch started the
+        // configured number of workers again, so a site limited to one job at a
+        // time accumulated workers with each scheduler tick and claimed several
+        // attempts in parallel — exactly what the limit was set to prevent.
+        $free = worker_registry::free_slots($concurrency);
+        if ($free === []) {
+            return [
+                'launched' => 0,
+                'skipped'  => $concurrency,
+                'reason'   => 'all-slots-busy',
+                'exitcode' => 0,
+                'output'   => '',
+            ];
         }
 
-        $foreground = self::launch(['workerid' => $last] + $config);
+        $launched = 0;
+        foreach ($free as $slot) {
+            $workerid = $prefix . '-' . $slot;
+
+            // The slot is taken before the process starts, not after. Starting
+            // first would leave a window in which a second dispatch sees the
+            // slot free and starts a second worker for it.
+            if (worker_registry::acquire_slot($slot, $workerid) === null) {
+                continue;
+            }
+
+            $command = implode(
+                ' ',
+                array_map('escapeshellarg', self::build_command(['workerid' => $workerid] + $config))
+            );
+
+            // Detached: the caller must not wait for a worker that plays
+            // attempts for minutes. A blocking exec() is also why interrupting
+            // the caller used to leave a claimed attempt with nobody to finish
+            // it and nothing recording that the worker was gone.
+            exec($command . ' > /dev/null 2>&1 &');
+            $launched++;
+        }
+
         return [
-            'launched' => count($ids) + 1,
-            'exitcode' => $foreground['exitcode'] ?? 0,
-            'output'   => $foreground['output'] ?? '',
+            'launched' => $launched,
+            'skipped'  => $concurrency - $launched,
+            'reason'   => $launched > 0 ? '' : 'no-slot-acquired',
+            'exitcode' => 0,
+            'output'   => '',
         ];
     }
 

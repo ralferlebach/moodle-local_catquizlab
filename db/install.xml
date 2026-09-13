@@ -164,6 +164,9 @@
         <FIELD NAME="tracejson" TYPE="text" NOTNULL="false" SEQUENCE="false" COMMENT="Analysis-friendly trace copied from the engine tables/debug info: item sequence, score components, theta/SE path, activations, stop reason."/>
         <FIELD NAME="runtimems" TYPE="int" LENGTH="10" NOTNULL="false" SEQUENCE="false" COMMENT="Wall-clock runtime of the attempt in milliseconds, reported by the worker."/>
         <FIELD NAME="tries" TYPE="int" LENGTH="4" NOTNULL="true" DEFAULT="0" SEQUENCE="false" COMMENT="Number of times the attempt has been claimed/tried (for retry limiting)."/>
+        <FIELD NAME="leaseowner" TYPE="char" LENGTH="100" NOTNULL="false" SEQUENCE="false" COMMENT="Worker instance holding the claim. A claim without an owner cannot be recovered deliberately, only by a timeout that guesses."/>
+        <FIELD NAME="leaseexpires" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false" COMMENT="When the claim lapses. Recovery reads this rather than timemodified, which a long attempt keeps refreshing."/>
+        <FIELD NAME="lasterror" TYPE="text" NOTNULL="false" SEQUENCE="false" COMMENT="The worker's own reason for the last failure, kept so the interface can show why an attempt is being retried."/>
         <FIELD NAME="nextruntime" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false" COMMENT="Earliest time the attempt may be (re)claimed; used for staggering and retry backoff."/>
         <FIELD NAME="timecreated" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
         <FIELD NAME="timemodified" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
@@ -256,6 +259,29 @@
       </KEYS>
       <INDEXES>
         <INDEX NAME="runid-catscaleid" UNIQUE="true" FIELDS="runid, catscaleid"/>
+      </INDEXES>
+    </TABLE>
+    <TABLE NAME="local_catquizlab_worker" COMMENT="One row per worker instance. Without it a worker exists only as an operating-system process: nothing can say how many are running, whether a slot is already taken, or when one last reported in.">
+      <FIELDS>
+        <FIELD NAME="id" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="true"/>
+        <FIELD NAME="workerid" TYPE="char" LENGTH="100" NOTNULL="true" SEQUENCE="false" COMMENT="Stable identity of the instance, e.g. catquizlab-exec-2."/>
+        <FIELD NAME="slot" TYPE="int" LENGTH="4" NOTNULL="true" DEFAULT="0" SEQUENCE="false" COMMENT="Concurrency slot. One live worker per slot is the whole point of the table."/>
+        <FIELD NAME="status" TYPE="int" LENGTH="2" NOTNULL="true" DEFAULT="0" SEQUENCE="false" COMMENT="0 starting, 10 running, 20 stopped, 30 crashed."/>
+        <FIELD NAME="pid" TYPE="int" LENGTH="10" NOTNULL="false" SEQUENCE="false"/>
+        <FIELD NAME="hostname" TYPE="char" LENGTH="255" NOTNULL="false" SEQUENCE="false"/>
+        <FIELD NAME="jobsdone" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
+        <FIELD NAME="lasterror" TYPE="text" NOTNULL="false" SEQUENCE="false"/>
+        <FIELD NAME="heartbeat" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false" COMMENT="Last sign of life. A worker that stops reporting is crashed, not merely slow."/>
+        <FIELD NAME="timecreated" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
+        <FIELD NAME="timemodified" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
+      </FIELDS>
+      <KEYS>
+        <KEY NAME="primary" TYPE="primary" FIELDS="id"/>
+      </KEYS>
+      <INDEXES>
+        <INDEX NAME="workerid" UNIQUE="true" FIELDS="workerid"/>
+        <INDEX NAME="slotstatus" UNIQUE="false" FIELDS="slot, status"/>
+        <INDEX NAME="heartbeat" UNIQUE="false" FIELDS="heartbeat"/>
       </INDEXES>
     </TABLE>
   </TABLES>

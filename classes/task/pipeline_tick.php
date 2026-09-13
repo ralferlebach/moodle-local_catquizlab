@@ -57,6 +57,16 @@ class pipeline_tick extends \core\task\scheduled_task {
             return;
         }
 
+        // Dead workers first, then their claims, then the timeout fallback.
+        // The order matters: reaping a worker hands its attempts back with a
+        // known reason, while the timeout can only guess that something went
+        // wrong somewhere.
+        $reaped = \local_catquizlab\local\worker_registry::reap();
+        if ($reaped['workers'] > 0) {
+            mtrace("local_catquizlab: reaped {$reaped['workers']} worker(s), "
+                . "released {$reaped['attempts']} attempt(s).");
+        }
+
         $reclaimed = attempt_scheduler::reclaim_stale(null, self::STALE_SECONDS);
         if ($reclaimed > 0) {
             mtrace("local_catquizlab: reclaimed {$reclaimed} stale attempt(s).");

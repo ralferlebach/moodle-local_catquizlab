@@ -6,6 +6,113 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.7.0] — 2026-09-13
+
+Worker operation: slots, leases, heartbeats and visible failure reasons.
+Addresses the reported issues #13, #16, #17 and #18, and the observable half of
+#15.
+
+### The reported failure
+A site limited to `worker_concurrency = 1` ended up with two attempts claimed
+at once, and nothing in the installation could say that a worker had gone.
+Concurrency that only holds while nobody interrupts anything is not a limit.
+
+### Added
+- **`local_catquizlab_worker`, a worker registry.** Without it a worker exists
+  only as an operating-system process: nothing can say how many are running,
+  whether a slot is already taken, or when one last reported in.
+
+  A **slot** is a concurrency place, so `worker_concurrency = 1` now means one
+  live worker installation-wide rather than one job per process that happens to
+  be started. Claiming a slot is an insert against a unique index, so two
+  simultaneous dispatches cannot both win — the database decides, not a
+  read-then-write in PHP that two processes can interleave. A worker restarting
+  into its own slot is not treated as a collision.
+
+  A **heartbeat** is the difference between slow and gone. A busy worker keeps
+  reporting; a dead one stops. Declaring a live worker crashed is the expensive
+  mistake — its attempt would be played twice — so the timeout is generous.
+
+- **Leases on attempts.** A claim now names its holder and says when it lapses.
+  Recovery reads the lease instead of `timemodified`, which a worker refreshes
+  while it works: a genuinely stuck attempt and a slow one used to look
+  identical. Attempts claimed before leases existed keep the timeout fallback,
+  so none of them is stranded.
+
+- **Failure reasons are kept.** The worker sends its own reason with the
+  completion report, and it is stored on the attempt. A retried attempt used to
+  offer nothing but a rising try count.
+
+- **A worker and queue panel on the landing page**: live workers, crashed
+  workers, the queue split by state, the five most recent failure reasons, and
+  a named warning for the one combination that never resolves itself — attempts
+  waiting with no worker running.
+
+### Fixed
+- **`launch_pool()` started the configured number of workers on every call.** It
+  now starts only workers for slots nobody holds, and takes the slot before
+  starting the process rather than after — starting first leaves a window in
+  which a second dispatch sees the slot free. Workers are launched detached:
+  the blocking `exec()` is why interrupting the caller used to leave a claimed
+  attempt with nobody to finish it.
+- **`pipeline_tick` reaps dead workers before falling back to the timeout.**
+  Reaping hands attempts back with a known reason; the timeout can only guess
+  that something went wrong somewhere.
+
+### Tests
+`worker_registry_test`, 13 tests: one worker per slot, a restart into its own
+slot, free-slot accounting, a silent worker reaped while a reporting one is
+left alone, the attempts of a dead worker released, release scoped to its
+owner, recovery following the lease rather than the clock, the leaseless
+fallback, the recorded failure reason, and a crash told apart from a clean stop.
+
+### Verification
+PHPUnit 455 tests / 2853 assertions, Behat 31 scenarios / 219 steps, 11 worker
+tests, phpcs and PHPDoc clean. The reported case measured directly: with
+`concurrency = 1`, the first dispatch takes slot 1 and a second attempt on the
+same slot returns nothing.
+
+---
+
+## [0.6.3] — 2026-09-13
+
+The engine comes from one coordinated branch again.
+
+### Changed
+- **`fetch-engine.sh` uses `ALiSe-v-1.2.0-legacy` for all three CAT plugins.**
+  Checked rather than assumed: the branch exists in all three repositories, the
+  highest Moodle requirement across them is 2024100700 (so Moodle 4.5 upwards),
+  `local_catquiz`'s declared dependencies on the other two are satisfied within
+  the set, `mod_adaptivequiz` carries its `subplugins.json`, and the branch
+  contains the fixes for catquiz#59, #62 and the #64 stage counts. Verified by
+  installing it and running the suite: all five engine pins pass.
+
+  The `v-3.0` line is unusable here — `mod_adaptivequiz` requires 2025100600
+  there, which only Moodle 5.2 meets, and Moodle aborts the whole installation
+  rather than skipping the one plugin.
+
+### Fixed
+- **Nine tests failed with the engine installed, on a missing `version.php`.**
+  `catquizcentralhub/client` and `/host` are Git submodules; a plain clone
+  leaves them as empty directories, and because `local_catquiz` declares
+  `catquizcentralhub` as a subplugin type, Moodle scans them and fails. Not with
+  a warning — it aborts whatever asked for the plugin list, which is why
+  ordinary tasks and tests died with it.
+
+  `fetch-engine.sh` removes unpopulated submodule directories. They are not
+  needed to drive the engine, and a half-materialised subplugin shell is worse
+  than none. This is also the warning that appeared in the earlier CI logs.
+
+### Verification
+Installed locally on Moodle 4.5 with this branch: upgrade clean, PHPUnit 442
+tests / 2811 assertions, Behat 31 scenarios / 219 steps, phpcs and PHPDoc
+clean, all five engine pins passing, and an end-to-end run provisioning
+`planned=24 questions=24 items=24 params=24 visible=24 failed=0` with a played
+attempt whose trace carries scale abilities, standard errors and the ability
+path.
+
+---
+
 ## [0.6.2] — 2026-09-13
 
 CI fix: the engine outgrew the Moodle releases this suite supports.

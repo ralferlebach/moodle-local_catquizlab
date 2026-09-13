@@ -133,6 +133,52 @@ function xmldb_local_catquizlab_upgrade($oldversion): bool {
         upgrade_plugin_savepoint(true, 2026083109, 'local', 'catquizlab');
     }
 
+    if ($oldversion < 2026091400) {
+        // A claim needs an owner and an expiry. Recovery used to key on
+        // timemodified, which a worker refreshes while it works, so a genuinely
+        // stuck attempt and a slow one looked alike.
+        $table = new xmldb_table('local_catquizlab_attempt');
+
+        $field = new xmldb_field('leaseowner', XMLDB_TYPE_CHAR, '100', null, null, null, null, 'tries');
+        if (!$dbman->field_exists($table, $field)) {
+            $dbman->add_field($table, $field);
+        }
+
+        $field = new xmldb_field('leaseexpires', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, '0', 'leaseowner');
+        if (!$dbman->field_exists($table, $field)) {
+            $dbman->add_field($table, $field);
+        }
+
+        $field = new xmldb_field('lasterror', XMLDB_TYPE_TEXT, null, null, null, null, null, 'leaseexpires');
+        if (!$dbman->field_exists($table, $field)) {
+            $dbman->add_field($table, $field);
+        }
+
+        // The worker registry. Without it a worker exists only as a process,
+        // and nothing can say whether a slot is already taken.
+        $table = new xmldb_table('local_catquizlab_worker');
+        if (!$dbman->table_exists($table)) {
+            $table->add_field('id', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, XMLDB_SEQUENCE, null);
+            $table->add_field('workerid', XMLDB_TYPE_CHAR, '100', null, XMLDB_NOTNULL, null, null);
+            $table->add_field('slot', XMLDB_TYPE_INTEGER, '4', null, XMLDB_NOTNULL, null, '0');
+            $table->add_field('status', XMLDB_TYPE_INTEGER, '2', null, XMLDB_NOTNULL, null, '0');
+            $table->add_field('pid', XMLDB_TYPE_INTEGER, '10', null, null, null, null);
+            $table->add_field('hostname', XMLDB_TYPE_CHAR, '255', null, null, null, null);
+            $table->add_field('jobsdone', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, '0');
+            $table->add_field('lasterror', XMLDB_TYPE_TEXT, null, null, null, null, null);
+            $table->add_field('heartbeat', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, '0');
+            $table->add_field('timecreated', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, '0');
+            $table->add_field('timemodified', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, '0');
+            $table->add_key('primary', XMLDB_KEY_PRIMARY, ['id']);
+            $table->add_index('workerid', XMLDB_INDEX_UNIQUE, ['workerid']);
+            $table->add_index('slotstatus', XMLDB_INDEX_NOTUNIQUE, ['slot', 'status']);
+            $table->add_index('heartbeat', XMLDB_INDEX_NOTUNIQUE, ['heartbeat']);
+            $dbman->create_table($table);
+        }
+
+        upgrade_plugin_savepoint(true, 2026091400, 'local', 'catquizlab');
+    }
+
     return true;
 }
 

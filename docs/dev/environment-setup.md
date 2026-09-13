@@ -287,3 +287,44 @@ gilt nicht mehr — nachgemessen: mit beiden aktiv laufen 16 Items durch, 17
 Debug-Zeilen werden geschrieben und die θ-Trajektorie wird eingesammelt. Die
 Entwicklungsumgebung kann Developer-Debugging und Debug-Speicherung dauerhaft
 zusammen führen.
+
+
+## CAT-Engine: welcher Branch (Stand 2026-09-13)
+
+Alle drei Plugins kommen aus **einem** abgestimmten Branch:
+
+```
+ALiSe-v-1.2.0-legacy
+  ralferlebach/moodle-local_catquiz                 2026090553
+  ralferlebach/moodle-mod_adaptivequiz              2026090604
+  ralferlebach/moodle-adaptivequizcatmodel_catquiz  2026082704
+```
+
+Gegengeprüft, nicht angenommen:
+
+| Prüfung | Ergebnis |
+|---|---|
+| Branch existiert in allen drei Repos | ja |
+| höchste Moodle-Anforderung | 2024100700, also ab Moodle 4.5 |
+| `local_catquiz`-Abhängigkeiten (≥ 2026081900) | von beiden erfüllt |
+| `subplugins.json` in `mod_adaptivequiz` | vorhanden |
+| catquiz#59 (`get_ability_range(int)`) | enthalten |
+| catquiz#62 (`lastquestion ?? []`) | enthalten |
+| catquiz#64 (`catquizstagecounts`) | enthalten |
+
+Der `v-3.0`-Zweig kommt dafür **nicht** in Frage: `mod_adaptivequiz` verlangt
+dort `2025100600`, was nur Moodle 5.2 erfüllt, und Moodle bricht dann die
+gesamte Installation mit `pluginrequirementsnotmet` ab, statt das eine Plugin
+auszulassen.
+
+### Submodule in `local_catquiz`
+
+`catquizcentralhub/client` und `catquizcentralhub/host` sind Git-Submodule. Ein
+flacher Klon lässt sie als leere Verzeichnisse zurück — und weil `local_catquiz`
+`catquizcentralhub` als Subplugin-Typ deklariert, scannt Moodle sie und
+scheitert an der fehlenden `version.php`. Nicht mit einer Warnung: Es bricht
+ab, was gerade die Pluginliste angefordert hat, also auch Tasks und Tests.
+
+`fetch-engine.sh` entfernt deshalb unpopulierte Submodul-Verzeichnisse. Sie
+werden für den Betrieb der Engine nicht gebraucht, und eine halb
+materialisierte Subplugin-Hülle ist schlechter als keine.

@@ -76,12 +76,83 @@ class attempt_scheduler {
      * @param int $timeoutseconds The staleness threshold in seconds.
      * @return int The number of attempts reclaimed (requeued or failed).
      */
+    /**
+     * Hand back everything a named worker was holding.
+     *
+     * Called when a worker is found to have died. This is the deliberate
+     * counterpart to the timeout below: here we know the holder is gone, so
+     * there is nothing to guess about.
+     *
+     * @param string $workerid The worker whose claims lapse.
+     * @return int How many attempts went back into the queue.
+     */
+    public static function release_lease(string $workerid): int {
+        global $DB;
+
+        $held = $DB->get_records_select(
+            'local_catquizlab_attempt',
+            'status = :status AND leaseowner = :owner',
+            ['status' => self::STATUS_RUNNING, 'owner' => $workerid],
+            '',
+            'id, tries'
+        );
+
+        $now = time();
+        foreach ($held as $attempt) {
+            $DB->set_field('local_catquizlab_attempt', 'leaseowner', null, ['id' => $attempt->id]);
+            $DB->set_field('local_catquizlab_attempt', 'leaseexpires', 0, ['id' => $attempt->id]);
+            self::apply_retry((int) $attempt->id, (int) $attempt->tries, $now);
+        }
+
+        return count($held);
+    }
+
+    /**
+     * Record why an attempt failed, for the interface and for the next reader.
+     *
+     * @param int $attemptid The attempt.
+     * @param string $error The worker's own reason.
+     * @return void
+     */
+    public static function record_error(int $attemptid, string $error): void {
+        global $DB;
+
+        if (trim($error) === '') {
+            return;
+        }
+
+        // Trimmed, because a stack trace in a list column helps nobody, and the
+        // first line is what says what happened.
+        $DB->set_field(
+            'local_catquizlab_attempt',
+            'lasterror',
+            \core_text::substr(trim($error), 0, 1000),
+            ['id' => $attemptid]
+        );
+    }
+
+    /**
+     * Hand back attempts whose claim has lapsed.
+     *
+     * The lease decides where there is one; the timeout is the fallback for
+     * attempts claimed before leases existed.
+     *
+     * @param int|null $runid Restrict to one run, or null for all of them.
+     * @param int $timeoutseconds How long a leaseless claim may sit untouched.
+     * @return int How many attempts went back into the queue.
+     */
     public static function reclaim_stale(?int $runid, int $timeoutseconds): int {
         global $DB;
 
         $now = time();
-        $params = ['status' => self::STATUS_RUNNING, 'cutoff' => $now - $timeoutseconds];
-        $where = 'status = :status AND timemodified < :cutoff';
+
+        // The lease decides, and the timeout is the fallback for attempts that
+        // predate leases. Keying on timemodified alone was the defect: a worker
+        // refreshes it while it works, so a stuck attempt and a slow one looked
+        // the same.
+        $params = ['status' => self::STATUS_RUNNING, 'cutoff' => $now - $timeoutseconds, 'now' => $now];
+        $where = 'status = :status AND ((leaseexpires > 0 AND leaseexpires < :now)'
+            . ' OR (leaseexpires = 0 AND timemodified < :cutoff))';
         if ($runid !== null) {
             $where .= ' AND runid = :runid';
             $params['runid'] = $runid;
@@ -89,6 +160,8 @@ class attempt_scheduler {
 
         $stale = $DB->get_records_select('local_catquizlab_attempt', $where, $params, '', 'id, tries');
         foreach ($stale as $attempt) {
+            $DB->set_field('local_catquizlab_attempt', 'leaseowner', null, ['id' => $attempt->id]);
+            $DB->set_field('local_catquizlab_attempt', 'leaseexpires', 0, ['id' => $attempt->id]);
             self::apply_retry((int) $attempt->id, (int) $attempt->tries, $now);
         }
         return count($stale);

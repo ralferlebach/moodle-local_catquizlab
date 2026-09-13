@@ -65,7 +65,6 @@ class job_claim extends external_api {
         $params = self::validate_parameters(self::execute_parameters(), [
             'workerid' => $workerid,
         ]);
-        unset($params);
 
         $context = \context_system::instance();
         self::validate_context($context);
@@ -104,6 +103,11 @@ class job_claim extends external_api {
         $DB->update_record('local_catquizlab_attempt', (object) [
             'id'           => $attempt->id,
             'status'       => attempt_scheduler::STATUS_RUNNING,
+            // The claim names its holder and says when it lapses. An
+            // unattributed claim can only be recovered by a timeout that
+            // guesses whether the worker is slow or gone.
+            'leaseowner'   => $params['workerid'],
+            'leaseexpires' => time() + \local_catquizlab\local\worker_registry::HEARTBEAT_TIMEOUT,
             'tries'        => (int) $attempt->tries + 1,
             'timemodified' => time(),
         ]);
