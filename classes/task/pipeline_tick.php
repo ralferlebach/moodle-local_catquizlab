@@ -67,6 +67,13 @@ class pipeline_tick extends \core\task\scheduled_task {
                 . "released {$reaped['attempts']} attempt(s).");
         }
 
+        // Engine attempts that never got a first question. Every retry of a
+        // failing attempt makes another, so they accumulate rather than appear.
+        $purged = \local_catquizlab\local\engine_hygiene::purge_empty_attempts();
+        if ($purged > 0) {
+            mtrace("local_catquizlab: removed {$purged} engine attempt(s) that never started.");
+        }
+
         $reclaimed = attempt_scheduler::reclaim_stale(null, self::STALE_SECONDS);
         if ($reclaimed > 0) {
             mtrace("local_catquizlab: reclaimed {$reclaimed} stale attempt(s).");

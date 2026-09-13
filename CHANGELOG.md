@@ -6,6 +6,51 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.6.6] — 2026-09-13
+
+Issue #25: engine attempts that were created but never started.
+
+### The defect
+When the CAT selection fails before item one, `mod_adaptivequiz` throws and the
+attempt row it had already written stays behind — `inprogress` with
+`uniqueid = 0`, no stop reason, no finish time. It is neither a running attempt
+nor a finished one; it is a record of a start that did not happen.
+
+One is a curiosity. This instance had **20 of them among 167 attempts**, because
+every retry of a failing attempt makes another: they accumulate rather than
+appear. They distort attempt counts, resume paths can find them again, and where
+an activity limits attempts they consume the allowance.
+
+### Added
+- **`engine_hygiene`** removes them, on the operations page and automatically in
+  `pipeline_tick`. Scope is deliberately narrow: only attempts belonging to this
+  lab's simulated persons, and only those with no question usage at all. A row
+  with a `uniqueid` has answers attached and is somebody's data whatever state
+  it is in — a plugin that deletes rows it did not create is worse than the
+  defect it cleans up after.
+
+  Deleted rather than closed: a closed empty attempt still counts as an attempt
+  wherever attempts are counted, and it carries nothing worth keeping. The
+  reason the start failed is on the lab attempt, where the worker put it.
+
+- **`docs/design/issue-adaptivequiz-empty-attempt.md`** — the fix belongs
+  upstream, and this is a workaround. The draft offers both designs: roll the
+  attempt back before the exception, or close it explicitly with a stop reason
+  and `resultvalid = 0`. Where the attempt count is limited, the rollback is the
+  better of the two. The existing comment at that line already names the problem
+  correctly — a leftover empty attempt should not be completed — but the branch
+  then does nothing at all, while the branch beside it handles the normal case
+  in full.
+
+### Verified on this instance
+20 empty attempts found and removed, the 147 real ones untouched.
+
+### Verification
+PHPUnit 471 tests / 2916 assertions, Behat 32 scenarios / 229 steps, 11 worker
+tests, phpcs and PHPDoc clean, 694 language strings per language.
+
+---
+
 ## [0.6.5] — 2026-09-13
 
 Two P0 defects from real operation: issues #23 and #24.

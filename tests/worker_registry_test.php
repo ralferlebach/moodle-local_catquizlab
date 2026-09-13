@@ -575,4 +575,78 @@ final class worker_registry_test extends \advanced_testcase {
         $this->assertStringContainsString('PUPPETEER_CACHE_DIR', $command);
         $this->assertStringContainsString('run.js', $command);
     }
+
+    /**
+     * Engine attempts that never got a first question are cleared up.
+     *
+     * @return void
+     */
+    public function test_empty_engine_attempts_are_removed(): void {
+        global $DB;
+        $this->resetAfterTest();
+
+        if (!$DB->get_manager()->table_exists('adaptivequiz_attempt')) {
+            $this->markTestSkipped('No mod_adaptivequiz installed.');
+        }
+
+        $user = $this->getDataGenerator()->create_user();
+        /** @var \local_catquizlab_generator $generator */
+        $generator = $this->getDataGenerator()->get_plugin_generator('local_catquizlab');
+        $runid = (int) $generator->create_run()->id;
+        $DB->insert_record('local_catquizlab_person', (object) [
+            'runid' => $runid, 'twinid' => 'r001-t00001', 'twinindex' => 0,
+            'moodleuserid' => $user->id, 'truetheta' => 0, 'timecreated' => time(),
+        ]);
+
+        // The row mod_adaptivequiz leaves behind when the selection fails
+        // before item one: neither running nor finished.
+        $emptyid = $DB->insert_record('adaptivequiz_attempt', (object) [
+            'instance' => 1, 'userid' => $user->id, 'uniqueid' => 0,
+            'attemptstate' => 'inprogress', 'attemptstopcriteria' => '',
+            'questionsattempted' => 0, 'standarderror' => 999, 'measure' => 0,
+            'timecreated' => time(), 'timemodified' => time(),
+        ]);
+
+        // One with a question usage has answers attached and is somebody's
+        // data, whatever state it is in.
+        $realid = $DB->insert_record('adaptivequiz_attempt', (object) [
+            'instance' => 1, 'userid' => $user->id, 'uniqueid' => 4242,
+            'attemptstate' => 'inprogress', 'attemptstopcriteria' => '',
+            'questionsattempted' => 3, 'standarderror' => 0.5, 'measure' => 0.2,
+            'timecreated' => time(), 'timemodified' => time(),
+        ]);
+
+        $this->assertSame(1, \local_catquizlab\local\engine_hygiene::count_empty_attempts());
+        $this->assertSame(1, \local_catquizlab\local\engine_hygiene::purge_empty_attempts());
+
+        $this->assertFalse($DB->record_exists('adaptivequiz_attempt', ['id' => $emptyid]));
+        $this->assertTrue($DB->record_exists('adaptivequiz_attempt', ['id' => $realid]));
+    }
+
+    /**
+     * Attempts of people who are not this lab's are left alone.
+     *
+     * @return void
+     */
+    public function test_only_lab_attempts_are_touched(): void {
+        global $DB;
+        $this->resetAfterTest();
+
+        if (!$DB->get_manager()->table_exists('adaptivequiz_attempt')) {
+            $this->markTestSkipped('No mod_adaptivequiz installed.');
+        }
+
+        $stranger = $this->getDataGenerator()->create_user();
+        $id = $DB->insert_record('adaptivequiz_attempt', (object) [
+            'instance' => 1, 'userid' => $stranger->id, 'uniqueid' => 0,
+            'attemptstate' => 'inprogress', 'attemptstopcriteria' => '',
+            'questionsattempted' => 0, 'standarderror' => 999, 'measure' => 0,
+            'timecreated' => time(), 'timemodified' => time(),
+        ]);
+
+        // Same shape, not our person: a plugin that deletes rows it did not
+        // create is worse than the defect it is cleaning up after.
+        $this->assertSame(0, \local_catquizlab\local\engine_hygiene::purge_empty_attempts());
+        $this->assertTrue($DB->record_exists('adaptivequiz_attempt', ['id' => $id]));
+    }
 }

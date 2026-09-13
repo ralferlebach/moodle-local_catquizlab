@@ -144,6 +144,23 @@
             <p class="text-muted">{{#str}}ops:nostuck, local_catquizlab{{/str}}</p>
         {{/stuck.hasany}}
 
+        {{#empty}}
+            <div class="alert alert-warning" role="status">
+                <strong>{{#str}}ops:emptyheading, local_catquizlab{{/str}}</strong>
+                <p class="mb-1">{{#str}}ops:emptyexplain, local_catquizlab{{/str}}</p>
+                <ul class="small mb-2">
+                    {{#rows}}<li>#{{attemptid}} (run {{runid}}, {{twinid}}) &mdash; {{since}}</li>{{/rows}}
+                </ul>
+                <form method="post" action="{{actionurl}}">
+                    <input type="hidden" name="sesskey" value="{{sesskey}}">
+                    <input type="hidden" name="action" value="purgeempty">
+                    <button type="submit" class="btn btn-sm btn-secondary">
+                        {{#str}}ops:purgeempty, local_catquizlab{{/str}}
+                    </button>
+                </form>
+            </div>
+        {{/empty}}
+
         <form method="post" action="{{actionurl}}">
             <input type="hidden" name="sesskey" value="{{sesskey}}">
             <input type="hidden" name="action" value="releaseorphans">

@@ -75,6 +75,16 @@ if ($action !== '') {
         redirect($pageurl);
     }
 
+    if ($action === 'purgeempty') {
+        $purged = \local_catquizlab\local\engine_hygiene::purge_empty_attempts();
+        redirect(
+            $pageurl,
+            $purged > 0
+                ? get_string('ops:emptypurged', $component, $purged)
+                : get_string('ops:noempty', $component)
+        );
+    }
+
     if ($action === 'reap') {
         $reaped = worker_registry::reap();
         redirect(
@@ -207,6 +217,11 @@ echo $OUTPUT->render_from_template('local_catquizlab/operations', [
     'sesskey'    => sesskey(),
     'actionurl'  => $pageurl->out(false),
     'cantoken'   => system_health::worker_token() === null,
+    'empty'      => (static function (): ?array {
+        $rows = \local_catquizlab\local\engine_hygiene::list_empty_attempts();
+
+        return $rows === [] ? null : ['count' => count($rows), 'rows' => $rows];
+    })(),
     // Kept for one page load: a self-test result is worth reading once, and
     // storing it would turn a diagnostic into state to maintain.
     'selftest'   => (static function () {
