@@ -53,6 +53,14 @@ class orchestrate_run extends \core\task\adhoc_task {
         $options = isset($data->options) ? (array) $data->options : [];
 
         $result = run_orchestrator::setup($runid, $options);
+
+        // One place decides what the run's state is now; the task only reports
+        // what happened.
+        \local_catquizlab\local\run_lifecycle::provisioned(
+            $runid,
+            !empty($result['ok']),
+            (string) ($result['reason'] ?? '')
+        );
         $status = $result['ok'] ? 'ok' : ('skipped: ' . ($result['reason'] ?? 'unknown'));
         mtrace("local_catquizlab: run {$runid} setup {$status}.");
     }

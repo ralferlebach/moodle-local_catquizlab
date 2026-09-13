@@ -97,6 +97,7 @@ class job_claim extends external_api {
         $attempt = reset($queued);
         if (!$attempt) {
             $transaction->allow_commit();
+
             return $none;
         }
 

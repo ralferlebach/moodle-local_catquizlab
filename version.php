@@ -25,7 +25,7 @@
 defined('MOODLE_INTERNAL') || die();
 
 $plugin->component    = 'local_catquizlab';
-$plugin->version      = 2026090300;
+$plugin->version      = 2026091300;
 $plugin->requires     = 2024100700;   // Moodle 4.5.0 — hard minimum.
 $plugin->supported    = [405, 502];   // Tested on Moodle 4.5, 5.0 and 5.2; raise as new majors are added to CI.
 // Beta since 0.6.0: the whole chain — definition, provisioning, engine
@@ -33,7 +33,7 @@ $plugin->supported    = [405, 502];   // Tested on Moodle 4.5, 5.0 and 5.2; rais
 // exercised end to end against a real CAT engine, and a study of 90 attempts
 // was run through it. What is missing for stable is field use, not function.
 $plugin->maturity     = MATURITY_BETA;
-$plugin->release      = '0.6.0';
+$plugin->release      = '0.6.1';
 
 // Deliberately NO hard dependencies: the suite drives local_catquiz and
 // mod_adaptivequiz as a black box, but the plugin must install stand-alone

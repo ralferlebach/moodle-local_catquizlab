@@ -151,7 +151,10 @@ Feature: Defining and running CAT experiments from the web interface
     And I should see "Robustness"
     And I should see "Test flow"
     And I should see "Any strategy"
-    And I should see "No attempts match this filter yet."
+    # The runs of this experiment exist but are all drafts, so the page says
+    # that nothing has been started rather than blaming the filter.
+    And I should see "No run has been started yet"
+    And I should see "draft"
 
   Scenario: The local diagnostics tabs are reachable and name their subject
     Given the following "local_catquizlab > experiment" exists:
@@ -226,3 +229,42 @@ Feature: Defining and running CAT experiments from the web interface
     And I should see "Vary the subscale item budget"
     And I should see "Vary the SE window"
     And I should see "Vary the disturbance strength"
+
+  @javascript
+  Scenario: The settings link from the landing page opens without a section error
+    Given I log in as "admin"
+    And I navigate to "Reports > CAT experiment suite" in site administration
+    When I follow "Choose an experiment course"
+    Then I should not see "Section error"
+    And I should see "CAT experiment suite"
+
+  Scenario: A created sweep is not presented as an executed experiment
+    Given the following "local_catquizlab > experiment" exists:
+      | name | Lifecycle demo |
+    And I log in as "admin"
+    And I navigate to "Reports > CAT experiment suite" in site administration
+    When I follow "Lifecycle demo"
+    And I press "Create sweep"
+    Then I should not see "Executed"
+    And I should see "Runs created, not started"
+
+  Scenario: Draft runs can be started from the web interface
+    Given the following "local_catquizlab > experiment" exists:
+      | name | Startable |
+    And I log in as "admin"
+    And I navigate to "Reports > CAT experiment suite" in site administration
+    And I follow "Startable"
+    And I press "Create sweep"
+    When I navigate to "Reports > CAT experiment suite" in site administration
+    Then I should see "Startable"
+
+  Scenario: Results explain that nothing has been started yet
+    Given the following "local_catquizlab > experiment" exists:
+      | name | Nothing played |
+    And I log in as "admin"
+    And I navigate to "Reports > CAT experiment suite" in site administration
+    And I follow "Nothing played"
+    And I press "Create sweep"
+    When I navigate to "Reports > CAT experiment suite" in site administration
+    And I follow "Results and evaluation"
+    Then I should see "No run has been started yet"

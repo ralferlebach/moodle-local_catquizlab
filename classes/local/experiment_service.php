@@ -45,7 +45,24 @@ class experiment_service {
     public const STATUS_VALIDATED = 10;
 
     /** @var int Executed: runs exist, so the definition is history and immutable. */
+    /**
+     * Status: the sweep was expanded, run records exist, nothing has run.
+     *
+     * This is the state the interface used to call "Executed", which hid the
+     * fact that execution had never begun. Creating runs is not running them.
+     *
+     * @var int
+     */
+    public const STATUS_EXPANDED = 15;
+
+    /** @var int Status: at least one run is on its way, not all are done. */
+    public const STATUS_RUNNING = 18;
+
+    /** @var int Status: every run reached a terminal state, at least one finished. */
     public const STATUS_EXECUTED = 20;
+
+    /** @var int Status: every run reached a terminal state, none finished. */
+    public const STATUS_FAILED = 25;
 
     /** @var int Archived: kept for the record, not offered for new sweeps. */
     public const STATUS_ARCHIVED = 30;
@@ -116,7 +133,7 @@ class experiment_service {
 
         $record->id = $id;
         if (self::run_count($id) > 0) {
-            $record->status = self::STATUS_EXECUTED;
+            $record->status = self::STATUS_EXPANDED;
         }
         $DB->update_record('local_catquizlab_experiment', $record);
 
@@ -277,7 +294,10 @@ class experiment_service {
                 'timemodified' => $now,
             ]);
         }
-        $DB->set_field('local_catquizlab_experiment', 'status', self::STATUS_EXECUTED, ['id' => $experimentid]);
+        // Expanded, not executed: the runs exist, none of them has run. The
+        // status is then kept in step with the runs by run_lifecycle, so the
+        // two can never tell different stories.
+        run_lifecycle::refresh_experiment_by_id($experimentid);
         $transaction->allow_commit();
 
         // Runs now depend on whatever building blocks the definition cited, so
@@ -401,7 +421,10 @@ class experiment_service {
         $keys = [
             self::STATUS_DRAFT     => 'status:draft',
             self::STATUS_VALIDATED => 'status:validated',
+            self::STATUS_EXPANDED  => 'status:expanded',
+            self::STATUS_RUNNING   => 'status:experimentrunning',
             self::STATUS_EXECUTED  => 'status:executed',
+            self::STATUS_FAILED    => 'status:experimentfailed',
             self::STATUS_ARCHIVED  => 'status:archived',
         ];
 

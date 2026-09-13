@@ -68,6 +68,26 @@ if ($action !== '' && $runid > 0) {
     $run = $DB->get_record('local_catquizlab_run', ['id' => $runid], '*', MUST_EXIST);
     $returnurl = new moodle_url('/local/catquizlab/runs.php', ['runid' => $runid]);
 
+    if ($action === 'start') {
+        require_sesskey();
+        require_capability('local/catquizlab:execute', $context);
+
+        // The interface asks the lifecycle to start the run; it does not
+        // orchestrate anything itself. A second copy of that decision here is a
+        // second thing to keep in step with the tasks.
+        $result = \local_catquizlab\local\run_lifecycle::start($runid, [], $context);
+        if (!$result['started']) {
+            redirect(
+                $returnurl,
+                get_string('run:startblocked', $component, $result['reason']),
+                null,
+                \core\output\notification::NOTIFY_WARNING
+            );
+        }
+
+        redirect($returnurl, get_string('run:started', $component, 1));
+    }
+
     if ($action === 'cancel') {
         if (!registry::allowed_actions((int) $run->status)['cancel']) {
             redirect(
@@ -178,6 +198,15 @@ if ($runid > 0) {
     $allowed = $run['actions'];
     if (has_capability('local/catquizlab:execute', $context)) {
         $buttons = '';
+        if (!empty($allowed['start'])) {
+            $buttons .= $OUTPUT->single_button(
+                new moodle_url('/local/catquizlab/runs.php', [
+                    'runid' => $runid, 'action' => 'start', 'sesskey' => sesskey(),
+                ]),
+                get_string('action:startrun', $component),
+                'post'
+            );
+        }
         if ($allowed['reproduce']) {
             $buttons .= $OUTPUT->single_button(
                 new moodle_url('/local/catquizlab/runs.php', [

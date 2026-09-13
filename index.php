@@ -194,7 +194,7 @@ $containercontext = [
         ? (new moodle_url('/course/view.php', ['id' => $course->id]))->out(false)
         : '',
     'settingsurl' => (new moodle_url('/admin/settings.php', [
-        'section' => 'local_catquizlab',
+        'section' => \local_catquizlab\local\registry::SETTINGS_SECTION,
     ]))->out(false),
 ];
 

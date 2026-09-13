@@ -132,6 +132,11 @@ class job_complete extends external_api {
             attempt_scheduler::retry_or_fail($attemptid);
         }
 
+        // Every terminal attempt asks the lifecycle whether the run is done.
+        // It answers at most once — a retried worker or a re-collected attempt
+        // must not queue the aggregation twice.
+        \local_catquizlab\local\run_lifecycle::attempt_finished((int) $attempt->runid);
+
         return [
             'acknowledged' => true,
             'message'      => get_string('job:acknowledged', 'local_catquizlab'),

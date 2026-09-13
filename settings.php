@@ -47,7 +47,7 @@ if ($hassiteconfig) {
     $component = 'local_catquizlab';
 
     $settings = new admin_settingpage(
-        'local_catquizlab_settings',
+        \local_catquizlab\local\registry::SETTINGS_SECTION,
         get_string('pluginname', $component)
     );
     $ADMIN->add('localplugins', $settings);

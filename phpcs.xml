@@ -2,6 +2,11 @@
 <ruleset name="local_catquizlab">
     <description>PHPCS configuration for local_catquizlab.</description>
     <rule ref="moodle"/>
+    <!-- CI helpers run outside Moodle, before it is installed, so they cannot
+         satisfy the MOODLE_INTERNAL check the Moodle standard requires of
+         plugin code. They are not shipped either: .gitattributes keeps
+         .github out of the distribution archive. -->
+    <exclude-pattern>*/\.github/*</exclude-pattern>
     <exclude-pattern>*/worker/*</exclude-pattern>
     <exclude-pattern>*/vendor/*</exclude-pattern>
     <exclude-pattern>*/node_modules/*</exclude-pattern>

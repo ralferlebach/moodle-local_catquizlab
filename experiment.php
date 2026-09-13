@@ -92,6 +92,23 @@ if ($action === 'duplicate' && $id > 0) {
     );
 }
 
+if ($action === 'startdrafts' && $id > 0) {
+    require_sesskey();
+    require_capability('local/catquizlab:execute', $context);
+
+    $started = \local_catquizlab\local\run_lifecycle::start_drafts($id, [], $context);
+    if ($started['started'] === 0) {
+        redirect(
+            $manageurl,
+            get_string('run:startblocked', $component, $started['reason']),
+            null,
+            \core\output\notification::NOTIFY_WARNING
+        );
+    }
+
+    redirect($manageurl, get_string('run:started', $component, $started['started']));
+}
+
 if ($action === 'archive' && $id > 0) {
     require_sesskey();
     require_capability('local/catquizlab:edit', $context);
@@ -120,11 +137,35 @@ if ($action === 'delete' && $id > 0) {
     }
 }
 
-if ($action === 'createsweep' && $id > 0) {
+if (($action === 'createsweep' || $action === 'createsweepandstart') && $id > 0) {
     require_sesskey();
     require_capability('local/catquizlab:execute', $context);
     try {
         $result = experiment_service::create_sweep($id);
+
+        // Creating runs and running them are different things, and the
+        // interface now lets the user say which one they meant instead of
+        // labelling the first as though it were the second.
+        if ($action === 'createsweepandstart') {
+            $started = \local_catquizlab\local\run_lifecycle::start_drafts($id, [], $context);
+            if ($started['started'] === 0) {
+                redirect(
+                    $manageurl,
+                    get_string('run:startblocked', $component, $started['reason']),
+                    null,
+                    \core\output\notification::NOTIFY_WARNING
+                );
+            }
+
+            redirect(
+                $manageurl,
+                get_string('notice:sweepcreated', $component, $result['created'])
+                    . ' ' . get_string('run:started', $component, $started['started']),
+                null,
+                \core\output\notification::NOTIFY_SUCCESS
+            );
+        }
+
         redirect(
             $manageurl,
             get_string('notice:sweepcreated', $component, $result['created']),
@@ -237,6 +278,17 @@ if ($preview !== null && $preview['runs'] > 0) {
         'attempts'     => $preview['attempts'],
         'large'        => $preview['large'],
         'cansweep'     => has_capability('local/catquizlab:execute', $context),
+        // What would stop a start, shown next to the button rather than after
+        // pressing it. A run queued without an engine or a course looks started
+        // and never moves.
+        'preflightblockers' => (static function () use ($context): ?array {
+            $check = \local_catquizlab\local\preflight::check($context);
+            if ($check['blockers'] === []) {
+                return null;
+            }
+
+            return ['items' => array_values($check['blockers'])];
+        })(),
         'sesskey'      => sesskey(),
         'experimentid' => $id,
         'createurl'    => (new moodle_url('/local/catquizlab/experiment.php'))->out(false),

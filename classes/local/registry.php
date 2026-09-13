@@ -35,6 +35,34 @@ namespace local_catquizlab\local;
  * questions are created here (that is provisioning, E2).
  */
 class registry {
+    /**
+     * The admin section id of the plugin's settings page.
+     *
+     * Declared once. The landing page linked to 'local_catquizlab' while
+     * settings.php registered 'local_catquizlab_settings', so the one link a
+     * new installation needs — to choose an experiment course — led to
+     * Moodle's sectionerror instead. Two literals that must agree and no
+     * reason for them to be separate.
+     *
+     * @var string
+     */
+    public const SETTINGS_SECTION = 'local_catquizlab_settings';
+
+    /**
+     * The URL of the plugin's settings page.
+     *
+     * @param string|null $anchor Optional setting to jump to.
+     * @return \moodle_url
+     */
+    public static function settings_url(?string $anchor = null): \moodle_url {
+        $url = new \moodle_url('/admin/settings.php', ['section' => self::SETTINGS_SECTION]);
+        if ($anchor !== null) {
+            $url->set_anchor($anchor);
+        }
+
+        return $url;
+    }
+
     /** @var int Run/experiment status: defined but not yet scheduled. */
     public const STATUS_DRAFT = 0;
 
@@ -108,6 +136,9 @@ class registry {
      */
     public static function allowed_actions(int $status): array {
         return [
+            // A draft run is the only one that can be started: starting a
+            // running one would give it a second attempt queue.
+            'start'     => $status === self::STATUS_DRAFT,
             'cancel'    => in_array(
                 $status,
                 [self::STATUS_SCHEDULED, self::STATUS_READY, self::STATUS_RUNNING, self::STATUS_AGGREGATING],

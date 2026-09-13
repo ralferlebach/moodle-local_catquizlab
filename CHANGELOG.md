@@ -6,6 +6,62 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.6.1] — 2026-09-13
+
+The web workflow closed end to end, from the reported lifecycle report.
+
+### Fixed
+- **"Choose an experiment course" led to `sectionerror`.** `settings.php`
+  registered `local_catquizlab_settings` while the landing page linked
+  `local_catquizlab` — two literals that had to agree, in two files. Both read
+  `registry::SETTINGS_SECTION` now. It was the one link a fresh installation
+  needs, and it was broken.
+- **An experiment read "Executed" while every run was a draft at 0%.**
+  `create_sweep()` set the status directly. Creating runs is not running them.
+  There are now `EXPANDED`, `RUNNING` and `FAILED` states, and the experiment
+  status is **derived** from its runs rather than stored, so the two can no
+  longer tell different stories.
+- **The web interface had no way to start a run.** Backend and task existed;
+  nothing called them. There are now start actions per run, per experiment
+  ("start all draft runs") and combined ("create sweep and start"). The
+  interface implements no orchestration of its own — it calls
+  `run_lifecycle::start()`, which queues the existing `orchestrate_run` task.
+- **The handover from the last attempt to the result was never closed.** No
+  status moved a run to aggregation, and nothing set it to finished afterwards.
+
+### Added
+- **`run_lifecycle`** — the one place that decides what state a run is in.
+  Before this the same decision was made in the interface, in the worker's claim
+  and complete calls and in the tasks, and they could disagree. The path is
+  `DRAFT → SCHEDULED → READY → RUNNING → AGGREGATING → FINISHED`, with failure
+  reasons recorded in the run manifest rather than only in a log.
+- **`preflight`** — engine, host activity, experiment course, capability and
+  worker are checked before a start, and what is missing is named. A missing
+  worker warns rather than blocks: the run provisions and its attempts wait. A
+  missing course or engine blocks, because a run queued without them looks
+  started and never moves.
+- The results view now says **why** it is empty: "No run has been started yet"
+  plus the run tally, instead of blaming the filter for a run that never ran.
+- `docs/design/issue-status-2026-09-13.md` — every one of the ten open issues
+  checked against the code and the tests, with the places to verify each claim.
+
+### Tests
+- `run_lifecycle_test`, 18 tests: the full path as a status sequence, the
+  aggregation queued exactly once across repeated completion callbacks, a run
+  whose attempts all failed never reaching aggregation, the deleted experiment
+  course, and a regression test that makes the reported state unreachable.
+- Behat: four scenarios covering the settings link without `sectionerror`,
+  "created is not executed", starting drafts from the web, and the results view
+  explaining itself.
+- `phpcs.xml` excludes `.github/`: CI helpers run before Moodle exists and
+  cannot satisfy a `MOODLE_INTERNAL` check meant for plugin code.
+
+### Verification
+PHPUnit 442 tests / 2811 assertions, Behat 31 scenarios / 219 steps, phpcs and
+PHPDoc clean, 618 language strings per language.
+
+---
+
 ## [0.6.0] — 2026-09-03
 
 **Beta.** `MATURITY_ALPHA` → `MATURITY_BETA`.

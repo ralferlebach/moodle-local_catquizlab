@@ -212,6 +212,70 @@ class results_page {
     }
 
     /**
+     * Why there is nothing to show: not started, still running, or filtered out.
+     *
+     * "Nothing matches this filter" and "nothing has been run" look the same
+     * from the results view and mean entirely different things. The second has
+     * an obvious remedy, and naming it turns a dead end into a next step.
+     *
+     * @return string
+     */
+    protected function explain_absence(): string {
+        global $DB;
+
+        $component = 'local_catquizlab';
+
+        // Scoped to the experiment when one is filtered for, otherwise across
+        // every run: the unfiltered view is exactly where a first-time user
+        // lands, and it should not be the one view that cannot say why it is
+        // empty.
+        $experimentid = (int) ($this->filter['experimentid'] ?? 0);
+        if ($experimentid > 0) {
+            $rows = $DB->get_records_sql(
+                'SELECT status, COUNT(*) AS n FROM {local_catquizlab_run} WHERE experimentid = :id GROUP BY status',
+                ['id' => $experimentid]
+            );
+        } else {
+            $rows = $DB->get_records_sql(
+                'SELECT status, COUNT(*) AS n FROM {local_catquizlab_run} GROUP BY status'
+            );
+        }
+        if (!$rows) {
+            return get_string('results:noobservations', $component);
+        }
+
+        $counts = ['total' => 0, 'draft' => 0, 'running' => 0, 'finished' => 0, 'failed' => 0];
+        foreach ($rows as $row) {
+            $n = (int) $row->n;
+            $counts['total'] += $n;
+            switch ((int) $row->status) {
+                case \local_catquizlab\local\registry::STATUS_DRAFT:
+                    $counts['draft'] += $n;
+                    break;
+                case \local_catquizlab\local\registry::STATUS_FINISHED:
+                    $counts['finished'] += $n;
+                    break;
+                case \local_catquizlab\local\registry::STATUS_FAILED:
+                case \local_catquizlab\local\registry::STATUS_CANCELLED:
+                    $counts['failed'] += $n;
+                    break;
+                default:
+                    $counts['running'] += $n;
+            }
+        }
+
+        $summary = get_string('results:runsummary', $component, (object) $counts);
+
+        // Every run still a draft was indistinguishable from an unlucky filter,
+        // and it is the case with something to do about it.
+        if ($counts['draft'] === $counts['total']) {
+            return get_string('results:nothingstarted', $component) . ' ' . $summary;
+        }
+
+        return get_string('results:noobservations', $component) . ' ' . $summary;
+    }
+
+    /**
      * A statement of what the figures on this page rest on.
      *
      * @return string
@@ -221,8 +285,11 @@ class results_page {
         $provenance = $this->query->provenance();
 
         if ($provenance['attempts'] === 0) {
+            // The two cases -- "nothing matches this filter" and "nothing has been run" -- look the
+            // same from here and mean entirely different things. Saying which
+            // one it is turns a dead end into a next step.
             return \html_writer::div(
-                get_string('results:noobservations', $component),
+                $this->explain_absence(),
                 'alert alert-info'
             );
         }
