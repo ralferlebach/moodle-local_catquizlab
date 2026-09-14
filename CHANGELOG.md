@@ -6,6 +6,64 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.6.13] — 2026-09-14
+
+Two defects introduced in 0.6.12, and the overview's one-line verdict.
+
+### #40 — An empty worker log broke the operations page
+`log_tail()` computed a read window from the file size and called `fread()` with
+it. A worker that has just started has a log file and nothing in it — the normal
+state for the first seconds of every run, not an edge case — and reading zero
+bytes threw, taking the whole page with it. That page is the one somebody opens
+when a worker is not behaving.
+
+Fixed, and a second defect found while testing it: `filesize()` reads PHP's
+cached stat data, and this file is written by a different process. Without
+`clearstatcache()` the log of a worker that had just written its first lines
+still looked empty. Both are covered by tests now.
+
+### #41 — The run view overwrote its own data
+`$detail` holds the run's data from `run_registry::detail()` and is read further
+down for the reproducibility manifest. The failure-reason block added in 0.6.12
+assigned an HTML string to the same name, so every later access read a character
+out of that string instead of an array.
+
+Renamed. `page_scripts_test` now checks every page script for the general shape
+of this mistake — a variable used as an array that is also assigned a plain
+string — because these files are long, procedural and share one scope, which
+makes exactly this easy.
+
+### #43 — The overview said four correct things that disagreed
+It could show, at once: 150 attempts queued, no worker running, one crashed, the
+experiment "running", its run "scheduled" at 0%. Every figure right; together no
+picture. The reader had to work out that nothing was progressing, that the
+crashed worker was why, and that starting one was the thing to do.
+
+`situation` assesses the installation as a whole and says one sentence with one
+action. The states are ranked by how much they need doing about them and the
+first that applies wins — an overview that reports three problems makes the
+reader rank them, which is the work this class exists to do. Waiting work with
+nobody on it outranks a failed run, because somebody is waiting on the first.
+
+A healthy state gets no button: an action on a healthy state trains people to
+press buttons that do not need pressing.
+
+### Not included: #42
+Live updating needs a web service and an AMD module, and this container no
+longer has the Moodle installation to exercise them in. Shipping an untested
+AJAX layer into the page somebody watches during a run is the wrong trade, so it
+waits for an environment where it can be verified.
+
+### Verification
+Reduced: the working tree was lost with the container, and the plugin was
+restored from the 2026091311 release archive. PHP syntax is clean across all
+files, language files match at 789 strings each, template example contexts parse
+and carry every key the new block uses, and both defects were reproduced and
+fixed against isolated runs of the affected logic. PHPUnit and Behat could not
+be run.
+
+---
+
 ## [0.6.12] — 2026-09-14
 
 Five findings from real operation: issues #35 to #39.

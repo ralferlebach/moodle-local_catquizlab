@@ -52,6 +52,7 @@
         "runsurl": "/local/catquizlab/runs.php",
         "presetsurl": "/local/catquizlab/presets.php",
         "resultsurl": "/local/catquizlab/results.php",
+        "situation": {"state": "idle", "headline": "Nothing is queued and nothing is wrong.", "detail": "", "ok": true, "warn": false, "problem": false, "action": null},
         "settingsurl": "/local/catquizlab/index.php?tab=settings",
         "overview": [
             { "count": 5, "label": "Experiments", "url": "#", "class": "text-primary" }
@@ -144,7 +145,20 @@
         </details>
     {{/environment}}
 
-    {{#setupnotice}}
+    {{#situation}}
+    <div class="alert {{#ok}}alert-info{{/ok}}{{#warn}}alert-warning{{/warn}}{{#problem}}alert-danger{{/problem}} d-flex align-items-center justify-content-between"
+         role="status" data-region="catquizlab-situation">
+        <div>
+            <strong>{{headline}}</strong>
+            {{#detail}}<div class="small">{{.}}</div>{{/detail}}
+        </div>
+        {{#action}}
+            <a href="{{url}}" class="btn btn-primary ml-3">{{label}}</a>
+        {{/action}}
+    </div>
+{{/situation}}
+
+{{#setupnotice}}
     <div class="alert alert-warning" role="status">
         <strong>{{#str}}setup:notready, local_catquizlab{{/str}}</strong>
         <p class="mb-2">{{blockers}}</p>

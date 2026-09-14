@@ -240,9 +240,24 @@ class worker_launcher {
             return '';
         }
 
+        // A worker that has just started has a log file and nothing in it, and
+        // that is the normal case for the first seconds of every run — not an
+        // edge case. Reading zero bytes from it threw, and the exception took
+        // the whole operations page with it: the one place somebody looks when
+        // a worker is not behaving.
+        // The file is written by a different process while this one reads it,
+        // so PHP's cached stat data can be older than the file. Without this
+        // the log of a worker that has just written its first lines still looks
+        // empty — which is exactly when somebody is looking at it.
+        clearstatcache(true, $path);
+
+        $size = (int) filesize($path);
+        if ($size <= 0) {
+            return '';
+        }
+
         // Read the end rather than the file: these grow for as long as a worker
         // runs, and the interesting part is always the last thing said.
-        $size = filesize($path);
         $window = min($size, 64 * 1024);
         $handle = fopen($path, 'rb');
         if ($handle === false) {

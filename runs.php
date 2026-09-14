@@ -205,11 +205,16 @@ if ($runid > 0) {
     // The reason was already recorded; it was simply never shown.
     $failure = \local_catquizlab\local\run_lifecycle::failure_details($runid);
     if ($failure['reason'] !== '') {
-        $detail = html_writer::tag('p', s($failure['reason']), ['class' => 'mb-1']);
+        // Its own variable: $detail is the run's data from run_registry::detail()
+        // and is read further down for the manifest. Reusing the name replaced
+        // an array with a string, and every later access to it — the
+        // reproducibility manifest among them — then read a character out of
+        // that string instead.
+        $failurehtml = html_writer::tag('p', s($failure['reason']), ['class' => 'mb-1']);
 
         if ($failure['facts'] !== []) {
             $facts = $failure['facts'];
-            $detail .= html_writer::tag('p', get_string('run:readinessfacts', $component, (object) [
+            $failurehtml .= html_writer::tag('p', get_string('run:readinessfacts', $component, (object) [
                 'leaves' => (int) ($facts['leaves'] ?? 0),
                 'items'  => (int) ($facts['items'] ?? 0),
                 'usable' => (int) ($facts['usable'] ?? 0),
@@ -217,7 +222,7 @@ if ($runid > 0) {
         }
 
         if ($failure['time'] > 0) {
-            $detail .= html_writer::tag(
+            $failurehtml .= html_writer::tag(
                 'p',
                 userdate($failure['time'], get_string('strftimedatetimeshort')),
                 ['class' => 'mb-0 small text-muted']
@@ -225,7 +230,7 @@ if ($runid > 0) {
         }
 
         echo $OUTPUT->notification(
-            html_writer::tag('strong', get_string('run:failedreason', $component)) . $detail,
+            html_writer::tag('strong', get_string('run:failedreason', $component)) . $failurehtml,
             'notifyproblem',
             false
         );

@@ -188,6 +188,11 @@ $recenterrors = array_values($DB->get_records_select(
 // The one thing a fresh installation needs to know: is it ready, and if not,
 // where does it go. Leaving that on a page an administrator has to already know
 // about is how the setup ends up being done by hand instead.
+// The one line that says whether this is working, above the numbers it is
+// drawn from. Four correct figures that contradict each other at a glance are
+// worse than one sentence.
+$situation = \local_catquizlab\local\situation::assess();
+
 $setupstate = \local_catquizlab\local\setup_wizard::state();
 $setupnotice = $setupstate['ready'] ? null : [
     'blockers' => implode(', ', array_slice($setupstate['blockers'], 0, 4)),
@@ -248,7 +253,12 @@ $templatecontext = [
     'environment' => ['items' => $envitems],
     'disabled'    => !get_config($component, 'enabled'),
     'experiments' => ['hasany' => $experimentrows !== [], 'rows' => $experimentrows],
-    'setupnotice' => $setupnotice,
+    'situation'   => $situation,
+    // Superseded by the verdict above when it already says the installation is
+    // not ready: two warnings about one thing is one too many.
+    'setupnotice' => $situation['state'] === \local_catquizlab\local\situation::NOTREADY
+        ? null
+        : $setupnotice,
     'workers'     => $workers + ['queue' => $queue, 'hasslot' => $workers['live'] > 0],
     'queue'       => $queue,
     'recenterrors' => $recenterrors === [] ? null : ['rows' => array_map(static function ($row): array {

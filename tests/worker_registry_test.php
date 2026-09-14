@@ -1266,4 +1266,46 @@ final class worker_registry_test extends \advanced_testcase {
         $this->assertStringContainsString('materialise', $details['reason']);
         $this->assertGreaterThan(0, $details['time']);
     }
+
+    /**
+     * An empty log file is normal, not an error.
+     *
+     * @return void
+     */
+    public function test_an_empty_worker_log_does_not_break_the_page(): void {
+        $this->resetAfterTest();
+
+        $launcher = \local_catquizlab\local\worker_launcher::class;
+        $path = $launcher::log_path('catquizlab-exec-9');
+        file_put_contents($path, '');
+
+        // A worker that has just started has a log file and nothing in it — the
+        // normal state for the first seconds of every run. Reading zero bytes
+        // threw, and the exception took the operations page with it: the one
+        // page somebody opens when a worker is not behaving.
+        $this->assertSame('', $launcher::log_tail('catquizlab-exec-9'));
+    }
+
+    /**
+     * A log written by another process is read at its current size.
+     *
+     * @return void
+     */
+    public function test_worker_log_reflects_later_writes(): void {
+        $this->resetAfterTest();
+
+        $launcher = \local_catquizlab\local\worker_launcher::class;
+        $path = $launcher::log_path('catquizlab-exec-8');
+
+        file_put_contents($path, '');
+        $this->assertSame('', $launcher::log_tail('catquizlab-exec-8'));
+
+        // The worker writes from its own process while this one reads, so PHP's
+        // cached stat data can be older than the file.
+        file_put_contents($path, "first\nsecond\n");
+        $this->assertSame("first\nsecond", $launcher::log_tail('catquizlab-exec-8'));
+
+        file_put_contents($path, "third\n", FILE_APPEND);
+        $this->assertSame("second\nthird", $launcher::log_tail('catquizlab-exec-8', 2));
+    }
 }
