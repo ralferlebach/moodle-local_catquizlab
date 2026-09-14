@@ -433,6 +433,26 @@ class worker_launcher {
         $concurrency = max(1, (int) ($config['concurrency'] ?? 1));
         $prefix = (string) ($config['workerid'] ?? 'catquizlab-exec');
 
+        // Work first, workers second. Starting a worker with nothing to claim
+        // costs a Node and a Chrome process, shows "workers running" beside 0%
+        // progress, and ends as an apparent crash when the process exits having
+        // found nothing — three misleading signals for no benefit, multiplied
+        // by the configured concurrency.
+        $breakdown = attempt_scheduler::queue_breakdown();
+        if ($breakdown['claimable'] === 0) {
+            return [
+                'launched' => 0,
+                'skipped'  => $concurrency,
+                'reason'   => 'no-claimable-work',
+                'exitcode' => 0,
+                'output'   => '',
+            ];
+        }
+
+        // And no more workers than there is work for: four workers for two
+        // attempts means two processes that start, find nothing and exit.
+        $concurrency = min($concurrency, $breakdown['claimable']);
+
         // Only the slots nobody holds. Before this every dispatch started the
         // configured number of workers again, so a site limited to one job at a
         // time accumulated workers with each scheduler tick and claimed several

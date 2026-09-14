@@ -302,12 +302,39 @@ class run_lifecycle {
     public static function attempt_claimed(int $runid): bool {
         global $DB;
 
+        // One conditional UPDATE rather than a read followed by a write. Two
+        // workers claiming the first two attempts of the same run reach this at
+        // the same moment, and a read-then-write lets both believe they made
+        // the transition — the second then repeats the side effects of the
+        // first. The database decides here instead.
+        //
+        // READY only: a scheduled run has not finished provisioning, and the
+        // claim refuses its attempts anyway (see is_runnable()). Accepting it
+        // here would let a run skip the state that says its pool was checked.
+        // The answer this returns is "did this call move the run", not "is the
+        // run running" — a later claim on the same run must not report that it
+        // made a transition that had already happened, or the caller repeats
+        // whatever it does on a first claim.
         $status = (int) $DB->get_field('local_catquizlab_run', 'status', ['id' => $runid]);
-        if (!in_array($status, [registry::STATUS_SCHEDULED, registry::STATUS_READY], true)) {
+        if ($status !== registry::STATUS_READY) {
             return false;
         }
 
-        $DB->set_field('local_catquizlab_run', 'status', registry::STATUS_RUNNING, ['id' => $runid]);
+        // Conditional even so: callers hold a transaction that serialises the
+        // claims, and the condition is what keeps that true if one ever does
+        // not. An UPDATE that matches nothing is not an error here.
+        $DB->execute(
+            'UPDATE {local_catquizlab_run}
+                SET status = :running, timemodified = :now
+              WHERE id = :id AND status = :ready',
+            [
+                'running' => registry::STATUS_RUNNING,
+                'now'     => time(),
+                'id'      => $runid,
+                'ready'   => registry::STATUS_READY,
+            ]
+        );
+
         self::refresh_experiment($runid);
 
         return true;
@@ -453,6 +480,39 @@ class run_lifecycle {
         }
 
         return count($queued);
+    }
+
+    /**
+     * Run the provisioning of a scheduled run now, in this request.
+     *
+     * The orchestrator task normally does this, and a run can wait for it
+     * indefinitely: the ad-hoc task may never have been queued, or was queued
+     * while cron was not running. From the outside that is indistinguishable
+     * from work in progress — "Scheduled, 0%", workers idle beside it.
+     *
+     * This does not set READY directly, and must not: READY means provisioning
+     * succeeded and the pool was checked. It runs the same orchestrator the task
+     * would have run, and lets it reach whatever conclusion it reaches.
+     *
+     * @param int $runid The run to provision.
+     * @return array{ok: bool, reason: string}
+     */
+    public static function provision_now(int $runid): array {
+        global $DB;
+
+        $status = (int) $DB->get_field('local_catquizlab_run', 'status', ['id' => $runid]);
+        if ($status !== registry::STATUS_SCHEDULED) {
+            return ['ok' => false, 'reason' => 'run-not-scheduled'];
+        }
+
+        $result = run_orchestrator::setup($runid);
+
+        self::provisioned($runid, !empty($result['ok']), (string) ($result['reason'] ?? ''));
+
+        return [
+            'ok'     => !empty($result['ok']),
+            'reason' => (string) ($result['reason'] ?? ''),
+        ];
     }
 
     /**

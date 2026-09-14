@@ -162,12 +162,10 @@ $counts = [
 // that has stalled looks exactly like one that is merely slow unless the page
 // says how many workers are alive and how long the queue is.
 $workers = \local_catquizlab\local\worker_registry::summary();
-$queue = [
-    'queued'    => $DB->count_records('local_catquizlab_attempt', ['status' => attempt_scheduler::STATUS_QUEUED]),
-    'running'   => $DB->count_records('local_catquizlab_attempt', ['status' => attempt_scheduler::STATUS_RUNNING]),
-    'collected' => $DB->count_records('local_catquizlab_attempt', ['status' => attempt_scheduler::STATUS_COLLECTED]),
-    'failed'    => $DB->count_records('local_catquizlab_attempt', ['status' => attempt_scheduler::STATUS_FAILED]),
-];
+// Split into what an operator can act on: claimable now, not due yet after a
+// failure, blocked by the run's state, or paused. One number for all four
+// answered a question nobody asked.
+$queue = attempt_scheduler::queue_breakdown();
 
 // Work waiting with nobody to do it is the one combination that never resolves
 // itself, so it is named rather than left to be inferred from two numbers.

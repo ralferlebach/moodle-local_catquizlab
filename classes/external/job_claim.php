@@ -132,6 +132,18 @@ class job_claim extends external_api {
             'tries'        => (int) $attempt->tries + 1,
             'timemodified' => time(),
         ]);
+
+        // The documented lifecycle is READY → first attempt claimed → RUNNING,
+        // and this is the moment it happens. Inside the transaction with the
+        // claim: a run whose attempt is being played must not be able to look
+        // READY to anything that reads it in between, and a claim that is
+        // rolled back must not leave the run marked as running.
+        \local_catquizlab\local\run_lifecycle::attempt_claimed((int) $attempt->runid);
+
+        // Claiming work is a sign of life, so the registry hears about it at
+        // the same time rather than waiting for the worker's own heartbeat.
+        \local_catquizlab\local\worker_registry::heartbeat($params['workerid']);
+
         $run = $DB->get_record('local_catquizlab_run', ['id' => $attempt->runid]);
         $userid = (int) $DB->get_field('local_catquizlab_person', 'moodleuserid', ['id' => $attempt->personid]);
         // The username travels with the job. The worker used to derive it as

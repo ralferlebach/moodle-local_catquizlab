@@ -1308,4 +1308,83 @@ final class worker_registry_test extends \advanced_testcase {
         file_put_contents($path, "third\n", FILE_APPEND);
         $this->assertSame("second\nthird", $launcher::log_tail('catquizlab-exec-8', 2));
     }
+
+    /**
+     * A worker reports what it is playing, not just that it lives.
+     *
+     * @return void
+     */
+    public function test_a_worker_reports_its_current_job(): void {
+        global $DB;
+        $this->resetAfterTest();
+
+        worker_registry::acquire_slot(1, 'reporter');
+
+        $this->assertTrue(worker_registry::report('reporter', 77, 'working'));
+
+        // "Busy for four minutes on attempt 77" and "gone four minutes ago"
+        // were the same row before this.
+        $row = $DB->get_record('local_catquizlab_worker', ['workerid' => 'reporter']);
+        $this->assertSame(77, (int) $row->currentattempt);
+        $this->assertSame('working', $row->workerstate);
+        $this->assertSame(worker_registry::STATUS_RUNNING, (int) $row->status);
+    }
+
+    /**
+     * A reporting worker is never reaped, however long its attempt takes.
+     *
+     * @return void
+     */
+    public function test_reporting_keeps_a_worker_alive(): void {
+        global $DB;
+        $this->resetAfterTest();
+
+        $id = worker_registry::acquire_slot(1, 'slow');
+        $DB->set_field('local_catquizlab_worker', 'heartbeat',
+            time() - worker_registry::HEARTBEAT_TIMEOUT - 60, ['id' => $id]);
+
+        // An attempt takes minutes, and the claim-to-completion gap used to
+        // cover the whole timeout.
+        worker_registry::report('slow', 5, 'working');
+
+        $this->assertSame(0, worker_registry::reap()['workers']);
+        $this->assertTrue(worker_registry::slot_is_busy(1));
+    }
+
+    /**
+     * Stopping a worker is a request, not a kill.
+     *
+     * @return void
+     */
+    public function test_stopping_a_worker_is_asked_for(): void {
+        $this->resetAfterTest();
+
+        worker_registry::acquire_slot(1, 'stoppable');
+        $this->assertFalse(worker_registry::stop_requested('stoppable'));
+
+        $this->assertTrue(worker_registry::request_stop('stoppable'));
+        $this->assertTrue(worker_registry::stop_requested('stoppable'));
+
+        // The worker is mid-attempt in a browser. Ending the process there
+        // leaves a claim with nobody to finish it, which is the state the lease
+        // mechanism exists to prevent — so it reads this and finishes first.
+        $this->assertFalse(worker_registry::request_stop('never-registered'));
+    }
+
+    /**
+     * A worker the registry has forgotten is told to stop.
+     *
+     * @return void
+     */
+    public function test_an_unknown_worker_is_told_to_stop(): void {
+        $this->resetAfterTest();
+        $this->setAdminUser();
+
+        $reply = \local_catquizlab\external\worker_heartbeat::execute('ghost-worker', 0, 'working');
+
+        // Its slot was reaped and may already have been given away. Two workers
+        // believing they hold one slot is worse than one stopping early.
+        $this->assertFalse($reply['known']);
+        $this->assertTrue($reply['stop']);
+    }
 }

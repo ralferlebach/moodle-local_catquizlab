@@ -77,6 +77,86 @@ class attempt_scheduler {
      * @return int The number of attempts reclaimed (requeued or failed).
      */
     /**
+     * How the queue breaks down for an operator, not for the database.
+     *
+     * `QUEUED` is a storage state and was being read as "waiting for a worker",
+     * which is only one of the things it can mean. An attempt can be claimable
+     * now, not due yet after a failure, held back because its run is not in a
+     * state that hands out work, or paused by a decision somebody took. Those
+     * four need four different responses, and one number gave them one.
+     *
+     * @return array{claimable: int, notdue: int, blocked: int, paused: int,
+     *               running: int, collected: int, failed: int, queued: int}
+     */
+    public static function queue_breakdown(): array {
+        global $DB;
+
+        $now = time();
+        $counts = [
+            'claimable' => 0,
+            'notdue'    => 0,
+            'blocked'   => 0,
+            'paused'    => 0,
+            'running'   => (int) $DB->count_records('local_catquizlab_attempt',
+                ['status' => self::STATUS_RUNNING]),
+            'collected' => (int) $DB->count_records('local_catquizlab_attempt',
+                ['status' => self::STATUS_COLLECTED]),
+            'failed'    => (int) $DB->count_records('local_catquizlab_attempt',
+                ['status' => self::STATUS_FAILED]),
+        ];
+
+        // Grouped by run so the run's state is read once rather than per
+        // attempt: a queue of 1600 would otherwise be 1600 lookups to draw one
+        // line of text.
+        $rows = $DB->get_records_sql(
+            'SELECT a.runid, r.status AS runstatus, r.manifestjson,
+                    SUM(CASE WHEN a.nextruntime <= :now THEN 1 ELSE 0 END) AS due,
+                    COUNT(1) AS total
+               FROM {local_catquizlab_attempt} a
+               JOIN {local_catquizlab_run} r ON r.id = a.runid
+              WHERE a.status = :queued
+           GROUP BY a.runid, r.status, r.manifestjson',
+            ['now' => $now, 'queued' => self::STATUS_QUEUED]
+        );
+
+        foreach ($rows as $row) {
+            $total = (int) $row->total;
+            $due = (int) $row->due;
+
+            $manifest = json_decode((string) $row->manifestjson, true) ?: [];
+            if (!empty($manifest['lifecycle']['paused'])) {
+                $counts['paused'] += $total;
+                continue;
+            }
+
+            if (!run_lifecycle::is_runnable((int) $row->runid)) {
+                // Queued against a run that cannot hand out work: scheduled,
+                // failed, finished. The attempts are real and unreachable, and
+                // showing them as waiting invites waiting for them.
+                $counts['blocked'] += $total;
+                continue;
+            }
+
+            $counts['claimable'] += $due;
+            $counts['notdue'] += $total - $due;
+        }
+
+        $counts['queued'] = $counts['claimable'] + $counts['notdue']
+            + $counts['blocked'] + $counts['paused'];
+
+        return $counts;
+    }
+
+    /**
+     * Whether there is work a worker could actually pick up right now.
+     *
+     * @return bool
+     */
+    public static function has_claimable_work(): bool {
+        return self::queue_breakdown()['claimable'] > 0;
+    }
+
+    /**
      * Hand back everything a named worker was holding.
      *
      * Called when a worker is found to have died. This is the deliberate

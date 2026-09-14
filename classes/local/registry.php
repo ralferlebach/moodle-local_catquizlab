@@ -159,6 +159,13 @@ class registry {
             // a pool enlarged, a budget corrected, an engine installed. It
             // keeps the run's identity, where reproducing makes a new one.
             'recheck'   => $status === self::STATUS_FAILED,
+            // A scheduled run is waiting for an orchestrator task that may
+            // never have been queued, or was queued before cron stopped
+            // running. Without this the run sits at "Scheduled, 0%" with
+            // workers idling beside it and no action that moves it — and READY
+            // must not be settable by hand, because it stands for a check that
+            // passed.
+            'provision' => $status === self::STATUS_SCHEDULED,
             'reproduce' => self::is_terminal($status),
             'results'   => in_array($status, [self::STATUS_FINISHED, self::STATUS_AGGREGATING], true),
         ];

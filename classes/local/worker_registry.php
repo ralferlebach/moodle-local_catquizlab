@@ -184,6 +184,72 @@ class worker_registry {
     }
 
     /**
+     * Record a worker's own report: alive, and what it is doing.
+     *
+     * @param string $workerid The instance.
+     * @param int $attemptid The attempt being played, or 0.
+     * @param string $state working, idle or stopping.
+     * @return bool Whether the registry knows this worker.
+     */
+    public static function report(string $workerid, int $attemptid = 0, string $state = 'working'): bool {
+        global $DB;
+
+        $worker = $DB->get_record('local_catquizlab_worker', ['workerid' => $workerid]);
+        if (!$worker) {
+            return false;
+        }
+
+        $now = time();
+        $DB->update_record('local_catquizlab_worker', (object) [
+            'id'             => $worker->id,
+            'status'         => self::STATUS_RUNNING,
+            'currentattempt' => max(0, $attemptid),
+            'workerstate'    => $state,
+            'heartbeat'      => $now,
+            'timemodified'   => $now,
+        ]);
+
+        return true;
+    }
+
+    /**
+     * Whether somebody has asked this worker to stop.
+     *
+     * @param string $workerid The instance.
+     * @return bool
+     */
+    public static function stop_requested(string $workerid): bool {
+        global $DB;
+
+        return (int) $DB->get_field('local_catquizlab_worker', 'stoprequested',
+            ['workerid' => $workerid]) > 0;
+    }
+
+    /**
+     * Ask a worker to finish its attempt and exit.
+     *
+     * Not a kill: the worker is in the middle of playing an attempt through a
+     * browser, and ending the process there leaves a claim with nobody to
+     * finish it — the state the leases exist to prevent. It reads this at its
+     * next heartbeat.
+     *
+     * @param string $workerid The instance.
+     * @return bool Whether the request was recorded.
+     */
+    public static function request_stop(string $workerid): bool {
+        global $DB;
+
+        $worker = $DB->get_record('local_catquizlab_worker', ['workerid' => $workerid]);
+        if (!$worker) {
+            return false;
+        }
+
+        $DB->set_field('local_catquizlab_worker', 'stoprequested', time(), ['id' => $worker->id]);
+
+        return true;
+    }
+
+    /**
      * Release a slot when a worker finishes on its own terms.
      *
      * @param string $workerid The instance.

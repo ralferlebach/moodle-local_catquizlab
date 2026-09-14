@@ -1005,4 +1005,163 @@ final class run_lifecycle_test extends \advanced_testcase {
         $DB->set_field('local_catquizlab_run', 'manifestjson', json_encode($manifest), ['id' => $runid]);
         $this->assertFalse(\local_catquizlab\local\cat_readiness::check($runid)['ok']);
     }
+
+    /**
+     * Claiming an attempt moves its run, in the same breath.
+     *
+     * @return void
+     */
+    public function test_the_claim_moves_the_run_to_running(): void {
+        global $DB;
+        $this->resetAfterTest();
+        $this->setAdminUser();
+
+        $runid = $this->run_ids($this->experiment_with_runs())[0];
+        $DB->set_field('local_catquizlab_run', 'status', registry::STATUS_READY, ['id' => $runid]);
+        $this->add_attempt($runid, attempt_scheduler::STATUS_QUEUED);
+
+        // The documented lifecycle is READY → first attempt claimed → RUNNING,
+        // and the claim is where it happens. It was not happening at all: the
+        // run stayed READY while its attempts were being played.
+        $this->assertTrue(\local_catquizlab\external\job_claim::execute('w')['hasjob']);
+
+        $this->assertSame(
+            registry::STATUS_RUNNING,
+            (int) $DB->get_field('local_catquizlab_run', 'status', ['id' => $runid])
+        );
+    }
+
+    /**
+     * A second claim does not report a transition that already happened.
+     *
+     * @return void
+     */
+    public function test_only_the_first_claim_reports_the_transition(): void {
+        global $DB;
+        $this->resetAfterTest();
+        $this->setAdminUser();
+
+        $runid = $this->run_ids($this->experiment_with_runs())[0];
+        $DB->set_field('local_catquizlab_run', 'status', registry::STATUS_READY, ['id' => $runid]);
+
+        $this->assertTrue(run_lifecycle::attempt_claimed($runid));
+        // Otherwise the caller repeats whatever it does on a first claim.
+        $this->assertFalse(run_lifecycle::attempt_claimed($runid));
+    }
+
+    /**
+     * A scheduled run does not become running by being claimed.
+     *
+     * @return void
+     */
+    public function test_a_scheduled_run_is_not_promoted_by_a_claim(): void {
+        global $DB;
+        $this->resetAfterTest();
+        $this->setAdminUser();
+
+        $runid = $this->run_ids($this->experiment_with_runs())[0];
+        $DB->set_field('local_catquizlab_run', 'status', registry::STATUS_SCHEDULED, ['id' => $runid]);
+
+        // READY stands for provisioning that succeeded and a pool that was
+        // checked. A run reaching RUNNING without passing through it would be a
+        // run nobody verified.
+        $this->assertFalse(run_lifecycle::attempt_claimed($runid));
+        $this->assertSame(
+            registry::STATUS_SCHEDULED,
+            (int) $DB->get_field('local_catquizlab_run', 'status', ['id' => $runid])
+        );
+    }
+
+    /**
+     * A scheduled run offers a way out of waiting.
+     *
+     * @return void
+     */
+    public function test_a_scheduled_run_can_be_provisioned_by_hand(): void {
+        $this->resetAfterTest();
+        $this->setAdminUser();
+
+        // "Scheduled, 0%, workers idle" with no action that moves it is
+        // indistinguishable from work in progress, and a run can wait for a
+        // task that was never queued or was queued while cron was down.
+        $actions = registry::allowed_actions(registry::STATUS_SCHEDULED);
+
+        $this->assertTrue($actions['provision']);
+        // Not on a run that already got past it: provisioning twice would
+        // create a second attempt queue.
+        $this->assertFalse(registry::allowed_actions(registry::STATUS_READY)['provision']);
+        $this->assertFalse(registry::allowed_actions(registry::STATUS_RUNNING)['provision']);
+    }
+
+    /**
+     * The queue is reported in categories an operator can act on.
+     *
+     * @return void
+     */
+    public function test_the_queue_distinguishes_what_can_be_claimed(): void {
+        global $DB;
+        $this->resetAfterTest();
+        $this->setAdminUser();
+
+        $runs = $this->run_ids($this->experiment_with_runs());
+
+        // Claimable now.
+        $DB->set_field('local_catquizlab_run', 'status', registry::STATUS_READY, ['id' => $runs[0]]);
+        $this->add_attempt($runs[0], attempt_scheduler::STATUS_QUEUED);
+
+        // Queued against a run that hands out nothing: real, and unreachable.
+        $DB->set_field('local_catquizlab_run', 'status', registry::STATUS_FAILED, ['id' => $runs[1]]);
+        $this->add_attempt($runs[1], attempt_scheduler::STATUS_QUEUED);
+
+        $breakdown = attempt_scheduler::queue_breakdown();
+
+        // One number for both invites waiting for attempts that will never be
+        // picked up.
+        $this->assertSame(1, $breakdown['claimable']);
+        $this->assertSame(1, $breakdown['blocked']);
+        $this->assertSame(2, $breakdown['queued']);
+    }
+
+    /**
+     * A retry delay is not the same as waiting for a worker.
+     *
+     * @return void
+     */
+    public function test_a_retry_delay_is_reported_separately(): void {
+        global $DB;
+        $this->resetAfterTest();
+        $this->setAdminUser();
+
+        $runid = $this->run_ids($this->experiment_with_runs())[0];
+        $DB->set_field('local_catquizlab_run', 'status', registry::STATUS_READY, ['id' => $runid]);
+        $attemptid = $this->add_attempt($runid, attempt_scheduler::STATUS_QUEUED);
+        $DB->set_field('local_catquizlab_attempt', 'nextruntime', time() + 3600, ['id' => $attemptid]);
+
+        $breakdown = attempt_scheduler::queue_breakdown();
+
+        // Starting a worker for it would produce a process that finds nothing.
+        $this->assertSame(0, $breakdown['claimable']);
+        $this->assertSame(1, $breakdown['notdue']);
+    }
+
+    /**
+     * Attempts of a paused run are counted as paused, not as waiting.
+     *
+     * @return void
+     */
+    public function test_paused_attempts_are_not_waiting(): void {
+        global $DB;
+        $this->resetAfterTest();
+        $this->setAdminUser();
+
+        $runid = $this->run_ids($this->experiment_with_runs())[0];
+        $DB->set_field('local_catquizlab_run', 'status', registry::STATUS_READY, ['id' => $runid]);
+        $this->add_attempt($runid, attempt_scheduler::STATUS_QUEUED);
+        run_lifecycle::set_paused($runid, true);
+
+        $breakdown = attempt_scheduler::queue_breakdown();
+
+        $this->assertSame(0, $breakdown['claimable']);
+        $this->assertSame(1, $breakdown['paused']);
+    }
 }

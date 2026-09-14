@@ -663,6 +663,48 @@ async function collectZeroQuestionDiagnosis(page, engineAttemptId) {
     return parts.join(' | ');
 }
 
+/**
+ * Report in every few seconds while an attempt is being played.
+ *
+ * A claim and a completion are minutes apart, so without this a working worker
+ * is silent for exactly as long as the timeout that declares it dead — and the
+ * registry has to guess which it is. The returned stop flag is how a worker is
+ * asked to finish and exit: ending the process instead would leave the claim it
+ * holds with nobody to complete it.
+ *
+ * @param {number} attemptId The attempt being played, or 0 between jobs.
+ * @param {string} state What the worker is doing.
+ * @returns {object} A handle with stop() and shouldStop().
+ */
+function startHeartbeat(attemptId, state) {
+    let asked = false;
+
+    const beat = async() => {
+        try {
+            const reply = await callWs('local_catquizlab_worker_heartbeat', {
+                workerid: WORKER_ID,
+                attemptid: attemptId,
+                state: state,
+            });
+            if (reply && reply.stop) {
+                asked = true;
+            }
+        } catch (error) {
+            // A missed heartbeat is not worth abandoning an attempt that is
+            // halfway through: the next one is seconds away, and the lease is
+            // generous enough to survive a few.
+        }
+    };
+
+    beat();
+    const timer = setInterval(beat, 20000);
+
+    return {
+        stop: () => clearInterval(timer),
+        shouldStop: () => asked,
+    };
+}
+
 async function selfTest() {
     const failures = [];
     const check = (label, condition) => {
@@ -757,12 +799,43 @@ async function main() {
             if (!job) {
                 break;
             }
-            await playAttempt(browser, job);
+
+            // Reports every few seconds for as long as this attempt takes, and
+            // carries back whether somebody has asked this worker to stop.
+            const heart = startHeartbeat(job.attemptid, 'working');
+            try {
+                await playAttempt(browser, job);
+            } finally {
+                heart.stop();
+            }
             played++;
+
+            if (heart.shouldStop()) {
+                // Asked to stop while playing: the attempt was finished and
+                // reported first. Stopping any earlier would leave a claim
+                // behind, which is the state the whole lease mechanism exists
+                // to prevent.
+                console.log(`Worker ${WORKER_ID} was asked to stop; finishing after this attempt.`);
+                break;
+            }
         }
     } finally {
         await browser.close();
     }
+
+    // The slot goes back deliberately rather than by timing out: a worker that
+    // ended normally should not hold a place for the length of the heartbeat
+    // timeout, and a crashed one should not look like this.
+    try {
+        await callWs('local_catquizlab_worker_heartbeat', {
+            workerid: WORKER_ID,
+            attemptid: 0,
+            state: 'stopping',
+        });
+    } catch (error) {
+        // Nothing to do about it here; the reaper will notice in its own time.
+    }
+
     console.log(`Worker ${WORKER_ID} finished; played ${played} attempt(s).`);
 }
 

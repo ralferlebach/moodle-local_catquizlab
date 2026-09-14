@@ -68,6 +68,28 @@ if ($action !== '' && $runid > 0) {
     $run = $DB->get_record('local_catquizlab_run', ['id' => $runid], '*', MUST_EXIST);
     $returnurl = new moodle_url('/local/catquizlab/runs.php', ['runid' => $runid]);
 
+    if ($action === 'provision') {
+        require_sesskey();
+        require_capability('local/catquizlab:execute', $context);
+
+        // Runs the orchestrator in this request rather than queueing it again:
+        // the run is already waiting for a task, and queueing a second is how
+        // somebody ends up with two.
+        \core\session\manager::write_close();
+        $result = \local_catquizlab\local\run_lifecycle::provision_now($runid);
+
+        redirect(
+            $returnurl,
+            $result['ok']
+                ? get_string('run:provisioned', $component)
+                : get_string('run:provisionfailed', $component, $result['reason'] ?: '-'),
+            null,
+            $result['ok']
+                ? \core\output\notification::NOTIFY_SUCCESS
+                : \core\output\notification::NOTIFY_WARNING
+        );
+    }
+
     if ($action === 'recheck') {
         require_sesskey();
         require_capability('local/catquizlab:execute', $context);
@@ -250,6 +272,15 @@ if ($runid > 0) {
     $allowed = $run['actions'];
     if (has_capability('local/catquizlab:execute', $context)) {
         $buttons = '';
+        if (!empty($allowed['provision'])) {
+            $buttons .= $OUTPUT->single_button(
+                new moodle_url('/local/catquizlab/runs.php', [
+                    'runid' => $runid, 'action' => 'provision', 'sesskey' => sesskey(),
+                ]),
+                get_string('action:provision', $component),
+                'post'
+            );
+        }
         if (!empty($allowed['recheck'])) {
             $buttons .= $OUTPUT->single_button(
                 new moodle_url('/local/catquizlab/runs.php', [

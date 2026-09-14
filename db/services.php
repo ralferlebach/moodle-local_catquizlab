@@ -46,6 +46,12 @@ $functions = [
         'ajax'        => false,
         'capabilities' => 'local/catquizlab:worker',
     ],
+    'local_catquizlab_worker_heartbeat' => [
+        'classname'    => 'local_catquizlab\\external\\worker_heartbeat',
+        'description'  => 'A worker reporting that it is alive and what it is playing.',
+        'type'         => 'write',
+        'capabilities' => 'local/catquizlab:worker',
+    ],
     'local_catquizlab_job_claim' => [
         'classname'   => 'local_catquizlab\\external\\job_claim',
         'methodname'  => 'execute',

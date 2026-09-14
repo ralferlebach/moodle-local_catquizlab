@@ -6,6 +6,68 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.6.15] — 2026-09-14
+
+The run lifecycle, from three directions: issues #50, #45, #47, #49 and #48.
+
+### #50 — The claim did not move the run (P0)
+The documented lifecycle is READY → first attempt claimed → RUNNING, and the
+call that performs it was missing from `job_claim` entirely: a run stayed READY
+while its attempts were being played. It happens inside the claim's transaction
+now — a run whose attempt is being played must not look READY to anything
+reading in between, and a rolled-back claim must not leave a run marked running.
+
+The transition is conditional on READY, so a scheduled run cannot skip the state
+that says its pool was checked, and it reports whether *this* call moved the run
+rather than whether the run is running — a later claim repeating a first claim's
+side effects was the failure waiting behind the old shape.
+
+### #45 — A scheduled run was a dead end (P0)
+"Scheduled, 0%, workers idle beside it" with no action that moves it is
+indistinguishable from work in progress, and a run can wait for an orchestrator
+task that was never queued or was queued while cron was down. **Provision now**
+runs the same orchestrator the task would have run and lets it reach its own
+conclusion — READY is not settable by hand, because it stands for a check that
+passed.
+
+### #47 — Workers started with nothing to do (P0)
+Dispatch knew nothing about whether work was claimable. Starting a worker
+without any costs a Node and a Chrome process, shows "workers running" beside 0%
+progress, and ends as an apparent crash when the process exits having found
+nothing — three misleading signals, multiplied by the configured concurrency.
+
+The pool now starts no workers when nothing is claimable, and no more workers
+than there is work for. Measured: one claimable attempt with concurrency 4
+starts one worker; none starts none.
+
+### #49 — `QUEUED` was read as "waiting for a worker" (P0)
+It is a storage state, and an attempt in it can be claimable now, not due yet
+after a failure, blocked because its run hands out no work, or held by a paused
+run. Four things needing four responses, reported as one number — which invited
+waiting for attempts that would never be picked up. `queue_breakdown()` splits
+them, grouped by run so a queue of 1600 is not 1600 lookups.
+
+### #48 — A working worker was indistinguishable from a dead one (P0)
+It spoke only when claiming and when finishing, and an attempt takes minutes: a
+working worker went quiet for exactly as long as the timeout that declares it
+dead. It reports every twenty seconds now, with the attempt it is playing, and
+the reply carries a stop flag.
+
+Stopping is a request, not a kill: the worker is mid-attempt in a browser, and
+ending the process there leaves a claim with nobody to finish it — the state the
+leases exist to prevent. It finishes the attempt, reports it, and exits. A
+worker the registry no longer knows is told to stop, because its slot may
+already have been given away.
+
+### Verification
+PHPUnit 545 tests / 3162 assertions, Behat 32 scenarios / 232 steps, PHPDoc
+clean. Each change measured against the running instance: READY 15 → RUNNING 20
+on first claim, one worker for one claimable attempt, `no-claimable-work` when
+there is none, and the heartbeat's stop flag answering true after a stop request
+and for an unknown worker.
+
+---
+
 ## [0.6.14] — 2026-09-14
 
 Live updating, a four-stage front end, and the test environment rebuilt.

@@ -271,6 +271,9 @@
         <FIELD NAME="hostname" TYPE="char" LENGTH="255" NOTNULL="false" SEQUENCE="false"/>
         <FIELD NAME="jobsdone" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
         <FIELD NAME="lasterror" TYPE="text" NOTNULL="false" SEQUENCE="false"/>
+        <FIELD NAME="currentattempt" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false" COMMENT="The attempt this worker is playing. A worker that is busy and one that is stuck look alike without it."/>
+        <FIELD NAME="workerstate" TYPE="char" LENGTH="20" NOTNULL="false" SEQUENCE="false" COMMENT="What the worker says it is doing: working, idle or stopping."/>
+        <FIELD NAME="stoprequested" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false" COMMENT="When somebody asked it to finish its attempt and exit. Killing the process would strand the claim."/>
         <FIELD NAME="heartbeat" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false" COMMENT="Last sign of life. A worker that stops reporting is crashed, not merely slow."/>
         <FIELD NAME="timecreated" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
         <FIELD NAME="timemodified" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
