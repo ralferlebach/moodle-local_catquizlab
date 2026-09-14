@@ -46,7 +46,7 @@ admin_externalpage_setup(registry::ADMIN_PAGE);
 
 $component = 'local_catquizlab';
 $context = context_system::instance();
-$pageurl = new moodle_url('/local/catquizlab/operations.php');
+$pageurl = new moodle_url('/local/catquizlab/index.php', ['tab' => 'setup']);
 $PAGE->set_url($pageurl);
 
 if ($action !== '') {
@@ -194,119 +194,6 @@ if ($action !== '') {
     }
 }
 
-$wizard = \local_catquizlab\local\setup_wizard::state();
-$runtime = \local_catquizlab\local\worker_runtime::verify();
-$health = system_health::health();
-$access = \local_catquizlab\local\worker_access::verify();
-
-$workers = array_map(static function (\stdClass $worker): array {
-    return [
-        'workerid'  => $worker->workerid,
-        'slot'      => (int) $worker->slot,
-        'jobsdone'  => (int) $worker->jobsdone,
-        'heartbeat' => userdate((int) $worker->heartbeat, get_string('strftimedatetimeshort')),
-        'lasterror' => $worker->lasterror,
-    ];
-}, worker_registry::live());
-
-$queue = [
-    'queued'    => $DB->count_records('local_catquizlab_attempt', ['status' => attempt_scheduler::STATUS_QUEUED]),
-    'running'   => $DB->count_records('local_catquizlab_attempt', ['status' => attempt_scheduler::STATUS_RUNNING]),
-    'collected' => $DB->count_records('local_catquizlab_attempt', ['status' => attempt_scheduler::STATUS_COLLECTED]),
-    'failed'    => $DB->count_records('local_catquizlab_attempt', ['status' => attempt_scheduler::STATUS_FAILED]),
-];
-
-// The claims held longest: "which attempt is stuck, and since when" was one of
-// the questions that needed a database client.
-$stuck = array_values(array_map(static function (\stdClass $row): array {
-    return [
-        'attemptid' => (int) $row->id,
-        'runid'     => (int) $row->runid,
-        'owner'     => $row->leaseowner,
-        'tries'     => (int) $row->tries,
-        'since'     => format_time(time() - (int) $row->timemodified),
-        'lasterror' => $row->lasterror,
-    ];
-}, $DB->get_records(
-    'local_catquizlab_attempt',
-    ['status' => attempt_scheduler::STATUS_RUNNING],
-    'timemodified ASC',
-    'id, runid, leaseowner, tries, timemodified, lasterror',
-    0,
-    10
-)));
-
-$inflight = array_values(array_map(static function (\stdClass $run) use ($component, $pageurl): array {
-    $counts = run_lifecycle::attempt_counts((int) $run->id);
-    $paused = run_lifecycle::is_paused((int) $run->id);
-
-    return [
-        'runid'     => (int) $run->id,
-        'cellkey'   => $run->cellkey,
-        'status'    => \local_catquizlab\local\run_registry::status_label((int) $run->status),
-        'total'     => $counts['total'],
-        'open'      => $counts['open'],
-        'collected' => $counts['collected'],
-        'failed'    => $counts['failed'],
-        'paused'    => $paused,
-        'pauseurl'  => (new moodle_url($pageurl, [
-            'action'  => $paused ? 'resumerun' : 'pauserun',
-            'runid'   => (int) $run->id,
-            'sesskey' => sesskey(),
-        ]))->out(false),
-    ];
-}, $DB->get_records_select(
-    'local_catquizlab_run',
-    'status IN (:scheduled, :ready, :running, :aggregating)',
-    [
-        'scheduled'   => registry::STATUS_SCHEDULED,
-        'ready'       => registry::STATUS_READY,
-        'running'     => registry::STATUS_RUNNING,
-        'aggregating' => registry::STATUS_AGGREGATING,
-    ],
-    'id ASC',
-    'id, cellkey, status',
-    0,
-    20
-)));
-
-echo $OUTPUT->header();
-echo $OUTPUT->heading(get_string('ops:heading', $component));
-
-echo $OUTPUT->render_from_template('local_catquizlab/operations', [
-    'health'     => $health,
-    'workers'    => ['hasany' => $workers !== [], 'rows' => $workers],
-    'queue'      => $queue,
-    'stuck'      => ['hasany' => $stuck !== [], 'rows' => $stuck],
-    'inflight'   => ['hasany' => $inflight !== [], 'rows' => $inflight],
-    'sesskey'    => sesskey(),
-    'actionurl'  => $pageurl->out(false),
-    'wizard'     => $wizard,
-    'runtime'    => $runtime,
-    'canruntime' => !$runtime['ok'],
-    'access'     => $access,
-    'cansetup'   => !$access['ok'],
-    'empty'      => (static function (): ?array {
-        $rows = \local_catquizlab\local\engine_hygiene::list_empty_attempts();
-
-        return $rows === [] ? null : ['count' => count($rows), 'rows' => $rows];
-    })(),
-    // Kept for one page load: a self-test result is worth reading once, and
-    // storing it would turn a diagnostic into state to maintain.
-    'selftest'   => (static function () {
-        global $SESSION;
-        $result = $SESSION->catquizlab_selftest ?? null;
-        unset($SESSION->catquizlab_selftest);
-        if ($result === null) {
-            return null;
-        }
-
-        return [
-            'ok'      => (int) $result['exitcode'] === 0,
-            'output'  => $result['output'],
-            'command' => $result['command'],
-        ];
-    })(),
-]);
-
-echo $OUTPUT->footer();
+// Everything is shown on the plugin's own page now. This file stays for the
+// action posts and for anyone who bookmarked it, and sends them there.
+redirect(new moodle_url('/local/catquizlab/index.php', ['tab' => 'setup']));

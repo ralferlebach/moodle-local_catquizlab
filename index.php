@@ -185,6 +185,15 @@ $recenterrors = array_values($DB->get_records_select(
     5
 ));
 
+// The one thing a fresh installation needs to know: is it ready, and if not,
+// where does it go. Leaving that on a page an administrator has to already know
+// about is how the setup ends up being done by hand instead.
+$setupstate = \local_catquizlab\local\setup_wizard::state();
+$setupnotice = $setupstate['ready'] ? null : [
+    'blockers' => implode(', ', array_slice($setupstate['blockers'], 0, 4)),
+    'opsurl'   => (new moodle_url('/local/catquizlab/operations.php'))->out(false),
+];
+
 $overview = [
     [
         'count' => $counts['experiments'],
@@ -239,6 +248,7 @@ $templatecontext = [
     'environment' => ['items' => $envitems],
     'disabled'    => !get_config($component, 'enabled'),
     'experiments' => ['hasany' => $experimentrows !== [], 'rows' => $experimentrows],
+    'setupnotice' => $setupnotice,
     'workers'     => $workers + ['queue' => $queue, 'hasslot' => $workers['live'] > 0],
     'queue'       => $queue,
     'recenterrors' => $recenterrors === [] ? null : ['rows' => array_map(static function ($row): array {
@@ -261,7 +271,69 @@ $templatecontext = [
     ],
 ];
 
+// One page. Everything an operator does — look at experiments, set the
+// installation up, watch it run, change what it runs with — is reachable from
+// here without leaving the plugin. Splitting these across three pages meant
+// knowing which page held which half.
+$tab = optional_param('tab', 'experiments', PARAM_ALPHA);
+if (!in_array($tab, ['experiments', 'setup', 'settings'], true)) {
+    $tab = 'experiments';
+}
+
+$settingsform = null;
+if ($tab === 'settings') {
+    $settingsform = new \local_catquizlab\form\settings_form(
+        new moodle_url('/local/catquizlab/index.php', ['tab' => 'settings'])
+    );
+
+    if ($data = $settingsform->get_data()) {
+        require_capability('local/catquizlab:execute', $context);
+        foreach (
+            ['experimentcourseid', 'enabled', 'worker_base_url', 'worker_node_path',
+            'worker_concurrency', 'worker_max_jobs'] as $name
+        ) {
+            if (isset($data->$name)) {
+                set_config($name, $data->$name, $component);
+            }
+        }
+        redirect(
+            new moodle_url('/local/catquizlab/index.php', ['tab' => 'settings']),
+            get_string('settingsform:saved', $component)
+        );
+    }
+
+    $settingsform->set_data((object) [
+        'experimentcourseid' => (int) get_config($component, 'experimentcourseid'),
+        'enabled'            => (int) get_config($component, 'enabled'),
+        'worker_base_url'    => (string) get_config($component, 'worker_base_url'),
+        'worker_node_path'   => (string) get_config($component, 'worker_node_path'),
+        'worker_concurrency' => (int) (get_config($component, 'worker_concurrency') ?: 1),
+        'worker_max_jobs'    => (int) get_config($component, 'worker_max_jobs'),
+    ]);
+}
+
+$tabs = [];
+foreach (['experiments', 'setup', 'settings'] as $name) {
+    $tabs[] = new tabobject(
+        $name,
+        new moodle_url('/local/catquizlab/index.php', ['tab' => $name]),
+        get_string('tab:' . $name, $component)
+    );
+}
+
 echo $OUTPUT->header();
 echo $OUTPUT->heading(get_string('pluginname', $component));
-echo $OUTPUT->render_from_template('local_catquizlab/manage', $templatecontext);
+echo $OUTPUT->tabtree($tabs, $tab);
+
+if ($tab === 'experiments') {
+    echo $OUTPUT->render_from_template('local_catquizlab/manage', $templatecontext);
+} else if ($tab === 'setup') {
+    echo $OUTPUT->render_from_template(
+        'local_catquizlab/operations',
+        \local_catquizlab\local\operations_view::context()
+    );
+} else {
+    $settingsform->display();
+}
+
 echo $OUTPUT->footer();

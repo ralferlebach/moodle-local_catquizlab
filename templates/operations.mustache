@@ -56,12 +56,12 @@
             </div>
         {{/wizard.ready}}
 
-        <form method="post" action="{{actionurl}}" class="d-inline">
+        <form method="post" action="{{formurl}}" class="d-inline">
             <input type="hidden" name="sesskey" value="{{sesskey}}">
             <input type="hidden" name="action" value="wizard">
             <button type="submit" class="btn btn-secondary">{{#str}}wizard:run, local_catquizlab{{/str}}</button>
         </form>
-        <form method="post" action="{{actionurl}}" class="d-inline">
+        <form method="post" action="{{formurl}}" class="d-inline">
             <input type="hidden" name="sesskey" value="{{sesskey}}">
             <input type="hidden" name="action" value="wizardstart">
             <button type="submit" class="btn btn-primary">{{#str}}wizard:runandenable, local_catquizlab{{/str}}</button>
@@ -83,7 +83,7 @@
             {{/runtime.steps}}
         </ul>
         {{#canruntime}}
-            <form method="post" action="{{actionurl}}">
+            <form method="post" action="{{formurl}}">
                 <input type="hidden" name="sesskey" value="{{sesskey}}">
                 <input type="hidden" name="action" value="setupruntime">
                 <button type="submit" class="btn btn-primary">{{#str}}runtime:setup, local_catquizlab{{/str}}</button>
@@ -125,7 +125,7 @@
         </ul>
         {{#cansetup}}
             <p class="text-muted small">{{#str}}access:explain, local_catquizlab{{/str}}</p>
-            <form method="post" action="{{actionurl}}">
+            <form method="post" action="{{formurl}}">
                 <input type="hidden" name="sesskey" value="{{sesskey}}">
                 <input type="hidden" name="action" value="setupaccess">
                 <button type="submit" class="btn btn-primary">{{#str}}access:setup, local_catquizlab{{/str}}</button>
@@ -163,22 +163,22 @@
             <p class="text-muted">{{#str}}health:workersnone, local_catquizlab{{/str}}</p>
         {{/workers.hasany}}
 
-        <form method="post" action="{{actionurl}}" class="d-inline">
+        <form method="post" action="{{formurl}}" class="d-inline">
             <input type="hidden" name="sesskey" value="{{sesskey}}">
             <input type="hidden" name="action" value="startworkers">
             <button type="submit" class="btn btn-primary">{{#str}}ops:startworkers, local_catquizlab{{/str}}</button>
         </form>
-        <form method="post" action="{{actionurl}}" class="d-inline">
+        <form method="post" action="{{formurl}}" class="d-inline">
             <input type="hidden" name="sesskey" value="{{sesskey}}">
             <input type="hidden" name="action" value="reap">
             <button type="submit" class="btn btn-secondary">{{#str}}ops:reap, local_catquizlab{{/str}}</button>
         </form>
-        <form method="post" action="{{actionurl}}" class="d-inline">
+        <form method="post" action="{{formurl}}" class="d-inline">
             <input type="hidden" name="sesskey" value="{{sesskey}}">
             <input type="hidden" name="action" value="selftest">
             <button type="submit" class="btn btn-secondary">{{#str}}ops:selftest, local_catquizlab{{/str}}</button>
         </form>
-        <form method="post" action="{{actionurl}}" class="d-inline">
+        <form method="post" action="{{formurl}}" class="d-inline">
             <input type="hidden" name="sesskey" value="{{sesskey}}">
             <input type="hidden" name="action" value="installbrowser">
             <button type="submit" class="btn btn-secondary">{{#str}}ops:installbrowser, local_catquizlab{{/str}}</button>
@@ -234,7 +234,7 @@
                 <ul class="small mb-2">
                     {{#rows}}<li>#{{attemptid}} (run {{runid}}, {{twinid}}) &mdash; {{since}}</li>{{/rows}}
                 </ul>
-                <form method="post" action="{{actionurl}}">
+                <form method="post" action="{{formurl}}">
                     <input type="hidden" name="sesskey" value="{{sesskey}}">
                     <input type="hidden" name="action" value="purgeempty">
                     <button type="submit" class="btn btn-sm btn-secondary">
@@ -244,7 +244,7 @@
             </div>
         {{/empty}}
 
-        <form method="post" action="{{actionurl}}">
+        <form method="post" action="{{formurl}}">
             <input type="hidden" name="sesskey" value="{{sesskey}}">
             <input type="hidden" name="action" value="releaseorphans">
             <button type="submit" class="btn btn-secondary">{{#str}}ops:releaseorphans, local_catquizlab{{/str}}</button>

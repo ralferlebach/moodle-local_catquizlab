@@ -18,10 +18,15 @@ Feature: Reaching the CAT experiment suite management page
     Then I should see "CAT experiment suite"
     And I should see "No experiments defined yet."
 
-  Scenario: The operations view answers the questions that needed a shell
+  Scenario: Setup and operations are reachable from the plugin's own page
     Given I log in as "admin"
-    When I navigate to "Reports > Operations" in site administration
-    Then I should see "System"
+    And I navigate to "Reports > CAT experiment suite" in site administration
+    # No detour through the Moodle administration: the tab is on the page the
+    # person is already on.
+    When I follow "Setup and operations"
+    Then I should see "Setup and readiness"
+    And I should see "Set up worker access"
+    And I should see "System"
     And I should see "CAT engine"
     And I should see "Worker web service token"
     And I should see "Attempt pipeline"

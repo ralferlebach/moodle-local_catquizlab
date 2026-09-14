@@ -142,7 +142,15 @@
         </details>
     {{/environment}}
 
-    <div class="card mb-3">
+    {{#setupnotice}}
+    <div class="alert alert-warning" role="status">
+        <strong>{{#str}}setup:notready, local_catquizlab{{/str}}</strong>
+        <p class="mb-2">{{blockers}}</p>
+        <a href="{{opsurl}}" class="btn btn-primary">{{#str}}setup:open, local_catquizlab{{/str}}</a>
+    </div>
+{{/setupnotice}}
+
+<div class="card mb-3">
     <div class="card-body">
         <h3 class="h5">{{#str}}worker:heading, local_catquizlab{{/str}}</h3>
         {{#workers}}

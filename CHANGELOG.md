@@ -6,6 +6,83 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.7.0] — 2026-09-13
+
+One page.
+
+Everything an operator does was spread over three: experiments on the landing
+page, setup and diagnosis on an operations page, settings in the Moodle
+administration tree. Each one was reachable, and using the plugin meant knowing
+which of the three held which half. Adding a link between them, as 0.6.10 did,
+treats the symptom.
+
+### Changed
+- **The plugin's own page carries three tabs**: Experiments, Setup and
+  operations, Settings. The setup view renders inside it rather than on a page
+  of its own, and `operations.php` remains only as the handler its forms post
+  to, redirecting anyone who arrives there.
+
+- **The settings that an operator turns are on the Settings tab**: experiment
+  course as a chooser rather than an id, master switch, base URL, Node path,
+  concurrency, maximum jobs. They stay in the Moodle settings tree as well —
+  that is the right place for a site administrator configuring a plugin once,
+  and the wrong place for somebody running an experiment.
+
+  The node path is checked on save rather than discovered later by a worker
+  that cannot start: the error is the same, but here it arrives while somebody
+  is looking at the field. The token is shown read-only with its state, because
+  an operator who can see it is empty understands why nothing runs — and typing
+  one in by hand is what this page exists to make unnecessary.
+
+### Fixed
+- The setup forms posted to an empty action, so the buttons did nothing. Found
+  by pressing them through the browser and then checking the database rather
+  than reading the page: the page's own text said `token, storedtoken`, which
+  was the list of what was *missing*, and could be read as a report of success.
+
+### Verified along the path a person takes
+Token cleared, then only the plugin's page: landing page → Setup tab → "Set up
+worker access" → "Worker access is complete. Changed: token, storedtoken", 32
+characters in the database, and that token calls `local_catquizlab_job_claim`
+successfully. No detour through the Moodle administration at any point.
+
+### Verification
+PHPUnit 487 tests / 2960 assertions, Behat 32 scenarios / 232 steps, phpcs and
+PHPDoc clean.
+
+---
+
+## [0.6.10] — 2026-09-13
+
+The setup was built and not signposted.
+
+0.6.8 made the worker access creatable in one click, and left the button on a
+page an administrator has to already know about. Somebody standing in the plugin
+settings in front of an empty token field saw nothing suggesting the plugin
+could fill it — which is exactly where the ten-step manual sequence used to
+begin. A capability nobody can find is not a capability.
+
+### Added
+- **The settings page states the access status above the token field**, and
+  when it is incomplete says plainly not to create a token by hand, with a link
+  to the page that creates it.
+- **The token field's own description** names where it comes from.
+- **The landing page warns when the installation is not ready**, lists what is
+  missing and links to the setup. That is the first page anyone opens, and it
+  was silent about an installation that could not run anything.
+
+### Verified along the path a person actually takes
+Token cleared to reproduce a fresh installation, then: the settings page shows
+the notice and a link, the operations page's button runs the setup, the field
+holds a 32-character token, and that token calls `local_catquizlab_job_claim`
+successfully.
+
+### Verification
+PHPUnit 487 tests / 2960 assertions, Behat 32 scenarios / 229 steps, phpcs and
+PHPDoc clean, 757 language strings per language.
+
+---
+
 ## [0.6.9] — 2026-09-13
 
 Issues #32, #33 and #34 — a fresh installation made ready from its own pages.
