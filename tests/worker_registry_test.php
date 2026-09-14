@@ -30,6 +30,7 @@
 namespace local_catquizlab;
 
 use local_catquizlab\local\attempt_scheduler;
+use local_catquizlab\local\registry;
 use local_catquizlab\local\worker_registry;
 
 /**
@@ -44,6 +45,79 @@ use local_catquizlab\local\worker_registry;
 final class worker_registry_test extends \advanced_testcase {
     /**
      * Add an attempt in a given state.
+     *
+     * @param int $status One of attempt_scheduler's status constants.
+     * @param string|null $owner The lease owner, when it is claimed.
+     * @param int $leaseexpires When the lease lapses.
+     * @return int The attempt id.
+     */
+    /**
+     * Give a run a pool and budgets its readiness check can pass.
+     *
+     * A run that exists only as a row cannot pass readiness — correctly, since
+     * such a run would queue jobs that fail before the first question.
+     *
+     * @param int $runid The run.
+     * @return void
+     */
+    protected function make_run_ready(int $runid): void {
+        global $DB;
+
+        $run = $DB->get_record('local_catquizlab_run', ['id' => $runid]);
+        $manifest = json_decode((string) $run->manifestjson, true) ?: [];
+        $manifest['config']['definition']['budgets'] = [
+            'global'   => ['minitems' => 2, 'maxitems' => 20],
+            'subscale' => ['minitems' => 1, 'maxitems' => 10],
+        ];
+        $manifest['config']['definition']['strategy'] = 'fastest';
+        $DB->set_field('local_catquizlab_run', 'manifestjson', json_encode($manifest), ['id' => $runid]);
+
+        $scaleid = 900000 + $runid;
+        $DB->insert_record('local_catquizlab_scalemap', (object) [
+            'runid' => $runid, 'level' => \local_catquizlab\local\scale_provisioner::LEVEL_SUBSCALE,
+            'catscaleid' => $scaleid, 'categoryindex' => 1, 'subscaleindex' => 1, 'timecreated' => time(),
+        ]);
+
+        for ($i = 0; $i < 12; $i++) {
+            $paramid = $DB->insert_record('local_catquiz_itemparams', (object) [
+                'componentid' => 0, 'componentname' => 'question', 'contextid' => 1,
+                'model' => 'raschbirnbaum', 'difficulty' => 0, 'discrimination' => 1, 'guessing' => 0,
+                'status' => \local_catquizlab\local\cat_readiness::STATUS_KNOWN,
+                'timecreated' => time(), 'timemodified' => time(),
+            ]);
+            $DB->insert_record('local_catquiz_items', (object) [
+                'componentid' => 0, 'componentname' => 'question', 'catscaleid' => $scaleid,
+                'contextid' => 1, 'activeparamid' => $paramid, 'status' => 0,
+                'timecreated' => time(), 'timemodified' => time(),
+            ]);
+        }
+    }
+
+    /**
+     * Add an attempt to a run that already exists.
+     *
+     * @param int $runid The run.
+     * @param int $status One of attempt_scheduler's status constants.
+     * @param string|null $error The recorded failure reason, when there is one.
+     * @return int The attempt id.
+     */
+    protected function add_attempt_to(int $runid, int $status, ?string $error = null): int {
+        global $DB;
+
+        return (int) $DB->insert_record('local_catquizlab_attempt', (object) [
+            'runid'        => $runid,
+            'personid'     => 0,
+            'status'       => $status,
+            'tries'        => 0,
+            'lasterror'    => $error,
+            'nextruntime'  => 0,
+            'timecreated'  => time(),
+            'timemodified' => time(),
+        ]);
+    }
+
+    /**
+     * Add an attempt on a run created for the purpose.
      *
      * @param int $status One of attempt_scheduler's status constants.
      * @param string|null $owner The lease owner, when it is claimed.
@@ -378,6 +452,7 @@ final class worker_registry_test extends \advanced_testcase {
 
         $attemptid = $this->add_attempt(attempt_scheduler::STATUS_QUEUED);
         $runid = (int) $DB->get_field('local_catquizlab_attempt', 'runid', ['id' => $attemptid]);
+        $DB->set_field('local_catquizlab_run', 'status', registry::STATUS_READY, ['id' => $runid]);
 
         $this->assertTrue(\local_catquizlab\external\job_claim::execute('w')['hasjob']);
 
@@ -1049,5 +1124,146 @@ final class worker_registry_test extends \advanced_testcase {
         // then fails as if nothing were installed — so the check looks for an
         // executable, not for a path.
         $this->assertFalse(is_executable($stale . '/chrome-linux64/chrome'));
+    }
+
+    /**
+     * A worker's output is kept, not thrown away.
+     *
+     * @return void
+     */
+    public function test_worker_output_is_kept(): void {
+        $this->resetAfterTest();
+
+        $launcher = \local_catquizlab\local\worker_launcher::class;
+        $path = $launcher::log_path('catquizlab-exec-1');
+
+        // A worker that dies on startup writes its reason to stderr. Sent to
+        // /dev/null, the registry then showed a slot held by a process that no
+        // longer existed, with nothing to say why.
+        $this->assertNotSame('/dev/null', $path);
+        file_put_contents($path, "first\nsecond\nthird\n");
+
+        $this->assertSame("second\nthird", $launcher::log_tail('catquizlab-exec-1', 2));
+
+        // One file per worker: a restarted worker appends to its own history
+        // rather than into a shared file nobody can untangle.
+        $this->assertStringContainsString('catquizlab-exec-1', $path);
+        $this->assertSame('', $launcher::log_tail('a-worker-that-never-ran'));
+    }
+
+    /**
+     * A failed run can be re-checked and resumed once its cause is fixed.
+     *
+     * @return void
+     */
+    public function test_a_failed_run_can_be_rechecked(): void {
+        global $DB;
+        $this->resetAfterTest();
+        $this->setAdminUser();
+
+        if (!\local_catquizlab\local\environment::catquiz_available()) {
+            $this->markTestSkipped('No CAT engine installed; readiness stands down.');
+        }
+
+        /** @var \local_catquizlab_generator $generator */
+        $generator = $this->getDataGenerator()->get_plugin_generator('local_catquizlab');
+        $runid = (int) $generator->create_run()->id;
+        $this->make_run_ready($runid);
+        $DB->set_field(
+            'local_catquizlab_run',
+            'status',
+            \local_catquizlab\local\registry::STATUS_READY,
+            ['id' => $runid]
+        );
+        $this->add_attempt_to($runid, attempt_scheduler::STATUS_QUEUED);
+
+        \local_catquizlab\local\run_lifecycle::fail($runid, 'cat-not-ready: pool too small');
+        $this->assertSame(0, $DB->count_records('local_catquizlab_attempt', [
+            'runid' => $runid, 'status' => attempt_scheduler::STATUS_QUEUED,
+        ]));
+
+        $result = \local_catquizlab\local\run_lifecycle::recheck($runid);
+
+        // A run that failed because a pool was too small is not broken for
+        // ever: the pool can be enlarged. Reproducing it instead would lose the
+        // identity of the run that failed.
+        $this->assertTrue($result['ok'], $result['reason']);
+        $this->assertSame(1, $result['requeued']);
+        $this->assertSame(
+            \local_catquizlab\local\registry::STATUS_READY,
+            (int) $DB->get_field('local_catquizlab_run', 'status', ['id' => $runid])
+        );
+        $this->assertSame('', \local_catquizlab\local\run_lifecycle::failure_details($runid)['reason']);
+    }
+
+    /**
+     * Attempts that failed while being played keep their history.
+     *
+     * @return void
+     */
+    public function test_recheck_only_reopens_what_the_run_closed(): void {
+        global $DB;
+        $this->resetAfterTest();
+        $this->setAdminUser();
+
+        if (!\local_catquizlab\local\environment::catquiz_available()) {
+            $this->markTestSkipped('No CAT engine installed; readiness stands down.');
+        }
+
+        /** @var \local_catquizlab_generator $generator */
+        $generator = $this->getDataGenerator()->get_plugin_generator('local_catquizlab');
+        $runid = (int) $generator->create_run()->id;
+        $this->make_run_ready($runid);
+
+        // One that genuinely failed while a worker played it, one closed when
+        // the run failed. Reopening the first would discard a real result.
+        $played = $this->add_attempt_to(
+            $runid,
+            attempt_scheduler::STATUS_FAILED,
+            'Login failed: no username field'
+        );
+        $this->add_attempt_to($runid, attempt_scheduler::STATUS_QUEUED);
+
+        $DB->set_field(
+            'local_catquizlab_run',
+            'status',
+            \local_catquizlab\local\registry::STATUS_READY,
+            ['id' => $runid]
+        );
+        \local_catquizlab\local\run_lifecycle::fail($runid, 'cat-not-ready');
+        $result = \local_catquizlab\local\run_lifecycle::recheck($runid);
+
+        $this->assertSame(1, $result['requeued']);
+        $this->assertSame(
+            attempt_scheduler::STATUS_FAILED,
+            (int) $DB->get_field('local_catquizlab_attempt', 'status', ['id' => $played])
+        );
+        $this->assertStringContainsString(
+            'Login failed',
+            (string) $DB->get_field('local_catquizlab_attempt', 'lasterror', ['id' => $played])
+        );
+    }
+
+    /**
+     * The recorded failure reason can be read back.
+     *
+     * @return void
+     */
+    public function test_the_failure_reason_is_readable(): void {
+        global $DB;
+        $this->resetAfterTest();
+        $this->setAdminUser();
+
+        /** @var \local_catquizlab_generator $generator */
+        $generator = $this->getDataGenerator()->get_plugin_generator('local_catquizlab');
+        $runid = (int) $generator->create_run()->id;
+
+        \local_catquizlab\local\run_lifecycle::fail($runid, 'stage:materialise (pool-too-small)');
+        $details = \local_catquizlab\local\run_lifecycle::failure_details($runid);
+
+        // It was recorded from the start and never read: a run said FAILED and
+        // the reason sat in its manifest, where only database access found it.
+        $this->assertStringContainsString('materialise', $details['reason']);
+        $this->assertGreaterThan(0, $details['time']);
     }
 }

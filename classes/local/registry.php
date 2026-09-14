@@ -155,6 +155,10 @@ class registry {
                 [self::STATUS_SCHEDULED, self::STATUS_READY, self::STATUS_RUNNING, self::STATUS_AGGREGATING],
                 true
             ),
+            // Re-checking is for a failed run whose cause may have been fixed:
+            // a pool enlarged, a budget corrected, an engine installed. It
+            // keeps the run's identity, where reproducing makes a new one.
+            'recheck'   => $status === self::STATUS_FAILED,
             'reproduce' => self::is_terminal($status),
             'results'   => in_array($status, [self::STATUS_FINISHED, self::STATUS_AGGREGATING], true),
         ];

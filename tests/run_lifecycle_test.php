@@ -701,7 +701,12 @@ final class run_lifecycle_test extends \advanced_testcase {
         $this->give_the_run_a_pool($runid, 1);
         $this->pretend_started($runid);
 
-        run_lifecycle::provisioned($runid, true);
+        // Readiness is a provisioning stage now, checked before the attempts
+        // are created rather than after the whole run — so the orchestrator
+        // reports the failure and no queue is built at all.
+        $this->assertFalse(\local_catquizlab\local\cat_readiness::check($runid)['ok']);
+
+        run_lifecycle::provisioned($runid, false, 'cat-not-ready');
 
         $this->assertSame(registry::STATUS_FAILED, $this->run_status($runid));
         $this->assertFalse(run_lifecycle::has_open_attempts($runid));
@@ -789,6 +794,11 @@ final class run_lifecycle_test extends \advanced_testcase {
             'global'   => ['minitems' => 20, 'maxitems' => 25],
             'subscale' => ['minitems' => 1, 'maxitems' => 1],
         ];
+        // Only a strategy that enforces a minimum on every subscale makes these
+        // numbers multiply. Under the others the engine's base implementation
+        // leaves the candidates untouched, so the arithmetic describes a test it
+        // would never administer.
+        $manifest['config']['definition']['strategy'] = 'allsubs';
         $DB->set_field('local_catquizlab_run', 'manifestjson', json_encode($manifest), ['id' => $runid]);
 
         $result = \local_catquizlab\local\cat_readiness::check($runid);
@@ -823,6 +833,7 @@ final class run_lifecycle_test extends \advanced_testcase {
             'global'   => ['minitems' => 2, 'maxitems' => 4],
             'subscale' => ['minitems' => 5, 'maxitems' => 8],
         ];
+        $manifest['config']['definition']['strategy'] = 'allsubs';
         $DB->set_field('local_catquizlab_run', 'manifestjson', json_encode($manifest), ['id' => $runid]);
 
         $result = \local_catquizlab\local\cat_readiness::check($runid);
@@ -853,5 +864,145 @@ final class run_lifecycle_test extends \advanced_testcase {
         // more elaborate way of refusing to run.
         $this->assertTrue($result['ok'], \local_catquizlab\local\cat_readiness::summary($result));
         $this->assertSame(24, $result['facts']['usable']);
+    }
+
+    /**
+     * A failed run leaves no claimable work behind.
+     *
+     * @return void
+     */
+    public function test_a_failed_run_closes_its_queue(): void {
+        global $DB;
+        $this->resetAfterTest();
+        $this->setAdminUser();
+
+        $runid = $this->run_ids($this->experiment_with_runs())[0];
+        $DB->set_field('local_catquizlab_run', 'status', registry::STATUS_READY, ['id' => $runid]);
+        $this->add_attempt($runid, attempt_scheduler::STATUS_QUEUED);
+        $this->add_attempt($runid, attempt_scheduler::STATUS_QUEUED);
+
+        run_lifecycle::fail($runid, 'cat-not-ready: pool too small');
+
+        // Reported: 3 failed runs and 150 attempts still sitting in the queue.
+        // The workers would have played every one of them.
+        $this->assertSame(0, $DB->count_records('local_catquizlab_attempt', [
+            'runid' => $runid, 'status' => attempt_scheduler::STATUS_QUEUED,
+        ]));
+        $this->assertSame(2, $DB->count_records('local_catquizlab_attempt', [
+            'runid' => $runid, 'status' => attempt_scheduler::STATUS_FAILED,
+        ]));
+
+        // History kept, not deleted: what was planned is worth knowing.
+        $error = $DB->get_field_sql(
+            'SELECT lasterror FROM {local_catquizlab_attempt} WHERE runid = ? AND lasterror IS NOT NULL',
+            [$runid],
+            IGNORE_MULTIPLE
+        );
+        $this->assertStringContainsString('pool too small', (string) $error);
+    }
+
+    /**
+     * A worker cannot claim an attempt of a terminal run.
+     *
+     * @return void
+     */
+    public function test_a_terminal_run_hands_out_no_work(): void {
+        global $DB;
+        $this->resetAfterTest();
+        $this->setAdminUser();
+
+        $runid = $this->run_ids($this->experiment_with_runs())[0];
+        $DB->set_field('local_catquizlab_run', 'status', registry::STATUS_READY, ['id' => $runid]);
+        $this->add_attempt($runid, attempt_scheduler::STATUS_QUEUED);
+
+        $this->assertTrue(\local_catquizlab\external\job_claim::execute('w')['hasjob']);
+
+        // Second barrier, independent of how the attempts got into the queue:
+        // the claim checks the run's status server-side.
+        foreach ([registry::STATUS_FAILED, registry::STATUS_CANCELLED, registry::STATUS_FINISHED] as $status) {
+            $DB->set_field('local_catquizlab_attempt', 'status', attempt_scheduler::STATUS_QUEUED, ['runid' => $runid]);
+            $DB->set_field('local_catquizlab_attempt', 'nextruntime', 0, ['runid' => $runid]);
+            $DB->set_field('local_catquizlab_run', 'status', $status, ['id' => $runid]);
+
+            $this->assertFalse(
+                \local_catquizlab\external\job_claim::execute('w')['hasjob'],
+                'A run in status ' . $status . ' handed out work.'
+            );
+        }
+    }
+
+    /**
+     * A scheduled run is not runnable either.
+     *
+     * @return void
+     */
+    public function test_only_ready_and_running_runs_are_runnable(): void {
+        global $DB;
+        $this->resetAfterTest();
+        $this->setAdminUser();
+
+        $runid = $this->run_ids($this->experiment_with_runs())[0];
+
+        $expected = [
+            registry::STATUS_DRAFT       => false,
+            // Scheduled means provisioning has not finished: its attempts, if
+            // any exist, belong to a run that is not set up yet.
+            registry::STATUS_SCHEDULED   => false,
+            registry::STATUS_READY       => true,
+            registry::STATUS_RUNNING     => true,
+            registry::STATUS_AGGREGATING => false,
+            registry::STATUS_FINISHED    => false,
+            registry::STATUS_FAILED      => false,
+            registry::STATUS_CANCELLED   => false,
+        ];
+
+        foreach ($expected as $status => $runnable) {
+            $DB->set_field('local_catquizlab_run', 'status', $status, ['id' => $runid]);
+            $this->assertSame($runnable, run_lifecycle::is_runnable($runid), 'status ' . $status);
+        }
+    }
+
+    /**
+     * Subscale minima do not multiply under a strategy that does not enforce them.
+     *
+     * @return void
+     */
+    public function test_subscale_minima_are_strategy_dependent(): void {
+        global $DB;
+        $this->resetAfterTest();
+        $this->setAdminUser();
+
+        if (!\local_catquizlab\local\environment::catquiz_available()) {
+            $this->markTestSkipped('No CAT engine installed; readiness stands down.');
+        }
+
+        $runid = $this->run_ids($this->experiment_with_runs())[0];
+        $this->give_the_run_a_pool($runid, 25);
+
+        // The reported configuration: 100 subscales at 3 questions each against
+        // a global maximum of 25. Under `fastest` the engine's base
+        // implementation of filterbyquestionsperscale() leaves the candidates
+        // untouched, so it never demands 300 questions.
+        $run = $DB->get_record('local_catquizlab_run', ['id' => $runid]);
+        $manifest = json_decode((string) $run->manifestjson, true);
+        $manifest['config']['definition']['budgets'] = [
+            'global'   => ['minitems' => 20, 'maxitems' => 25],
+            'subscale' => ['minitems' => 3, 'maxitems' => 5],
+        ];
+
+        $manifest['config']['definition']['strategy'] = 'fastest';
+        $DB->set_field('local_catquizlab_run', 'manifestjson', json_encode($manifest), ['id' => $runid]);
+        $this->assertTrue(
+            \local_catquizlab\local\cat_readiness::check($runid)['ok'],
+            'A valid fastest run was refused: '
+                . \local_catquizlab\local\cat_readiness::summary(
+                    \local_catquizlab\local\cat_readiness::check($runid)
+                )
+        );
+
+        // The `allsubs` strategy does override it, so there the arithmetic holds.
+        $manifest['config']['definition']['strategy'] = 'allsubs';
+        $DB->set_field('local_catquizlab_run', 'manifestjson', json_encode($manifest), ['id' => $runid]);
+        $this->assertFalse(\local_catquizlab\local\cat_readiness::check($runid)['ok']);
     }
 }

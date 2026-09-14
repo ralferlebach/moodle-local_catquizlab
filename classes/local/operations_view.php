@@ -52,6 +52,9 @@ class operations_view {
                 'jobsdone'  => (int) $worker->jobsdone,
                 'heartbeat' => userdate((int) $worker->heartbeat, get_string('strftimedatetimeshort')),
                 'lasterror' => $worker->lasterror,
+                // What the process itself said. Without this a crashed worker
+                // is a row with a status and no explanation.
+                'log'       => worker_launcher::log_tail((string) $worker->workerid, 12),
             ];
         }, worker_registry::live());
 

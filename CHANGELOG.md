@@ -6,6 +6,65 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.6.12] — 2026-09-14
+
+Five findings from real operation: issues #35 to #39.
+
+### #35 — Readiness was strategy-blind (P0)
+A valid run was refused before a worker ever started: 100 subscales at 3
+questions each against a global maximum of 25, under `fastest`.
+
+The multiplication is only correct where a strategy makes the per-subscale
+minimum binding on every subscale, and in the engine exactly one does —
+`inferallsubscales` overrides `filterbyquestionsperscale()`, the base class
+returns the candidates unchanged. For every other strategy the minimum bounds
+what may be taken from a scale the selection visits, not what must be taken from
+all of them. The same correction applies to per-subscale caps and to empty
+subscales: an empty scale among ninety-nine full ones is a scale `fastest` will
+not pick.
+
+The refusal now names the strategy it applies to, because a number that is wrong
+under one strategy and right under another should say which.
+
+### #37 — Failed runs left claimable work (P0)
+Readiness ran after provisioning, so a run that could not start had already had
+its queue built: 3 failed runs and 150 attempts still claimable. Three changes,
+each sufficient on its own and all three kept:
+
+- Readiness is a provisioning stage between the test and the attempts, so the
+  queue is not built for a run that cannot use it.
+- `fail()` closes the run's queued attempts with the run's reason. Closed, not
+  deleted: what was planned is worth knowing.
+- `job_claim` checks the run's status server-side. Only `READY` and `RUNNING`
+  hand out work — however attempts got into the queue.
+
+### #38 — The failure reason was recorded and never shown
+`lifecycle.failedreason` had been written since 0.6.1 and read by nothing, so a
+run said FAILED and the reason sat in its manifest where only database access
+found it. The run view shows it now, with the readiness counts beside it: "2
+usable items against a minimum of 4" is actionable, "not ready" is not.
+
+### #39 — Worker output went to /dev/null
+A worker that died on startup wrote its reason to stderr and it went nowhere;
+the registry then showed a slot held by a process that no longer existed, with
+nothing to say why. Output goes to a per-worker log now, and the last lines are
+on the operations view next to the worker they belong to.
+
+### #36 — Recovery without reproducing
+A run that failed readiness because a pool was too small is not broken for ever.
+"Re-check and resume" re-runs the check, and on success puts back the attempts
+that were closed when the run failed — only those: an attempt that failed while
+a worker played it keeps its history, because reopening it would discard a real
+result.
+
+### Verification
+PHPUnit 498 tests / 3013 assertions, Behat 32 scenarios / 232 steps, phpcs and
+PHPDoc clean, 780 language strings per language, all templates rendering from
+their example context. The reported configuration measured directly: `fastest`
+passes, `allsubs` is still refused with the arithmetic.
+
+---
+
 ## [0.6.11] — 2026-09-13
 
 One page, and the CI failures that followed it.

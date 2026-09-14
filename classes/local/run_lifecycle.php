@@ -147,17 +147,6 @@ class run_lifecycle {
             return;
         }
 
-        // Provisioning succeeding says the objects exist, not that the test can
-        // start. A structurally complete run whose configuration cannot select
-        // a first question produces one failing job per person — the reported
-        // case was 1600 of them, all failing identically before question one.
-        $readiness = cat_readiness::check($runid);
-        if (!$readiness['ok']) {
-            self::fail($runid, 'cat-not-ready: ' . cat_readiness::summary($readiness));
-
-            return;
-        }
-
         $DB->update_record('local_catquizlab_run', (object) [
             'id'           => $runid,
             'status'       => registry::STATUS_READY,
@@ -411,6 +400,13 @@ class run_lifecycle {
         $manifest['lifecycle']['failedreason'] = $reason;
         $manifest['lifecycle']['failedtime'] = time();
 
+        // The counts behind the verdict, so the interface can show what was
+        // found rather than only that something was wrong.
+        if (str_contains($reason, 'cat-not-ready')) {
+            $readiness = cat_readiness::check($runid);
+            $manifest['lifecycle']['readinessfacts'] = $readiness['facts'];
+        }
+
         $DB->update_record('local_catquizlab_run', (object) [
             'id'           => $runid,
             'status'       => registry::STATUS_FAILED,
@@ -418,7 +414,160 @@ class run_lifecycle {
             'timemodified' => time(),
         ]);
 
+        // A failed run must not leave work behind. Its queued attempts are
+        // closed rather than deleted: the history of what was planned is worth
+        // keeping, and a worker playing attempts of a run that already failed
+        // is worse than no check at all.
+        self::close_open_attempts($runid, $reason);
+
         self::refresh_experiment($runid);
+    }
+
+    /**
+     * Close the attempts of a run that will not run.
+     *
+     * Queued attempts become failed with the run's reason; running ones are
+     * left to their worker, which will report back and find the run terminal.
+     *
+     * @param int $runid The run.
+     * @param string $reason Why the run failed.
+     * @return int How many attempts were closed.
+     */
+    public static function close_open_attempts(int $runid, string $reason = ''): int {
+        global $DB;
+
+        $queued = $DB->get_records('local_catquizlab_attempt', [
+            'runid'  => $runid,
+            'status' => attempt_scheduler::STATUS_QUEUED,
+        ], '', 'id');
+
+        foreach ($queued as $attempt) {
+            $DB->update_record('local_catquizlab_attempt', (object) [
+                'id'           => $attempt->id,
+                'status'       => attempt_scheduler::STATUS_FAILED,
+                'lasterror'    => \core_text::substr('run failed: ' . $reason, 0, 1000),
+                'leaseowner'   => null,
+                'leaseexpires' => 0,
+                'timemodified' => time(),
+            ]);
+        }
+
+        return count($queued);
+    }
+
+    /**
+     * Check a failed run again, and put it back if it can run now.
+     *
+     * A run that failed readiness because a pool was too small is not broken
+     * for ever — the pool can be enlarged, a budget corrected, an engine
+     * installed. Without this the only way back was to reproduce the run, which
+     * loses the identity of the one that failed and makes the experiment's
+     * history harder to read than it needs to be.
+     *
+     * @param int $runid The run to re-check.
+     * @return array{ok: bool, reason: string, requeued: int}
+     */
+    public static function recheck(int $runid): array {
+        global $DB;
+
+        $run = $DB->get_record('local_catquizlab_run', ['id' => $runid]);
+        if (!$run || (int) $run->status !== registry::STATUS_FAILED) {
+            return ['ok' => false, 'reason' => 'run-not-failed', 'requeued' => 0];
+        }
+
+        $readiness = cat_readiness::check($runid);
+        if (!$readiness['ok']) {
+            // Recorded again: the reason may have changed even when the verdict
+            // has not, and the older one is no longer true.
+            self::fail($runid, 'cat-not-ready: ' . cat_readiness::summary($readiness));
+
+            return ['ok' => false, 'reason' => cat_readiness::summary($readiness), 'requeued' => 0];
+        }
+
+        // Attempts that were closed when the run failed go back into the queue.
+        // Ones that genuinely failed while being played keep their history:
+        // only the ones this plugin closed are reopened.
+        $reopened = 0;
+        foreach (
+            $DB->get_records_select(
+                'local_catquizlab_attempt',
+                'runid = :runid AND status = :status AND ' . $DB->sql_like('lasterror', ':pattern'),
+                ['runid' => $runid, 'status' => attempt_scheduler::STATUS_FAILED, 'pattern' => 'run failed:%'],
+                '',
+                'id'
+            ) as $attempt
+        ) {
+            $DB->update_record('local_catquizlab_attempt', (object) [
+                'id'           => $attempt->id,
+                'status'       => attempt_scheduler::STATUS_QUEUED,
+                'tries'        => 0,
+                'nextruntime'  => 0,
+                'lasterror'    => null,
+                'timemodified' => time(),
+            ]);
+            $reopened++;
+        }
+
+        $manifest = json_decode((string) $run->manifestjson, true) ?: [];
+        unset(
+            $manifest['lifecycle']['failedreason'],
+            $manifest['lifecycle']['failedtime'],
+            $manifest['lifecycle']['readinessfacts']
+        );
+
+        $DB->update_record('local_catquizlab_run', (object) [
+            'id'           => $runid,
+            'status'       => registry::STATUS_READY,
+            'manifestjson' => json_encode($manifest, JSON_UNESCAPED_SLASHES),
+            'timemodified' => time(),
+        ]);
+        self::refresh_experiment($runid);
+
+        return ['ok' => true, 'reason' => '', 'requeued' => $reopened];
+    }
+
+    /**
+     * Why a run failed, and what the readiness check counted.
+     *
+     * Recorded at failure time and never read until now: a run said FAILED and
+     * the reason sat in its manifest, where only somebody with database access
+     * would find it. The facts are carried alongside because "not ready" is not
+     * actionable and "2 usable items against a minimum of 4" is.
+     *
+     * @param int $runid The run.
+     * @return array{reason: string, time: int, facts: array}
+     */
+    public static function failure_details(int $runid): array {
+        global $DB;
+
+        $manifest = json_decode(
+            (string) $DB->get_field('local_catquizlab_run', 'manifestjson', ['id' => $runid]),
+            true
+        ) ?: [];
+
+        $lifecycle = $manifest['lifecycle'] ?? [];
+
+        return [
+            'reason' => (string) ($lifecycle['failedreason'] ?? ''),
+            'time'   => (int) ($lifecycle['failedtime'] ?? 0),
+            'facts'  => (array) ($lifecycle['readinessfacts'] ?? []),
+        ];
+    }
+
+    /**
+     * Whether a run is in a state that may hand out work.
+     *
+     * @param int $runid The run.
+     * @return bool
+     */
+    public static function is_runnable(int $runid): bool {
+        global $DB;
+
+        $status = (int) $DB->get_field('local_catquizlab_run', 'status', ['id' => $runid]);
+
+        // Only these two: a scheduled run has not been provisioned yet, and
+        // everything past RUNNING is either aggregating or finished.
+        return in_array($status, [registry::STATUS_READY, registry::STATUS_RUNNING], true);
     }
 
     /**

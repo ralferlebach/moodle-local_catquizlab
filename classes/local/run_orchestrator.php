@@ -64,6 +64,19 @@ class run_orchestrator {
     public const STAGE_PEOPLE = 'people';
 
     /** @var string Queue the simulated attempts. */
+    /**
+     * Stage: can this configuration actually select a first question?
+     *
+     * Between the test and the attempt queue on purpose. Checked afterwards, a
+     * run that cannot start has already had its queue built — and a failed run
+     * with 150 claimable attempts is worse than no check at all, because the
+     * workers then play them.
+     *
+     * @var string
+     */
+    public const STAGE_READINESS = 'readiness';
+
+    /** @var string Stage: create the queue of attempts to be played. */
     public const STAGE_ATTEMPTS = 'attempts';
 
     /** @var string Resolving the shared course and the experiment's section. */
@@ -85,6 +98,7 @@ class run_orchestrator {
             self::STAGE_CONTAINER,
             self::STAGE_PEOPLE,
             self::STAGE_TEST,
+            self::STAGE_READINESS,
             self::STAGE_ATTEMPTS,
         ];
     }
@@ -483,6 +497,17 @@ class run_orchestrator {
                 return self::stage_test($context);
             case self::STAGE_PEOPLE:
                 return self::stage_people($context);
+            case self::STAGE_READINESS:
+                $readiness = cat_readiness::check($runid);
+
+                return [
+                    'ok'     => $readiness['ok'],
+                    'reason' => $readiness['ok'] ? '' : cat_readiness::summary($readiness),
+                    // The counts travel with the stage so the interface can show
+                    // what was actually found rather than only that it failed.
+                    'facts'  => $readiness['facts'],
+                ];
+
             case self::STAGE_ATTEMPTS:
                 return self::stage_attempts($context);
             default:

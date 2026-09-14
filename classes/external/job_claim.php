@@ -100,10 +100,20 @@ class job_claim extends external_api {
 
         $attempt = null;
         foreach ($queued as $candidate) {
-            if (!\local_catquizlab\local\run_lifecycle::is_paused((int) $candidate->runid)) {
-                $attempt = $candidate;
-                break;
+            $runid = (int) $candidate->runid;
+
+            // Two conditions, and the run status is the one that matters most:
+            // a failed or cancelled run must never hand out work again, however
+            // its attempts got into the queue.
+            if (\local_catquizlab\local\run_lifecycle::is_paused($runid)) {
+                continue;
             }
+            if (!\local_catquizlab\local\run_lifecycle::is_runnable($runid)) {
+                continue;
+            }
+
+            $attempt = $candidate;
+            break;
         }
         if (!$attempt) {
             $transaction->allow_commit();

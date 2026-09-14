@@ -452,6 +452,8 @@ final class provisioning_test extends \advanced_testcase {
             'tries' => 0, 'timecreated' => time(), 'timemodified' => time(),
         ]);
 
+        $DB->set_field('local_catquizlab_run', 'status', \local_catquizlab\local\registry::STATUS_READY, []);
+
         $job = \local_catquizlab\external\job_claim::execute('unit-worker');
 
         // The provisioner makes usernames unique per run, so any convention the

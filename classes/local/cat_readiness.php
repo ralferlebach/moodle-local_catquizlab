@@ -78,6 +78,11 @@ class cat_readiness {
         }
 
         $facts = self::pool_facts($runid);
+        $facts['strategy'] = (string) ($definition['strategy'] ?? '');
+        $facts['enforcespersubscale'] = $facts['strategy'] !== ''
+            && strategy_catalog::has($facts['strategy'])
+            && strategy_catalog::enforces_per_subscale_minimum($facts['strategy']);
+
         $reasons = array_merge(
             self::check_pool_exists($facts, $component),
             self::check_budgets($definition, $facts, $component)
@@ -157,9 +162,10 @@ class cat_readiness {
             }
         }
 
-        if ($empty !== []) {
-            // A subscale with a minimum and no items stops the test the moment
-            // the strategy turns to it.
+        // A subscale with no items only stops a test that has to visit every
+        // subscale. Under a strategy that picks where it likes, an empty scale
+        // among ninety-nine full ones is a scale it will not pick.
+        if ($empty !== [] && !empty($facts['enforcespersubscale'])) {
             return [get_string('readiness:emptysubscale', $component, implode(', ', $empty))];
         }
 
@@ -192,7 +198,10 @@ class cat_readiness {
 
         // Per-subscale maxima cap the whole test: with a maximum of five on
         // each of two subscales, ten is all the test can ever ask.
-        if ($globalmin > 0 && $submax > 0 && $leaves > 0 && $submax * $leaves < $globalmin) {
+        if (
+            !empty($facts['enforcespersubscale'])
+                && $globalmin > 0 && $submax > 0 && $leaves > 0 && $submax * $leaves < $globalmin
+        ) {
             $reasons[] = get_string('readiness:subscalecapbelowminimum', $component, (object) [
                 'cap'     => $submax * $leaves,
                 'minimum' => $globalmin,
@@ -201,20 +210,33 @@ class cat_readiness {
             ]);
         }
 
-        // Per-subscale minima multiply the other way: twenty subscales at three
-        // questions each is sixty questions, whatever the global maximum says.
+        // Per-subscale minima multiply only where the strategy makes them
+        // binding on every subscale. Under `fastest` the engine's base
+        // implementation of filterbyquestionsperscale() returns the candidates
+        // unchanged, so 100 subscales at 3 questions each is not a demand for
+        // 300 questions — it is a bound on what may be taken from whichever
+        // scales the selection actually visits. Applying the multiplication
+        // there refused valid configurations before a worker ever ran.
         $globalmax = (int) ($definition['budgets']['global']['maxitems'] ?? 0);
-        if ($submin > 0 && $leaves > 0 && $globalmax > 0 && $submin * $leaves > $globalmax) {
+        if (
+            !empty($facts['enforcespersubscale'])
+                && $submin > 0 && $leaves > 0 && $globalmax > 0 && $submin * $leaves > $globalmax
+        ) {
             $reasons[] = get_string('readiness:subscalefloorabovemaximum', $component, (object) [
-                'floor'   => $submin * $leaves,
-                'maximum' => $globalmax,
-                'leaves'  => $leaves,
-                'submin'  => $submin,
+                'floor'    => $submin * $leaves,
+                'maximum'  => $globalmax,
+                'leaves'   => $leaves,
+                'submin'   => $submin,
+                'strategy' => strategy_catalog::label((string) $facts['strategy']),
             ]);
         }
 
-        // A subscale minimum its own pool cannot serve stops the test there.
-        if ($submin > 0) {
+        // The same for per-subscale caps: they only bound the whole test when
+        // every subscale has to be served.
+        if (
+            !empty($facts['enforcespersubscale'])
+                && $submin > 0
+        ) {
             foreach ($facts['perleaf'] as $scaleid => $available) {
                 if ($available < $submin) {
                     $reasons[] = get_string('readiness:subscalebelowminimum', $component, (object) [

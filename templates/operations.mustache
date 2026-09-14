@@ -157,6 +157,16 @@
                             <td>{{jobsdone}}</td>
                             <td>{{heartbeat}}</td>
                         </tr>
+                        {{#log}}
+                            <tr>
+                                <td colspan="4">
+                                    <details>
+                                        <summary class="small">{{#str}}ops:workerlog, local_catquizlab{{/str}}</summary>
+                                        <pre class="small mb-0">{{.}}</pre>
+                                    </details>
+                                </td>
+                            </tr>
+                        {{/log}}
                     {{/workers.rows}}
                 </tbody>
             </table>

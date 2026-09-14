@@ -68,6 +68,23 @@ if ($action !== '' && $runid > 0) {
     $run = $DB->get_record('local_catquizlab_run', ['id' => $runid], '*', MUST_EXIST);
     $returnurl = new moodle_url('/local/catquizlab/runs.php', ['runid' => $runid]);
 
+    if ($action === 'recheck') {
+        require_sesskey();
+        require_capability('local/catquizlab:execute', $context);
+
+        $result = \local_catquizlab\local\run_lifecycle::recheck($runid);
+        redirect(
+            $returnurl,
+            $result['ok']
+                ? get_string('run:rechecked', $component, $result['requeued'])
+                : get_string('run:recheckfailed', $component, $result['reason']),
+            null,
+            $result['ok']
+                ? \core\output\notification::NOTIFY_SUCCESS
+                : \core\output\notification::NOTIFY_WARNING
+        );
+    }
+
     if ($action === 'start') {
         require_sesskey();
         require_capability('local/catquizlab:execute', $context);
@@ -184,6 +201,36 @@ if ($runid > 0) {
     ];
     echo html_writer::table($table);
 
+    // A run that says FAILED and nothing else sends the reader to the database.
+    // The reason was already recorded; it was simply never shown.
+    $failure = \local_catquizlab\local\run_lifecycle::failure_details($runid);
+    if ($failure['reason'] !== '') {
+        $detail = html_writer::tag('p', s($failure['reason']), ['class' => 'mb-1']);
+
+        if ($failure['facts'] !== []) {
+            $facts = $failure['facts'];
+            $detail .= html_writer::tag('p', get_string('run:readinessfacts', $component, (object) [
+                'leaves' => (int) ($facts['leaves'] ?? 0),
+                'items'  => (int) ($facts['items'] ?? 0),
+                'usable' => (int) ($facts['usable'] ?? 0),
+            ]), ['class' => 'mb-1 small']);
+        }
+
+        if ($failure['time'] > 0) {
+            $detail .= html_writer::tag(
+                'p',
+                userdate($failure['time'], get_string('strftimedatetimeshort')),
+                ['class' => 'mb-0 small text-muted']
+            );
+        }
+
+        echo $OUTPUT->notification(
+            html_writer::tag('strong', get_string('run:failedreason', $component)) . $detail,
+            'notifyproblem',
+            false
+        );
+    }
+
     // Reproducibility is not hidden behind convenience: the manifest that
     // pins this run down is on the page, not somewhere in the database.
     echo $OUTPUT->heading(get_string('heading:manifest', $component), 3);
@@ -198,6 +245,15 @@ if ($runid > 0) {
     $allowed = $run['actions'];
     if (has_capability('local/catquizlab:execute', $context)) {
         $buttons = '';
+        if (!empty($allowed['recheck'])) {
+            $buttons .= $OUTPUT->single_button(
+                new moodle_url('/local/catquizlab/runs.php', [
+                    'runid' => $runid, 'action' => 'recheck', 'sesskey' => sesskey(),
+                ]),
+                get_string('action:recheck', $component),
+                'post'
+            );
+        }
         if (!empty($allowed['start'])) {
             $buttons .= $OUTPUT->single_button(
                 new moodle_url('/local/catquizlab/runs.php', [

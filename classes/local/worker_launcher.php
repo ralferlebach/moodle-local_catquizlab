@@ -205,6 +205,59 @@ class worker_launcher {
     }
 
     /**
+     * Where a worker's output is kept.
+     *
+     * Under the plugin's own directory in dataroot, one file per worker, so a
+     * restarted worker appends to its own history rather than to a shared file
+     * nobody can untangle.
+     *
+     * @param string $workerid The worker instance.
+     * @return string
+     */
+    public static function log_path(string $workerid): string {
+        global $CFG;
+
+        $dir = $CFG->dataroot . '/local_catquizlab/worker-logs';
+        if (!is_dir($dir) && !@mkdir($dir, 0700, true) && !is_dir($dir)) {
+            // Falling back rather than failing the launch: a worker without a
+            // log is worse off than one with, and far better than none at all.
+            return '/dev/null';
+        }
+
+        return $dir . '/' . preg_replace('/[^A-Za-z0-9_.-]/', '_', $workerid) . '.log';
+    }
+
+    /**
+     * The tail of a worker's log, for the interface.
+     *
+     * @param string $workerid The worker instance.
+     * @param int $lines How many lines to return.
+     * @return string
+     */
+    public static function log_tail(string $workerid, int $lines = 40): string {
+        $path = self::log_path($workerid);
+        if ($path === '/dev/null' || !is_readable($path)) {
+            return '';
+        }
+
+        // Read the end rather than the file: these grow for as long as a worker
+        // runs, and the interesting part is always the last thing said.
+        $size = filesize($path);
+        $window = min($size, 64 * 1024);
+        $handle = fopen($path, 'rb');
+        if ($handle === false) {
+            return '';
+        }
+        fseek($handle, -$window, SEEK_END);
+        $text = (string) fread($handle, $window);
+        fclose($handle);
+
+        $all = array_values(array_filter(explode("\n", trim($text))));
+
+        return implode("\n", array_slice($all, -$lines));
+    }
+
+    /**
      * Put the worker token into this process's environment, for the child.
      *
      * @param array $config The worker configuration.
@@ -400,7 +453,13 @@ class worker_launcher {
             // attempts for minutes. A blocking exec() is also why interrupting
             // the caller used to leave a claimed attempt with nobody to finish
             // it and nothing recording that the worker was gone.
-            exec($command . ' > /dev/null 2>&1 &');
+            //
+            // Output goes to a per-worker log rather than /dev/null. A worker
+            // that dies on startup wrote its reason to stderr and it went
+            // nowhere: the registry then showed a slot taken by a process that
+            // no longer existed, with nothing to say why.
+            $log = self::log_path($workerid);
+            exec($command . ' >> ' . escapeshellarg($log) . ' 2>&1 &');
             $launched++;
         }
 
