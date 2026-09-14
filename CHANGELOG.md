@@ -6,15 +6,39 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
-## [0.7.0] — 2026-09-13
+## [0.6.11] — 2026-09-13
 
-One page.
+One page, and the CI failures that followed it.
 
 Everything an operator does was spread over three: experiments on the landing
 page, setup and diagnosis on an operations page, settings in the Moodle
 administration tree. Each one was reachable, and using the plugin meant knowing
 which of the three held which half. Adding a link between them, as 0.6.10 did,
 treats the symptom.
+
+
+### CI fixes on top of the one-page change
+
+- **The Mustache lint failed on seven empty form actions.**
+  `moodle-plugin-ci mustache` renders every template against the example context
+  in its docblock, and `formurl` was not in it — so the rendered HTML had
+  `action=""`. The same omission in the real context is what made the setup
+  buttons inert: an empty action posts to the current page, where no handler
+  lives, so the button looks right and does nothing.
+
+  `manage.mustache` had the same gap for `resultsurl` and `settingsurl`.
+
+  `templates_test` now renders every template from its own documented example
+  and fails on any empty href or action, so this is caught before CI rather than
+  by it.
+
+- **One PHPUnit failure, only on Moodle 4.5.** `make_writable_directory()`
+  reports a failure through `debugging()`, which PHPUnit counts as an unexpected
+  call. The directory is created directly with `0700` now — which it wanted to
+  be anyway, since that helper uses `$CFG->directorypermissions`, defaulting to
+  `0777` across a dataroot. The warning is suppressed and immediately replaced
+  by an exception carrying the path: nothing is swallowed, and the diagnostic
+  channel is not used to report something the caller is told about properly.
 
 ### Changed
 - **The plugin's own page carries three tabs**: Experiments, Setup and
@@ -47,8 +71,8 @@ characters in the database, and that token calls `local_catquizlab_job_claim`
 successfully. No detour through the Moodle administration at any point.
 
 ### Verification
-PHPUnit 487 tests / 2960 assertions, Behat 32 scenarios / 232 steps, phpcs and
-PHPDoc clean.
+PHPUnit 490 tests / 2981 assertions, Behat 32 scenarios / 232 steps, phpcs and
+PHPDoc clean, every template rendered from its example context.
 
 ---
 

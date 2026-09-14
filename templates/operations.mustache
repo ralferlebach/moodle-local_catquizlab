@@ -13,7 +13,8 @@
     * queue - queued, running, collected, failed
     * stuck - hasany, rows
     * inflight - hasany, rows
-    * sesskey, actionurl, cantoken
+    * sesskey, actionurl, formurl — formurl is where the forms post; an empty
+      one renders an invalid form action and does nothing when pressed
 
     Example context (json):
     {
@@ -23,7 +24,8 @@
         "stuck": {"hasany": false, "rows": []},
         "inflight": {"hasany": false, "rows": []},
         "sesskey": "abc123",
-        "actionurl": "/local/catquizlab/operations.php",
+        "actionurl": "/local/catquizlab/index.php?tab=setup",
+        "formurl": "/local/catquizlab/operations.php",
         "cantoken": false
     }
 }}

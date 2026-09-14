@@ -262,7 +262,19 @@ class worker_launcher {
                 continue;
             }
 
-            if (!make_writable_directory($dir, false)) {
+            // 0700 directly rather than through make_writable_directory(),
+            // for two reasons. It uses $CFG->directorypermissions, which
+            // defaults to 0777 across a dataroot — reasonable for files a site
+            // serves, not for a browser profile with its cookies and cache. And
+            // it reports a failure through debugging(), which is a diagnostic
+            // channel: the caller then has both a debugging message and, from
+            // the line below, an exception saying the same thing twice.
+            //
+            // The warning is suppressed and immediately replaced by an
+            // exception carrying the path, so nothing is swallowed — the
+            // failure arrives where it happened, with the information needed to
+            // act on it.
+            if (!@mkdir($dir, 0700, true) && !is_dir($dir)) {
                 throw new \moodle_exception(
                     'worker:runtimedirfailed',
                     'local_catquizlab',
@@ -270,12 +282,6 @@ class worker_launcher {
                     $dir
                 );
             }
-
-            // Tightened explicitly rather than left to $CFG->directorypermissions,
-            // which defaults to 0777 across a Moodle dataroot. That default is a
-            // reasonable one for files a site serves; it is not reasonable for a
-            // browser profile, its cookies and its cache.
-            @chmod($dir, 0700);
         }
 
         // Existing directories are checked too: one created once by the wrong
