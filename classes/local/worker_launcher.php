@@ -177,6 +177,20 @@ class worker_launcher {
      * @return string
      */
     protected static function command_with_environment(array $config, array $argv): string {
+        return self::environment_prefix($config) . ' ' . implode(' ', array_map('escapeshellarg', $argv));
+    }
+
+    /**
+     * The `env …` prefix that puts a command into the worker's runtime.
+     *
+     * Shared with the dependency installer: npm and the browser download must
+     * write into the same cache the worker reads, or they install something
+     * nobody will find.
+     *
+     * @param array $config The worker configuration.
+     * @return string
+     */
+    public static function environment_prefix(array $config = []): string {
         $env = array_map('escapeshellarg', self::runtime_environment($config));
 
         // The token is deliberately absent from this string. Putting it in an
@@ -187,7 +201,7 @@ class worker_launcher {
         // anyone.
         self::export_token($config);
 
-        return 'env ' . implode(' ', $env) . ' ' . implode(' ', array_map('escapeshellarg', $argv));
+        return 'env ' . implode(' ', $env);
     }
 
     /**

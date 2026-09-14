@@ -6,6 +6,125 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.6.9] — 2026-09-13
+
+Issues #32, #33 and #34 — a fresh installation made ready from its own pages.
+
+### #34 — A setup and readiness view
+The pieces existed but were spread across the settings page, the operations
+page and Moodle's own administration, so a fresh installation needed somebody
+who knew the internal dependencies and the order to satisfy them in. That is
+knowledge about this plugin's implementation, not about experiments.
+
+`setup_wizard` answers one question in one place, in four stages ordered by what
+depends on what: engine, experiment environment, worker, pipeline. Each step
+says whether it holds and what would fix it; `run()` performs the fixes it can
+and stops at the first stage it cannot complete — setting up a worker against a
+missing engine produces a second failure that hides the first.
+
+The pipeline stage is last on purpose. `pipeline_tick` ships disabled, which is
+right: a task that hands out work should not start the moment a plugin is
+installed. That is an argument for enabling it knowingly, not for making
+somebody find it in the scheduled task administration — so it is offered here,
+and only once the three stages it depends on are green. Cron itself is checked
+beside it, because a task that exists and never runs looks exactly like a task
+that is disabled.
+
+### #33 — The experiment course creates itself
+It is not a course in the ordinary sense: one section per experiment, one
+adaptive quiz per run, everything generated, nobody teaching in it. Its
+shortname, format and visibility follow from that role, which made asking an
+administrator to create it first a question with one right answer.
+
+`ensure_course()` adopts before it creates — an installation that already has
+the course, from an earlier setup or a restore, must not end up with two, and
+the second would silently hold half the experiments. A hidden category is
+created alongside it, falling back to any category rather than failing the whole
+setup over where a technical course sits.
+
+### #32 — The worker runtime sets itself up
+`worker_runtime` finds a usable Node, installs the npm dependencies (`npm ci`
+where a lockfile exists, so the worker is the one that was tested), fetches the
+browser into the cache the worker actually reads, and defaults the base URL to
+`wwwroot`. Each through the same runtime environment as the worker, or they
+install something nobody will find.
+
+What is left for a shell is the operating system itself: Node has to exist and
+be runnable by the web server user. The wizard says so in those words rather
+than appearing to work on it.
+
+An empty `chrome/` directory is not a browser — an interrupted download leaves
+one behind, and the worker then fails as if nothing were installed — so the
+check looks for an executable.
+
+### Tests
+Eight more: the four stages in dependency order, the wizard stopping without an
+engine, the pipeline refusing to start over a broken setup, the course created
+once and adopted when present, Node discovered without configuration, a wrong
+Node path repairing itself, and a half-downloaded browser not counting as
+installed.
+
+### Verification
+PHPUnit 487 tests / 2960 assertions, Behat 32 scenarios / 229 steps, phpcs and
+PHPDoc clean, 752 language strings per language. Exercised on this instance from
+an unset course and an empty browser cache: both were created, and the wizard
+went from four blockers to one — cron, which does not run in this container.
+
+---
+
+## [0.6.8] — 2026-09-13
+
+Issue #31: the worker's access to Moodle, set up by the plugin that needs it.
+
+### The problem
+Getting a worker running took ten steps across four areas of the Moodle
+administration: enable web services, enable REST, enable the external service,
+create a technical user, create a system role, grant two capabilities, assign
+the role, authorise the user for the restricted service, mint a token for
+exactly that pair, and paste it back into the plugin setting.
+
+Any one of those missing produces the same symptom — a worker that claims
+nothing — and there were thirteen listed ways to get it wrong. None of it is a
+configuration decision: the service exists for this worker, its three functions
+are this plugin's, and `local/catquizlab:worker` is granted to no role by
+default precisely because it is not meant to be handed around.
+
+### Added
+- **`worker_access`** with two entry points, and the distinction matters:
+  `verify()` only looks, so it runs on every page load, and `ensure()` changes
+  the site when somebody asks. Idempotent by construction — every step checks
+  before it acts, so running it after a partial manual setup completes that
+  setup rather than duplicating it.
+
+- **The access panel on the operations page** lists all eleven checks with an
+  individual verdict, and offers one button when anything is missing.
+
+### Notes on two decisions
+- **A dedicated account, not the administrator's.** The token carries exactly
+  the three functions the worker calls; if it leaks it is worth exactly that.
+  An administrator's token is worth the administrator.
+- **`auth = 'webservice'`, not `'nologin'`.** The first version used `nologin`,
+  which looks equivalent and is not: the call came back
+  `wsaccessusernologin`, which reads as a permission problem and is an
+  account-type problem. Found by calling the web service with the token rather
+  than by inspecting the rows — the setup verified as complete either way. The
+  authentication plugin is enabled as part of the setup, since an account whose
+  type is disabled is refused however correct everything else is.
+
+### Tests
+Five more: the whole access created in one operation, a second run changing
+nothing, the token belonging to the technical account rather than to whoever
+pressed the button, a partial setup completed without a second account or role,
+and the role carrying both capabilities in the system context only.
+
+### Verification
+PHPUnit 479 tests / 2946 assertions, Behat 32 scenarios / 229 steps, phpcs and
+PHPDoc clean, 716 language strings per language. End to end on this instance:
+the setup ran from nothing to complete, and the resulting token then called
+`local_catquizlab_job_claim` successfully.
+
+---
+
 ## [0.6.7] — 2026-09-13
 
 Issues #26, #27, #28, #29 and #30 — two of them defects in code written earlier

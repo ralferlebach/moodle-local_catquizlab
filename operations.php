@@ -53,11 +53,73 @@ if ($action !== '') {
     require_sesskey();
     require_capability('local/catquizlab:execute', $context);
 
-    if ($action === 'createtoken') {
-        $created = \local_catquizlab\local\worker_setup::ensure_token();
+    if ($action === 'wizard' || $action === 'wizardstart') {
+        // One button for the whole dependency chain, in order. Doing the
+        // stages separately is still possible below; this is for the case where
+        // somebody just wants the installation to work.
+        $result = \local_catquizlab\local\setup_wizard::run($action === 'wizardstart');
+
+        $message = $result['changed'] === []
+            ? get_string('wizard:nothingchanged', $component)
+            : get_string('wizard:changed', $component, implode(', ', $result['changed']));
+
+        if (!$result['ready']) {
+            $blockers = \local_catquizlab\local\setup_wizard::state()['blockers'];
+            $message .= ' ' . get_string('wizard:notready', $component, implode(', ', $blockers));
+        }
+
         redirect(
             $pageurl,
-            get_string($created ? 'ops:tokencreated' : 'ops:tokenexists', $component),
+            $message,
+            null,
+            $result['ready']
+                ? \core\output\notification::NOTIFY_SUCCESS
+                : \core\output\notification::NOTIFY_WARNING
+        );
+    }
+
+    if ($action === 'setupruntime') {
+        $result = \local_catquizlab\local\worker_runtime::ensure();
+        redirect(
+            $pageurl,
+            $result['ok']
+                ? ($result['changed'] === []
+                    ? get_string('runtime:setupnothing', $component)
+                    : get_string('runtime:setupdone', $component, implode(', ', $result['changed'])))
+                : get_string('runtime:setupfailed', $component, implode(', ', $result['missing'])),
+            null,
+            $result['ok']
+                ? \core\output\notification::NOTIFY_SUCCESS
+                : \core\output\notification::NOTIFY_WARNING
+        );
+    }
+
+    if ($action === 'setupaccess') {
+        // The whole access, not just the token: ten steps across four areas of
+        // the administration, any one of which missing looks the same from
+        // outside.
+        $result = \local_catquizlab\local\worker_access::ensure();
+
+        if (!$result['ok']) {
+            $missing = [];
+            foreach ($result['steps'] as $step) {
+                if (!$step['ok']) {
+                    $missing[] = $step['label'];
+                }
+            }
+            redirect(
+                $pageurl,
+                get_string('access:setupfailed', $component, implode(', ', $missing)),
+                null,
+                \core\output\notification::NOTIFY_ERROR
+            );
+        }
+
+        redirect(
+            $pageurl,
+            $result['changed'] === []
+                ? get_string('access:setupnothing', $component)
+                : get_string('access:setupdone', $component, implode(', ', array_unique($result['changed']))),
             null,
             \core\output\notification::NOTIFY_SUCCESS
         );
@@ -132,7 +194,10 @@ if ($action !== '') {
     }
 }
 
+$wizard = \local_catquizlab\local\setup_wizard::state();
+$runtime = \local_catquizlab\local\worker_runtime::verify();
 $health = system_health::health();
+$access = \local_catquizlab\local\worker_access::verify();
 
 $workers = array_map(static function (\stdClass $worker): array {
     return [
@@ -216,7 +281,11 @@ echo $OUTPUT->render_from_template('local_catquizlab/operations', [
     'inflight'   => ['hasany' => $inflight !== [], 'rows' => $inflight],
     'sesskey'    => sesskey(),
     'actionurl'  => $pageurl->out(false),
-    'cantoken'   => system_health::worker_token() === null,
+    'wizard'     => $wizard,
+    'runtime'    => $runtime,
+    'canruntime' => !$runtime['ok'],
+    'access'     => $access,
+    'cansetup'   => !$access['ok'],
     'empty'      => (static function (): ?array {
         $rows = \local_catquizlab\local\engine_hygiene::list_empty_attempts();
 

@@ -70,6 +70,101 @@ class experiment_container {
      *
      * @return \stdClass|null
      */
+    /**
+     * Create the dedicated experiment course, or adopt one that exists.
+     *
+     * The course this plugin provisions into is not a course in the ordinary
+     * sense: it holds one section per experiment and one adaptive quiz per run,
+     * all generated, and nobody is meant to teach in it. Its shortname, format
+     * and visibility are determined by that role, which makes asking an
+     * administrator to create it first a question with only one right answer.
+     *
+     * Adopting before creating matters: an installation that already has the
+     * course — from an earlier setup, from a restore — must not end up with two
+     * of them, and the second would silently hold half the experiments.
+     *
+     * @param bool $hidden Whether the course is hidden from students.
+     * @return int The course id, or 0 when it could not be created.
+     */
+    public static function ensure_course(bool $hidden = true): int {
+        global $DB, $CFG;
+        require_once($CFG->dirroot . '/course/lib.php');
+
+        $existing = self::configured_course();
+        if ($existing > 0 && $DB->record_exists('course', ['id' => $existing])) {
+            return $existing;
+        }
+
+        $shortname = 'catquizlab';
+        $adopted = $DB->get_record('course', ['shortname' => $shortname]);
+        if ($adopted) {
+            set_config(self::SETTING_COURSE, (int) $adopted->id, 'local_catquizlab');
+
+            return (int) $adopted->id;
+        }
+
+        $category = self::ensure_category();
+        if ($category === 0) {
+            return 0;
+        }
+
+        $course = create_course((object) [
+            'category'        => $category,
+            'shortname'       => $shortname,
+            'fullname'        => get_string('container:coursename', 'local_catquizlab'),
+            'summary'         => get_string('container:coursesummary', 'local_catquizlab'),
+            'summaryformat'   => FORMAT_MARKDOWN,
+            // Topics, because the plugin addresses sections by number: one per
+            // experiment. A format without sections would break that.
+            'format'          => 'topics',
+            'numsections'     => 1,
+            'visible'         => $hidden ? 0 : 1,
+            'startdate'       => time(),
+            'enablecompletion' => 0,
+        ]);
+
+        set_config(self::SETTING_COURSE, (int) $course->id, 'local_catquizlab');
+
+        return (int) $course->id;
+    }
+
+    /**
+     * A category to put the experiment course in.
+     *
+     * @return int The category id, or 0 when none could be found or made.
+     */
+    protected static function ensure_category(): int {
+        global $DB, $CFG;
+
+        $existing = $DB->get_record('course_categories', ['idnumber' => 'catquizlab']);
+        if ($existing) {
+            return (int) $existing->id;
+        }
+
+        try {
+            $category = \core_course_category::create([
+                'name'        => get_string('container:categoryname', 'local_catquizlab'),
+                'idnumber'    => 'catquizlab',
+                'description' => get_string('container:categorydescription', 'local_catquizlab'),
+                'visible'     => 0,
+            ]);
+
+            return (int) $category->id;
+        } catch (\Throwable $e) {
+            // Fall back to any category rather than failing the whole setup: a
+            // course in the wrong category still works, and the alternative is
+            // an installation that cannot start.
+            $first = $DB->get_records('course_categories', null, 'sortorder ASC', 'id', 0, 1);
+
+            return $first ? (int) reset($first)->id : 0;
+        }
+    }
+
+    /**
+     * The configured experiment course, or null when there is none.
+     *
+     * @return \stdClass|null
+     */
     public static function course(): ?\stdClass {
         global $DB;
 

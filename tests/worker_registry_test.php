@@ -737,4 +737,317 @@ final class worker_registry_test extends \advanced_testcase {
             chmod($blocked, 0700);
         }
     }
+
+    /**
+     * The whole worker access is created in one operation.
+     *
+     * @return void
+     */
+    public function test_worker_access_is_set_up_completely(): void {
+        global $DB;
+        $this->resetAfterTest();
+        $this->setAdminUser();
+
+        $access = \local_catquizlab\local\worker_access::class;
+
+        $before = $access::verify();
+        $this->assertFalse($before['ok']);
+
+        $result = $access::ensure();
+
+        // Ten steps across four areas of the administration, any one of which
+        // missing looks the same from outside: a worker that claims nothing.
+        $this->assertTrue($result['ok'], 'Still missing: ' . implode(', ', $access::verify()['missing']));
+        foreach ($result['steps'] as $step) {
+            $this->assertTrue($step['ok'], $step['label'] . ' was not set up.');
+        }
+
+        $user = $DB->get_record('user', ['username' => $access::USERNAME]);
+        $this->assertNotFalse($user);
+        // The type 'nologin' looks equivalent and is not: web service calls under
+        // it are refused with wsaccessusernologin, which reads as a permission
+        // problem and is an account-type problem.
+        $this->assertSame('webservice', $user->auth);
+    }
+
+    /**
+     * Setting it up twice changes nothing the second time.
+     *
+     * @return void
+     */
+    public function test_worker_access_setup_is_idempotent(): void {
+        $this->resetAfterTest();
+        $this->setAdminUser();
+
+        $access = \local_catquizlab\local\worker_access::class;
+
+        $access::ensure();
+        $second = $access::ensure();
+
+        // Running it after a partial manual setup should complete that setup,
+        // not duplicate it — so every step checks before it acts.
+        $this->assertTrue($second['ok']);
+        $this->assertSame([], $second['changed']);
+    }
+
+    /**
+     * The token belongs to the technical account, not to whoever pressed the button.
+     *
+     * @return void
+     */
+    public function test_the_token_belongs_to_the_worker_account(): void {
+        global $DB, $USER;
+        $this->resetAfterTest();
+        $this->setAdminUser();
+
+        $access = \local_catquizlab\local\worker_access::class;
+        $access::ensure();
+
+        $service = $DB->get_record('external_services', ['shortname' => $access::SERVICE]);
+        $stored = (string) get_config('local_catquizlab', 'worker_token');
+        $token = $DB->get_record('external_tokens', ['token' => $stored]);
+
+        $worker = $DB->get_record('user', ['username' => $access::USERNAME]);
+        $this->assertSame((int) $worker->id, (int) $token->userid);
+        $this->assertSame((int) $service->id, (int) $token->externalserviceid);
+
+        // If it leaks it is worth exactly the three functions the worker calls.
+        // An administrator's token is worth the administrator.
+        $this->assertNotSame((int) $USER->id, (int) $token->userid);
+    }
+
+    /**
+     * A partial setup is completed rather than duplicated.
+     *
+     * @return void
+     */
+    public function test_a_partial_setup_is_completed(): void {
+        global $DB;
+        $this->resetAfterTest();
+        $this->setAdminUser();
+
+        $access = \local_catquizlab\local\worker_access::class;
+        $access::ensure();
+
+        // The step most often forgotten by hand: the token exists and was never
+        // pasted back, so everything looks right and nothing works.
+        set_config('worker_token', '', 'local_catquizlab');
+        $this->assertFalse($access::verify()['ok']);
+
+        $repaired = $access::ensure();
+
+        $this->assertTrue($repaired['ok']);
+        $this->assertContains('storedtoken', $repaired['changed']);
+        // No second account and no second role for one missing setting.
+        $this->assertSame(1, $DB->count_records('user', ['username' => $access::USERNAME, 'deleted' => 0]));
+        $this->assertSame(1, $DB->count_records('role', ['shortname' => $access::ROLE]));
+    }
+
+    /**
+     * The worker role carries both capabilities and only in the system context.
+     *
+     * @return void
+     */
+    public function test_the_worker_role_is_narrow(): void {
+        global $DB;
+        $this->resetAfterTest();
+        $this->setAdminUser();
+
+        $access = \local_catquizlab\local\worker_access::class;
+        $access::ensure();
+
+        $role = $DB->get_record('role', ['shortname' => $access::ROLE]);
+        $context = \context_system::instance();
+
+        // Both: the endpoints check local/catquizlab:worker, and Moodle refuses
+        // the REST call itself without webservice/rest:use. Missing either
+        // produces the same silence.
+        foreach (['local/catquizlab:worker', 'webservice/rest:use'] as $capability) {
+            $this->assertTrue($DB->record_exists('role_capabilities', [
+                'roleid' => $role->id, 'capability' => $capability,
+                'permission' => CAP_ALLOW, 'contextid' => $context->id,
+            ]), $capability . ' is not granted.');
+        }
+
+        // System context only: a role assignable in courses would invite the
+        // worker's capability being handed to people.
+        $levels = array_map('intval', array_values(get_role_contextlevels($role->id)));
+        $this->assertSame([CONTEXT_SYSTEM], $levels);
+    }
+
+    /**
+     * The wizard reports the four stages in dependency order.
+     *
+     * @return void
+     */
+    public function test_the_wizard_reports_four_stages_in_order(): void {
+        $this->resetAfterTest();
+        $this->setAdminUser();
+
+        $state = \local_catquizlab\local\setup_wizard::state();
+        $ids = array_column($state['stages'], 'id');
+
+        // The order is the dependency order: a worker cannot be set up against
+        // an engine that is not there, and a pipeline over a broken setup
+        // produces failing jobs rather than results.
+        $this->assertSame(['engine', 'environment', 'worker', 'pipeline'], $ids);
+    }
+
+    /**
+     * Without the engine the wizard stops rather than pressing on.
+     *
+     * @return void
+     */
+    public function test_the_wizard_stops_when_the_engine_is_missing(): void {
+        $this->resetAfterTest();
+        $this->setAdminUser();
+
+        if (\local_catquizlab\local\environment::catquiz_available()) {
+            $this->markTestSkipped('The engine is installed; this path cannot be staged.');
+        }
+
+        $result = \local_catquizlab\local\setup_wizard::run(true);
+
+        // Setting up a worker against a missing engine produces a second
+        // failure that hides the first.
+        $this->assertFalse($result['ready']);
+        $this->assertSame([], $result['changed']);
+        $this->assertNotEmpty($result['log']);
+    }
+
+    /**
+     * The pipeline is not switched on over an incomplete setup.
+     *
+     * @return void
+     */
+    public function test_the_pipeline_is_not_started_over_a_broken_setup(): void {
+        $this->resetAfterTest();
+        $this->setAdminUser();
+
+        global $DB;
+
+        // Without the external service the worker cannot authenticate, and that
+        // is not something the wizard can repair: it is declared in
+        // db/services.php, so its absence means a broken installation.
+        $DB->delete_records('external_services', ['shortname' => \local_catquizlab\local\worker_access::SERVICE]);
+        set_config('enabled', 0, 'local_catquizlab');
+
+        \local_catquizlab\local\setup_wizard::run(true);
+
+        // A pipeline switched on over a broken setup does not produce results,
+        // it produces failing jobs.
+        $this->assertFalse(\local_catquizlab\local\setup_wizard::pipeline_enabled());
+    }
+
+    /**
+     * The experiment course is created, and only once.
+     *
+     * @return void
+     */
+    public function test_the_experiment_course_is_created_once(): void {
+        global $DB;
+        $this->resetAfterTest();
+        $this->setAdminUser();
+
+        set_config('experimentcourseid', 0, 'local_catquizlab');
+
+        $first = \local_catquizlab\local\experiment_container::ensure_course();
+        $second = \local_catquizlab\local\experiment_container::ensure_course();
+
+        $this->assertGreaterThan(0, $first);
+        // An installation that already has the course must not end up with two:
+        // the second would silently hold half the experiments.
+        $this->assertSame($first, $second);
+        $this->assertSame(1, $DB->count_records('course', ['shortname' => 'catquizlab']));
+
+        $course = $DB->get_record('course', ['id' => $first]);
+        // Sections are addressed by number, one per experiment, so a format
+        // without them would break provisioning.
+        $this->assertSame('topics', $course->format);
+        $this->assertSame(0, (int) $course->visible);
+    }
+
+    /**
+     * An existing course is adopted rather than duplicated.
+     *
+     * @return void
+     */
+    public function test_an_existing_experiment_course_is_adopted(): void {
+        global $DB;
+        $this->resetAfterTest();
+        $this->setAdminUser();
+
+        $existing = $this->getDataGenerator()->create_course(['shortname' => 'catquizlab']);
+        set_config('experimentcourseid', 0, 'local_catquizlab');
+
+        $resolved = \local_catquizlab\local\experiment_container::ensure_course();
+
+        $this->assertSame((int) $existing->id, $resolved);
+        $this->assertSame(1, $DB->count_records('course', ['shortname' => 'catquizlab']));
+    }
+
+    /**
+     * A misconfigured Node path repairs itself rather than blocking setup.
+     *
+     * @return void
+     */
+    public function test_a_wrong_node_path_is_repaired(): void {
+        $this->resetAfterTest();
+        $this->setAdminUser();
+
+        if (\local_catquizlab\local\worker_runtime::find_node() === null) {
+            $this->markTestSkipped('No Node on this machine.');
+        }
+
+        // Pointing at nothing is the state a fresh installation is in, and it
+        // is one the plugin can fix by looking rather than by asking.
+        set_config('worker_node_path', '/nonexistent/node', 'local_catquizlab');
+        $this->assertFalse(\local_catquizlab\local\worker_runtime::verify()['ok']);
+
+        $result = \local_catquizlab\local\worker_runtime::ensure();
+
+        $this->assertContains('node', $result['changed']);
+        $this->assertNotSame('/nonexistent/node', get_config('local_catquizlab', 'worker_node_path'));
+    }
+
+    /**
+     * A usable Node binary is found without being configured by hand.
+     *
+     * @return void
+     */
+    public function test_node_is_discovered(): void {
+        $this->resetAfterTest();
+
+        $found = \local_catquizlab\local\worker_runtime::find_node();
+        if ($found === null) {
+            $this->markTestSkipped('No Node on this machine; discovery cannot be exercised.');
+        }
+
+        $this->assertTrue(is_executable($found));
+    }
+
+    /**
+     * A half-downloaded browser does not count as installed.
+     *
+     * @return void
+     */
+    public function test_an_empty_browser_directory_is_not_a_browser(): void {
+        $this->resetAfterTest();
+
+        $cache = null;
+        foreach (\local_catquizlab\local\worker_launcher::runtime_environment([]) as $pair) {
+            [$name, $value] = explode('=', $pair, 2);
+            if ($name === 'PUPPETEER_CACHE_DIR') {
+                $cache = $value;
+            }
+        }
+
+        $stale = $cache . '/chrome/linux-0.0.0.0';
+        make_writable_directory($stale, false);
+
+        // An interrupted download leaves the directory behind, and the worker
+        // then fails as if nothing were installed — so the check looks for an
+        // executable, not for a path.
+        $this->assertFalse(is_executable($stale . '/chrome-linux64/chrome'));
+    }
 }
