@@ -25,6 +25,10 @@
     three closed triangles and no way in.
 
     Classes required for JS: none.
+    Data attributes required for JS:
+    * data-region="catquizlab-situation" — the verdict banner
+    * data-region="catquizlab-liveworkers|queued|running|collected|failed" —
+      counters the livestatus module keeps current while workers run.
     Data attributes required for JS: none.
 
     Context variables required for this template:
@@ -172,12 +176,16 @@
         {{#workers}}
             <p class="mb-1">
                 {{#str}}worker:fleet, local_catquizlab{{/str}}
-                <span class="badge {{#hasslot}}badge-success{{/hasslot}}{{^hasslot}}badge-secondary{{/hasslot}}">{{live}}</span>
+                <span class="badge {{#hasslot}}badge-success{{/hasslot}}{{^hasslot}}badge-secondary{{/hasslot}}"
+                      data-region="catquizlab-liveworkers">{{live}}</span>
                 {{#crashed}}<span class="badge badge-warning ml-1">{{#str}}worker:crashed, local_catquizlab{{/str}} {{crashed}}</span>{{/crashed}}
             </p>
             <p class="mb-1 text-muted small">
                 {{#str}}worker:queue, local_catquizlab{{/str}}
-                {{queue.queued}} / {{queue.running}} / {{queue.collected}} / {{queue.failed}}
+                <span data-region="catquizlab-queued">{{queue.queued}}</span> /
+                <span data-region="catquizlab-running">{{queue.running}}</span> /
+                <span data-region="catquizlab-collected">{{queue.collected}}</span> /
+                <span data-region="catquizlab-failed">{{queue.failed}}</span>
             </p>
             {{#queue.stalled}}
                 <div class="alert alert-warning mb-0" role="status">

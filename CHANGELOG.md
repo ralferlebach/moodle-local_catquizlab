@@ -6,6 +6,63 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.6.14] — 2026-09-14
+
+Live updating, a four-stage front end, and the test environment rebuilt.
+
+### The environment
+The container was reset between releases and 0.6.13 had to ship on inspection
+alone. Moodle 4.5.14, PostgreSQL, the engine on `ALiSe-v-1.2.0-legacy`, PHPUnit,
+Behat with ChromeDriver and Puppeteer are all back, and everything below was
+exercised against them.
+
+**What that immediately caught:** the `situation` ranking added in 0.6.13 could
+only be tested by building a whole installation into each state, which is a
+ranking nobody tests. Gathering the facts (`assess()`) and judging them
+(`rank()`) are separate now, and two cases are pinned that were only assumptions
+before: an unready installation outranks a failed run, while work already in the
+queue outranks an unfinished setup — attempts in the queue mean the installation
+ran at some point, so the setup warning is the stale one.
+
+### #42 — The overview keeps itself current
+`local_catquizlab_live_status` returns counts and the one-line verdict, and the
+`livestatus` module updates them in place. Measured in the browser: the queue
+figure went from 7 to 5 with zero navigations while attempts were completed from
+outside the page.
+
+The page reloads itself only when the *verdict* changes, because that is where
+the run rows, their progress and the buttons stop matching the counters —
+patching all of that from JavaScript would be a second renderer.
+
+**A defect only the browser test could show:** the service was declared in
+`db/services.php` and never registered, because Moodle re-reads that file only
+when the plugin version changes. The page polled, Moodle answered `Can't find
+data record in database table external_functions`, and nothing on the page said
+so. A test now checks the registration, not just the declaration.
+
+Polling stops when the tab is hidden and after a long idle period: a tab left
+open overnight should not keep a server busy.
+
+### #44 — Tabs follow the work
+`1. Set up`, `2. Experiments and runs`, `3. Results`, `Settings`.
+
+Not included deliberately: sending an unready installation straight to the setup
+tab. It was written, and Behat showed what it costs — 28 scenarios went red
+because the page moved out from under them. Somebody who opens the plugin to
+look at their experiments should find their experiments; the banner at the top
+already says what is missing and links to where it is fixed.
+
+### Verification
+PHPUnit 534 tests / 3132 assertions, Behat 32 scenarios / 232 steps, PHPDoc
+clean, 790 language strings per language, the AMD module built with Moodle's own
+grunt. phpcs could not run here: the Moodle standard needs a PHP_CodeSniffer
+version this container cannot resolve without Composer — 3.7 is too old for its
+dependencies and 4.0 too new for the standard itself. Style was checked by hand
+across the changed files (line length, docblocks, trailing whitespace, comment
+form); CI will have the final word.
+
+---
+
 ## [0.6.13] — 2026-09-14
 
 Two defects introduced in 0.6.12, and the overview's one-line verdict.

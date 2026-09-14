@@ -31,6 +31,13 @@
 defined('MOODLE_INTERNAL') || die();
 
 $functions = [
+    'local_catquizlab_live_status' => [
+        'classname'   => 'local_catquizlab\\external\\live_status',
+        'description' => 'Counts and the overall verdict for the overview, small enough to poll.',
+        'type'        => 'read',
+        'ajax'        => true,
+        'capabilities' => 'local/catquizlab:view',
+    ],
     'local_catquizlab_oracle_answer' => [
         'classname'   => 'local_catquizlab\\external\\oracle_answer',
         'methodname'  => 'execute',

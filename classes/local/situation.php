@@ -65,23 +65,42 @@ class situation {
     public static function assess(): array {
         global $DB;
 
-        $component = 'local_catquizlab';
-        $workers = worker_registry::summary();
-
-        $queue = [
-            'queued'  => $DB->count_records('local_catquizlab_attempt',
+        return self::rank([
+            'workers'    => worker_registry::summary(),
+            'queued'     => $DB->count_records('local_catquizlab_attempt',
                 ['status' => attempt_scheduler::STATUS_QUEUED]),
-            'running' => $DB->count_records('local_catquizlab_attempt',
+            'running'    => $DB->count_records('local_catquizlab_attempt',
                 ['status' => attempt_scheduler::STATUS_RUNNING]),
-        ];
+            'failedruns' => $DB->count_records('local_catquizlab_run',
+                ['status' => registry::STATUS_FAILED]),
+            'wizard'     => setup_wizard::state(),
+        ]);
+    }
 
-        $failedruns = $DB->count_records('local_catquizlab_run', ['status' => registry::STATUS_FAILED]);
+    /**
+     * Turn a set of facts into the one thing worth saying about them.
+     *
+     * Separate from gathering them so the ranking can be exercised on its own.
+     * The order is the point of this class, and an order that can only be tested
+     * by building a whole installation into each state is an order nobody tests.
+     *
+     * @param array $facts workers, queued, running, failedruns, wizard.
+     * @return array{state: string, headline: string, detail: string, action: array|null}
+     */
+    public static function rank(array $facts): array {
+        $component = 'local_catquizlab';
+        $workers = (array) $facts['workers'];
+        $queue = ['queued' => (int) $facts['queued'], 'running' => (int) $facts['running']];
+        $failedruns = (int) $facts['failedruns'];
+        $wizard = (array) $facts['wizard'];
 
         $setupurl = new \moodle_url('/local/catquizlab/index.php', ['tab' => 'setup']);
         $runsurl = new \moodle_url('/local/catquizlab/runs.php', ['status' => registry::STATUS_FAILED]);
 
-        // Not ready comes first: nothing else can be acted on until it is.
-        $wizard = setup_wizard::state();
+        // Not ready comes first: nothing else can be acted on until it is. The
+        // exception is work already in the queue — attempts mean the
+        // installation ran at some point, so the setup warning is stale and the
+        // stalled queue is the live problem.
         if (!$wizard['ready'] && $queue['queued'] === 0 && $queue['running'] === 0) {
             return self::verdict(
                 self::NOTREADY,

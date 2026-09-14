@@ -285,10 +285,20 @@ $templatecontext = [
 // installation up, watch it run, change what it runs with — is reachable from
 // here without leaving the plugin. Splitting these across three pages meant
 // knowing which page held which half.
+// Named and ordered by the work, not by the objects behind them: set the
+// installation up, define what to run, watch it run, look at what came out.
+// Somebody doing this for the first time should be able to follow the numbers.
 $tab = optional_param('tab', 'experiments', PARAM_ALPHA);
-if (!in_array($tab, ['experiments', 'setup', 'settings'], true)) {
+if (!in_array($tab, ['experiments', 'setup', 'results', 'settings'], true)) {
     $tab = 'experiments';
 }
+
+// Deliberately no redirect to the setup tab for an unready installation. It
+// was tempting — there is one thing worth doing and this is not the tab for it
+// — but somebody who opens the plugin to look at their experiments should find
+// their experiments. The banner at the top of this tab says what is missing and
+// links to where it is fixed, which is the same information without moving the
+// page out from under the reader.
 
 $settingsform = null;
 if ($tab === 'settings') {
@@ -323,10 +333,12 @@ if ($tab === 'settings') {
 }
 
 $tabs = [];
-foreach (['experiments', 'setup', 'settings'] as $name) {
+foreach (['setup', 'experiments', 'results', 'settings'] as $name) {
     $tabs[] = new tabobject(
         $name,
-        new moodle_url('/local/catquizlab/index.php', ['tab' => $name]),
+        $name === 'results'
+            ? new moodle_url('/local/catquizlab/results.php')
+            : new moodle_url('/local/catquizlab/index.php', ['tab' => $name]),
         get_string('tab:' . $name, $component)
     );
 }
@@ -334,6 +346,13 @@ foreach (['experiments', 'setup', 'settings'] as $name) {
 echo $OUTPUT->header();
 echo $OUTPUT->heading(get_string('pluginname', $component));
 echo $OUTPUT->tabtree($tabs, $tab);
+
+if ($tab === 'experiments') {
+    // Keeps the counters current while workers run, so watching a queue drain
+    // does not mean reloading the page during exactly the minutes somebody is
+    // watching it.
+    $PAGE->requires->js_call_amd('local_catquizlab/livestatus', 'init', [$situation['state']]);
+}
 
 if ($tab === 'experiments') {
     echo $OUTPUT->render_from_template('local_catquizlab/manage', $templatecontext);
