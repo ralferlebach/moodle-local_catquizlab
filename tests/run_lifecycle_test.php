@@ -1164,4 +1164,156 @@ final class run_lifecycle_test extends \advanced_testcase {
         $this->assertSame(0, $breakdown['claimable']);
         $this->assertSame(1, $breakdown['paused']);
     }
+
+    /**
+     * The readiness stage runs through the orchestrator, not only on its own.
+     *
+     * @return void
+     */
+    public function test_the_readiness_stage_can_be_dispatched(): void {
+        $this->resetAfterTest();
+        $this->setAdminUser();
+
+        $runid = $this->run_ids($this->experiment_with_runs())[0];
+
+        // It reached for an undefined variable and threw on every provisioning.
+        // The tests missed it because they called cat_readiness directly rather
+        // than through the stage that uses it — so this goes through the stage.
+        $method = new \ReflectionMethod(\local_catquizlab\local\run_orchestrator::class, 'run_stage');
+        $method->setAccessible(true);
+
+        $result = $method->invoke(null, 'readiness', ['runid' => $runid]);
+
+        $this->assertIsArray($result);
+        $this->assertArrayHasKey('ok', $result);
+    }
+
+    /**
+     * A run with no usable definition is refused, not fatal.
+     *
+     * @return void
+     */
+    public function test_readiness_without_a_definition_is_a_verdict(): void {
+        global $DB;
+        $this->resetAfterTest();
+        $this->setAdminUser();
+
+        $runid = $this->run_ids($this->experiment_with_runs())[0];
+        $DB->set_field('local_catquizlab_run', 'manifestjson', '{}', ['id' => $runid]);
+        $DB->set_field('local_catquizlab_experiment', 'configjson', 'not json at all',
+            ['id' => $DB->get_field('local_catquizlab_run', 'experimentid', ['id' => $runid])]);
+
+        // A readiness check that throws is worse than one that fails: the
+        // caller gets an exception where it expected a verdict.
+        $result = \local_catquizlab\local\cat_readiness::check($runid);
+
+        $this->assertFalse($result['ok']);
+        $this->assertNotEmpty($result['reasons']);
+    }
+
+    /**
+     * Provisioning the same run twice builds one scale tree.
+     *
+     * @return void
+     */
+    public function test_scale_provisioning_is_idempotent(): void {
+        global $DB;
+        $this->resetAfterTest();
+        $this->setAdminUser();
+
+        if (!\local_catquizlab\local\environment::engine_available()) {
+            $this->markTestSkipped('No CAT engine installed.');
+        }
+
+        $runid = $this->run_ids($this->experiment_with_runs())[0];
+        $blueprint = ['name' => 'Idempotent', 'categories' => 1, 'subcategories' => 2];
+
+        $first = \local_catquizlab\local\scale_provisioner::provision($runid, $blueprint);
+        $second = \local_catquizlab\local\scale_provisioner::provision($runid, $blueprint);
+
+        // A retried task, a "provision now" after one, a recovered run: each
+        // built another tree, and items then materialised into whichever map
+        // was named later.
+        $this->assertSame($first['rootscaleid'], $second['rootscaleid']);
+        $this->assertSame(1, $DB->count_records('local_catquizlab_scalemap', [
+            'runid' => $runid,
+            'level' => \local_catquizlab\local\scale_provisioner::LEVEL_ROOT,
+        ]));
+    }
+
+    /**
+     * Resetting a run clears what provisioning made and keeps what it is.
+     *
+     * @return void
+     */
+    public function test_resetting_a_run_returns_it_to_draft(): void {
+        global $DB;
+        $this->resetAfterTest();
+        $this->setAdminUser();
+
+        $runid = $this->run_ids($this->experiment_with_runs())[0];
+        $cellkey = $DB->get_field('local_catquizlab_run', 'cellkey', ['id' => $runid]);
+        $seed = $DB->get_field('local_catquizlab_run', 'seed', ['id' => $runid]);
+
+        $this->add_attempt($runid, attempt_scheduler::STATUS_FAILED);
+        $DB->set_field('local_catquizlab_run', 'status', registry::STATUS_FAILED, ['id' => $runid]);
+        run_lifecycle::fail($runid, 'something went wrong');
+
+        $result = run_lifecycle::reset($runid);
+
+        $this->assertTrue($result['ok']);
+        $this->assertSame(registry::STATUS_DRAFT,
+            (int) $DB->get_field('local_catquizlab_run', 'status', ['id' => $runid]));
+        $this->assertSame(0, $DB->count_records('local_catquizlab_attempt', ['runid' => $runid]));
+
+        // The cell and the seed are what make this run this run: reproducing it
+        // would make a second one and leave the first in the list for ever.
+        $this->assertSame($cellkey, $DB->get_field('local_catquizlab_run', 'cellkey', ['id' => $runid]));
+        $this->assertSame($seed, $DB->get_field('local_catquizlab_run', 'seed', ['id' => $runid]));
+        $this->assertSame('', run_lifecycle::failure_details($runid)['reason']);
+    }
+
+    /**
+     * A run being played is not reset underneath its worker.
+     *
+     * @return void
+     */
+    public function test_a_running_run_is_not_reset(): void {
+        global $DB;
+        $this->resetAfterTest();
+        $this->setAdminUser();
+
+        $runid = $this->run_ids($this->experiment_with_runs())[0];
+        $DB->set_field('local_catquizlab_run', 'status', registry::STATUS_RUNNING, ['id' => $runid]);
+        $this->add_attempt($runid, attempt_scheduler::STATUS_RUNNING);
+
+        $result = run_lifecycle::reset($runid);
+
+        // Resetting underneath a worker strands the claim it holds, which is
+        // the failure the lease mechanism exists to prevent.
+        $this->assertFalse($result['ok']);
+        $this->assertSame('run-is-being-played', $result['reason']);
+        $this->assertSame(1, $DB->count_records('local_catquizlab_attempt', ['runid' => $runid]));
+    }
+
+    /**
+     * The experiment course is visible, because its students have to use it.
+     *
+     * @return void
+     */
+    public function test_the_experiment_course_is_visible(): void {
+        global $DB;
+        $this->resetAfterTest();
+        $this->setAdminUser();
+
+        set_config('experimentcourseid', 0, 'local_catquizlab');
+        $courseid = \local_catquizlab\local\experiment_container::ensure_course();
+
+        // A hidden course tells enrolled students "this course is currently
+        // unavailable", and the simulated persons are enrolled students. The
+        // worker logged in correctly, reached the activity, and found that
+        // sentence where the start button should have been — every attempt
+        // failed as "no question was presented", three steps from the cause.
+        $this->assertSame(1, (int) $DB->get_field('course', 'visible', ['id' => $courseid]));
+    }
 }

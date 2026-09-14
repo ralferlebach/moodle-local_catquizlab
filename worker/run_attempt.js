@@ -418,7 +418,34 @@ async function readEngineAttemptId(page) {
  * @returns {Promise<void>}
  */
 async function gotoSettle(page, url) {
-    await page.goto(url, {waitUntil: 'networkidle2'}).catch(() => page.goto(url, {waitUntil: 'domcontentloaded'}));
+    let firstError = null;
+
+    try {
+        await page.goto(url, {waitUntil: 'networkidle2'});
+    } catch (error) {
+        firstError = error;
+        try {
+            await page.goto(url, {waitUntil: 'domcontentloaded'});
+        } catch (second) {
+            // Both swallowed, the page stayed wherever it was, and the next
+            // step reported whatever it failed to find there. The symptom was
+            // "no question was presented" on the dashboard — true, and three
+            // steps away from the cause.
+            throw new Error(`Could not open ${url}: ${second.message}`);
+        }
+    }
+
+    // Arriving somewhere else is its own failure: a redirect to the login page
+    // or the dashboard means the session or the permission is wrong, and
+    // neither is visible from the page that comes next.
+    const landed = page.url();
+    const wanted = url.split('?')[0];
+    if (!landed.startsWith(wanted)) {
+        throw new Error(
+            `Expected ${url} but landed on ${landed}`
+            + (firstError ? ` (first attempt: ${firstError.message})` : '')
+        );
+    }
 }
 
 /**

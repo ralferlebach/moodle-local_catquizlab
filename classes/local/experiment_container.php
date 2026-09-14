@@ -83,10 +83,10 @@ class experiment_container {
      * course — from an earlier setup, from a restore — must not end up with two
      * of them, and the second would silently hold half the experiments.
      *
-     * @param bool $hidden Whether the course is hidden from students.
+     * @param bool $hidden Retained for callers; a hidden course cannot be played.
      * @return int The course id, or 0 when it could not be created.
      */
-    public static function ensure_course(bool $hidden = true): int {
+    public static function ensure_course(bool $hidden = false): int {
         global $DB, $CFG;
         require_once($CFG->dirroot . '/course/lib.php');
 
@@ -118,7 +118,16 @@ class experiment_container {
             // experiment. A format without sections would break that.
             'format'          => 'topics',
             'numsections'     => 1,
-            'visible'         => $hidden ? 0 : 1,
+            // Visible, and this is not a cosmetic choice. A hidden course tells
+            // enrolled students "this course is currently unavailable", and the
+            // simulated persons are enrolled students: the worker logged in
+            // correctly, reached the activity and found that sentence where the
+            // start button should have been. Hiding it looked tidy and stopped
+            // every attempt from being playable.
+            //
+            // It is kept out of the way by its category and its name instead,
+            // which costs nothing and breaks nothing.
+            'visible'         => 1,
             'startdate'       => time(),
             'enablecompletion' => 0,
         ]);

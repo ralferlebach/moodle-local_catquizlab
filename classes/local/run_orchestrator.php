@@ -498,7 +498,12 @@ class run_orchestrator {
             case self::STAGE_PEOPLE:
                 return self::stage_people($context);
             case self::STAGE_READINESS:
-                $readiness = cat_readiness::check($runid);
+                // The run comes from the shared context like every other stage
+                // uses it. Reaching for an undefined $runid here meant the
+                // readiness stage threw on every provisioning — introduced when
+                // the stage was added, and invisible in the tests because they
+                // call cat_readiness directly rather than through the stage.
+                $readiness = cat_readiness::check((int) $context['runid']);
 
                 return [
                     'ok'     => $readiness['ok'],

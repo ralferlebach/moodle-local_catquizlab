@@ -1039,7 +1039,10 @@ final class worker_registry_test extends \advanced_testcase {
         // Sections are addressed by number, one per experiment, so a format
         // without them would break provisioning.
         $this->assertSame('topics', $course->format);
-        $this->assertSame(0, (int) $course->visible);
+        // Visible on purpose: a hidden course tells its enrolled students that
+        // it is unavailable, and the simulated persons are enrolled students.
+        // Hiding it looked tidy and made every attempt unplayable.
+        $this->assertSame(1, (int) $course->visible);
     }
 
     /**

@@ -107,6 +107,16 @@ class scale_provisioner {
             return null;
         }
 
+        // Provisioning runs more than once for the same run: an ad-hoc task
+        // that is retried, a "provision now" pressed after one, a run being
+        // recovered. Without this each of those built a second scale tree —
+        // two roots, two sets of subscales, and items materialised into
+        // whichever the later map happened to name.
+        $existing = self::existing_scales($runid);
+        if ($existing !== null) {
+            return $existing;
+        }
+
         $plan = self::plan_scales($blueprint);
         $now = time();
         $contextid = self::create_context($plan[0]['name'], $now, (int) ($USER->id ?? 0));
@@ -246,5 +256,48 @@ class scale_provisioner {
             return 'c' . $node['categoryindex'];
         }
         return 'c' . $node['categoryindex'] . 's' . $node['subscaleindex'];
+    }
+
+    /**
+     * The scales this run already has, if the engine still knows them.
+     *
+     * The lab's own map is checked against the engine rather than trusted: a
+     * map row pointing at a scale that was deleted is worse than no map at all,
+     * because everything downstream would materialise into a scale nobody can
+     * select from.
+     *
+     * @param int $runid The run.
+     * @return array|null contextid, rootscaleid and count, or null when there is no usable tree.
+     */
+    protected static function existing_scales(int $runid): ?array {
+        global $DB;
+
+        $rows = $DB->get_records('local_catquizlab_scalemap', ['runid' => $runid], 'level ASC, id ASC');
+        if ($rows === []) {
+            return null;
+        }
+
+        $root = 0;
+        $contextid = 0;
+        foreach ($rows as $row) {
+            if ((int) $row->level === self::LEVEL_ROOT) {
+                $root = (int) $row->catscaleid;
+                $contextid = (int) $row->contextid;
+                break;
+            }
+        }
+
+        if ($root === 0
+                || !$DB->get_manager()->table_exists('local_catquiz_catscales')
+                || !$DB->record_exists('local_catquiz_catscales', ['id' => $root])) {
+            // The map is stale. Clearing it lets this run build a tree it can
+            // actually use, rather than adding a second one beside a broken
+            // first.
+            $DB->delete_records('local_catquizlab_scalemap', ['runid' => $runid]);
+
+            return null;
+        }
+
+        return ['contextid' => $contextid, 'rootscaleid' => $root, 'count' => count($rows)];
     }
 }

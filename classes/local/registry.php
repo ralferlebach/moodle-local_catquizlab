@@ -166,6 +166,13 @@ class registry {
             // must not be settable by hand, because it stands for a check that
             // passed.
             'provision' => $status === self::STATUS_SCHEDULED,
+            // Available wherever a run is not actively being played: a run can
+            // be wrong in ways re-checking will never fix, and reproducing it
+            // leaves the broken one in the list for ever.
+            'reset'     => in_array($status, [
+                self::STATUS_SCHEDULED, self::STATUS_READY, self::STATUS_FAILED,
+                self::STATUS_CANCELLED, self::STATUS_FINISHED,
+            ], true),
             'reproduce' => self::is_terminal($status),
             'results'   => in_array($status, [self::STATUS_FINISHED, self::STATUS_AGGREGATING], true),
         ];

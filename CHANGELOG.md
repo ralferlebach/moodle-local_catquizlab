@@ -6,6 +6,98 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.6.20] — 2026-09-14
+
+The chain runs end to end.
+
+### The last blocker: the experiment course was hidden
+0.6.9 created it with `visible = 0`, which looked tidy and was the reason no
+attempt could ever be played. A hidden course tells its enrolled students *"this
+course is currently unavailable"* — and the simulated persons are enrolled
+students. The worker logged in correctly, reached the activity, and found that
+sentence where the start button should have been.
+
+Every symptom above it was a consequence: "no question was presented", the page
+reported as the dashboard, attempts cycling back into the queue. The course is
+visible now and kept out of the way by its category and its name instead, which
+costs nothing.
+
+### Measured, not asserted
+A full run on this instance, from an empty installation:
+
+    Setup            all four stages green in one action
+    Experiment       1 experiment, 1 run
+    Provisioning     4 scales, 24 items, 2 persons, 2 attempts
+    Worker           1 started (1 claimable attempt, concurrency 1)
+    Attempts         2 played, 12 items each
+    Traces           theta -0.003 (SE 0.603) and -2.146 (SE 1.054)
+    Aggregation      28 result rows
+    Evaluation       true -0.479 → -0.003 (error +0.476)
+                     true -1.778 → -2.146 (error -0.368)
+    Run status       FINISHED
+    Status card      [good] Run finished — 2 of 2 attempt(s) collected
+
+### Also fixed on the way
+`gotoSettle()` swallowed both navigation attempts, so a failed navigation left
+the page where it was and the next step reported what it failed to find there.
+It now names the URL it wanted and the one it landed on.
+
+### Verification
+PHPUnit 563 tests / 3236 assertions, Behat 32 scenarios / 232 steps, PHPDoc
+clean. One existing test asserted the course was hidden; that expectation was
+the defect, and it now asserts the opposite with the reason.
+
+---
+
+## [0.6.19] — 2026-09-14
+
+Three P0 defects that stopped provisioning working at all: issues #60, #59, #58.
+
+### #60 — Readiness threw on every provisioning
+`run_stage()` reached for an undefined `$runid` in the readiness stage, so the
+stage I added in 0.6.15 raised a fatal error every time a run was provisioned.
+It uses the shared context now, like every other stage.
+
+The tests did not catch it because they call `cat_readiness` directly rather
+than through the stage that uses it. There is now a test that dispatches the
+stage.
+
+Behind it, a second one: `cat_readiness` threw when a run had no usable
+definition. A readiness check that throws is worse than one that fails — the
+caller gets an exception where it expected a verdict. It returns a stated
+verdict now.
+
+### #59 — Provisioning built a second scale tree each time
+`scale_provisioner::provision()` created scales unconditionally. A retried
+ad-hoc task, a "provision now" after one, a recovered run — each produced
+another root and another set of subscales, and items materialised into whichever
+map was named later. It reuses what the run already has, and checks that against
+the engine rather than trusting its own map: a map row pointing at a deleted
+scale is worse than no map, because everything downstream then materialises into
+a scale nobody can select from.
+
+### #58 — No way back from a stuck run
+Re-checking suits a run whose cause was fixed outside it. **Reset to draft** is
+for the other case: a run that is wrong in itself. It removes what provisioning
+made — attempts, people, scale map, items, results — and keeps what the run *is*:
+its cell and its seed. A run being played is refused, because resetting
+underneath a worker strands the claim it holds.
+
+### Also
+`gotoSettle()` in the worker swallowed both of its navigation attempts, so a
+failed navigation left the page wherever it was and the next step reported what
+it failed to find there. The symptom was "no question was presented" on the
+dashboard — true, and three steps from the cause. It now reports the URL it
+wanted and the one it landed on.
+
+### Verification
+PHPUnit 562 tests / 3235 assertions, 11 worker tests. Each defect measured
+against the running instance: the readiness stage dispatches, provisioning twice
+yields one root scale, and a failed run resets to draft with its cell and seed
+intact.
+
+---
+
 ## [0.6.18] — 2026-09-14
 
 Directories that were never ours, shipped in every release.

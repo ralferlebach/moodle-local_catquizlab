@@ -72,9 +72,24 @@ class cat_readiness {
 
         $definition = json_decode((string) ($run->manifestjson ?? ''), true)['config']['definition'] ?? null;
         if (!is_array($definition)) {
-            $definition = experiment_definition::from_json(
-                (string) $DB->get_field('local_catquizlab_experiment', 'configjson', ['id' => $run->experimentid])
-            )->get_normalised();
+            // Falling back to the experiment, and saying so if that is gone
+            // too. A readiness check that throws is worse than one that fails:
+            // the caller gets an exception where it expected a verdict, and the
+            // provisioning stage around it turns into a stack trace rather than
+            // a run marked as not ready.
+            $configjson = (string) $DB->get_field(
+                'local_catquizlab_experiment',
+                'configjson',
+                ['id' => $run->experimentid]
+            );
+
+            try {
+                $definition = experiment_definition::from_json($configjson)->get_normalised();
+            } catch (\Throwable $e) {
+                return self::verdict(false, [
+                    get_string('readiness:nodefinition', 'local_catquizlab'),
+                ], ['leaves' => 0, 'items' => 0, 'usable' => 0, 'perleaf' => []]);
+            }
         }
 
         $facts = self::pool_facts($runid);

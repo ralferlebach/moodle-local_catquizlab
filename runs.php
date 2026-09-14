@@ -68,6 +68,28 @@ if ($action !== '' && $runid > 0) {
     $run = $DB->get_record('local_catquizlab_run', ['id' => $runid], '*', MUST_EXIST);
     $returnurl = new moodle_url('/local/catquizlab/runs.php', ['runid' => $runid]);
 
+    if ($action === 'reset') {
+        require_sesskey();
+        require_capability('local/catquizlab:execute', $context);
+
+        $result = \local_catquizlab\local\run_lifecycle::reset($runid);
+        if (!$result['ok']) {
+            redirect(
+                $returnurl,
+                get_string('run:resetrefused', $component, $result['reason']),
+                null,
+                \core\output\notification::NOTIFY_WARNING
+            );
+        }
+
+        $parts = [];
+        foreach ($result['removed'] as $label => $count) {
+            $parts[] = $count . ' ' . $label;
+        }
+
+        redirect($returnurl, get_string('run:reset', $component, implode(', ', $parts) ?: '-'));
+    }
+
     if ($action === 'provision') {
         require_sesskey();
         require_capability('local/catquizlab:execute', $context);
@@ -272,6 +294,15 @@ if ($runid > 0) {
     $allowed = $run['actions'];
     if (has_capability('local/catquizlab:execute', $context)) {
         $buttons = '';
+        if (!empty($allowed['reset'])) {
+            $buttons .= $OUTPUT->single_button(
+                new moodle_url('/local/catquizlab/runs.php', [
+                    'runid' => $runid, 'action' => 'reset', 'sesskey' => sesskey(),
+                ]),
+                get_string('action:reset', $component),
+                'post'
+            );
+        }
         if (!empty($allowed['provision'])) {
             $buttons .= $OUTPUT->single_button(
                 new moodle_url('/local/catquizlab/runs.php', [

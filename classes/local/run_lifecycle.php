@@ -516,6 +516,79 @@ class run_lifecycle {
     }
 
     /**
+     * Put a run back to draft, clearing what provisioning created.
+     *
+     * Re-checking suits a run whose cause was fixed outside it — a pool
+     * enlarged, an engine installed. This is for the other case: a run that is
+     * wrong in itself, or stuck in a state nothing moves it out of. Reproducing
+     * it makes a second run and leaves the first sitting there; this returns
+     * the one that exists to the state it started in.
+     *
+     * What is removed is what provisioning made: attempts, people, the scale
+     * map, the item records. What is kept is the run, its cell and its seed —
+     * the identity of the experiment condition, which is the point of a run.
+     *
+     * Engine-side objects are deliberately left alone. Deleting scales and
+     * questions from under an engine that may be mid-attempt is a much bigger
+     * promise than this needs to make, and re-provisioning reuses them.
+     *
+     * @param int $runid The run to reset.
+     * @return array{ok: bool, removed: array, reason: string}
+     */
+    public static function reset(int $runid): array {
+        global $DB;
+
+        $run = $DB->get_record('local_catquizlab_run', ['id' => $runid]);
+        if (!$run) {
+            return ['ok' => false, 'removed' => [], 'reason' => 'run-not-found'];
+        }
+
+        if ((int) $run->status === registry::STATUS_RUNNING && self::has_open_attempts($runid)) {
+            // A worker is playing one of these right now. Resetting underneath
+            // it would strand the claim it holds, which is the failure the
+            // whole lease mechanism exists to prevent.
+            return ['ok' => false, 'removed' => [], 'reason' => 'run-is-being-played'];
+        }
+
+        $removed = [];
+        foreach ([
+            'local_catquizlab_attempt'   => 'attempts',
+            'local_catquizlab_person'    => 'people',
+            'local_catquizlab_item'      => 'items',
+            'local_catquizlab_scalemap'  => 'scales',
+            'local_catquizlab_result'    => 'results',
+        ] as $table => $label) {
+            if (!$DB->get_manager()->table_exists($table)) {
+                continue;
+            }
+            $count = $DB->count_records($table, ['runid' => $runid]);
+            if ($count > 0) {
+                $DB->delete_records($table, ['runid' => $runid]);
+                $removed[$label] = $count;
+            }
+        }
+
+        // The manifest keeps its configuration and loses its history: the cell
+        // definition is what makes this run this run, the failure reason
+        // describes an attempt at it that no longer exists.
+        $manifest = json_decode((string) $run->manifestjson, true) ?: [];
+        unset($manifest['lifecycle']);
+
+        $DB->update_record('local_catquizlab_run', (object) [
+            'id'           => $runid,
+            'status'       => registry::STATUS_DRAFT,
+            'testcmid'     => 0,
+            'sectionid'    => 0,
+            'manifestjson' => json_encode($manifest, JSON_UNESCAPED_SLASHES),
+            'timemodified' => time(),
+        ]);
+
+        self::refresh_experiment($runid);
+
+        return ['ok' => true, 'removed' => $removed, 'reason' => ''];
+    }
+
+    /**
      * Check a failed run again, and put it back if it can run now.
      *
      * A run that failed readiness because a pool was too small is not broken
