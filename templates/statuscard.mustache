@@ -1,0 +1,43 @@
+{{!
+    @template local_catquizlab/statuscard
+
+    One stateful thing, said the same way as every other: what it is, the
+    evidence, and the one thing to do about it.
+
+    A component with nothing to do about it has no action, and that is a
+    statement rather than a gap — buttons on healthy things teach people to
+    press buttons.
+
+    Classes required for JS: none.
+    Data attributes required for JS: none.
+
+    Context variables required for this template:
+    * level - good, watch or bad
+    * good, watch, bad - flags for the level
+    * state - what it is
+    * reason - the evidence
+    * action - label and url, or null
+
+    Example context (json):
+    {
+        "level": "bad",
+        "good": false,
+        "watch": false,
+        "bad": true,
+        "state": "Waiting for a worker",
+        "reason": "6 attempt(s) claimed by nobody",
+        "action": {"label": "Start workers", "url": "/local/catquizlab/index.php?tab=setup"}
+    }
+}}
+<div class="d-flex align-items-start justify-content-between">
+    <div>
+        <span class="badge {{#good}}badge-success{{/good}}{{#watch}}badge-warning{{/watch}}{{#bad}}badge-danger{{/bad}}">
+            {{#good}}&check;{{/good}}{{#watch}}!{{/watch}}{{#bad}}&times;{{/bad}}
+        </span>
+        <strong>{{state}}</strong>
+        {{#reason}}<div class="small text-muted">{{.}}</div>{{/reason}}
+    </div>
+    {{#action}}
+        <a href="{{url}}" class="btn btn-sm btn-outline-primary ml-2 flex-shrink-0">{{label}}</a>
+    {{/action}}
+</div>

@@ -47,6 +47,10 @@ class operations_view {
 
         $workers = array_map(static function (\stdClass $worker): array {
             return [
+                // The same shape every other stateful thing on this page uses:
+                // what it is, the evidence, and what to do — rather than a
+                // count that leaves the reader to infer all three.
+                'status'    => status_report::worker($worker),
                 'workerid'  => $worker->workerid,
                 'slot'      => (int) $worker->slot,
                 'jobsdone'  => (int) $worker->jobsdone,
@@ -131,6 +135,15 @@ class operations_view {
         // is what lets the same view render inside the tabbed page.
         'formurl'    => (new \moodle_url('/local/catquizlab/operations.php'))->out(false),
         'actionurl'  => $pageurl->out(false),
+        // The tasks everything here waits on. They are in Moodle's own
+        // administration too, but there an ad-hoc task is a class name beside a
+        // JSON blob — "which run is waiting for what" meant reading it.
+        // The same contract as everything else on the page: state, evidence,
+        // one action. Four vocabularies for four components was the complaint.
+        'queuestatus'    => status_report::queue(),
+        'pipelinestatus' => status_report::pipeline(),
+        'tasks'        => task_overview::state(),
+        'taskadminurl' => (new \moodle_url('/admin/tool/task/scheduledtasks.php'))->out(false),
         'wizard'     => $wizard,
         'runtime'    => $runtime,
         'canruntime' => !$runtime['ok'],

@@ -26,6 +26,10 @@
         "sesskey": "abc123",
         "actionurl": "/local/catquizlab/index.php?tab=setup",
         "formurl": "/local/catquizlab/operations.php",
+        "tasks": {"scheduled": [], "adhoc": [], "hasadhoc": false, "cron": {"ok": true, "detail": "Cron last ran 30 secs ago."}},
+        "queuestatus": {"level": "good", "good": true, "watch": false, "bad": false, "state": "Nothing queued", "reason": "", "action": null},
+        "pipelinestatus": {"level": "good", "good": true, "watch": false, "bad": false, "state": "Pipeline active", "reason": "ran 20 secs ago", "action": null},
+        "taskadminurl": "/admin/tool/task/scheduledtasks.php",
         "cantoken": false
     }
 }}
@@ -153,9 +157,9 @@
                     {{#workers.rows}}
                         <tr>
                             <td>{{workerid}}</td>
-                            <td>{{slot}}</td>
-                            <td>{{jobsdone}}</td>
-                            <td>{{heartbeat}}</td>
+                            <td colspan="3">
+                                {{#status}}{{> local_catquizlab/statuscard }}{{/status}}
+                            </td>
                         </tr>
                         {{#log}}
                             <tr>
@@ -207,7 +211,63 @@
 
 <div class="card mb-3">
     <div class="card-body">
+        <h3 class="h5">{{#str}}task:heading, local_catquizlab{{/str}}</h3>
+
+        {{#pipelinestatus}}<div class="mb-3">{{> local_catquizlab/statuscard }}</div>{{/pipelinestatus}}
+
+        <h4 class="h6">{{#str}}task:scheduled, local_catquizlab{{/str}}</h4>
+        <table class="table table-sm">
+            <tbody>
+                {{#tasks.scheduled}}
+                    <tr>
+                        <td>{{name}}</td>
+                        <td class="small text-muted">{{lastrun}}</td>
+                        <td class="small {{#overdue}}text-danger{{/overdue}}">{{nextrun}}</td>
+                        <td>
+                            <a href="{{runurl}}" class="btn btn-sm btn-outline-secondary">
+                                {{#str}}task:runnow, local_catquizlab{{/str}}
+                            </a>
+                        </td>
+                    </tr>
+                    {{#overdue}}
+                        <tr><td colspan="4" class="small text-danger">
+                            {{#str}}task:overdue, local_catquizlab{{/str}}
+                        </td></tr>
+                    {{/overdue}}
+                {{/tasks.scheduled}}
+            </tbody>
+        </table>
+
+        <h4 class="h6">{{#str}}task:adhoc, local_catquizlab{{/str}}</h4>
+        {{#tasks.hasadhoc}}
+            <table class="table table-sm">
+                <tbody>
+                    {{#tasks.adhoc}}
+                        <tr>
+                            <td>{{name}}</td>
+                            <td>{{subject}}</td>
+                            <td class="small text-muted">
+                                {{#running}}{{#str}}task:isrunning, local_catquizlab{{/str}}{{/running}}
+                                {{^running}}{{due}}{{/running}}
+                            </td>
+                            <td class="small text-muted">{{failures}}</td>
+                        </tr>
+                    {{/tasks.adhoc}}
+                </tbody>
+            </table>
+        {{/tasks.hasadhoc}}
+        {{^tasks.hasadhoc}}
+            <p class="text-muted">{{#str}}task:noadhoc, local_catquizlab{{/str}}</p>
+        {{/tasks.hasadhoc}}
+
+        <a href="{{taskadminurl}}" class="small">{{#str}}task:openmoodle, local_catquizlab{{/str}}</a>
+    </div>
+</div>
+
+<div class="card mb-3">
+    <div class="card-body">
         <h3 class="h5">{{#str}}ops:queue, local_catquizlab{{/str}}</h3>
+        {{#queuestatus}}<div class="mb-2">{{> local_catquizlab/statuscard }}</div>{{/queuestatus}}
         <p>{{#str}}worker:queue, local_catquizlab{{/str}}
             {{queue.queued}} / {{queue.running}} / {{queue.collected}} / {{queue.failed}}</p>
 

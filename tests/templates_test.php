@@ -95,4 +95,55 @@ final class templates_test extends \advanced_testcase {
             );
         }
     }
+
+    /**
+     * The operations view supplies every top-level key its template uses.
+     *
+     * @return void
+     */
+    public function test_the_operations_context_covers_its_template(): void {
+        global $CFG;
+        $this->resetAfterTest();
+        $this->setAdminUser();
+
+        $source = file_get_contents($CFG->dirroot . '/local/catquizlab/templates/operations.mustache');
+        $context = \local_catquizlab\local\operations_view::context();
+
+        // Only the names the context itself has to provide. A name used inside
+        // a section belongs to that section's data, so the nesting is followed
+        // rather than pattern-matched.
+        preg_match_all('/\{\{([#^\/]?)([a-z][a-z0-9_.]*)\}?\}/i', $source, $tags, PREG_SET_ORDER);
+
+        $depth = 0;
+        $toplevel = [];
+        foreach ($tags as $tag) {
+            [, $sigil, $name] = $tag;
+
+            if ($sigil === '/') {
+                $depth = max(0, $depth - 1);
+                continue;
+            }
+
+            if ($depth === 0 && !in_array($name, ['str', 'js', 'pix'], true)) {
+                // A dotted path is rooted in a top-level key too: {{a.b}}
+                // needs a.
+                $toplevel[] = explode('.', $name)[0];
+            }
+
+            if ($sigil === '#' || $sigil === '^') {
+                $depth++;
+            }
+        }
+
+        // A missing key renders as nothing at all: the section is skipped, the
+        // table comes out empty, and the page looks correct. That is how a
+        // whole tasks panel rendered with its headings and no rows.
+        foreach (array_unique($toplevel) as $key) {
+            $this->assertArrayHasKey(
+                $key,
+                $context,
+                'operations.mustache uses {{' . $key . '}} and the context does not provide it.'
+            );
+        }
+    }
 }

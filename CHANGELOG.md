@@ -6,6 +6,106 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.6.17] — 2026-09-14
+
+Issue #51: one shape for every stateful thing.
+
+### The problem this fixes is one I made
+Ten issues of point repairs left each component saying its piece its own way: a
+run showed a status word, the queue a number, a worker a count, a task a class
+name. Every one more accurate than before, and the reader still had to hold four
+vocabularies at once to answer "is anything wrong". "Scheduled", "1 worker",
+"150 waiting", "0%" — all true, none actionable.
+
+### Added
+- **`status_report`**, one contract for runs, workers, the queue and the
+  pipeline:
+
+      state   — what it is, in words that mean something on their own
+      reason  — the evidence: which task, which attempt, since when, how many
+      action  — the one thing to do, or nothing
+
+  The contract is deliberately narrow, because one that allows exceptions is a
+  style guide. A healthy component has no action, and that is a statement rather
+  than a gap: buttons on healthy things teach people to press buttons.
+
+- **`statuscard.mustache`** renders it, so the shape is the same everywhere by
+  construction rather than by discipline.
+
+### What it reads like now
+A scheduled run was "Scheduled". It is:
+
+    Provisioning pending
+    Waiting for Run provisioning, due now. Cron has never run on this site.
+    [ Provision now ]
+
+A ready run with work and no worker was "Running, 0%". It is:
+
+    Waiting for a worker
+    3 attempt(s) claimed by nobody.
+    [ Start workers ]
+
+A worker was "1 worker". It is `Attempt #57 of run #4, heartbeat 2 secs ago`, or
+`Worker idle — no claimable attempts`, which answers the question the first
+version invited.
+
+A queue of attempts belonging to failed runs was "150 waiting", which reads as
+"a worker will get to it". It is `5 attempt(s) cannot be claimed — their runs
+are failed, cancelled or not ready`.
+
+### Verification
+PHPUnit 556 tests / 3216 assertions, Behat 32 scenarios / 232 steps, PHPDoc
+clean. Seven of the new tests check the contract itself: every card carries all
+three parts, lands in exactly one level, and a healthy one offers nothing to
+press.
+
+---
+
+## [0.6.16] — 2026-09-14
+
+Issue #46: the tasks everything waits on, in the plugin's own terms.
+
+### The problem
+Six Moodle tasks carry this plugin, and all of them are visible in Moodle's task
+administration — which is the problem. An ad-hoc task there is a class name
+beside a blob of JSON, so answering "is run 4 waiting for something, and for
+what" meant reading `{"runid":4,"options":[]}` out of a list of identical rows.
+
+### Added
+- **A tasks and pipeline section** on the setup tab: the scheduled task with
+  when it last ran and when it is next due, and the queued ad-hoc work named
+  after its subject — `Run #2 (strategy=classic)` rather than its custom data.
+
+- **Cron is reported beside them.** A task that is enabled and never runs looks
+  exactly like a disabled one from every angle except its last-run time, and
+  cron not running is the most common reason a pipeline sits still. A scheduled
+  task more than fifteen minutes overdue is called out: that is not slow cron.
+
+- **Run now**, for this plugin's own scheduled tasks only — a general "run any
+  task" button on a plugin page is a way to run somebody else's task by
+  accident. The task's `mtrace()` output comes back with the result, since that
+  is how these tasks say what they did.
+
+- A link to Moodle's task administration, as the supplement it should be rather
+  than the normal route.
+
+### Fixed
+The tasks panel first rendered with its headings and no rows: the view supplied
+no `tasks` key, so every section was skipped and the page looked correct. A
+missing key in Mustache renders as nothing at all, which is a failure mode that
+shows up as a page that seems fine.
+
+`templates_test` now checks that the operations context provides every top-level
+name its template uses, following the section nesting so a name belonging to a
+section's own data is not demanded of the context.
+
+### Verification
+PHPUnit 548 tests / 3181 assertions, Behat 32 scenarios / 232 steps, PHPDoc
+clean. Measured against the running instance: two queued ad-hoc tasks rendered
+as `Run #2` with their due times, and the scheduled task with its run button.
+
+---
+
 ## [0.6.15] — 2026-09-14
 
 The run lifecycle, from three directions: issues #50, #45, #47, #49 and #48.
