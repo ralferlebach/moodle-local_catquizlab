@@ -54,7 +54,11 @@ const NAV_TIMEOUT = 30000;
 
 const args = parseArgs(process.argv.slice(2));
 const BASE_URL = normaliseBaseUrl(args['base-url']);
-const TOKEN = args.token || '';
+// The token comes from the environment, not from argv: command-line arguments
+// are visible in process listings, and this one opens every web service
+// function the worker may call. The argument is still accepted for a manual
+// run, where the person typing it already has the token in their shell history.
+const TOKEN = process.env.CATQUIZLAB_WORKER_TOKEN || args.token || '';
 const WORKER_ID = args['worker-id'] || 'catquizlab-worker';
 const MAX_JOBS = parseInt(args['max-jobs'] || '0', 10); // 0 = until the queue is empty.
 const LOGIN_SUFFIX = args['login-suffix'] || '';
@@ -160,7 +164,15 @@ async function playAttempt(browser, job) {
         // completed experiment: the queue drains, every job reports success and
         // no trace is ever collected.
         if (answeredCount === 0) {
-            throw new Error('No question was presented; the attempt never started.');
+            // What the page actually said. "No question was presented" names
+            // the symptom and nothing else, and the cause is almost always on
+            // the screen the worker was looking at: a misconfigured pool, an
+            // engine error, a login that silently failed. Carrying that back
+            // saves the round trip through the browser by hand.
+            const diagnosis = await collectZeroQuestionDiagnosis(page, engineAttemptId);
+            throw new Error(
+                'No question was presented; the attempt never started. ' + diagnosis
+            );
         }
 
         // The absence of a question is not evidence that the attempt finished.
@@ -604,6 +616,53 @@ function chooseOptionIndex(decision, count) {
  *
  * @returns {Promise<void>} Resolves when every check passed; rejects on the first failure.
  */
+/**
+ * What the page shows when no question appeared.
+ *
+ * Kept short on purpose: this ends up in a database column and in a list in the
+ * interface, where a stack trace would push out the part that matters.
+ *
+ * @param {object} page The Puppeteer page.
+ * @param {number} engineAttemptId The engine attempt, when one was read.
+ * @returns {Promise<string>} A one-line diagnosis.
+ */
+async function collectZeroQuestionDiagnosis(page, engineAttemptId) {
+    const parts = [];
+
+    try {
+        parts.push(`url=${page.url()}`);
+        parts.push(`title=${(await page.title()).slice(0, 80)}`);
+
+        // Moodle renders its own errors and notifications in known containers;
+        // the generic body text is the fallback when neither is present.
+        const message = await page.evaluate(() => {
+            const selectors = [
+                '.errormessage', '.alert-danger', '#region-main .alert',
+                '.notifyproblem', '.core-error-message',
+            ];
+            for (const selector of selectors) {
+                const node = document.querySelector(selector);
+                if (node && node.innerText.trim()) {
+                    return node.innerText.trim();
+                }
+            }
+            const main = document.querySelector('#region-main') || document.body;
+            return main.innerText.trim().slice(0, 400);
+        });
+        if (message) {
+            parts.push(`page=${message.replace(/\s+/g, ' ').slice(0, 240)}`);
+        }
+    } catch (error) {
+        parts.push(`diagnosis unavailable: ${error.message}`);
+    }
+
+    if (engineAttemptId) {
+        parts.push(`engineattempt=${engineAttemptId}`);
+    }
+
+    return parts.join(' | ');
+}
+
 async function selfTest() {
     const failures = [];
     const check = (label, condition) => {

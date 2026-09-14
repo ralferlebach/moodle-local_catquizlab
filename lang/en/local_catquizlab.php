@@ -716,5 +716,7 @@ $string['worker:fleet'] = 'Live workers:';
 $string['worker:heading'] = 'Workers and attempt queue';
 $string['worker:queue'] = 'Attempts queued / running / collected / failed:';
 $string['worker:recenterrors'] = 'Recent attempt failures';
+$string['worker:runtimedirfailed'] = 'The worker runtime directory could not be created: {$a}';
+$string['worker:runtimedirunwritable'] = 'The worker runtime directory is not writable by this user: {$a}';
 $string['worker:stalled'] = 'Attempts are waiting and no worker is running. Nothing will move until one is started.';
 $string['worker:tries'] = 'tries';

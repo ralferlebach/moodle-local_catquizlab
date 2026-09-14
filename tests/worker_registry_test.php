@@ -649,4 +649,92 @@ final class worker_registry_test extends \advanced_testcase {
         $this->assertSame(0, \local_catquizlab\local\engine_hygiene::purge_empty_attempts());
         $this->assertTrue($DB->record_exists('adaptivequiz_attempt', ['id' => $id]));
     }
+
+    /**
+     * The web service token never reaches the command line.
+     *
+     * @return void
+     */
+    public function test_the_token_stays_out_of_the_command_line(): void {
+        $this->resetAfterTest();
+
+        $secret = 'SECRET-TOKEN-0123456789';
+        set_config('worker_token', $secret, 'local_catquizlab');
+        set_config('worker_node_path', '/usr/bin/node', 'local_catquizlab');
+
+        $config = \local_catquizlab\local\worker_launcher::config_from_settings();
+
+        // Arguments are visible in process listings, monitoring output and
+        // crash reports, and this token opens every web service function the
+        // worker is allowed to call.
+        $argv = \local_catquizlab\local\worker_launcher::build_command($config);
+        $this->assertStringNotContainsString($secret, implode(' ', $argv));
+
+        $method = new \ReflectionMethod(\local_catquizlab\local\worker_launcher::class, 'command_with_environment');
+        $method->setAccessible(true);
+        $command = $method->invoke(null, $config, $argv);
+
+        // Not in the env prefix either: `env NAME=value cmd` only moves the
+        // secret from the worker's argv into env's own, which is just as
+        // visible. It is exported into this process, and the child inherits it.
+        $this->assertStringNotContainsString($secret, $command);
+        $this->assertSame($secret, getenv('CATQUIZLAB_WORKER_TOKEN'));
+    }
+
+    /**
+     * Runtime directories are not world-writable.
+     *
+     * @return void
+     */
+    public function test_runtime_directories_are_not_world_writable(): void {
+        $this->resetAfterTest();
+
+        $env = \local_catquizlab\local\worker_launcher::runtime_environment([]);
+        $home = null;
+        foreach ($env as $pair) {
+            [$name, $value] = explode('=', $pair, 2);
+            if ($name === 'HOME') {
+                $home = $value;
+            }
+        }
+
+        $this->assertDirectoryExists($home);
+
+        // These hold a browser profile and its cache. 0777 asks for more than
+        // is needed, and whether the umask happens to trim it is not a
+        // security argument.
+        $mode = fileperms($home) & 0777;
+        $this->assertSame(0, $mode & 0002, sprintf('The runtime directory is world-writable (%o).', $mode));
+    }
+
+    /**
+     * An unusable runtime directory is reported where it happens.
+     *
+     * @return void
+     */
+    public function test_an_unwritable_runtime_directory_is_reported(): void {
+        $this->resetAfterTest();
+
+        // A directory that exists and cannot be written: the case that used to
+        // surface later as an EACCES from inside Puppeteer, where the reader
+        // then debugs the browser instead of the file system.
+        if (function_exists('posix_geteuid') && posix_geteuid() === 0) {
+            // Root ignores the permission bits, so the case cannot be staged
+            // here. Skipping says so instead of passing on a false premise.
+            $this->markTestSkipped('Running as root; directory permissions are not enforced.');
+        }
+
+        $blocked = make_temp_directory('catquizlab_blocked_' . random_int(1000, 9999));
+        chmod($blocked, 0500);
+        set_config('worker_home', $blocked . '/home', 'local_catquizlab');
+
+        try {
+            \local_catquizlab\local\worker_launcher::runtime_environment([]);
+            $this->fail('An unusable runtime directory passed silently.');
+        } catch (\moodle_exception $e) {
+            $this->assertStringContainsString($blocked, $e->getMessage() . ($e->debuginfo ?? ''));
+        } finally {
+            chmod($blocked, 0700);
+        }
+    }
 }

@@ -25,7 +25,7 @@
 defined('MOODLE_INTERNAL') || die();
 
 $plugin->component    = 'local_catquizlab';
-$plugin->version      = 2026091304;
+$plugin->version      = 2026091305;
 $plugin->requires     = 2024100700;   // Moodle 4.5.0 — hard minimum.
 $plugin->supported    = [405, 502];   // Tested on Moodle 4.5, 5.0 and 5.2; raise as new majors are added to CI.
 // Beta since 0.6.0: the whole chain — definition, provisioning, engine
@@ -33,13 +33,21 @@ $plugin->supported    = [405, 502];   // Tested on Moodle 4.5, 5.0 and 5.2; rais
 // exercised end to end against a real CAT engine, and a study of 90 attempts
 // was run through it. What is missing for stable is field use, not function.
 $plugin->maturity     = MATURITY_BETA;
-$plugin->release      = '0.6.6';
+$plugin->release      = '0.6.7';
 
-// Deliberately NO hard dependencies: the suite drives local_catquiz and
-// mod_adaptivequiz as a black box, but the plugin must install stand-alone
-// (e.g. in CI, where neither is present). Their availability is detected at
-// runtime (see classes/local/environment.php) and surfaced on the settings
-// page. This mirrors the optional-integration pattern used in earlier
-// reference plugins. Revisit before beta: once the attempt runner exists,
-// promote local_catquiz and mod_adaptivequiz to declared dependencies.
-$plugin->dependencies = [];
+// The engine is a hard dependency now, as the note here used to promise it
+// would become. The suite no longer drives it as an optional black box: it
+// creates mod_adaptivequiz instances, writes local_catquiz test environments,
+// materialises items into engine scales and plays attempts through the real
+// activity. An installation without those plugins cannot do any of it, and the
+// honest place to say so is here rather than in a runtime check that reports a
+// broken installation after the fact.
+//
+// The versions are the ALiSe-v-1.2.0-legacy set: the earliest release of each
+// plugin whose behaviour this suite has been verified against, and the newest
+// line that still supports Moodle 4.5 — the v-3.0 line requires Moodle 5.2.
+$plugin->dependencies = [
+    'local_catquiz'                => 2026090553,
+    'mod_adaptivequiz'             => 2026090604,
+    'adaptivequizcatmodel_catquiz' => 2026082704,
+];

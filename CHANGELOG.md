@@ -6,6 +6,67 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.6.7] — 2026-09-13
+
+Issues #26, #27, #28, #29 and #30 — two of them defects in code written earlier
+the same day.
+
+### Security
+- **The web service token no longer reaches the command line (#29).** It was
+  passed as `--token=…`, where a process listing shows it to anyone who can run
+  `ps`, and it opens every web service function the worker is allowed to call.
+
+  The first fix was incomplete and the test caught it: moving the secret into an
+  `env NAME=value` prefix only moves it from the worker's argv into env's own,
+  which is just as visible. It is exported into the PHP process now and
+  inherited by the child — `/proc/<pid>/environ` is readable by the owner and
+  root, argv by anyone. The worker reads `CATQUIZLAB_WORKER_TOKEN` and still
+  accepts `--token` for a manual run, where the person typing it already has the
+  token in their shell history.
+
+- **Runtime directories are no longer created world-writable (#30).** They were
+  made with `@mkdir(…, 0777)`. They are now created through Moodle's own helper
+  and then tightened to `0700` explicitly, rather than left to
+  `$CFG->directorypermissions` — which defaults to `0777` across a dataroot.
+  That default is reasonable for files a site serves and is not reasonable for
+  a browser profile, its cookies and its cache.
+
+  The error suppression is gone with it: a directory that cannot be created or
+  written now fails where it happens, naming the path. Suppressed, it surfaced
+  later as an EACCES from inside Puppeteer, and the reader debugged the browser
+  instead of the file system.
+
+### Changed
+- **The engine is a declared dependency (#26, #27).** The note in `version.php`
+  promised this — *"promote local_catquiz and mod_adaptivequiz to declared
+  dependencies once the attempt runner exists"* — and the runner exists. The
+  suite creates `mod_adaptivequiz` instances, writes `local_catquiz` test
+  environments, materialises items into engine scales and plays attempts
+  through the real activity; an installation without those plugins cannot do
+  any of it. Versions are the ALiSe-v-1.2.0-legacy set, which is also the
+  newest line that still supports Moodle 4.5.
+
+### Added
+- **The zero-question failure says what the page said (#28)**: url, title, the
+  Moodle error or notification if there is one, otherwise the main region's
+  text, plus the engine attempt id. "No question was presented" names the
+  symptom and nothing else, and the cause is almost always on the screen the
+  worker was looking at.
+
+### Tests
+Three more: the token absent from both argv and the assembled command while
+present in the environment, the runtime directory not world-writable, and an
+unusable runtime directory reported where it happens (skipped as root, which
+ignores permission bits — saying so beats passing on a false premise). One
+existing expectation was inverted: `worker_launcher_test` asserted the token
+*was* in argv.
+
+### Verification
+PHPUnit 474 tests / 2918 assertions, Behat 32 scenarios / 229 steps, 11 worker
+tests, phpcs and PHPDoc clean. Runtime directories verified at `0700` on disk.
+
+---
+
 ## [0.6.6] — 2026-09-13
 
 Issue #25: engine attempts that were created but never started.

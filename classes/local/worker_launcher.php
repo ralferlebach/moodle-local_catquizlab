@@ -45,7 +45,10 @@ class worker_launcher {
             (string) ($config['node'] ?? 'node'),
             (string) ($config['script'] ?? ''),
             '--base-url=' . (string) ($config['baseurl'] ?? ''),
-            '--token=' . (string) ($config['token'] ?? ''),
+            // The token is NOT here: see runtime_environment(). Command-line
+            // arguments are visible in process listings, monitoring output and
+            // crash reports, and this one opens every web service function the
+            // worker is allowed to call.
         ];
         if (!empty($config['workerid'])) {
             $argv[] = '--worker-id=' . $config['workerid'];
@@ -176,7 +179,28 @@ class worker_launcher {
     protected static function command_with_environment(array $config, array $argv): string {
         $env = array_map('escapeshellarg', self::runtime_environment($config));
 
+        // The token is deliberately absent from this string. Putting it in an
+        // `env NAME=value` prefix would only move it from the worker's argv to
+        // env's own, which is just as visible in a process listing. It is
+        // exported into this process instead, and the child inherits it —
+        // /proc/<pid>/environ is readable by the owner and root, argv by
+        // anyone.
+        self::export_token($config);
+
         return 'env ' . implode(' ', $env) . ' ' . implode(' ', array_map('escapeshellarg', $argv));
+    }
+
+    /**
+     * Put the worker token into this process's environment, for the child.
+     *
+     * @param array $config The worker configuration.
+     * @return void
+     */
+    protected static function export_token(array $config): void {
+        $token = (string) ($config['token'] ?? get_config('local_catquizlab', 'worker_token'));
+        if ($token !== '') {
+            putenv('CATQUIZLAB_WORKER_TOKEN=' . $token);
+        }
     }
 
     /**
@@ -214,19 +238,55 @@ class worker_launcher {
             $cache = $home . '/.cache/puppeteer';
         }
 
+        // Moodle's own directory permissions, not 0777: these hold a browser
+        // profile and its cache, which nobody but the web server user has any
+        // business reading. And no error suppression — a runtime directory that
+        // cannot be created surfaces later as a Chrome or Puppeteer error, and
+        // the reader then debugs the browser instead of the file system.
         foreach ([$home, $cache, $home . '/.config', $home . '/.local/share'] as $dir) {
-            if (!is_dir($dir)) {
-                @mkdir($dir, 0777, true);
+            if (is_dir($dir)) {
+                continue;
+            }
+
+            if (!make_writable_directory($dir, false)) {
+                throw new \moodle_exception(
+                    'worker:runtimedirfailed',
+                    'local_catquizlab',
+                    '',
+                    $dir
+                );
+            }
+
+            // Tightened explicitly rather than left to $CFG->directorypermissions,
+            // which defaults to 0777 across a Moodle dataroot. That default is a
+            // reasonable one for files a site serves; it is not reasonable for a
+            // browser profile, its cookies and its cache.
+            @chmod($dir, 0700);
+        }
+
+        // Existing directories are checked too: one created once by the wrong
+        // user stays unusable, and that is exactly the case that produced an
+        // EACCES from inside Puppeteer rather than from here.
+        foreach ([$home, $cache] as $dir) {
+            if (!is_writable($dir)) {
+                throw new \moodle_exception(
+                    'worker:runtimedirunwritable',
+                    'local_catquizlab',
+                    '',
+                    $dir
+                );
             }
         }
 
-        return [
+        $environment = [
             'HOME=' . $home,
             'PUPPETEER_CACHE_DIR=' . $cache,
             'XDG_CACHE_HOME=' . $home . '/.cache',
             'XDG_CONFIG_HOME=' . $home . '/.config',
             'XDG_DATA_HOME=' . $home . '/.local/share',
         ];
+
+        return $environment;
     }
 
     /**

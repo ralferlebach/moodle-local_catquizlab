@@ -716,5 +716,7 @@ $string['worker:fleet'] = 'Laufende Worker:';
 $string['worker:heading'] = 'Worker und Attempt-Queue';
 $string['worker:queue'] = 'Attempts eingereiht / laufend / eingesammelt / fehlgeschlagen:';
 $string['worker:recenterrors'] = 'Letzte fehlgeschlagene Attempts';
+$string['worker:runtimedirfailed'] = 'Das Worker-Runtime-Verzeichnis konnte nicht angelegt werden: {$a}';
+$string['worker:runtimedirunwritable'] = 'Das Worker-Runtime-Verzeichnis ist für diesen Nutzer nicht beschreibbar: {$a}';
 $string['worker:stalled'] = 'Es warten Attempts und es läuft kein Worker. Ohne einen gestarteten Worker bewegt sich nichts.';
 $string['worker:tries'] = 'Versuche';
