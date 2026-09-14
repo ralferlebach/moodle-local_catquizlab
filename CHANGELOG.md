@@ -6,6 +6,41 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.6.18] — 2026-09-14
+
+Directories that were never ours, shipped in every release.
+
+### The finding
+`catmodel/` and `catquizcentralhub/` are subplugin directories of
+`local_catquiz`. Empty copies of their whole tree — model folders, `classes`,
+`tests`, `lang`, `host`, `client` — sat in this plugin's root and rode along as
+**123 empty entries in every zip I delivered**.
+
+They arrived through a source archive and came back after a restore, because I
+removed them once by hand and nothing stopped them returning. A directory named
+after a subplugin type, sitting in a plugin root, is also an invitation to be
+scanned as one.
+
+Twelve further empty directories went with them: leftovers of a removed AMD
+module, of template folders, of a `doc/` beside the real `docs/`, and a
+`downloads/` holding nothing. Git does not track empty directories, so these
+existed only where somebody unpacked a zip — and then travelled into the next
+one.
+
+### Added
+`schema_test` now refuses both: the two foreign names explicitly, and any empty
+directory anywhere in the tree. Verified in both directions — recreating
+`catmodel/rasch/classes` fails the test with "belongs to local_catquiz, not to
+this plugin".
+
+Removing them by hand is what I did the first time, and it lasted until the next
+archive.
+
+### Verification
+PHPUnit 557 tests / 3219 assertions.
+
+---
+
 ## [0.6.17] — 2026-09-14
 
 Issue #51: one shape for every stateful thing.

@@ -283,4 +283,53 @@ final class schema_test extends \advanced_testcase {
             );
         }
     }
+
+    /**
+     * The plugin contains only its own directories, and no empty ones.
+     *
+     * @return void
+     */
+    public function test_the_tree_holds_nothing_foreign_or_empty(): void {
+        global $CFG;
+        $this->resetAfterTest();
+
+        $root = $CFG->dirroot . '/local/catquizlab';
+
+        // `catmodel` and `catquizcentralhub` are subplugin directories of
+        // local_catquiz. Copies of them arrived here empty through a source
+        // archive and rode along in 123 zip entries of every release, and a
+        // directory named after a subplugin type sitting in a plugin root is an
+        // invitation to be scanned as one.
+        foreach (['catmodel', 'catquizcentralhub'] as $foreign) {
+            $this->assertDirectoryDoesNotExist(
+                $root . '/' . $foreign,
+                $foreign . ' belongs to local_catquiz, not to this plugin.'
+            );
+        }
+
+        // Empty directories are all leftovers of something: a module that was
+        // removed, an archive that carried the shape of a tree without its
+        // contents. Git does not track them, so they exist only where somebody
+        // unpacked a zip — and then travel into the next one.
+        $empty = [];
+        $iterator = new \RecursiveIteratorIterator(
+            new \RecursiveDirectoryIterator($root, \FilesystemIterator::SKIP_DOTS),
+            \RecursiveIteratorIterator::CHILD_FIRST
+        );
+
+        foreach ($iterator as $entry) {
+            if (!$entry->isDir()) {
+                continue;
+            }
+            $path = $entry->getPathname();
+            if (str_contains($path, '/node_modules/') || str_contains($path, '/.git/')) {
+                continue;
+            }
+            if (!(new \FilesystemIterator($path, \FilesystemIterator::SKIP_DOTS))->valid()) {
+                $empty[] = str_replace($root . '/', '', $path);
+            }
+        }
+
+        $this->assertSame([], $empty, 'Empty directories in the plugin tree: ' . implode(', ', $empty));
+    }
 }
