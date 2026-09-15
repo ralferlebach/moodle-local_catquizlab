@@ -25,11 +25,14 @@ Feature: Reaching the CAT experiment suite management page
     # person is already on.
     When I follow "1. Preparation"
     Then I should see "Setup and readiness"
-    And I should see "Set up worker access"
+    # The action now sits on the step it fixes, not in a card repeating it.
+    And I should see "3. Worker access to Moodle"
     And I should see "System"
     And I should see "CAT engine"
-    And I should see "Worker web service token"
-    And I should see "Attempt pipeline"
+    # Its eleven checks are steps of the process now, not a card beside it.
+    And I should see "Token stored in the plugin setting"
+    # Was a heading of the system card; the pipeline is step 5 of the process.
+    And I should see "5. Pipeline"
     And I should see "Attempt queue"
     And I should see "Start workers"
     And I should see "Release orphaned claims"

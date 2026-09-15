@@ -57,7 +57,16 @@
                         </li>
                     {{/steps}}
                 </ul>
-                {{#incomplete}}{{#hint}}<p class="small text-muted ml-4 mb-0">{{hint}}</p>{{/hint}}{{/incomplete}}
+                {{#incomplete}}
+                    {{#hint}}<p class="small text-muted ml-4 mb-1">{{.}}</p>{{/hint}}
+                    {{#action}}
+                        <form method="post" action="{{url}}" class="ml-4">
+                            <input type="hidden" name="sesskey" value="{{../../sesskey}}">
+                            <input type="hidden" name="action" value="{{command}}">
+                            <button type="submit" class="btn btn-sm btn-primary">{{label}}</button>
+                        </form>
+                    {{/action}}
+                {{/incomplete}}
             </div>
         {{/wizard.stages}}
 
@@ -77,71 +86,6 @@
             <input type="hidden" name="action" value="wizardstart">
             <button type="submit" class="btn btn-primary">{{#str}}wizard:runandenable, local_catquizlab{{/str}}</button>
         </form>
-    </div>
-</div>
-
-<div class="card mb-3">
-    <div class="card-body">
-        <h3 class="h5">{{#str}}runtime:heading, local_catquizlab{{/str}}</h3>
-        <ul class="list-unstyled mb-2">
-            {{#runtime.steps}}
-                <li>
-                    <span class="badge {{#ok}}badge-success{{/ok}}{{#missing}}badge-danger{{/missing}}">
-                        {{#ok}}OK{{/ok}}{{#missing}}&times;{{/missing}}
-                    </span>
-                    {{label}} <span class="text-muted small">{{detail}}</span>
-                </li>
-            {{/runtime.steps}}
-        </ul>
-        {{#canruntime}}
-            <form method="post" action="{{formurl}}">
-                <input type="hidden" name="sesskey" value="{{sesskey}}">
-                <input type="hidden" name="action" value="setupruntime">
-                <button type="submit" class="btn btn-primary">{{#str}}runtime:setup, local_catquizlab{{/str}}</button>
-            </form>
-        {{/canruntime}}
-    </div>
-</div>
-
-<div class="card mb-3">
-    <div class="card-body">
-        <h3 class="h5">{{#str}}ops:system, local_catquizlab{{/str}}</h3>
-        <ul class="list-unstyled mb-0">
-            {{#health.checks}}
-                <li class="mb-1">
-                    <span class="badge {{#ok}}badge-success{{/ok}}{{#warn}}badge-warning{{/warn}}{{#fail}}badge-danger{{/fail}}">
-                        {{#ok}}OK{{/ok}}{{#warn}}!{{/warn}}{{#fail}}&times;{{/fail}}
-                    </span>
-                    <strong>{{label}}</strong>
-                    <span class="text-muted">{{detail}}</span>
-                    {{#actionurl}}<a href="{{actionurl}}">{{#str}}settings, core{{/str}}</a>{{/actionurl}}
-                </li>
-            {{/health.checks}}
-        </ul>
-    </div>
-</div>
-
-<div class="card mb-3">
-    <div class="card-body">
-        <h3 class="h5">{{#str}}access:heading, local_catquizlab{{/str}}</h3>
-        <ul class="list-unstyled mb-2">
-            {{#access.steps}}
-                <li>
-                    <span class="badge {{#ok}}badge-success{{/ok}}{{#missing}}badge-danger{{/missing}}">
-                        {{#ok}}OK{{/ok}}{{#missing}}&times;{{/missing}}
-                    </span>
-                    {{label}}
-                </li>
-            {{/access.steps}}
-        </ul>
-        {{#cansetup}}
-            <p class="text-muted small">{{#str}}access:explain, local_catquizlab{{/str}}</p>
-            <form method="post" action="{{formurl}}">
-                <input type="hidden" name="sesskey" value="{{sesskey}}">
-                <input type="hidden" name="action" value="setupaccess">
-                <button type="submit" class="btn btn-primary">{{#str}}access:setup, local_catquizlab{{/str}}</button>
-            </form>
-        {{/cansetup}}
     </div>
 </div>
 

@@ -144,8 +144,8 @@ Feature: Defining and running CAT experiments from the web interface
       | name | Behat results |
     And the experiment "Behat results" has been expanded into runs
     And I navigate to "Reports > CAT experiment suite" in site administration
-    When I follow "Results and evaluation"
-    Then I should see "Results and evaluation"
+    When I follow "4. Results"
+    Then I should see "Results"
     And I should see "Overview"
     And I should see "Global metrics"
     And I should see "Robustness"
@@ -162,7 +162,7 @@ Feature: Defining and running CAT experiments from the web interface
       | strategy | lowestsub   |
     And the experiment "Behat local" has been expanded into runs
     And I navigate to "Reports > CAT experiment suite" in site administration
-    And I follow "Results and evaluation"
+    And I follow "4. Results"
     When I follow "Subscales"
     Then I should see "Local diagnostic performance"
     And I should see "No subscale-level data under this filter."
@@ -174,7 +174,7 @@ Feature: Defining and running CAT experiments from the web interface
       | name | Behat robustness |
     And the experiment "Behat robustness" has been expanded into runs
     And I navigate to "Reports > CAT experiment suite" in site administration
-    And I follow "Results and evaluation"
+    And I follow "4. Results"
     When I follow "Robustness"
     Then I should see "Robustness against pool disturbances"
     And I should see "measured against the ideal pool"
@@ -184,7 +184,7 @@ Feature: Defining and running CAT experiments from the web interface
       | name | Behat flow |
     And the experiment "Behat flow" has been expanded into runs
     And I navigate to "Reports > CAT experiment suite" in site administration
-    And I follow "Results and evaluation"
+    And I follow "4. Results"
     When I follow "Test flow"
     Then I should see "Test flow and feasibility"
     And I should see "I = 1 / SE"
@@ -194,7 +194,7 @@ Feature: Defining and running CAT experiments from the web interface
       | name | Behat export |
     And the experiment "Behat export" has been expanded into runs
     And I navigate to "Reports > CAT experiment suite" in site administration
-    And I follow "Results and evaluation"
+    And I follow "4. Results"
     When I follow "Raw data"
     Then I should see "Raw data"
     And I should see "Data level"
@@ -266,5 +266,5 @@ Feature: Defining and running CAT experiments from the web interface
     And I follow "Nothing played"
     And I press "Create sweep"
     When I navigate to "Reports > CAT experiment suite" in site administration
-    And I follow "Results and evaluation"
+    And I follow "4. Results"
     Then I should see "No run has been started yet"

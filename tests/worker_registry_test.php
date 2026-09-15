@@ -951,11 +951,11 @@ final class worker_registry_test extends \advanced_testcase {
     }
 
     /**
-     * The wizard reports the four stages in dependency order.
+     * The wizard reports its steps in dependency order.
      *
      * @return void
      */
-    public function test_the_wizard_reports_four_stages_in_order(): void {
+    public function test_the_wizard_reports_its_steps_in_order(): void {
         $this->resetAfterTest();
         $this->setAdminUser();
 
@@ -965,7 +965,15 @@ final class worker_registry_test extends \advanced_testcase {
         // The order is the dependency order: a worker cannot be set up against
         // an engine that is not there, and a pipeline over a broken setup
         // produces failing jobs rather than results.
-        $this->assertSame(['engine', 'environment', 'worker', 'pipeline'], $ids);
+        //
+        // Access and runtime were one "worker" stage with a card below
+        // repeating both; they are their own steps now, and the last one
+        // answers the question the tab exists for rather than leaving five
+        // green rows as an argument for it.
+        $this->assertSame(
+            ['engine', 'environment', 'access', 'runtime', 'pipeline', 'readiness'],
+            $ids
+        );
     }
 
     /**

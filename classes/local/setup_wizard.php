@@ -55,11 +55,17 @@ class setup_wizard {
     public static function state(): array {
         $component = 'local_catquizlab';
 
+        // Six steps, each answering one thing once. They used to be four
+        // stages beside six separate diagnostic cards that repeated them —
+        // Node, dependencies, browser and base URL appeared in the wizard and
+        // again below it, which made the page more complete and less readable.
         $stages = [
             self::engine_stage($component),
             self::environment_stage($component),
-            self::worker_stage($component),
+            self::access_stage($component),
+            self::runtime_stage($component),
             self::pipeline_stage($component),
+            self::readiness_stage($component),
         ];
 
         $blockers = [];
@@ -203,31 +209,89 @@ class setup_wizard {
     }
 
     /**
-     * Stage 3: the worker's access and its runtime.
+     * Step 3: may the worker talk to Moodle at all.
+     *
+     * Each of the eleven checks is its own line rather than a summary with a
+     * card repeating them underneath: one place, one answer.
      *
      * @param string $component For the strings.
      * @return array
      */
-    protected static function worker_stage(string $component): array {
-        $steps = [];
-
+    protected static function access_stage(string $component): array {
         $access = worker_access::verify();
-        $steps[] = self::step(
+
+        $steps = [];
+        foreach ($access['steps'] as $check) {
+            $steps[] = self::step(
+                (string) $check['id'],
+                (string) $check['label'],
+                !empty($check['ok']),
+                (string) ($check['detail'] ?? '')
+            );
+        }
+
+        return self::stage(
             'access',
-            get_string('access:heading', $component),
-            $access['ok'],
-            $access['ok'] ? '' : implode(', ', $access['missing'])
+            get_string('wizard:access', $component),
+            $steps,
+            $access['ok'] ? '' : get_string('wizard:accesshint', $component)
         );
+    }
 
+    /**
+     * Step 4: can the worker actually run.
+     *
+     * @param string $component For the strings.
+     * @return array
+     */
+    protected static function runtime_stage(string $component): array {
         $runtime = worker_runtime::verify();
-        $steps[] = self::step(
-            'runtime',
-            get_string('runtime:heading', $component),
-            $runtime['ok'],
-            $runtime['ok'] ? '' : implode(', ', $runtime['missing'])
-        );
 
-        return self::stage('worker', get_string('wizard:worker', $component), $steps);
+        $steps = [];
+        foreach ($runtime['steps'] as $check) {
+            $steps[] = self::step(
+                (string) $check['id'],
+                (string) $check['label'],
+                !empty($check['ok']),
+                (string) ($check['detail'] ?? '')
+            );
+        }
+
+        return self::stage(
+            'runtime',
+            get_string('wizard:runtime', $component),
+            $steps,
+            $runtime['ok'] ? '' : get_string('wizard:runtimehint', $component)
+        );
+    }
+
+    /**
+     * Step 6: the answer the whole tab exists for.
+     *
+     * Not a check of its own — it restates what the five before it establish,
+     * because "can this installation run an experiment" is the question
+     * somebody came with, and five green rows are an argument rather than an
+     * answer.
+     *
+     * @param string $component For the strings.
+     * @return array
+     */
+    protected static function readiness_stage(string $component): array {
+        $ready = environment::catquiz_available()
+            && environment::adaptivequiz_available()
+            && worker_access::verify()['ok']
+            && worker_runtime::verify()['ok']
+            && self::pipeline_enabled();
+
+        return self::stage('readiness', get_string('wizard:readiness', $component), [
+            self::step(
+                'canrun',
+                get_string('wizard:canrun', $component),
+                $ready,
+                $ready ? get_string('wizard:canrunyes', $component)
+                    : get_string('wizard:canrunno', $component)
+            ),
+        ]);
     }
 
     /**
@@ -287,8 +351,51 @@ class setup_wizard {
             $ok = $ok && !empty($step['ok']);
         }
 
-        return ['id' => $id, 'label' => $label, 'ok' => $ok, 'incomplete' => !$ok,
-            'steps' => $steps, 'hint' => $hint];
+        return [
+            'id'         => $id,
+            'label'      => $label,
+            'ok'         => $ok,
+            'incomplete' => !$ok,
+            'steps'      => $steps,
+            'hint'       => $hint,
+            // The action belongs to the step it fixes. It used to live in a card
+            // below that repeated the step, which is why removing the cards
+            // nearly took the only way to set up worker access with them.
+            'action'     => $ok ? null : self::action_for($id),
+        ];
+    }
+
+    /**
+     * What fixes a step, when something can.
+     *
+     * @param string $id The step.
+     * @return array|null Label and url, or null when there is nothing to press.
+     */
+    protected static function action_for(string $id): ?array {
+        $component = 'local_catquizlab';
+        $ops = new \moodle_url('/local/catquizlab/operations.php');
+
+        $actions = [
+            // The engine is installed by an administrator; a button here would
+            // be a promise this plugin cannot keep.
+            'engine'      => null,
+            'environment' => ['label' => get_string('wizard:run', $component), 'action' => 'wizard'],
+            'access'      => ['label' => get_string('access:setup', $component), 'action' => 'setupaccess'],
+            'runtime'     => ['label' => get_string('runtime:setup', $component), 'action' => 'setupruntime'],
+            'pipeline'    => ['label' => get_string('wizard:runandenable', $component), 'action' => 'wizardstart'],
+            'readiness'   => ['label' => get_string('wizard:run', $component), 'action' => 'wizard'],
+        ];
+
+        $action = $actions[$id] ?? null;
+        if ($action === null) {
+            return null;
+        }
+
+        return [
+            'label'   => $action['label'],
+            'url'     => $ops->out(false),
+            'command' => $action['action'],
+        ];
     }
 
     /**

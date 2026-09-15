@@ -6,6 +6,57 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.6.22] — 2026-09-14
+
+Issues #54 and #55: the first two steps become processes.
+
+### #54 — One process, six steps, each thing said once
+Tab 1 showed the wizard and then six diagnostic cards that repeated it. Node,
+dependencies, browser and base URL appeared in the wizard and again below —
+technically more complete, and harder to read for it.
+
+It is one process now:
+
+    1. Systemvoraussetzungen   2. Experimentumgebung   3. Worker-Zugang
+    4. Worker-Runtime          5. Pipeline             6. Startbereit
+
+The eleven access checks and the four runtime checks are steps of it rather than
+summaries with cards restating them. Step 6 is not a check: it answers the
+question somebody came to the tab with, because five green rows are an argument
+for readiness and not a statement of it.
+
+**The action belongs to the step it fixes.** Removing the cards nearly removed
+the only way to set up worker access with them — the button lived in the card,
+not in the step it was about. Each incomplete step now carries its own action,
+which is where it belonged.
+
+Verified in the browser: Node.js, Worker access and Base URL appear exactly
+once each.
+
+### #55 — Tab 2 asks one question
+The quick-action bar offered five buttons, two of which — "All runs" and
+"Results" — led into steps 3 and 4 that the tabs above already reach. A row of
+buttons leading out of a step is not process guidance; it is a second navigation
+disagreeing with the first.
+
+One primary action remains: define an experiment. Presets and import stay as
+secondary offers, because they are ways of *starting* a definition rather than
+peers of it.
+
+The worker fleet and attempt queue panels moved out: this step answers "what
+shall be run", and a panel about what is running now answers something else. The
+setup warning and the state line went too — the shell says both on every page,
+and two identical banners one above the other is how a reader learns to skip
+both.
+
+### Verification
+PHPUnit 575 tests / 3277 assertions, Behat 32 scenarios / 232 steps, phpcs with
+the Moodle standard clean, PHPDoc clean. Nine Behat scenarios navigated through
+the removed buttons and now go through the shell tabs, which is the navigation
+they should have been using.
+
+---
+
 ## [0.6.21] — 2026-09-14
 
 CI made green locally, and the navigation rebuilt around the work: #52, #53.
