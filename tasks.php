@@ -48,14 +48,22 @@ if ($action === 'runscheduled' && $classname !== '') {
     // Only this plugin's own tasks: a general "run any task" button on a plugin
     // page is a way to run somebody else's task by accident.
     if (!in_array($classname, \local_catquizlab\local\task_overview::SCHEDULED, true)) {
-        redirect($returnurl, get_string('task:notours', $component), null,
-            \core\output\notification::NOTIFY_ERROR);
+        redirect(
+            $returnurl,
+            get_string('task:notours', $component),
+            null,
+            \core\output\notification::NOTIFY_ERROR
+        );
     }
 
     $task = \core\task\manager::get_scheduled_task($classname);
     if ($task === false) {
-        redirect($returnurl, get_string('task:notfound', $component), null,
-            \core\output\notification::NOTIFY_ERROR);
+        redirect(
+            $returnurl,
+            get_string('task:notfound', $component),
+            null,
+            \core\output\notification::NOTIFY_ERROR
+        );
     }
 
     // The task may take a while and writes as it goes; holding the session open

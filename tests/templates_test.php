@@ -66,6 +66,48 @@ final class templates_test extends \advanced_testcase {
      * @param string $file Its path.
      * @return void
      */
+    public function test_the_example_survives_the_linters_extraction(string $name, string $file): void {
+        $this->resetAfterTest();
+
+        // The `moodle-plugin-ci mustache` check does not read the docblock the
+        // way a person does: it takes everything between `{{!` and the *first* `}}`,
+        // non-greedily. A template that parses here and fails there is a CI
+        // failure with no local symptom, which is how one shipped.
+        $content = file_get_contents($file);
+
+        $docs = '';
+        preg_match_all('/{{!([\s\S]*?)}}/', $content, $sections);
+        foreach ($sections[0] as $section) {
+            $section = trim($section);
+            $pos = strpos($section, '@template');
+            if ($pos !== false) {
+                $docs = substr($section, $pos, -2);
+                break;
+            }
+        }
+
+        $this->assertNotSame('', $docs, $name . ' has no @template section the linter can find.');
+        $this->assertMatchesRegularExpression(
+            '/Example context \(json\):/',
+            $docs,
+            $name . ' has no example context inside the part the linter reads.'
+        );
+
+        preg_match('/Example context \(json\):([\s\S]*)/', $docs, $matches);
+        $this->assertNotNull(
+            json_decode($matches[1]),
+            $name . ' has an example context the linter cannot parse: ' . json_last_error_msg()
+        );
+    }
+
+    /**
+     * A template renders from its example context.
+     *
+     * @dataProvider template_provider
+     * @param string $name The template name.
+     * @param string $file Its path.
+     * @return void
+     */
     public function test_template_renders_from_its_example(string $name, string $file): void {
         global $OUTPUT;
         $this->resetAfterTest();

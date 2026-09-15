@@ -287,9 +287,11 @@ class scale_provisioner {
             }
         }
 
-        if ($root === 0
+        if (
+            $root === 0
                 || !$DB->get_manager()->table_exists('local_catquiz_catscales')
-                || !$DB->record_exists('local_catquiz_catscales', ['id' => $root])) {
+                || !$DB->record_exists('local_catquiz_catscales', ['id' => $root])
+        ) {
             // The map is stale. Clearing it lets this run build a tree it can
             // actually use, rather than adding a second one beside a broken
             // first.

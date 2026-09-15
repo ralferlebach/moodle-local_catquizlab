@@ -221,8 +221,11 @@ class worker_registry {
     public static function stop_requested(string $workerid): bool {
         global $DB;
 
-        return (int) $DB->get_field('local_catquizlab_worker', 'stoprequested',
-            ['workerid' => $workerid]) > 0;
+        return (int) $DB->get_field(
+            'local_catquizlab_worker',
+            'stoprequested',
+            ['workerid' => $workerid]
+        ) > 0;
     }
 
     /**

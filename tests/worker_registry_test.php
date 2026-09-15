@@ -1325,7 +1325,7 @@ final class worker_registry_test extends \advanced_testcase {
 
         $this->assertTrue(worker_registry::report('reporter', 77, 'working'));
 
-        // "Busy for four minutes on attempt 77" and "gone four minutes ago"
+        // Reading "busy for four minutes on attempt 77" and "gone four minutes ago"
         // were the same row before this.
         $row = $DB->get_record('local_catquizlab_worker', ['workerid' => 'reporter']);
         $this->assertSame(77, (int) $row->currentattempt);
@@ -1343,8 +1343,12 @@ final class worker_registry_test extends \advanced_testcase {
         $this->resetAfterTest();
 
         $id = worker_registry::acquire_slot(1, 'slow');
-        $DB->set_field('local_catquizlab_worker', 'heartbeat',
-            time() - worker_registry::HEARTBEAT_TIMEOUT - 60, ['id' => $id]);
+        $DB->set_field(
+            'local_catquizlab_worker',
+            'heartbeat',
+            time() - worker_registry::HEARTBEAT_TIMEOUT - 60,
+            ['id' => $id]
+        );
 
         // An attempt takes minutes, and the claim-to-completion gap used to
         // cover the whole timeout.

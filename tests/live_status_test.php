@@ -50,8 +50,10 @@ final class live_status_test extends \advanced_testcase {
         $generator = $this->getDataGenerator()->get_plugin_generator('local_catquizlab');
         $runid = (int) $generator->create_run()->id;
 
-        foreach ([attempt_scheduler::STATUS_QUEUED, attempt_scheduler::STATUS_QUEUED,
-            attempt_scheduler::STATUS_COLLECTED] as $status) {
+        foreach (
+            [attempt_scheduler::STATUS_QUEUED, attempt_scheduler::STATUS_QUEUED,
+            attempt_scheduler::STATUS_COLLECTED] as $status
+        ) {
             $DB->insert_record('local_catquizlab_attempt', (object) [
                 'runid' => $runid, 'personid' => 0, 'status' => $status, 'tries' => 0,
                 'nextruntime' => 0, 'timecreated' => time(), 'timemodified' => time(),
@@ -82,8 +84,10 @@ final class live_status_test extends \advanced_testcase {
             live_status::execute()
         );
 
-        foreach (['liveworkers', 'crashedworkers', 'queued', 'running', 'collected',
-            'failed', 'state', 'headline', 'detail', 'changed'] as $key) {
+        foreach (
+            ['liveworkers', 'crashedworkers', 'queued', 'running', 'collected',
+            'failed', 'state', 'headline', 'detail', 'changed'] as $key
+        ) {
             $this->assertArrayHasKey($key, $clean);
         }
     }

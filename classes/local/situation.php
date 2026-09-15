@@ -67,12 +67,18 @@ class situation {
 
         return self::rank([
             'workers'    => worker_registry::summary(),
-            'queued'     => $DB->count_records('local_catquizlab_attempt',
-                ['status' => attempt_scheduler::STATUS_QUEUED]),
-            'running'    => $DB->count_records('local_catquizlab_attempt',
-                ['status' => attempt_scheduler::STATUS_RUNNING]),
-            'failedruns' => $DB->count_records('local_catquizlab_run',
-                ['status' => registry::STATUS_FAILED]),
+            'queued'     => $DB->count_records(
+                'local_catquizlab_attempt',
+                ['status' => attempt_scheduler::STATUS_QUEUED]
+            ),
+            'running'    => $DB->count_records(
+                'local_catquizlab_attempt',
+                ['status' => attempt_scheduler::STATUS_RUNNING]
+            ),
+            'failedruns' => $DB->count_records(
+                'local_catquizlab_run',
+                ['status' => registry::STATUS_FAILED]
+            ),
             'wizard'     => setup_wizard::state(),
         ]);
     }

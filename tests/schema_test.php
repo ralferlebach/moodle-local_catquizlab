@@ -295,7 +295,7 @@ final class schema_test extends \advanced_testcase {
 
         $root = $CFG->dirroot . '/local/catquizlab';
 
-        // `catmodel` and `catquizcentralhub` are subplugin directories of
+        // The catmodel and catquizcentralhub trees are subplugin directories of
         // local_catquiz. Copies of them arrived here empty through a source
         // archive and rode along in 123 zip entries of every release, and a
         // directory named after a subplugin type sitting in a plugin root is an

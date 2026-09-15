@@ -179,18 +179,19 @@ function xmldb_local_catquizlab_upgrade($oldversion): bool {
         upgrade_plugin_savepoint(true, 2026091301, 'local', 'catquizlab');
     }
 
-
     if ($oldversion < 2026091401) {
         // A worker only spoke when it claimed and when it finished, and an
         // attempt takes minutes: a working worker went quiet for as long as the
         // timeout that declares it dead.
         $table = new xmldb_table('local_catquizlab_worker');
 
-        foreach ([
+        foreach (
+            [
             ['currentattempt', XMLDB_TYPE_INTEGER, '10', XMLDB_NOTNULL, '0', 'lasterror'],
             ['workerstate', XMLDB_TYPE_CHAR, '20', null, null, 'currentattempt'],
             ['stoprequested', XMLDB_TYPE_INTEGER, '10', XMLDB_NOTNULL, '0', 'workerstate'],
-        ] as [$name, $type, $precision, $notnull, $default, $previous]) {
+            ] as [$name, $type, $precision, $notnull, $default, $previous]
+        ) {
             $field = new xmldb_field($name, $type, $precision, null, $notnull, null, $default, $previous);
             if (!$dbman->field_exists($table, $field)) {
                 $dbman->add_field($table, $field);

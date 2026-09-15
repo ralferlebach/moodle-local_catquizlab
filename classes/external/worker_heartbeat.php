@@ -49,8 +49,12 @@ class worker_heartbeat extends external_api {
         return new external_function_parameters([
             'workerid'  => new external_value(PARAM_TEXT, 'The worker instance reporting in.'),
             'attemptid' => new external_value(PARAM_INT, 'The attempt it is playing, or 0.', VALUE_DEFAULT, 0),
-            'state'     => new external_value(PARAM_ALPHA, 'What it is doing: working, idle or stopping.',
-                VALUE_DEFAULT, 'working'),
+            'state'     => new external_value(
+                PARAM_ALPHA,
+                'What it is doing: working, idle or stopping.',
+                VALUE_DEFAULT,
+                'working'
+            ),
         ]);
     }
 

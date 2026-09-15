@@ -23,7 +23,7 @@ Feature: Reaching the CAT experiment suite management page
     And I navigate to "Reports > CAT experiment suite" in site administration
     # No detour through the Moodle administration: the tab is on the page the
     # person is already on.
-    When I follow "1. Set up"
+    When I follow "1. Preparation"
     Then I should see "Setup and readiness"
     And I should see "Set up worker access"
     And I should see "System"

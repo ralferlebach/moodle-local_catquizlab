@@ -89,6 +89,11 @@ if ($action === 'extract' && $fromexperiment > 0) {
 }
 
 echo $OUTPUT->header();
+
+// The same frame as every other CatQuizLab page: opening a run used to drop
+// the reader out of the process they were in the middle of.
+echo \local_catquizlab\output\shell::render('plan', optional_param('experimentid', 0, PARAM_INT));
+
 echo $OUTPUT->heading(get_string('heading:presets', $component));
 echo html_writer::tag('p', get_string('preset:intro', $component), ['class' => 'text-muted']);
 

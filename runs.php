@@ -68,6 +68,52 @@ if ($action !== '' && $runid > 0) {
     $run = $DB->get_record('local_catquizlab_run', ['id' => $runid], '*', MUST_EXIST);
     $returnurl = new moodle_url('/local/catquizlab/runs.php', ['runid' => $runid]);
 
+    if ($action === 'delete' || $action === 'deletedeep') {
+        require_sesskey();
+        require_capability('local/catquizlab:execute', $context);
+
+        $deep = $action === 'deletedeep';
+        $force = optional_param('force', 0, PARAM_BOOL);
+
+        if (!optional_param('confirm', 0, PARAM_BOOL)) {
+            // Irreversible, so it is confirmed against the run it names rather
+            // than with a general "are you sure".
+            echo $OUTPUT->header();
+            echo $OUTPUT->confirm(
+                get_string($deep ? 'purge:confirmrundeep' : 'purge:confirmrun', $component, $runid),
+                new moodle_url('/local/catquizlab/runs.php', [
+                    'runid' => $runid, 'action' => $action, 'sesskey' => sesskey(),
+                    'confirm' => 1, 'force' => $force,
+                ]),
+                $returnurl
+            );
+            echo $OUTPUT->footer();
+            exit;
+        }
+
+        $result = \local_catquizlab\local\purger::delete_run($runid, $deep, (bool) $force);
+        if (!$result['ok']) {
+            redirect(
+                $returnurl,
+                get_string('purge:refused', $component, $result['reason']),
+                null,
+                \core\output\notification::NOTIFY_WARNING
+            );
+        }
+
+        $parts = [];
+        foreach ($result['removed'] as $label => $count) {
+            $parts[] = $count . ' ' . $label;
+        }
+
+        redirect(
+            new moodle_url('/local/catquizlab/runs.php'),
+            $parts === []
+                ? get_string('purge:nothing', $component)
+                : get_string('purge:done', $component, implode(', ', $parts))
+        );
+    }
+
     if ($action === 'reset') {
         require_sesskey();
         require_capability('local/catquizlab:execute', $context);
@@ -215,6 +261,10 @@ if ($action !== '' && $runid > 0) {
 
 echo $OUTPUT->header();
 
+// The same frame as every other CatQuizLab page: opening a run used to drop
+// the reader out of the process they were in the middle of.
+echo \local_catquizlab\output\shell::render('progress', optional_param('experimentid', 0, PARAM_INT));
+
 // A single run: its coordinates, manifest and metrics.
 if ($runid > 0) {
     $detail = run_registry::detail($runid);
@@ -294,6 +344,20 @@ if ($runid > 0) {
     $allowed = $run['actions'];
     if (has_capability('local/catquizlab:execute', $context)) {
         $buttons = '';
+        $buttons .= $OUTPUT->single_button(
+            new moodle_url('/local/catquizlab/runs.php', [
+                'runid' => $runid, 'action' => 'delete', 'sesskey' => sesskey(),
+            ]),
+            get_string('purge:deleterun', $component),
+            'post'
+        );
+        $buttons .= $OUTPUT->single_button(
+            new moodle_url('/local/catquizlab/runs.php', [
+                'runid' => $runid, 'action' => 'deletedeep', 'sesskey' => sesskey(), 'force' => 1,
+            ]),
+            get_string('purge:deleterundeep', $component),
+            'post'
+        );
         if (!empty($allowed['reset'])) {
             $buttons .= $OUTPUT->single_button(
                 new moodle_url('/local/catquizlab/runs.php', [

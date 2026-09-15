@@ -26,7 +26,12 @@
         "sesskey": "abc123",
         "actionurl": "/local/catquizlab/index.php?tab=setup",
         "formurl": "/local/catquizlab/operations.php",
-        "tasks": {"scheduled": [], "adhoc": [], "hasadhoc": false, "cron": {"ok": true, "detail": "Cron last ran 30 secs ago."}},
+        "tasks": {
+            "scheduled": [],
+            "adhoc": [],
+            "hasadhoc": false,
+            "cron": {"ok": true, "detail": "Cron last ran 30 secs ago."}
+        },
         "queuestatus": {"level": "good", "good": true, "watch": false, "bad": false, "state": "Nothing queued", "reason": "", "action": null},
         "pipelinestatus": {"level": "good", "good": true, "watch": false, "bad": false, "state": "Pipeline active", "reason": "ran 20 secs ago", "action": null},
         "taskadminurl": "/admin/tool/task/scheduledtasks.php",
@@ -261,6 +266,31 @@
         {{/tasks.hasadhoc}}
 
         <a href="{{taskadminurl}}" class="small">{{#str}}task:openmoodle, local_catquizlab{{/str}}</a>
+
+        <hr>
+        <h4 class="h6">{{#str}}purge:heading, local_catquizlab{{/str}}</h4>
+        <p class="small text-muted">{{#str}}purge:explain, local_catquizlab{{/str}}</p>
+        <form method="post" action="{{formurl}}" class="d-inline">
+            <input type="hidden" name="sesskey" value="{{sesskey}}">
+            <input type="hidden" name="action" value="killtasks">
+            <button type="submit" class="btn btn-sm btn-outline-danger">
+                {{#str}}purge:killtasks, local_catquizlab{{/str}}
+            </button>
+        </form>
+        <form method="post" action="{{formurl}}" class="d-inline">
+            <input type="hidden" name="sesskey" value="{{sesskey}}">
+            <input type="hidden" name="action" value="killworkers">
+            <button type="submit" class="btn btn-sm btn-outline-danger">
+                {{#str}}purge:killworkers, local_catquizlab{{/str}}
+            </button>
+        </form>
+        <form method="post" action="{{formurl}}" class="d-inline">
+            <input type="hidden" name="sesskey" value="{{sesskey}}">
+            <input type="hidden" name="action" value="killpipeline">
+            <button type="submit" class="btn btn-sm btn-danger">
+                {{#str}}purge:killpipeline, local_catquizlab{{/str}}
+            </button>
+        </form>
     </div>
 </div>
 

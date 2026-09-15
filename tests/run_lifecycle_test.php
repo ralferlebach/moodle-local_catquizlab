@@ -1081,7 +1081,7 @@ final class run_lifecycle_test extends \advanced_testcase {
         $this->resetAfterTest();
         $this->setAdminUser();
 
-        // "Scheduled, 0%, workers idle" with no action that moves it is
+        // A run reading "scheduled, 0%, workers idle" with no action that moves it is
         // indistinguishable from work in progress, and a run can wait for a
         // task that was never queued or was queued while cron was down.
         $actions = registry::allowed_actions(registry::STATUS_SCHEDULED);
@@ -1200,8 +1200,12 @@ final class run_lifecycle_test extends \advanced_testcase {
 
         $runid = $this->run_ids($this->experiment_with_runs())[0];
         $DB->set_field('local_catquizlab_run', 'manifestjson', '{}', ['id' => $runid]);
-        $DB->set_field('local_catquizlab_experiment', 'configjson', 'not json at all',
-            ['id' => $DB->get_field('local_catquizlab_run', 'experimentid', ['id' => $runid])]);
+        $DB->set_field(
+            'local_catquizlab_experiment',
+            'configjson',
+            'not json at all',
+            ['id' => $DB->get_field('local_catquizlab_run', 'experimentid', ['id' => $runid])]
+        );
 
         // A readiness check that throws is worse than one that fails: the
         // caller gets an exception where it expected a verdict.
@@ -1262,8 +1266,10 @@ final class run_lifecycle_test extends \advanced_testcase {
         $result = run_lifecycle::reset($runid);
 
         $this->assertTrue($result['ok']);
-        $this->assertSame(registry::STATUS_DRAFT,
-            (int) $DB->get_field('local_catquizlab_run', 'status', ['id' => $runid]));
+        $this->assertSame(
+            registry::STATUS_DRAFT,
+            (int) $DB->get_field('local_catquizlab_run', 'status', ['id' => $runid])
+        );
         $this->assertSame(0, $DB->count_records('local_catquizlab_attempt', ['runid' => $runid]));
 
         // The cell and the seed are what make this run this run: reproducing it

@@ -67,14 +67,22 @@ class live_status extends external_api {
         return [
             'liveworkers'    => (int) $workers['live'],
             'crashedworkers' => (int) $workers['crashed'],
-            'queued'         => $DB->count_records('local_catquizlab_attempt',
-                ['status' => attempt_scheduler::STATUS_QUEUED]),
-            'running'        => $DB->count_records('local_catquizlab_attempt',
-                ['status' => attempt_scheduler::STATUS_RUNNING]),
-            'collected'      => $DB->count_records('local_catquizlab_attempt',
-                ['status' => attempt_scheduler::STATUS_COLLECTED]),
-            'failed'         => $DB->count_records('local_catquizlab_attempt',
-                ['status' => attempt_scheduler::STATUS_FAILED]),
+            'queued'         => $DB->count_records(
+                'local_catquizlab_attempt',
+                ['status' => attempt_scheduler::STATUS_QUEUED]
+            ),
+            'running'        => $DB->count_records(
+                'local_catquizlab_attempt',
+                ['status' => attempt_scheduler::STATUS_RUNNING]
+            ),
+            'collected'      => $DB->count_records(
+                'local_catquizlab_attempt',
+                ['status' => attempt_scheduler::STATUS_COLLECTED]
+            ),
+            'failed'         => $DB->count_records(
+                'local_catquizlab_attempt',
+                ['status' => attempt_scheduler::STATUS_FAILED]
+            ),
             'state'          => $verdict['state'],
             'headline'       => $verdict['headline'],
             'detail'         => $verdict['detail'],

@@ -70,7 +70,7 @@ class status_report {
         $counts = run_lifecycle::attempt_counts($runid);
 
         if ($status === registry::STATUS_SCHEDULED) {
-            // "Scheduled" says nothing about whether anything is happening. The
+            // The word "scheduled" says nothing about whether anything is happening.
             // useful facts are which task it waits for and whether that task is
             // being run at all.
             $task = self::pending_task_for($runid, '\local_catquizlab\task\orchestrate_run');

@@ -97,12 +97,18 @@ class attempt_scheduler {
             'notdue'    => 0,
             'blocked'   => 0,
             'paused'    => 0,
-            'running'   => (int) $DB->count_records('local_catquizlab_attempt',
-                ['status' => self::STATUS_RUNNING]),
-            'collected' => (int) $DB->count_records('local_catquizlab_attempt',
-                ['status' => self::STATUS_COLLECTED]),
-            'failed'    => (int) $DB->count_records('local_catquizlab_attempt',
-                ['status' => self::STATUS_FAILED]),
+            'running'   => (int) $DB->count_records(
+                'local_catquizlab_attempt',
+                ['status' => self::STATUS_RUNNING]
+            ),
+            'collected' => (int) $DB->count_records(
+                'local_catquizlab_attempt',
+                ['status' => self::STATUS_COLLECTED]
+            ),
+            'failed'    => (int) $DB->count_records(
+                'local_catquizlab_attempt',
+                ['status' => self::STATUS_FAILED]
+            ),
         ];
 
         // Grouped by run so the run's state is read once rather than per

@@ -6,6 +6,55 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.6.21] — 2026-09-14
+
+CI made green locally, and the navigation rebuilt around the work: #52, #53.
+
+### The CI tooling now runs here
+Two things I had been unable to reproduce locally are reproducible now:
+PHP_CodeSniffer 3.13.2 with the real Moodle standard, and the mustache linter
+from moodle-local_ci.
+
+**phpcs reports nothing.** The violations the CI found were in 0.6.17; the ones
+still left in the working tree are fixed, including three that came from a stray
+frame render my own edit script had dropped into a confirmation branch.
+
+**The mustache failure is explained.** `moodle-plugin-ci mustache` reads the
+docblock non-greedily — everything between `{{!` and the *first* `}}`. An
+example context that parses perfectly here can be cut short there, which is a CI
+failure with no local symptom. `templates_test` now reproduces that extraction
+exactly, so the next one fails here instead.
+
+### #52, #53 — one frame, four steps, everywhere
+The navigation existed on `index.php` and nowhere else, so opening a run dropped
+the reader out of the process they were in the middle of. And it was cut by
+object — "experiments and runs", "settings" — so no place meant "what is
+happening right now".
+
+`output\shell` renders on every page:
+
+    1. Vorbereitung   2. Experimentenplan   3. Verlauf   4. Ergebnisse
+
+Settings is not a step; it is a link in the header, reached from preparation
+where somebody setting an installation up is already looking. The chosen
+experiment travels with the reader through a selector on every step, so moving
+between them does not mean choosing it again. The state line sits above the tabs
+on every page, with the same state–reason–action contract as everything else.
+
+Verified in the browser on index, setup, runs, results and presets: four steps
+each, the right one active.
+
+### Verification
+PHPUnit 575 tests / 3284 assertions, Behat 32 scenarios / 232 steps, phpcs with
+the Moodle standard clean, PHPDoc clean.
+
+The end-to-end run was not repeated after this change — the built-in web server
+this container uses for it did not survive the test sequence. Provisioning was
+confirmed after the rebuild (4 scales, 24 items, 2 persons, 2 attempts); the
+worker leg was not.
+
+---
+
 ## [0.6.20] — 2026-09-14
 
 The chain runs end to end.

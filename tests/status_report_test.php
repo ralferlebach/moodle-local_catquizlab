@@ -105,7 +105,7 @@ final class status_report_test extends \advanced_testcase {
 
         $card = status_report::run($this->make_run(registry::STATUS_SCHEDULED));
 
-        // "Scheduled" alone was the complaint: accurate, and it leaves the
+        // The bare word "scheduled" was the complaint: accurate, and it leaves the
         // reader to work out whether anything is happening.
         $this->assertNotSame('', $card['reason']);
         $this->assertNotNull($card['action']);
@@ -150,7 +150,7 @@ final class status_report_test extends \advanced_testcase {
 
         $card = status_report::worker($DB->get_record('local_catquizlab_worker', ['workerid' => 'exec-1']));
 
-        // "1 worker" was the whole message before this.
+        // The count "1 worker" was the whole message before this.
         $this->assertTrue($card['good']);
         $this->assertStringContainsString((string) $attemptid, $card['reason']);
         $this->assertStringContainsString((string) $runid, $card['reason']);

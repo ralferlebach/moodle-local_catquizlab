@@ -137,6 +137,45 @@ if ($action !== '') {
         redirect($pageurl);
     }
 
+    if ($action === 'killpipeline') {
+        if (!optional_param('confirm', 0, PARAM_BOOL)) {
+            echo $OUTPUT->header();
+            echo $OUTPUT->confirm(
+                get_string('purge:confirmpipeline', $component),
+                new moodle_url('/local/catquizlab/operations.php', [
+                    'action' => 'killpipeline', 'sesskey' => sesskey(), 'confirm' => 1,
+                ]),
+                $pageurl
+            );
+            echo $OUTPUT->footer();
+            exit;
+        }
+
+        $result = \local_catquizlab\local\purger::kill_pipeline();
+        redirect($pageurl, get_string('purge:done', $component, sprintf(
+            '%d tasks, %d workers, %d attempts',
+            $result['tasks'],
+            $result['workers'],
+            $result['attempts']
+        )));
+    }
+
+    if ($action === 'killtasks') {
+        $count = \local_catquizlab\local\purger::kill_tasks();
+        redirect($pageurl, $count > 0
+            ? get_string('purge:done', $component, $count . ' tasks')
+            : get_string('purge:nothing', $component));
+    }
+
+    if ($action === 'killworkers') {
+        $result = \local_catquizlab\local\purger::kill_workers();
+        redirect($pageurl, get_string('purge:done', $component, sprintf(
+            '%d workers, %d attempts released',
+            $result['workers'],
+            $result['attempts']
+        )));
+    }
+
     if ($action === 'purgeempty') {
         $purged = \local_catquizlab\local\engine_hygiene::purge_empty_attempts();
         redirect(

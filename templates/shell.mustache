@@ -1,0 +1,86 @@
+{{!
+    @template local_catquizlab/shell
+
+    The frame every CatQuizLab page renders inside: the four process steps, the
+    experiment in context, and one line about the state of the installation.
+
+    Rendered on every page rather than only the landing one, because opening a
+    run used to drop the reader out of the process they were in the middle of.
+
+    Classes required for JS: none.
+    Data attributes required for JS:
+    * data-region="catquizlab-situation" - the state line, kept current by the
+      livestatus module.
+
+    Context variables required for this template:
+    * title - the plugin name
+    * steps - key, number, label, url, current
+    * experiments - id, name, selected
+    * hasexperiments - whether there are any
+    * experimentid - the one in context, or 0
+    * selecturl - where the selector posts
+    * situation - state, reason and action for the installation
+    * settingsurl - where settings live
+
+    Example context (json):
+    {
+        "title": "CAT experiment suite",
+        "steps": [
+            {"key": "prepare", "number": 1, "label": "Preparation", "url": "/local/catquizlab/index.php?tab=setup", "current": true},
+            {"key": "plan", "number": 2, "label": "Experiment plan", "url": "/local/catquizlab/index.php?tab=experiments", "current": false}
+        ],
+        "experiments": [{"id": 1, "name": "Smoke Test 2", "selected": true}],
+        "hasexperiments": true,
+        "experimentid": 1,
+        "selecturl": "/local/catquizlab/index.php",
+        "situation": {"level": "good", "good": true, "watch": false, "bad": false, "state": "Nothing queued", "reason": "", "action": null},
+        "settingsurl": "/local/catquizlab/index.php?tab=settings"
+    }
+}}
+<div class="catquizlab-shell mb-3">
+    <div class="d-flex align-items-center justify-content-between flex-wrap">
+        <h2 class="h4 mb-2">{{title}}</h2>
+        <a href="{{settingsurl}}" class="small">{{#str}}tab:settings, local_catquizlab{{/str}}</a>
+    </div>
+
+    {{#hasexperiments}}
+        <form method="get" action="{{selecturl}}" class="form-inline mb-2">
+            <label for="catquizlab-experiment" class="mr-2">
+                {{#str}}shell:experiment, local_catquizlab{{/str}}
+            </label>
+            <select name="experimentid" id="catquizlab-experiment" class="custom-select mr-2"
+                    onchange="this.form.submit()">
+                <option value="0">{{#str}}shell:allexperiments, local_catquizlab{{/str}}</option>
+                {{#experiments}}
+                    <option value="{{id}}" {{#selected}}selected{{/selected}}>{{name}}</option>
+                {{/experiments}}
+            </select>
+            <noscript><button type="submit" class="btn btn-sm btn-secondary">
+                {{#str}}shell:apply, local_catquizlab{{/str}}
+            </button></noscript>
+        </form>
+    {{/hasexperiments}}
+
+    {{#situation}}
+        <div class="alert {{#good}}alert-info{{/good}}{{#watch}}alert-warning{{/watch}}{{#bad}}alert-danger{{/bad}} py-2 mb-2"
+             role="status" data-region="catquizlab-situation">
+            <div class="d-flex align-items-center justify-content-between">
+                <div>
+                    <strong>{{state}}</strong>
+                    {{#reason}}<span class="small"> — {{.}}</span>{{/reason}}
+                </div>
+                {{#action}}<a href="{{url}}" class="btn btn-sm btn-primary ml-2">{{label}}</a>{{/action}}
+            </div>
+        </div>
+    {{/situation}}
+
+    <ul class="nav nav-tabs">
+        {{#steps}}
+            <li class="nav-item">
+                <a class="nav-link {{#current}}active{{/current}}" href="{{url}}">
+                    {{number}}. {{label}}
+                </a>
+            </li>
+        {{/steps}}
+    </ul>
+</div>

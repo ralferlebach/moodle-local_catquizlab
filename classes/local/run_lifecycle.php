@@ -551,13 +551,15 @@ class run_lifecycle {
         }
 
         $removed = [];
-        foreach ([
+        foreach (
+            [
             'local_catquizlab_attempt'   => 'attempts',
             'local_catquizlab_person'    => 'people',
             'local_catquizlab_item'      => 'items',
             'local_catquizlab_scalemap'  => 'scales',
             'local_catquizlab_result'    => 'results',
-        ] as $table => $label) {
+            ] as $table => $label
+        ) {
             if (!$DB->get_manager()->table_exists($table)) {
                 continue;
             }

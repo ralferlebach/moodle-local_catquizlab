@@ -342,8 +342,15 @@ foreach (['setup', 'experiments', 'results', 'settings'] as $name) {
 }
 
 echo $OUTPUT->header();
-echo $OUTPUT->heading(get_string('pluginname', $component));
-echo $OUTPUT->tabtree($tabs, $tab);
+
+// The same frame as every other page. The old tabtree was cut by object —
+// "experiments and runs", "settings" — so there was no place that meant "what is
+// happening right now", and settings sat beside the work as if it were a step.
+echo \local_catquizlab\output\shell::render(
+    $tab === 'setup' ? \local_catquizlab\output\shell::STEP_PREPARE
+        : \local_catquizlab\output\shell::STEP_PLAN,
+    optional_param('experimentid', 0, PARAM_INT)
+);
 
 if ($tab === 'experiments') {
     // Keeps the counters current while workers run, so watching a queue drain
