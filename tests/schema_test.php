@@ -322,7 +322,21 @@ final class schema_test extends \advanced_testcase {
                 continue;
             }
             $path = $entry->getPathname();
-            if (str_contains($path, '/node_modules/') || str_contains($path, '/.git/')) {
+
+            // Directories the tooling creates inside the plugin while it runs.
+            // `.phpunit.cache` in particular is made by the very run that
+            // executes this test, so checking for it means the test fails
+            // because it was run — which it did, on Moodle 5.x where PHPUnit
+            // places the cache differently than on 4.5.
+            $generated = ['/node_modules/', '/.git/', '/vendor/', '.phpunit.cache', '/.phpunit.result.cache'];
+            $skip = false;
+            foreach ($generated as $fragment) {
+                if (str_contains($path, $fragment)) {
+                    $skip = true;
+                    break;
+                }
+            }
+            if ($skip) {
                 continue;
             }
             if (!(new \FilesystemIterator($path, \FilesystemIterator::SKIP_DOTS))->valid()) {

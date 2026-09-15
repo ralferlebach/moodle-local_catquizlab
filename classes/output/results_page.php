@@ -130,12 +130,15 @@ class results_page {
             'type' => 'hidden', 'name' => 'tab', 'value' => $this->tab,
         ]);
 
-        $experiments = $DB->get_records_menu('local_catquizlab_experiment', null, 'name ASC', 'id, name');
-        $out .= $this->select(
-            'experimentid',
-            [0 => get_string('filter:allexperiments', $component)] + $experiments,
-            get_string('run:experiment', $component)
-        );
+        // The experiment is chosen in the shell, on every step, and carried
+        // here in the URL. A second selector for the same thing invited the two
+        // to disagree — and made "which experiment am I looking at" a question
+        // with two answers on one page.
+        $out .= \html_writer::empty_tag('input', [
+            'type'  => 'hidden',
+            'name'  => 'experimentid',
+            'value' => (int) ($this->filter['experimentid'] ?? 0),
+        ]);
 
         // The remaining menus describe the experimental coordinates. Every one
         // of them is a factor the design varies, so all of them are filterable.

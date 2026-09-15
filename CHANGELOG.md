@@ -6,6 +6,93 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.6.24] — 2026-09-14
+
+A CI failure of my own making, and issue #57.
+
+### CI — the emptiness test failed because it ran
+`schema_test` refuses empty directories in the plugin tree, added in 0.6.18
+after 123 foreign ones shipped in every release. On Moodle 5.x, PHPUnit places
+`.phpunit.cache` inside the plugin — so the test failed because the run that
+executed it had created a directory for itself.
+
+The check now skips what the tooling makes while it works: `node_modules`,
+`vendor`, `.git`, and the PHPUnit caches. Verified in the failing direction by
+creating `.phpunit.cache` first.
+
+Moodle 4.5 does not put it there, which is why nothing here caught it. That is
+the cost of a one-version local environment, and the reason your CI runs matter.
+
+### #57 — One experiment selector, not two
+The results page carried its own experiment dropdown while the shell carried
+another, on every step. Two selectors for one thing invite each other to
+disagree, and make "which experiment am I looking at" a question with two
+answers on one page.
+
+The shell's selector is the only one now; the results page receives the choice
+through the URL and keeps it in a hidden field so its own filters — tier, model,
+strategy, variant, stratum, severity — submit against the current experiment
+rather than resetting it. Those filters stay: they are the experimental
+coordinates, which is a different question from which experiment.
+
+### Verification
+PHPUnit 577 tests / 3287 assertions, Behat 32 scenarios / 232 steps, phpcs with
+the Moodle standard clean, PHPDoc clean. Confirmed in the browser: the results
+page has exactly one `experimentid` selector, and it is the shell's.
+
+---
+
+## [0.6.23] — 2026-09-14
+
+Issue #56: step 3 becomes the operations view it was supposed to be.
+
+### The problem
+A tab for "what is happening" did not exist. The parts of an answer were spread
+across four pages — runs on one, tasks and workers on another, the queue on a
+third, recovery actions on a fourth — so answering "why is nothing moving"
+meant visiting all of them and holding the pieces together yourself.
+
+### Added
+`progress_view` and its template, on step 3, in the order things block each
+other:
+
+    1. Runs and provisioning   what should be happening
+    2. Tasks and pipeline      what carries it
+    3. Workers                 who does it
+    4. Queue                   what is waiting
+    5. Recovery                what to do when it is stuck
+
+Every row uses the same state–reason–action contract, so a run, a worker and the
+queue say their piece the same way. The run section shows only what is not
+finished — this section answers "what is happening", and a finished run is not —
+while the filterable list below it still covers everything.
+
+What it reads like on this instance, with cron off and no worker:
+
+    Run #6                     ✓ Run finished
+    Tasks and pipeline         × Pipeline not running — cron has never run
+    Workers                      No worker is registered
+    Attempt queue              × 2 attempt(s) cannot be claimed
+                                 Their runs are failed, cancelled or not ready
+
+### Caught while building it
+- The new template's example context contained `}}` inside a nested object,
+  which is exactly the trap described in 0.6.21 — the linter cuts the docblock
+  there. My own test caught it before the CI did, which is what it was for.
+- A recovery button posted `release`, an action nothing handles; the real name
+  is `releaseorphans`. Every action in the template is now checked against what
+  `operations.php` answers.
+- Replacing the run list with the new view would have taken the status filters
+  with it. Behat noticed. The view sits above the list rather than instead of
+  it.
+
+### Verification
+PHPUnit 577 tests / 3287 assertions, Behat 32 scenarios / 232 steps, phpcs with
+the Moodle standard clean, PHPDoc clean, 888 language strings per language, all
+six template example contexts parseable by the linter's own extraction.
+
+---
+
 ## [0.6.22] — 2026-09-14
 
 Issues #54 and #55: the first two steps become processes.

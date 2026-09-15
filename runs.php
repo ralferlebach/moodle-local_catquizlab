@@ -265,6 +265,21 @@ echo $OUTPUT->header();
 // the reader out of the process they were in the middle of.
 echo \local_catquizlab\output\shell::render('progress', optional_param('experimentid', 0, PARAM_INT));
 
+// Without a run named, this is step 3 itself: what is happening, why, or why it
+// is not. The answer used to need four pages — runs here, tasks and workers on
+// the operations page, the queue on a third, recovery on a fourth — and holding
+// the pieces together was left to the reader.
+if ($runid === 0) {
+    echo $OUTPUT->render_from_template(
+        'local_catquizlab/progress',
+        \local_catquizlab\local\progress_view::context(optional_param('experimentid', 0, PARAM_INT))
+    );
+
+    // And then the full, filterable list below it. The view above answers "what
+    // is happening"; the list answers "show me the ones matching this", and
+    // replacing the second with the first would have taken the filters away.
+}
+
 // A single run: its coordinates, manifest and metrics.
 if ($runid > 0) {
     $detail = run_registry::detail($runid);
