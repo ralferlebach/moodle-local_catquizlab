@@ -191,7 +191,14 @@
                 <tbody>
                     {{#rows}}
                         <tr>
-                            <td><a href="{{editurl}}">{{name}}</a></td>
+                            <td>
+                                <a href="{{editurl}}">{{name}}</a>
+                                {{#candelete}}
+                                    <a href="{{deleteurl}}" class="small text-danger ml-2">
+                                        {{#str}}purge:deletefull, local_catquizlab{{/str}}
+                                    </a>
+                                {{/candelete}}
+                            </td>
                             <td>{{tierlabel}}</td>
                             <td>{{modellabel}}</td>
                             <td>{{strategylabel}} <span class="text-muted small">({{strategy}})</span></td>

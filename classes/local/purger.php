@@ -42,6 +42,111 @@ namespace local_catquizlab\local;
  */
 class purger {
     /**
+     * What deleting an experiment would remove, before it is removed.
+     *
+     * An irreversible action needs to be able to say what it will do, and in
+     * terms of the things it will take: not "this cannot be undone" but "this
+     * removes 4 runs, 150 attempts, 96 questions and 1 adaptive quiz".
+     *
+     * @param int $experimentid The experiment.
+     * @param bool $deep Whether the engine-side objects are included.
+     * @return array{ok: bool, name: string, counts: array, blockers: string[]}
+     */
+    public static function preview_experiment(int $experimentid, bool $deep = true): array {
+        global $DB;
+
+        $experiment = $DB->get_record('local_catquizlab_experiment', ['id' => $experimentid]);
+        if (!$experiment) {
+            return ['ok' => false, 'name' => '', 'counts' => [], 'blockers' => ['experiment-not-found']];
+        }
+
+        $runids = $DB->get_fieldset_select('local_catquizlab_run', 'id', 'experimentid = ?', [$experimentid]);
+        $runids = array_map('intval', $runids);
+
+        $counts = ['runs' => count($runids)];
+        $blockers = [];
+
+        if ($runids === []) {
+            return ['ok' => true, 'name' => format_string($experiment->name), 'counts' => $counts, 'blockers' => []];
+        }
+
+        [$insql, $params] = $DB->get_in_or_equal($runids, SQL_PARAMS_NAMED, 'r');
+
+        $tables = [
+            'local_catquizlab_attempt'  => 'attempts',
+            'local_catquizlab_person'   => 'people',
+            'local_catquizlab_item'     => 'items',
+            'local_catquizlab_scalemap' => 'scales',
+            'local_catquizlab_result'   => 'results',
+        ];
+
+        foreach ($tables as $table => $label) {
+            if ($DB->get_manager()->table_exists($table)) {
+                $counts[$label] = $DB->count_records_select($table, 'runid ' . $insql, $params);
+            }
+        }
+
+        // A run being played cannot be deleted from under its worker, and
+        // saying so before the button is pressed beats saying so after.
+        foreach ($runids as $runid) {
+            $status = (int) $DB->get_field('local_catquizlab_run', 'status', ['id' => $runid]);
+            $playing = $status === registry::STATUS_RUNNING && run_lifecycle::has_open_attempts($runid);
+            if ($playing) {
+                $blockers[] = get_string('purge:runbeingplayed', 'local_catquizlab', $runid);
+            }
+        }
+
+        if ($deep) {
+            $counts['activities'] = $DB->count_records_select(
+                'local_catquizlab_run',
+                'id ' . $insql . ' AND testcmid > 0',
+                $params
+            );
+            if ($DB->get_manager()->table_exists('local_catquizlab_item')) {
+                $counts['questions'] = $DB->count_records_select(
+                    'local_catquizlab_item',
+                    'runid ' . $insql . ' AND questionid > 0',
+                    $params
+                );
+            }
+        }
+
+        // The log is the one thing deliberately not counted as a loss: it goes
+        // with the runs it describes, and by then there is nothing left for it
+        // to describe.
+        $counts['tasks'] = self::count_tasks_for_runs($runids);
+
+        return [
+            'ok'       => $blockers === [],
+            'name'     => format_string($experiment->name),
+            'counts'   => array_filter($counts),
+            'blockers' => $blockers,
+        ];
+    }
+
+    /**
+     * How many of this plugin's tasks are queued for a set of runs.
+     *
+     * @param int[] $runids The runs.
+     * @return int
+     */
+    protected static function count_tasks_for_runs(array $runids): int {
+        global $DB;
+
+        [$insql, $params] = $DB->get_in_or_equal(task_overview::ADHOC, SQL_PARAMS_NAMED, 'cls');
+
+        $count = 0;
+        foreach ($DB->get_records_select('task_adhoc', 'classname ' . $insql, $params) as $row) {
+            $data = json_decode((string) $row->customdata, true) ?: [];
+            if (in_array((int) ($data['runid'] ?? 0), $runids, true)) {
+                $count++;
+            }
+        }
+
+        return $count;
+    }
+
+    /**
      * Delete a run and everything the lab made for it.
      *
      * @param int $runid The run.
@@ -80,6 +185,14 @@ class purger {
         $removed['tasks'] = self::delete_tasks_for_run($runid);
 
         $experimentid = (int) $run->experimentid;
+
+        // The log describes a run that is about to stop existing. Keeping it
+        // would leave a history of something nobody can look at.
+        if ($DB->get_manager()->table_exists('local_catquizlab_runlog')) {
+            $removed['logentries'] = $DB->count_records('local_catquizlab_runlog', ['runid' => $runid]);
+            $DB->delete_records('local_catquizlab_runlog', ['runid' => $runid]);
+        }
+
         $DB->delete_records('local_catquizlab_run', ['id' => $runid]);
         $removed['run'] = 1;
 

@@ -6,6 +6,49 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.6.26] — 2026-09-14
+
+Issues #64 and #65.
+
+### #64 — The PHP CLI path, checked where it matters
+Moodle's scheduled task administration needs `$CFG->pathtophp`, and when it is
+empty a task that shells out simply does nothing — indistinguishable, from the
+outside, from a task that is disabled.
+
+Step 1 checks it now, using Moodle's own canonical setting rather than a second
+one of ours: two fields for one path is how they come to disagree. The three
+cases get three answers, because they need three different responses:
+
+    not configured, and a usable PHP found at /usr/bin/php
+    configured as /opt/php, which does not exist
+    configured as /opt/php, which the web server user cannot run
+
+Where it is unset and a binary was found, the step carries a button that sets
+it — guarded by `moodle/site:config`, because it is that person's setting.
+
+### #65 — Deleting an experiment, with a preview
+`purger::delete_experiment` existed since 0.6.19 and had no way into it from the
+interface. It has one now, and it says what it will do first:
+
+    Delete experiment "Smoke Test 2" with all of its runs and results?
+    1 run(s), 3 attempt(s), 2 simulated person(s), 24 item(s), 1 adaptive quiz
+
+An irreversible action should be able to name the things it takes rather than
+only warn that it cannot be undone. A run being played is named in the preview
+too — before the button, not after it.
+
+Deleting a run now takes its execution log with it. That is the opposite of the
+reset case deliberately: a reset must keep the log, because the run survives to
+be looked at again; a delete must not, because keeping a history of something
+nobody can open is not keeping anything.
+
+### Verification
+PHPUnit 585 tests / 3315 assertions, Behat 32 scenarios / 232 steps, phpcs with
+the Moodle standard clean, PHPDoc clean. The PHP path was measured through its
+own action: empty, detected, set, and green on the next check.
+
+---
+
 ## [0.6.25] — 2026-09-14
 
 Issues #61 and #62: what happened to a run, kept — and where the queries go.

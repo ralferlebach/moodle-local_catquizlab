@@ -46,6 +46,67 @@ $pageurl = new moodle_url('/local/catquizlab/experiment.php', $id ? ['id' => $id
 $manageurl = new moodle_url('/local/catquizlab/index.php');
 $PAGE->set_url($pageurl);
 
+// Deleting an experiment outright, with a preview of what goes. Irreversible
+// actions should be able to say what they will do in terms of the things they
+// take — "4 runs, 150 attempts, 96 questions" rather than "this cannot be
+// undone".
+if ($action === 'delete' && $id > 0) {
+    require_sesskey();
+    require_capability('local/catquizlab:execute', $context);
+
+    $deep = optional_param('deep', 1, PARAM_BOOL);
+    $preview = \local_catquizlab\local\purger::preview_experiment($id, (bool) $deep);
+
+    if (!optional_param('confirm', 0, PARAM_BOOL)) {
+        $lines = [];
+        foreach ($preview['counts'] as $label => $count) {
+            $lines[] = $count . ' ' . get_string('purge:count' . $label, $component);
+        }
+
+        $message = get_string('purge:confirmexperiment', $component, $preview['name'])
+            . html_writer::tag('p', implode(', ', $lines), ['class' => 'mt-2']);
+
+        foreach ($preview['blockers'] as $blocker) {
+            $message .= html_writer::tag('p', $blocker, ['class' => 'text-danger mb-0']);
+        }
+
+        echo $OUTPUT->header();
+        echo \local_catquizlab\output\shell::render('plan', $id);
+        echo $OUTPUT->confirm(
+            $message,
+            new moodle_url('/local/catquizlab/experiment.php', [
+                'id' => $id, 'action' => 'delete', 'sesskey' => sesskey(),
+                'confirm' => 1, 'deep' => $deep,
+            ]),
+            $manageurl
+        );
+        echo $OUTPUT->footer();
+        exit;
+    }
+
+    $result = \local_catquizlab\local\purger::delete_experiment(
+        $id,
+        (bool) $deep,
+        (bool) optional_param('force', 0, PARAM_BOOL)
+    );
+
+    if (!$result['ok']) {
+        redirect(
+            $manageurl,
+            get_string('purge:refused', $component, $result['reason']),
+            null,
+            \core\output\notification::NOTIFY_WARNING
+        );
+    }
+
+    $parts = [];
+    foreach ($result['removed'] as $label => $count) {
+        $parts[] = $count . ' ' . $label;
+    }
+
+    redirect($manageurl, get_string('purge:done', $component, implode(', ', $parts) ?: '-'));
+}
+
 // Reading the editor needs only view rights; every state change below asks for
 // the capability that belongs to that specific action.
 require_capability('local/catquizlab:view', $context);

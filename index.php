@@ -124,7 +124,14 @@ foreach (experiment_service::overview() as $row) {
             : $row['tier'],
         'cells'        => $row['cells'] ?? '—',
         'modified'     => userdate($row['timemodified'], get_string('strftimedatetimeshort')),
+        'candelete'    => has_capability('local/catquizlab:execute', $context),
         'editurl'      => $editurl->out(false),
+        // Deleting outright, distinct from anything that keeps the experiment:
+        // for test, development and mistaken experiments, which the archive is
+        // the wrong home for.
+        'deleteurl'    => (new moodle_url('/local/catquizlab/experiment.php', [
+            'id' => $row['id'], 'action' => 'delete', 'sesskey' => sesskey(),
+        ]))->out(false),
         'actions'      => implode('', $actions),
     ]);
 }

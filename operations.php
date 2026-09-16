@@ -137,6 +137,26 @@ if ($action !== '') {
         redirect($pageurl);
     }
 
+    if ($action === 'setphpcli') {
+        // Moodle's own setting, written the way Moodle writes it — and only by
+        // somebody who may change site configuration, because that is whose
+        // setting it is.
+        require_capability('moodle/site:config', $context);
+
+        $found = \local_catquizlab\local\setup_wizard::find_php_cli();
+        if ($found === null) {
+            redirect(
+                $pageurl,
+                get_string('health:phpclimissing', $component),
+                null,
+                \core\output\notification::NOTIFY_WARNING
+            );
+        }
+
+        set_config('pathtophp', $found);
+        redirect($pageurl, get_string('health:phpcliset', $component, $found));
+    }
+
     if ($action === 'killpipeline') {
         if (!optional_param('confirm', 0, PARAM_BOOL)) {
             echo $OUTPUT->header();

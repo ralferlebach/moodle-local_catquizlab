@@ -220,4 +220,68 @@ final class purger_test extends \advanced_testcase {
         $this->assertTrue($DB->record_exists('local_catquizlab_run', ['id' => $runid]));
         $this->assertSame(2, $DB->count_records('local_catquizlab_attempt', ['runid' => $runid]));
     }
+
+    /**
+     * The preview says what would go, before anything goes.
+     *
+     * @return void
+     */
+    public function test_the_preview_counts_what_would_be_removed(): void {
+        global $DB;
+        $this->resetAfterTest();
+        $this->setAdminUser();
+
+        $runid = $this->make_run(registry::STATUS_READY, 3);
+        $experimentid = (int) $DB->get_field('local_catquizlab_run', 'experimentid', ['id' => $runid]);
+
+        $preview = purger::preview_experiment($experimentid);
+
+        // Counting the things that go is something a person can weigh;
+        // "this cannot be undone" is not.
+        $this->assertTrue($preview['ok']);
+        $this->assertSame(1, $preview['counts']['runs']);
+        $this->assertSame(3, $preview['counts']['attempts']);
+        $this->assertNotSame('', $preview['name']);
+    }
+
+    /**
+     * A run being played is named before the button, not after.
+     *
+     * @return void
+     */
+    public function test_the_preview_names_what_blocks_it(): void {
+        global $DB;
+        $this->resetAfterTest();
+        $this->setAdminUser();
+
+        $runid = $this->make_run(registry::STATUS_RUNNING, 1, attempt_scheduler::STATUS_RUNNING);
+        $experimentid = (int) $DB->get_field('local_catquizlab_run', 'experimentid', ['id' => $runid]);
+
+        $preview = purger::preview_experiment($experimentid);
+
+        $this->assertFalse($preview['ok']);
+        $this->assertNotEmpty($preview['blockers']);
+        $this->assertStringContainsString((string) $runid, $preview['blockers'][0]);
+    }
+
+    /**
+     * Deleting a run takes its log with it.
+     *
+     * @return void
+     */
+    public function test_deleting_a_run_removes_its_log(): void {
+        global $DB;
+        $this->resetAfterTest();
+        $this->setAdminUser();
+
+        $runid = $this->make_run();
+        \local_catquizlab\local\run_log::record($runid, \local_catquizlab\local\run_log::START_REQUESTED);
+
+        purger::delete_run($runid);
+
+        // The log describes a run that no longer exists; keeping it would be a
+        // history of something nobody can look at. A reset is the case where it
+        // must survive — and does.
+        $this->assertSame(0, $DB->count_records('local_catquizlab_runlog', ['runid' => $runid]));
+    }
 }

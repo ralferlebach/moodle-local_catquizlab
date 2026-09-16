@@ -181,6 +181,14 @@ class setup_wizard {
      * @return array
      */
     protected static function engine_stage(string $component): array {
+        global $CFG;
+
+        // Moodle's own canonical setting, not a second one of ours. The task
+        // administration needs this value too, and two fields for one path is
+        // how they come to disagree.
+        $php = trim((string) ($CFG->pathtophp ?? ''));
+        $phpok = $php !== '' && is_executable($php);
+
         return self::stage('engine', get_string('wizard:engine', $component), [
             self::step('catquiz', get_string('health:engine', $component), environment::catquiz_available()),
             self::step(
@@ -188,7 +196,66 @@ class setup_wizard {
                 get_string('health:activity', $component),
                 environment::adaptivequiz_available()
             ),
+            self::step(
+                'phpcli',
+                get_string('health:phpcli', $component),
+                $phpok,
+                self::php_cli_detail($php, $component)
+            ),
         ], get_string('wizard:enginehint', $component));
+    }
+
+    /**
+     * What is wrong with the configured PHP CLI path, in words.
+     *
+     * "Not configured" and "configured to something that is not there" need
+     * different answers, and both used to surface as a scheduled task that
+     * quietly did nothing.
+     *
+     * @param string $php The configured path.
+     * @param string $component For the strings.
+     * @return string
+     */
+    protected static function php_cli_detail(string $php, string $component): string {
+        if ($php === '') {
+            $found = self::find_php_cli();
+
+            return $found !== null
+                ? get_string('health:phpclimissingfound', $component, $found)
+                : get_string('health:phpclimissing', $component);
+        }
+
+        if (!file_exists($php)) {
+            return get_string('health:phpclinotthere', $component, $php);
+        }
+
+        if (!is_executable($php)) {
+            return get_string('health:phpclinotexecutable', $component, $php);
+        }
+
+        return $php;
+    }
+
+    /**
+     * A PHP CLI binary this server could use.
+     *
+     * @return string|null
+     */
+    public static function find_php_cli(): ?string {
+        $candidates = ['/usr/bin/php', '/usr/local/bin/php', '/opt/php/bin/php'];
+
+        $which = @exec('command -v php 2>/dev/null');
+        if (is_string($which) && trim($which) !== '') {
+            array_unshift($candidates, trim($which));
+        }
+
+        foreach ($candidates as $candidate) {
+            if (is_executable($candidate)) {
+                return $candidate;
+            }
+        }
+
+        return null;
     }
 
     /**
@@ -378,7 +445,10 @@ class setup_wizard {
         $actions = [
             // The engine is installed by an administrator; a button here would
             // be a promise this plugin cannot keep.
-            'engine'      => null,
+            // The engine is installed by an administrator; a button here would
+            // be a promise this plugin cannot keep. The PHP path is different:
+            // it is a setting, and one this page can fill in.
+            'engine'      => ['label' => get_string('health:setphpcli', $component), 'action' => 'setphpcli'],
             'environment' => ['label' => get_string('wizard:run', $component), 'action' => 'wizard'],
             'access'      => ['label' => get_string('access:setup', $component), 'action' => 'setupaccess'],
             'runtime'     => ['label' => get_string('runtime:setup', $component), 'action' => 'setupruntime'],
