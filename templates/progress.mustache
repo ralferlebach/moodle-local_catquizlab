@@ -26,6 +26,7 @@
     Example context (json):
     {
         "ambiguous": {"hasany": false, "rows": []},
+        "debug": {"enabled": false, "hasany": false, "rows": []},
         "situation": {"level": "good", "good": true, "watch": false, "bad": false, "state": "Nothing queued", "reason": "", "action": null},
         "runs": {"hasany": false, "rows": []},
         "tasks": {
@@ -167,6 +168,50 @@
         </ul>
     </div>
 </div>
+
+{{#debug.enabled}}
+    <div class="card mb-3">
+        <div class="card-body">
+            <h3 class="h5">{{#str}}debug:heading, local_catquizlab{{/str}}</h3>
+            {{#debug.hasany}}
+                <div style="max-height: 24rem; overflow-y: auto;">
+                    <table class="table table-sm small">
+                        <thead>
+                            <tr>
+                                <th>{{#str}}runlog:time, local_catquizlab{{/str}}</th>
+                                <th>{{#str}}debug:channel, local_catquizlab{{/str}}</th>
+                                <th>{{#str}}debug:action, local_catquizlab{{/str}}</th>
+                                <th>{{#str}}debug:params, local_catquizlab{{/str}}</th>
+                                <th>{{#str}}debug:outcome, local_catquizlab{{/str}}</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {{#debug.rows}}
+                                <tr class="{{#failed}}table-danger{{/failed}}{{#refused}}table-warning{{/refused}}">
+                                    <td>{{time}}</td>
+                                    <td>{{channel}}</td>
+                                    <td>{{action}}{{#runid}} <span class="text-muted">#{{.}}</span>{{/runid}}</td>
+                                    <td><code>{{params}}</code></td>
+                                    <td>{{outcome}} {{#detail}}<code>{{.}}</code>{{/detail}}</td>
+                                </tr>
+                            {{/debug.rows}}
+                        </tbody>
+                    </table>
+                </div>
+                <form method="post" action="{{formurl}}">
+                    <input type="hidden" name="sesskey" value="{{sesskey}}">
+                    <input type="hidden" name="action" value="cleardebug">
+                    <button type="submit" class="btn btn-sm btn-outline-secondary">
+                        {{#str}}debug:clear, local_catquizlab{{/str}}
+                    </button>
+                </form>
+            {{/debug.hasany}}
+            {{^debug.hasany}}
+                <p class="text-muted mb-0">{{#str}}debug:empty, local_catquizlab{{/str}}</p>
+            {{/debug.hasany}}
+        </div>
+    </div>
+{{/debug.enabled}}
 
 {{#canexecute}}
     <div class="card mb-3">

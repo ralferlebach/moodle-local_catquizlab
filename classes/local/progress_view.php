@@ -101,7 +101,14 @@ class progress_view {
             $ambiguous[] = $affected;
         }
 
+        $debug = debug_trace::enabled() ? debug_trace::entries([], 60) : [];
+
         return [
+            'debug'       => [
+                'enabled' => debug_trace::enabled(),
+                'hasany'  => $debug !== [],
+                'rows'    => $debug,
+            ],
             'ambiguous'   => ['hasany' => $ambiguous !== [], 'rows' => $ambiguous],
             'situation'   => situation::assess(),
             'runs'        => ['hasany' => $runs !== [], 'rows' => $runs],

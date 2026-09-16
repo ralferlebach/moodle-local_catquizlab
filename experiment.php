@@ -38,6 +38,19 @@ use local_catquizlab\local\preset_library;
 $id = optional_param('id', 0, PARAM_INT);
 $action = optional_param('action', '', PARAM_ALPHA);
 
+// Recorded where the action is known and before it is carried out, so a
+// defect reads as a sequence rather than as fragments in five logs.
+if ($action !== '') {
+    \local_catquizlab\local\debug_trace::record(
+        \local_catquizlab\local\debug_trace::UI,
+        $action,
+        array_diff_key($_REQUEST, array_flip(['sesskey'])),
+        'ok',
+        [],
+        (int) ($id ?? 0)
+    );
+}
+
 admin_externalpage_setup('local_catquizlab_manage');
 
 $context = context_system::instance();

@@ -115,6 +115,11 @@ class run_log {
             return 0;
         }
 
+        // The same event on the debug channel, so the console shows the run's
+        // state changes interleaved with the actions that caused them — which is
+        // the order somebody reads a defect in.
+        debug_trace::record(debug_trace::LIFECYCLE, $event, [], 'ok', $detail, $runid);
+
         try {
             return (int) $DB->insert_record('local_catquizlab_runlog', (object) [
                 'runid'       => $runid,

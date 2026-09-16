@@ -307,5 +307,25 @@
         <INDEX NAME="runattempt" UNIQUE="false" FIELDS="runid, attemptno"/>
       </INDEXES>
     </TABLE>
+    <TABLE NAME="local_catquizlab_debug" COMMENT="Operator and execution events while the debug mode is on. A ring buffer: it answers what just happened, not what happened last month.">
+      <FIELDS>
+        <FIELD NAME="id" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="true"/>
+        <FIELD NAME="channel" TYPE="char" LENGTH="20" NOTNULL="true" SEQUENCE="false" COMMENT="ui, service, task, worker or lifecycle."/>
+        <FIELD NAME="action" TYPE="char" LENGTH="80" NOTNULL="true" SEQUENCE="false" COMMENT="What was done, in this plugin's own words."/>
+        <FIELD NAME="page" TYPE="char" LENGTH="120" NOTNULL="false" SEQUENCE="false" COMMENT="Where it came from."/>
+        <FIELD NAME="params" TYPE="text" NOTNULL="false" SEQUENCE="false" COMMENT="The parameters it was given, with anything secret removed."/>
+        <FIELD NAME="outcome" TYPE="char" LENGTH="20" NOTNULL="false" SEQUENCE="false" COMMENT="ok, refused or error."/>
+        <FIELD NAME="detail" TYPE="text" NOTNULL="false" SEQUENCE="false" COMMENT="Result, reason or exception."/>
+        <FIELD NAME="runid" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false" COMMENT="The run it concerned, where one did."/>
+        <FIELD NAME="userid" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
+        <FIELD NAME="timecreated" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="false"/>
+      </FIELDS>
+      <KEYS>
+        <KEY NAME="primary" TYPE="primary" FIELDS="id"/>
+      </KEYS>
+      <INDEXES>
+        <INDEX NAME="timecreated" UNIQUE="false" FIELDS="timecreated"/>
+      </INDEXES>
+    </TABLE>
   </TABLES>
 </XMLDB>

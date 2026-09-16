@@ -226,6 +226,32 @@ function xmldb_local_catquizlab_upgrade($oldversion): bool {
         upgrade_plugin_savepoint(true, 2026091411, 'local', 'catquizlab');
     }
 
+    if ($oldversion < 2026091414) {
+        // Diagnosis was spread over Moodle notifications, task logs, worker
+        // logs, the run manifest, the operations page and the database, so a
+        // defect could not be reconstructed as a sequence: what was clicked,
+        // what ran, with what parameters, and what came back.
+        $table = new xmldb_table('local_catquizlab_debug');
+        $table->add_field('id', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, XMLDB_SEQUENCE);
+        $table->add_field('channel', XMLDB_TYPE_CHAR, '20', null, XMLDB_NOTNULL, null, null);
+        $table->add_field('action', XMLDB_TYPE_CHAR, '80', null, XMLDB_NOTNULL, null, null);
+        $table->add_field('page', XMLDB_TYPE_CHAR, '120', null, null, null, null);
+        $table->add_field('params', XMLDB_TYPE_TEXT, null, null, null, null, null);
+        $table->add_field('outcome', XMLDB_TYPE_CHAR, '20', null, null, null, null);
+        $table->add_field('detail', XMLDB_TYPE_TEXT, null, null, null, null, null);
+        $table->add_field('runid', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, '0');
+        $table->add_field('userid', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, '0');
+        $table->add_field('timecreated', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, '0');
+        $table->add_key('primary', XMLDB_KEY_PRIMARY, ['id']);
+        $table->add_index('timecreated', XMLDB_INDEX_NOTUNIQUE, ['timecreated']);
+
+        if (!$dbman->table_exists($table)) {
+            $dbman->create_table($table);
+        }
+
+        upgrade_plugin_savepoint(true, 2026091414, 'local', 'catquizlab');
+    }
+
     return true;
 }
 

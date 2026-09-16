@@ -6,6 +6,51 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.6.28] — 2026-09-14
+
+Issue #63: one recording instead of seven logs.
+
+### The problem
+Diagnosis was spread over Moodle notifications, ad-hoc task logs, worker logs,
+the run manifest, the operations page, database state and Moodle's own
+debugging. Each holds a fragment; none holds the order. So a defect could not be
+read as what it is — somebody pressed a button, a handler ran with certain
+parameters, something changed, an error came back.
+
+### Added
+`debug_trace`, a switch on the settings tab and a console on step 3. Five
+channels — `ui`, `service`, `task`, `worker`, `lifecycle` — in one sequence:
+
+    ui         provision        ok      {"runid":39,"sesskey":"(hidden)"}
+    lifecycle  start_requested  ok
+    lifecycle  run_failed       ok      {"reason":"pool zu klein"}
+    task       orchestrate      error   moodle_exception at run_orchestrator.php:214
+
+Every run state change already went through `run_log`; it now appears on the
+debug channel too, so the console shows a run's transitions interleaved with the
+actions that caused them. That interleaving is the point: it is the order
+somebody reads a defect in.
+
+Three things keep the recording from becoming its own problem:
+
+- **Off by default.** An installation that records every action all the time is
+  one where nobody reads the recording.
+- **A ring buffer of 2000.** The question is "what just happened", and a table
+  that grows without limit answers it worse the longer it runs.
+- **Secrets recorded as present, not as their value.** Knowing a token was sent
+  is diagnostic; knowing which token is a liability. Tested.
+
+Recording can never be why something fails — a plugin that breaks while writing
+about itself is worse than a defect nobody can reconstruct. Verified with an
+action name far longer than its column and a non-scalar parameter.
+
+### Verification
+PHPUnit 596 tests / 3353 assertions, Behat 32 scenarios / 232 steps, phpcs with
+the Moodle standard clean, PHPDoc clean. The sequence above is a real recording
+from this instance, including the redaction.
+
+---
+
 ## [0.6.27] — 2026-09-14
 
 Issues #66 and #67: one run, one scale tree — and the installations that already

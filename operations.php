@@ -40,6 +40,19 @@ use local_catquizlab\local\worker_launcher;
 use local_catquizlab\local\worker_registry;
 
 $action = optional_param('action', '', PARAM_ALPHA);
+
+// Recorded where the action is known and before it is carried out, so a
+// defect reads as a sequence rather than as fragments in five logs.
+if ($action !== '') {
+    \local_catquizlab\local\debug_trace::record(
+        \local_catquizlab\local\debug_trace::UI,
+        $action,
+        array_diff_key($_REQUEST, array_flip(['sesskey'])),
+        'ok',
+        [],
+        (int) (0 ?? 0)
+    );
+}
 $runid = optional_param('runid', 0, PARAM_INT);
 
 admin_externalpage_setup(registry::ADMIN_PAGE);
@@ -135,6 +148,11 @@ if ($action !== '') {
         $result = worker_launcher::self_test(worker_launcher::config_from_settings());
         $SESSION->catquizlab_selftest = $result;
         redirect($pageurl);
+    }
+
+    if ($action === 'cleardebug') {
+        $count = \local_catquizlab\local\debug_trace::clear();
+        redirect($pageurl, get_string('debug:cleared', $component, $count));
     }
 
     if ($action === 'setphpcli') {

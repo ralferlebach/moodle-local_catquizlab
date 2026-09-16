@@ -334,6 +334,7 @@ if ($tab === 'settings') {
         'worker_node_path'   => (string) get_config($component, 'worker_node_path'),
         'worker_concurrency' => (int) (get_config($component, 'worker_concurrency') ?: 1),
         'worker_max_jobs'    => (int) get_config($component, 'worker_max_jobs'),
+        'debugmode'          => (int) get_config($component, 'debugmode'),
     ]);
 }
 

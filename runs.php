@@ -30,6 +30,19 @@ use local_catquizlab\local\run_registry;
 
 $runid = optional_param('runid', 0, PARAM_INT);
 $action = optional_param('action', '', PARAM_ALPHA);
+
+// Recorded where the action is known and before it is carried out, so a
+// defect reads as a sequence rather than as fragments in five logs.
+if ($action !== '') {
+    \local_catquizlab\local\debug_trace::record(
+        \local_catquizlab\local\debug_trace::UI,
+        $action,
+        array_diff_key($_REQUEST, array_flip(['sesskey'])),
+        'ok',
+        [],
+        (int) ($runid ?? 0)
+    );
+}
 $page = optional_param('page', 0, PARAM_INT);
 
 $filters = [];
