@@ -114,6 +114,30 @@ if ($action !== '' && $runid > 0) {
         );
     }
 
+    if ($action === 'cleanscales') {
+        require_sesskey();
+        require_capability('local/catquizlab:execute', $context);
+
+        $result = \local_catquizlab\local\scale_inventory::cleanup($runid);
+        if (!$result['ok']) {
+            redirect(
+                $returnurl,
+                $result['reason'] === 'nothing-to-clean'
+                    ? get_string('scales:cleanupnothing', $component)
+                    : get_string('scales:cleanuprefused', $component, $result['reason']),
+                null,
+                \core\output\notification::NOTIFY_WARNING
+            );
+        }
+
+        $parts = [];
+        foreach ($result['removed'] as $label => $count) {
+            $parts[] = $count . ' ' . $label;
+        }
+
+        redirect($returnurl, get_string('scales:cleanupdone', $component, implode(', ', $parts)));
+    }
+
     if ($action === 'reset') {
         require_sesskey();
         require_capability('local/catquizlab:execute', $context);
@@ -309,6 +333,40 @@ if ($runid > 0) {
         [get_string('run:progress', $component), $run['progress'] . '%'],
     ];
     echo html_writer::table($table);
+
+    // The scale generations this run owns. One is the normal case and says
+    // nothing; several is a data defect worth naming here, where somebody is
+    // looking at the run it affects.
+    $generations = \local_catquizlab\local\scale_inventory::generations($runid);
+    if (count($generations) > 1) {
+        echo $OUTPUT->heading(get_string('scales:heading', $component), 4);
+
+        $scaletable = new html_table();
+        $scaletable->head = ['Root', 'Context', get_string('scales:generations', $component), ''];
+        foreach ($generations as $generation) {
+            $scaletable->data[] = [
+                $generation['rootscaleid'],
+                $generation['contextid'],
+                $generation['nodes'] . ' / ' . $generation['items'],
+                $generation['current']
+                    ? html_writer::tag('strong', get_string('scales:keep', $component))
+                    : html_writer::tag(
+                        'span',
+                        get_string('scales:stale', $component),
+                        ['class' => 'text-muted']
+                    ),
+            ];
+        }
+        echo html_writer::table($scaletable);
+
+        echo $OUTPUT->single_button(
+            new moodle_url('/local/catquizlab/runs.php', [
+                'runid' => $runid, 'action' => 'cleanscales', 'sesskey' => sesskey(),
+            ]),
+            get_string('scales:cleanup', $component),
+            'post'
+        );
+    }
 
     // What actually happened, kept across resets. A failed run's story used to
     // be spread over five places and a reset destroyed most of it.

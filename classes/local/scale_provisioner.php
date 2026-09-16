@@ -277,15 +277,12 @@ class scale_provisioner {
             return null;
         }
 
-        $root = 0;
-        $contextid = 0;
-        foreach ($rows as $row) {
-            if ((int) $row->level === self::LEVEL_ROOT) {
-                $root = (int) $row->catscaleid;
-                $contextid = (int) $row->contextid;
-                break;
-            }
-        }
+        // The newest generation, chosen the same way everywhere: a run that
+        // already owns several must not quietly gain another, and picking by
+        // iteration order would make "the root" mean whatever came back first.
+        $generations = scale_inventory::generations($runid);
+        $root = $generations === [] ? 0 : (int) $generations[0]['rootscaleid'];
+        $contextid = $generations === [] ? 0 : (int) $generations[0]['contextid'];
 
         if (
             $root === 0

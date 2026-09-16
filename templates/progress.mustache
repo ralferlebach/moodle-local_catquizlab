@@ -25,6 +25,7 @@
 
     Example context (json):
     {
+        "ambiguous": {"hasany": false, "rows": []},
         "situation": {"level": "good", "good": true, "watch": false, "bad": false, "state": "Nothing queued", "reason": "", "action": null},
         "runs": {"hasany": false, "rows": []},
         "tasks": {
@@ -43,6 +44,21 @@
         "canexecute": true
     }
 }}
+{{#ambiguous.hasany}}
+    <div class="alert alert-danger" role="status">
+        <strong>{{#str}}scales:ambiguous, local_catquizlab{{/str}}</strong>
+        <p class="small mb-1">{{#str}}scales:ambiguouswhy, local_catquizlab{{/str}}</p>
+        <ul class="small mb-0">
+            {{#ambiguous.rows}}
+                <li>
+                    <a href="{{url}}">#{{runid}}</a> {{cellkey}} — {{generations}}
+                    {{#str}}scales:generations, local_catquizlab{{/str}}
+                </li>
+            {{/ambiguous.rows}}
+        </ul>
+    </div>
+{{/ambiguous.hasany}}
+
 <div class="card mb-3">
     <div class="card-body">
         <h3 class="h5">{{#str}}progress:runs, local_catquizlab{{/str}}</h3>

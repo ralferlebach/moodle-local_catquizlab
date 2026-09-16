@@ -90,7 +90,19 @@ class progress_view {
 
         $breakdown = attempt_scheduler::queue_breakdown();
 
+        // Runs owning more than one scale tree. A data defect rather than a
+        // state, so it is shown where somebody is already asking why nothing
+        // works, with the count that makes it concrete.
+        $ambiguous = [];
+        foreach (scale_inventory::affected_runs() as $affected) {
+            $affected['url'] = (new \moodle_url('/local/catquizlab/runs.php', [
+                'runid' => $affected['runid'],
+            ]))->out(false);
+            $ambiguous[] = $affected;
+        }
+
         return [
+            'ambiguous'   => ['hasany' => $ambiguous !== [], 'rows' => $ambiguous],
             'situation'   => situation::assess(),
             'runs'        => ['hasany' => $runs !== [], 'rows' => $runs],
             'tasks'       => task_overview::state(),

@@ -699,14 +699,19 @@ class run_orchestrator {
      * @return int|null
      */
     protected static function root_scale(int $runid): ?int {
-        global $DB;
+        // The get_field() call threw when a run owned more than one root, and did so
+        // at the test stage — long after the second tree was created, and with
+        // a message about a database call rather than about the run. The
+        // ambiguity is reported where it is now, and the newest generation is
+        // used, which is the one everything else already points at.
+        if (scale_inventory::is_ambiguous($runid)) {
+            run_log::record($runid, run_log::STAGE_FAILED, [
+                'reason'      => 'ambiguous-scale-tree',
+                'generations' => count(scale_inventory::generations($runid)),
+            ], 'scales');
+        }
 
-        $id = $DB->get_field(
-            'local_catquizlab_scalemap',
-            'catscaleid',
-            ['runid' => $runid, 'level' => scale_provisioner::LEVEL_ROOT]
-        );
-        return $id ? (int) $id : null;
+        return scale_inventory::current_root($runid);
     }
 
     /**

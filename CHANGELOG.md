@@ -6,6 +6,52 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.6.27] — 2026-09-14
+
+Issues #66 and #67: one run, one scale tree — and the installations that already
+have more.
+
+### #66 — The ambiguity is reported where it is
+`root_scale()` used `get_field()`, which throws when a run owns more than one
+root. The failure arrived at the test stage, long after the second tree was
+created, with a message about a database call rather than about the run:
+
+    mdb->get_record() found more than one record!
+
+`scale_inventory` answers the question instead of assuming it away. It names the
+generations a run owns, picks the newest as current — chosen the same way
+everywhere, because picking by iteration order would make "the root" mean
+whatever came back first — and records the ambiguity in the run log where it is
+found rather than where it happens to be noticed.
+
+### #67 — Cleaning up what is already there
+0.6.19 stopped new duplicates appearing and did nothing for installations that
+already had them. Your run #4 owned generations from root 334 to root 1444.
+
+Reproduced here and cleaned:
+
+    root 556  context 7  2 nodes   <- current
+    root 445  context 6  2 nodes      abandoned
+    root 334  context 5  2 nodes      abandoned
+
+    cleaned: 2 generations, 4 nodes, 4 engine scales
+    afterwards: one tree, root 556
+
+The engine rows go with the abandoned generations: a scale nobody points at is
+worse than no scale, because a selection that finds it draws items from a tree
+the run left behind. A run being played is refused — which tree its worker is
+reading from is not worth guessing.
+
+Step 3 lists affected runs across the installation; the run view inventories its
+generations and offers the cleanup, with the preview naming what would go.
+
+### Verification
+PHPUnit 590 tests / 3334 assertions, Behat 32 scenarios / 232 steps, phpcs with
+the Moodle standard clean, PHPDoc clean. The reported shape — three generations,
+roots 334/445/556 — was reproduced, cleaned, and checked back to one.
+
+---
+
 ## [0.6.26] — 2026-09-14
 
 Issues #64 and #65.
