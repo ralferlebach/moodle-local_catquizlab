@@ -6,6 +6,54 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.6.29] — 2026-09-14
+
+Issue #68: the scale tree answers for itself.
+
+### The old message was about a database call
+    mdb->get_record() found more than one record!
+
+That is a DML warning, arriving at the test stage, about a query. What it meant
+was: run #4 owns several root scales and several CAT contexts — a statement
+about the run, true since the moment the second tree was created, and available
+long before anything tried to build a test on top of it.
+
+### Added
+`scale_health` asks the whole question rather than the part that happened to
+throw, per run, and reports it in the plugin's own terms:
+
+    Scale tree consistent: 1 context, 1 root, 4 nodes
+      ✓ Exactly one root scale
+      ✓ Exactly one CAT context
+      ✓ Every mapped scale exists in the engine
+      ✓ No duplicate nodes
+      ✓ Node count matches the blueprint
+
+and on the reported shape:
+
+      × Exactly one root scale                  2 root scale(s) found.
+      × Exactly one CAT context                 2 context(s) found.
+      × Every mapped scale exists in the engine  0 of 2 present.
+      × No duplicate nodes                      1 duplicate node(s).
+      × Node count matches the blueprint        2 nodes, blueprint calls for 4.
+
+Each check is separate because each has a different answer: a missing subscale
+and a stray extra one are not the same problem, and a map row pointing at a
+deleted scale is worse than a missing row — everything downstream then
+materialises into a scale nobody can select from.
+
+It runs **before** the test stage, where the fact was already true, rather than
+being discovered while building on top of it. The run view shows it beside the
+scale generations.
+
+### Verification
+PHPUnit 599 tests / 3362 assertions, Behat 32 scenarios / 232 steps, phpcs with
+the Moodle standard clean, PHPDoc clean. Both outputs above are real: the
+inconsistent one from the reported shape staged here, the consistent one from a
+fresh provisioning.
+
+---
+
 ## [0.6.28] — 2026-09-14
 
 Issue #63: one recording instead of seven logs.

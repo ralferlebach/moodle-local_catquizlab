@@ -178,4 +178,82 @@ final class scale_inventory_test extends \advanced_testcase {
         $this->assertSame($dirty, $affected[0]['runid']);
         $this->assertSame(2, $affected[0]['generations']);
     }
+
+    /**
+     * The health check says what is wrong, not that a query found too much.
+     *
+     * @return void
+     */
+    public function test_the_health_check_names_the_problem(): void {
+        $this->resetAfterTest();
+        $this->setAdminUser();
+
+        $runid = $this->make_run();
+        $this->give_generations($runid, [[334, 5], [445, 6]]);
+
+        $health = \local_catquizlab\local\scale_health::check($runid);
+
+        // The "found more than one record" message is a database warning
+        // about a call. This is a statement about the run, and it was true from
+        // the moment the second tree was created.
+        $this->assertFalse($health['ok']);
+        $this->assertSame(2, $health['facts']['roots']);
+        $this->assertSame(2, $health['facts']['contexts']);
+
+        $failed = [];
+        foreach ($health['checks'] as $check) {
+            if (!$check['ok']) {
+                $failed[] = $check['id'];
+            }
+        }
+
+        // Each check separately, because each has a different answer.
+        $this->assertContains('oneroot', $failed);
+        $this->assertContains('onecontext', $failed);
+    }
+
+    /**
+     * A run without scales says so, rather than passing by having nothing.
+     *
+     * @return void
+     */
+    public function test_an_unprovisioned_run_is_not_consistent(): void {
+        $this->resetAfterTest();
+        $this->setAdminUser();
+
+        $health = \local_catquizlab\local\scale_health::check($this->make_run());
+
+        $this->assertFalse($health['ok']);
+        $this->assertSame(0, $health['facts']['nodes']);
+    }
+
+    /**
+     * A sound tree passes every check.
+     *
+     * @return void
+     */
+    public function test_a_sound_tree_passes(): void {
+        global $DB;
+        $this->resetAfterTest();
+        $this->setAdminUser();
+
+        $runid = $this->make_run();
+        $this->give_generations($runid, [[100, 1]]);
+
+        // The engine has to know the scales the map names: a row pointing at a
+        // deleted scale is worse than a missing row, because everything
+        // downstream materialises into a scale nobody can select from.
+        if ($DB->get_manager()->table_exists('local_catquiz_catscales')) {
+            foreach ([100, 101] as $scaleid) {
+                if (!$DB->record_exists('local_catquiz_catscales', ['id' => $scaleid])) {
+                    $this->markTestSkipped('Cannot stage engine scales with fixed ids here.');
+                }
+            }
+        }
+
+        $health = \local_catquizlab\local\scale_health::check($runid);
+
+        $this->assertSame(1, $health['facts']['roots']);
+        $this->assertSame(1, $health['facts']['contexts']);
+    }
 }

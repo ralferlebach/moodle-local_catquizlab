@@ -519,6 +519,15 @@ class run_orchestrator {
             case self::STAGE_CONTAINER:
                 return self::stage_container($context);
             case self::STAGE_TEST:
+                // Checked before the test is built, not discovered while
+                // building it: an inconsistent tree produced a database warning
+                // about a call, at this stage, when the fact had been true
+                // since provisioning.
+                $health = scale_health::check((int) $context['runid']);
+                if (!$health['ok']) {
+                    return ['ok' => false, 'reason' => $health['summary'], 'facts' => $health['facts']];
+                }
+
                 return self::stage_test($context);
             case self::STAGE_PEOPLE:
                 return self::stage_people($context);

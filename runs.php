@@ -347,6 +347,29 @@ if ($runid > 0) {
     ];
     echo html_writer::table($table);
 
+    // Whether the tree is sound, in the plugin's own terms. The old failure
+    // was a database warning about a call; this is a statement about the run.
+    $scalehealth = \local_catquizlab\local\scale_health::check($runid);
+    if (!$scalehealth['ok'] || count($scalehealth['checks']) > 1) {
+        echo $OUTPUT->heading(get_string('scalehealth:heading', $component), 4);
+        echo $OUTPUT->notification(
+            $scalehealth['summary'],
+            $scalehealth['ok']
+                ? \core\output\notification::NOTIFY_SUCCESS
+                : \core\output\notification::NOTIFY_ERROR
+        );
+
+        $healthtable = new html_table();
+        foreach ($scalehealth['checks'] as $check) {
+            $healthtable->data[] = [
+                $check['ok'] ? '&check;' : '&times;',
+                s($check['label']),
+                s($check['detail']),
+            ];
+        }
+        echo html_writer::table($healthtable);
+    }
+
     // The scale generations this run owns. One is the normal case and says
     // nothing; several is a data defect worth naming here, where somebody is
     // looking at the run it affects.
