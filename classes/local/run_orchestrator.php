@@ -486,6 +486,31 @@ class run_orchestrator {
      * @return mixed The stage result.
      */
     protected static function run_stage(string $stage, array $context) {
+        $token = run_log::start_step((int) ($context['runid'] ?? 0), $stage);
+
+        try {
+            $result = self::dispatch_stage($stage, $context);
+        } catch (\Throwable $e) {
+            run_log::finish_step($token, false, ['reason' => $e->getMessage()]);
+            throw $e;
+        }
+
+        $ok = !is_array($result) || !array_key_exists('ok', $result) || !empty($result['ok']);
+        run_log::finish_step($token, $ok, is_array($result) && !empty($result['reason'])
+            ? ['reason' => (string) $result['reason']]
+            : []);
+
+        return $result;
+    }
+
+    /**
+     * Run one stage, without the measurement around it.
+     *
+     * @param string $stage The stage name.
+     * @param array $context The shared setup context.
+     * @return mixed The stage result.
+     */
+    protected static function dispatch_stage(string $stage, array $context) {
         switch ($stage) {
             case self::STAGE_SCALES:
                 return self::stage_scales($context);

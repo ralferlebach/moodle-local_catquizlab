@@ -66,6 +66,7 @@ class run_lifecycle {
      * @return array{started: bool, reason: string}
      */
     public static function start(int $runid, array $options = [], ?\context $context = null): array {
+        run_log::record($runid, run_log::START_REQUESTED);
         global $DB;
 
         $run = $DB->get_record('local_catquizlab_run', ['id' => $runid]);
@@ -139,6 +140,11 @@ class run_lifecycle {
      * @return void
      */
     public static function provisioned(int $runid, bool $ok, string $reason = ''): void {
+        run_log::record(
+            $runid,
+            $ok ? run_log::PROVISIONING_READY : run_log::RUN_FAILED,
+            $reason !== '' ? ['reason' => $reason] : []
+        );
         global $DB;
 
         if (!$ok) {
@@ -392,6 +398,11 @@ class run_lifecycle {
      * @return void
      */
     public static function aggregated(int $runid, bool $ok = true, string $reason = ''): void {
+        run_log::record(
+            $runid,
+            $ok ? run_log::RUN_FINISHED : run_log::RUN_FAILED,
+            $reason !== '' ? ['reason' => $reason] : []
+        );
         global $DB;
 
         if (!$ok) {
@@ -440,6 +451,8 @@ class run_lifecycle {
             'manifestjson' => json_encode($manifest, JSON_UNESCAPED_SLASHES),
             'timemodified' => time(),
         ]);
+
+        run_log::record($runid, run_log::RUN_FAILED, ['reason' => $reason]);
 
         // A failed run must not leave work behind. Its queued attempts are
         // closed rather than deleted: the history of what was planned is worth
@@ -536,6 +549,10 @@ class run_lifecycle {
      * @return array{ok: bool, removed: array, reason: string}
      */
     public static function reset(int $runid): array {
+        // A new execution attempt rather than a clean slate: the log of what
+        // went wrong last time is exactly what somebody needs while looking at
+        // this one, and the number is what keeps the two apart.
+        run_log::new_attempt($runid, 'reset to draft');
         global $DB;
 
         $run = $DB->get_record('local_catquizlab_run', ['id' => $runid]);
@@ -603,6 +620,7 @@ class run_lifecycle {
      * @return array{ok: bool, reason: string, requeued: int}
      */
     public static function recheck(int $runid): array {
+        run_log::record($runid, run_log::RECHECKED);
         global $DB;
 
         $run = $DB->get_record('local_catquizlab_run', ['id' => $runid]);

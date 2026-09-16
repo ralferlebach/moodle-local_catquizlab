@@ -6,6 +6,55 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.6.25] — 2026-09-14
+
+Issues #61 and #62: what happened to a run, kept — and where the queries go.
+
+### #61 — A persistent execution and recovery log
+A failed run's story was spread across the Moodle task log, the run manifest,
+the worker log, the interface and the database. A reset destroyed most of it,
+which is the wrong moment to lose it: what went wrong on the last attempt is
+exactly what somebody needs while looking at this one.
+
+`local_catquizlab_runlog` is append-only and numbered by execution attempt.
+Resetting a run starts attempt 2 rather than erasing attempt 1 — measured: 17
+entries before, all 17 still readable after, and the new attempt beginning
+beside them.
+
+Sixteen events are recorded across a normal provisioning, from
+`start_requested` through each stage to `provisioning_ready`. Logging can never
+be why something fails: a missing table or a bad write returns quietly, because
+a run that completes without its story is worse than one with it and far better
+than one that dies trying to write it.
+
+### #62 — The 549,727 queries have an address
+Every provisioning stage is now measured. On this instance:
+
+    scales              13 queries    0.01 s
+    materialise        937 queries    0.70 s
+    container           18 queries    0.01 s
+    people              89 queries    0.15 s
+    test               163 queries    1.12 s
+    readiness            6 queries    0.00 s
+    attempts             7 queries    0.00 s
+
+`materialise` is the whole story: about 39 queries per item. The reported
+549,727 is that same rate against a pool of some fourteen thousand — a big
+number, and not a different problem.
+
+So the budget is per stage and per unit where the stage scales, and it exists to
+notice a change in the rate rather than to police a total: 937 queries for 24
+items passes, 5,000 for the same 24 does not, and 900 queries to create one
+course is flagged where the same number materialising a pool is not.
+
+The run view shows the log with its costs, over-budget steps marked.
+
+### Verification
+PHPUnit 582 tests / 3305 assertions, Behat 32 scenarios / 232 steps, phpcs with
+the Moodle standard clean, PHPDoc clean.
+
+---
+
 ## [0.6.24] — 2026-09-14
 
 A CI failure of my own making, and issue #57.

@@ -201,6 +201,31 @@ function xmldb_local_catquizlab_upgrade($oldversion): bool {
         upgrade_plugin_savepoint(true, 2026091401, 'local', 'catquizlab');
     }
 
+    if ($oldversion < 2026091411) {
+        // A failed run's story was spread across the Moodle task log, the run
+        // manifest, the worker log, the interface and the database — and a
+        // reset destroyed most of it. This keeps it, per execution attempt.
+        $table = new xmldb_table('local_catquizlab_runlog');
+        $table->add_field('id', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, XMLDB_SEQUENCE);
+        $table->add_field('runid', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, '0');
+        $table->add_field('attemptno', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, '1');
+        $table->add_field('event', XMLDB_TYPE_CHAR, '40', null, XMLDB_NOTNULL, null, null);
+        $table->add_field('stage', XMLDB_TYPE_CHAR, '40', null, null, null, null);
+        $table->add_field('detail', XMLDB_TYPE_TEXT, null, null, null, null, null);
+        $table->add_field('dbqueries', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, '0');
+        $table->add_field('duration', XMLDB_TYPE_NUMBER, '10, 3', null, XMLDB_NOTNULL, null, '0');
+        $table->add_field('userid', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, '0');
+        $table->add_field('timecreated', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, '0');
+        $table->add_key('primary', XMLDB_KEY_PRIMARY, ['id']);
+        $table->add_index('runattempt', XMLDB_INDEX_NOTUNIQUE, ['runid', 'attemptno']);
+
+        if (!$dbman->table_exists($table)) {
+            $dbman->create_table($table);
+        }
+
+        upgrade_plugin_savepoint(true, 2026091411, 'local', 'catquizlab');
+    }
+
     return true;
 }
 

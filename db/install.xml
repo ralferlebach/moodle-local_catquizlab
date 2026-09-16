@@ -287,5 +287,25 @@
         <INDEX NAME="heartbeat" UNIQUE="false" FIELDS="heartbeat"/>
       </INDEXES>
     </TABLE>
+    <TABLE NAME="local_catquizlab_runlog" COMMENT="An append-only record of what happened to a run and why. Survives a reset: what went wrong on the second execution attempt is exactly what somebody needs while looking at the third.">
+      <FIELDS>
+        <FIELD NAME="id" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="true"/>
+        <FIELD NAME="runid" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="false" COMMENT="The run. Not a foreign key: the log outlives the run it describes."/>
+        <FIELD NAME="attemptno" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="1" SEQUENCE="false" COMMENT="Which execution attempt of this run. A reset starts a new one rather than overwriting the last."/>
+        <FIELD NAME="event" TYPE="char" LENGTH="40" NOTNULL="true" SEQUENCE="false" COMMENT="What happened, from a fixed vocabulary."/>
+        <FIELD NAME="stage" TYPE="char" LENGTH="40" NOTNULL="false" SEQUENCE="false" COMMENT="Which provisioning stage, where one applies."/>
+        <FIELD NAME="detail" TYPE="text" NOTNULL="false" SEQUENCE="false" COMMENT="Reason, error or measurement, as JSON."/>
+        <FIELD NAME="dbqueries" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false" COMMENT="Queries used by this step. A provisioning that took 549727 of them is the reason this is recorded."/>
+        <FIELD NAME="duration" TYPE="number" LENGTH="10" DECIMALS="3" NOTNULL="true" DEFAULT="0" SEQUENCE="false" COMMENT="Seconds the step took."/>
+        <FIELD NAME="userid" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false" COMMENT="Who caused it, where a person did."/>
+        <FIELD NAME="timecreated" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="false"/>
+      </FIELDS>
+      <KEYS>
+        <KEY NAME="primary" TYPE="primary" FIELDS="id"/>
+      </KEYS>
+      <INDEXES>
+        <INDEX NAME="runattempt" UNIQUE="false" FIELDS="runid, attemptno"/>
+      </INDEXES>
+    </TABLE>
   </TABLES>
 </XMLDB>

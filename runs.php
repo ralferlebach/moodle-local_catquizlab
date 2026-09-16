@@ -310,6 +310,48 @@ if ($runid > 0) {
     ];
     echo html_writer::table($table);
 
+    // What actually happened, kept across resets. A failed run's story used to
+    // be spread over five places and a reset destroyed most of it.
+    $log = \local_catquizlab\local\run_log::entries($runid);
+    if ($log !== []) {
+        echo $OUTPUT->heading(get_string('runlog:heading', $component), 4);
+
+        $logtable = new html_table();
+        $logtable->head = [
+            get_string('runlog:attempt', $component),
+            get_string('runlog:time', $component),
+            get_string('runlog:event', $component),
+            get_string('runlog:detail', $component),
+            get_string('runlog:cost', $component),
+        ];
+
+        foreach (array_reverse($log) as $entry) {
+            $cost = $entry['dbqueries'] > 0
+                ? get_string('runlog:costvalue', $component, (object) [
+                    'queries'  => $entry['dbqueries'],
+                    'duration' => $entry['duration'],
+                ])
+                : '';
+            if ($entry['expensive']) {
+                $cost = html_writer::tag('strong', $cost) . ' ' . html_writer::tag(
+                    'span',
+                    get_string('runlog:overbudget', $component),
+                    ['class' => 'text-danger small']
+                );
+            }
+
+            $logtable->data[] = [
+                '#' . $entry['attemptno'],
+                $entry['time'],
+                s($entry['event']) . ($entry['stage'] !== '' ? ' (' . s($entry['stage']) . ')' : ''),
+                s($entry['summary']),
+                $cost,
+            ];
+        }
+
+        echo html_writer::table($logtable);
+    }
+
     // A run that says FAILED and nothing else sends the reader to the database.
     // The reason was already recorded; it was simply never shown.
     $failure = \local_catquizlab\local\run_lifecycle::failure_details($runid);
