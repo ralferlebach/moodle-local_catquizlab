@@ -19,6 +19,7 @@
     * hasexperiments - whether there are any
     * experimentid - the one in context, or 0
     * selecturl - where the selector posts
+    * newurl - where a new experiment is started
     * situation - state, reason and action for the installation
     * settingsurl - where settings live
 
@@ -31,6 +32,7 @@
         ],
         "experiments": [{"id": 1, "name": "Smoke Test 2", "selected": true}],
         "hasexperiments": true,
+        "newurl": "/local/catquizlab/experiment.php",
         "experimentid": 1,
         "selecturl": "/local/catquizlab/index.php",
         "situation": {"level": "good", "good": true, "watch": false, "bad": false, "state": "Nothing queued", "reason": "", "action": null},
@@ -87,6 +89,14 @@
                 {{#str}}shell:apply, local_catquizlab{{/str}}
             </button></noscript>
         </form>
+
+        {{!
+            Beside the selector, because creating one is the other thing a
+            person does with the list of experiments — and looking for it on a
+            different tab is how somebody ends up making their second
+            experiment by editing their first.
+        }}
+        <a href="{{newurl}}" class="small">{{#str}}shell:newexperiment, local_catquizlab{{/str}}</a>
     {{/hasexperiments}}
 
 </div>

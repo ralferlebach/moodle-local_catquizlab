@@ -62,8 +62,13 @@ class scale_health {
                         get_string('scalehealth:notprovisioned', $component)
                     ),
                 ],
+                // Every verdict carries codes, including this one: a caller
+                // branching on them must not have to know which return path it
+                // came from, and "no codes key" is not the same as "no
+                // failures".
+                'codes'   => ['provisioned'],
                 'summary' => get_string('scalehealth:notprovisioned', $component),
-                'facts'   => ['nodes' => 0],
+                'facts'   => ['nodes' => 0, 'roots' => 0, 'contexts' => 0, 'rootids' => [], 'contextids' => []],
             ];
         }
 

@@ -960,6 +960,7 @@ $string['severity:strong'] = 'Stark';
 $string['shell:allexperiments'] = 'Alle Experimente';
 $string['shell:apply'] = 'Übernehmen';
 $string['shell:experiment'] = 'Experiment';
+$string['shell:newexperiment'] = '+ Neues Experiment';
 $string['situation:failing'] = '{$a} Versuchsdurchläufe sind fehlgeschlagen, die Warteschlange ist leer.';
 $string['situation:failinghint'] = 'Jeder fehlgeschlagene Versuchsdurchlauf hält fest, warum. Ein Versuchsdurchlauf, dessen Ursache behoben ist, kann erneut geprüft und fortgesetzt werden.';
 $string['situation:idle'] = 'Es ist nichts eingereiht und nichts im Argen.';

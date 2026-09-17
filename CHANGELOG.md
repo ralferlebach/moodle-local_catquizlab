@@ -6,6 +6,50 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.6.46] — 2026-09-17
+
+Issue #70: the audit, re-run against what is there now.
+
+The audit judged 0.6.29 and found one issue closeable. It set the right
+standard — "practical functionality and usable operation, not the mere presence
+of classes or strings or changelog claims" — so this does not answer it with a
+changelog. Every claim was measured against the running code.
+
+Fifteen of sixteen held. Two did not, and both are fixed here.
+
+### `+ Neues Experiment` was never in the selector
+#53 asked for it beside the experiment dropdown and it was never added. Looking
+for it on another tab is how somebody ends up making their second experiment by
+editing their first.
+
+### A verdict without its codes
+`scale_health::check()` returns machine-readable failure codes — except on the
+early path for a run with no scale tree, which returned no `codes` key at all.
+A caller branching on them would have to know which return path produced the
+verdict, and "no codes key" is not the same as "no failures". Every path carries
+them now.
+
+That one is worth noting: it was added in 0.6.37, the focused tests passed, and
+it took a check written from the outside to find it. Which is the argument for
+writing checks from the outside.
+
+### The audit is a test now
+`tests/audit_test.php` checks the promises at the seam where each would break:
+one shell per request, the selector under the tabs, six preparation stages, the
+PHP path gating the pipeline and not the engine, the database refusing a second
+root, health verdicts carrying codes, one correlation id across both logs, and
+deleting having its own `RISK_DATALOSS` capability.
+
+Deliberately shallow — one check per claim — because its job is to notice a
+promise regressing, not to re-test what the focused suites cover.
+
+### Verification
+PHPUnit 658 tests / 3561 assertions, Behat 32 scenarios / 232 steps, phpcs with
+the Moodle standard clean, PHPDoc clean, every template example context
+parseable.
+
+---
+
 ## [0.6.45] — 2026-09-17
 
 Issue #73: the process, explained where somebody is standing in it.

@@ -165,6 +165,9 @@ class shell {
             'hasexperiments' => $experiments !== [],
             'experimentid' => $experimentid,
             'selecturl'    => (new \moodle_url(self::steps()[$current] ?? '/local/catquizlab/index.php'))->out(false),
+            // Beside the selector: creating one is the other thing a person
+            // does with the list of experiments.
+            'newurl'       => (new \moodle_url('/local/catquizlab/experiment.php'))->out(false),
             'currentstep'  => $current,
             'situation'    => $verdict,
             'settingsurl'  => (new \moodle_url('/local/catquizlab/index.php', ['tab' => 'settings']))->out(false),

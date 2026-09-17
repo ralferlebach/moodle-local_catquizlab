@@ -960,6 +960,7 @@ $string['severity:strong'] = 'Strong';
 $string['shell:allexperiments'] = 'All experiments';
 $string['shell:apply'] = 'Apply';
 $string['shell:experiment'] = 'Experiment';
+$string['shell:newexperiment'] = '+ New experiment';
 $string['situation:failing'] = '{$a} run(s) failed and the queue is empty.';
 $string['situation:failinghint'] = 'Each failed run records why. A run whose cause has been fixed can be re-checked and resumed.';
 $string['situation:idle'] = 'Nothing is queued and nothing is wrong.';
