@@ -30,7 +30,27 @@ namespace local_catquizlab\local;
  */
 class operations_view {
     /**
-     * The template context for the setup and operations view.
+     * The experiment course, as preparation needs to see it.
+     *
+     * @return array
+     */
+    protected static function container_context(): array {
+        $course = experiment_container::course();
+
+        return [
+            'configured'  => $course !== null,
+            'coursename'  => $course !== null ? format_string($course->fullname) : '',
+            'courseurl'   => $course !== null
+                ? (new \moodle_url('/course/view.php', ['id' => $course->id]))->out(false)
+                : '',
+            'settingsurl' => (new \moodle_url('/admin/settings.php', [
+                'section' => registry::SETTINGS_SECTION,
+            ]))->out(false),
+        ];
+    }
+
+    /**
+     * The template context for the preparation view.
      *
      * @return array
      */
@@ -146,6 +166,11 @@ class operations_view {
         // JSON blob — "which run is waiting for what" meant reading it.
         // The same contract as everything else on the page: state, evidence,
         // one action. Four vocabularies for four components was the complaint.
+        // The experiment course belongs to preparation: it is created here and
+        // it is part of answering whether the installation can run anything. On
+        // the plan step it was one of three things that made a plan unreadable
+        // as a plan.
+        'container'      => self::container_context(),
         'queuestatus'    => status_report::queue(),
         'pipelinestatus' => status_report::pipeline(),
         'tasks'        => task_overview::state(),

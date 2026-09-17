@@ -32,6 +32,7 @@
             "hasadhoc": false,
             "cron": {"ok": true, "detail": "Cron last ran 30 secs ago."}
         },
+        "container": {"configured": true, "coursename": "CATLab experiments", "courseurl": "/course/view.php?id=2", "settingsurl": "/admin/settings.php?section=local_catquizlab"},
         "selftest": null,
         "queuestatus": {"level": "good", "good": true, "watch": false, "bad": false, "state": "Nothing queued", "reason": "", "action": null},
         "pipelinestatus": {"level": "good", "good": true, "watch": false, "bad": false, "state": "Pipeline active", "reason": "ran 20 secs ago", "action": null},
@@ -90,77 +91,23 @@
     </div>
 </div>
 
+
 <div class="card mb-3">
     <div class="card-body">
-        <h3 class="h5">{{#str}}ops:workers, local_catquizlab{{/str}}</h3>
-        {{#workers.hasany}}
-            <table class="table table-sm">
-                <thead>
-                    <tr>
-                        <th scope="col">{{#str}}ops:worker, local_catquizlab{{/str}}</th>
-                        <th scope="col">{{#str}}ops:slot, local_catquizlab{{/str}}</th>
-                        <th scope="col">{{#str}}ops:jobsdone, local_catquizlab{{/str}}</th>
-                        <th scope="col">{{#str}}ops:heartbeat, local_catquizlab{{/str}}</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    {{#workers.rows}}
-                        <tr>
-                            <td>{{workerid}}</td>
-                            <td colspan="3">
-                                {{#status}}{{> local_catquizlab/statuscard }}{{/status}}
-                            </td>
-                        </tr>
-                        {{#log}}
-                            <tr>
-                                <td colspan="4">
-                                    <details>
-                                        <summary class="small">{{#str}}ops:workerlog, local_catquizlab{{/str}}</summary>
-                                        <pre class="small mb-0">{{.}}</pre>
-                                    </details>
-                                </td>
-                            </tr>
-                        {{/log}}
-                    {{/workers.rows}}
-                </tbody>
-            </table>
-        {{/workers.hasany}}
-        {{^workers.hasany}}
-            <p class="text-muted">{{#str}}health:workersnone, local_catquizlab{{/str}}</p>
-        {{/workers.hasany}}
-
-        <form method="post" action="{{formurl}}" class="d-inline">
-            <input type="hidden" name="sesskey" value="{{sesskey}}">
-            <input type="hidden" name="action" value="startworkers">
-            <button type="submit" class="btn btn-primary">{{#str}}ops:startworkers, local_catquizlab{{/str}}</button>
-        </form>
-        <form method="post" action="{{formurl}}" class="d-inline">
-            <input type="hidden" name="sesskey" value="{{sesskey}}">
-            <input type="hidden" name="action" value="reap">
-            <button type="submit" class="btn btn-secondary">{{#str}}ops:reap, local_catquizlab{{/str}}</button>
-        </form>
-        <form method="post" action="{{formurl}}" class="d-inline">
-            <input type="hidden" name="sesskey" value="{{sesskey}}">
-            <input type="hidden" name="action" value="selftest">
-            <button type="submit" class="btn btn-secondary">{{#str}}ops:selftest, local_catquizlab{{/str}}</button>
-        </form>
-        <form method="post" action="{{formurl}}" class="d-inline">
-            <input type="hidden" name="sesskey" value="{{sesskey}}">
-            <input type="hidden" name="action" value="installbrowser">
-            <button type="submit" class="btn btn-secondary">{{#str}}ops:installbrowser, local_catquizlab{{/str}}</button>
-        </form>
-
-        {{#selftest}}
-            <div class="alert {{#ok}}alert-success{{/ok}}{{^ok}}alert-danger{{/ok}} mt-3" role="status">
-                <strong>{{#str}}ops:selftestresult, local_catquizlab{{/str}}</strong>
-                <pre class="mb-0 small">{{output}}</pre>
+        {{#container}}
+            <div class="mb-3 small">
+                <span class="text-muted">{{#str}}container:label, local_catquizlab{{/str}}</span>
+                {{#configured}}
+                    <a href="{{courseurl}}">{{coursename}}</a>
+                    &middot;
+                    <a href="{{settingsurl}}">{{#str}}container:change, local_catquizlab{{/str}}</a>
+                {{/configured}}
+                {{^configured}}
+                    <a href="{{settingsurl}}">{{#str}}container:choose, local_catquizlab{{/str}}</a>
+                {{/configured}}
             </div>
-        {{/selftest}}
-    </div>
-</div>
+        {{/container}}
 
-<div class="card mb-3">
-    <div class="card-body">
         <h3 class="h5">{{#str}}selftest:heading, local_catquizlab{{/str}}</h3>
         <p class="small text-muted">{{#str}}selftest:explain, local_catquizlab{{/str}}</p>
 
@@ -191,180 +138,5 @@
     </div>
 </div>
 
-<div class="card mb-3">
-    <div class="card-body">
-        <h3 class="h5">{{#str}}task:heading, local_catquizlab{{/str}}</h3>
 
-        {{#pipelinestatus}}<div class="mb-3">{{> local_catquizlab/statuscard }}</div>{{/pipelinestatus}}
 
-        <h4 class="h6">{{#str}}task:scheduled, local_catquizlab{{/str}}</h4>
-        <table class="table table-sm">
-            <tbody>
-                {{#tasks.scheduled}}
-                    <tr>
-                        <td>{{name}}</td>
-                        <td class="small text-muted">{{lastrun}}</td>
-                        <td class="small {{#overdue}}text-danger{{/overdue}}">{{nextrun}}</td>
-                        <td>
-                            <form method="post" action="{{runurl}}" class="d-inline">
-                                <input type="hidden" name="sesskey" value="{{sesskey}}">
-                                <input type="hidden" name="action" value="runscheduled">
-                                <input type="hidden" name="classname" value="{{classname}}">
-                                <button type="submit" class="btn btn-sm btn-outline-secondary">
-                                    {{#str}}task:runnow, local_catquizlab{{/str}}
-                                </button>
-                            </form>
-                        </td>
-                    </tr>
-                    {{#overdue}}
-                        <tr><td colspan="4" class="small text-danger">
-                            {{#str}}task:overdue, local_catquizlab{{/str}}
-                        </td></tr>
-                    {{/overdue}}
-                {{/tasks.scheduled}}
-            </tbody>
-        </table>
-
-        <h4 class="h6">{{#str}}task:adhoc, local_catquizlab{{/str}}</h4>
-        {{#tasks.hasadhoc}}
-            <table class="table table-sm">
-                <tbody>
-                    {{#tasks.adhoc}}
-                        <tr>
-                            <td>{{name}}</td>
-                            <td>{{subject}}</td>
-                            <td class="small text-muted">
-                                {{#running}}{{#str}}task:isrunning, local_catquizlab{{/str}}{{/running}}
-                                {{^running}}{{due}}{{/running}}
-                            </td>
-                            <td class="small text-muted">{{failures}}</td>
-                        </tr>
-                    {{/tasks.adhoc}}
-                </tbody>
-            </table>
-        {{/tasks.hasadhoc}}
-        {{^tasks.hasadhoc}}
-            <p class="text-muted">{{#str}}task:noadhoc, local_catquizlab{{/str}}</p>
-        {{/tasks.hasadhoc}}
-
-        <a href="{{taskadminurl}}" class="small">{{#str}}task:openmoodle, local_catquizlab{{/str}}</a>
-
-        <hr>
-        <h4 class="h6">{{#str}}purge:heading, local_catquizlab{{/str}}</h4>
-        <p class="small text-muted">{{#str}}purge:explain, local_catquizlab{{/str}}</p>
-        <form method="post" action="{{formurl}}" class="d-inline">
-            <input type="hidden" name="sesskey" value="{{sesskey}}">
-            <input type="hidden" name="action" value="killtasks">
-            <button type="submit" class="btn btn-sm btn-outline-danger">
-                {{#str}}purge:killtasks, local_catquizlab{{/str}}
-            </button>
-        </form>
-        <form method="post" action="{{formurl}}" class="d-inline">
-            <input type="hidden" name="sesskey" value="{{sesskey}}">
-            <input type="hidden" name="action" value="killworkers">
-            <button type="submit" class="btn btn-sm btn-outline-danger">
-                {{#str}}purge:killworkers, local_catquizlab{{/str}}
-            </button>
-        </form>
-        <form method="post" action="{{formurl}}" class="d-inline">
-            <input type="hidden" name="sesskey" value="{{sesskey}}">
-            <input type="hidden" name="action" value="killpipeline">
-            <button type="submit" class="btn btn-sm btn-danger">
-                {{#str}}purge:killpipeline, local_catquizlab{{/str}}
-            </button>
-        </form>
-    </div>
-</div>
-
-<div class="card mb-3">
-    <div class="card-body">
-        <h3 class="h5">{{#str}}ops:queue, local_catquizlab{{/str}}</h3>
-        {{#queuestatus}}<div class="mb-2">{{> local_catquizlab/statuscard }}</div>{{/queuestatus}}
-        <p>{{#str}}worker:queue, local_catquizlab{{/str}}
-            {{queue.queued}} / {{queue.running}} / {{queue.collected}} / {{queue.failed}}</p>
-
-        <h4 class="h6">{{#str}}ops:stuckattempts, local_catquizlab{{/str}}</h4>
-        {{#stuck.hasany}}
-            <table class="table table-sm">
-                <thead>
-                    <tr>
-                        <th scope="col">{{#str}}ops:attempt, local_catquizlab{{/str}}</th>
-                        <th scope="col">{{#str}}ops:worker, local_catquizlab{{/str}}</th>
-                        <th scope="col">{{#str}}worker:tries, local_catquizlab{{/str}}</th>
-                        <th scope="col">{{#str}}ops:heartbeat, local_catquizlab{{/str}}</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    {{#stuck.rows}}
-                        <tr>
-                            <td>#{{attemptid}} (run {{runid}})</td>
-                            <td>{{owner}}</td>
-                            <td>{{tries}}</td>
-                            <td>{{since}}</td>
-                        </tr>
-                        {{#lasterror}}<tr><td colspan="4" class="small text-muted">{{lasterror}}</td></tr>{{/lasterror}}
-                    {{/stuck.rows}}
-                </tbody>
-            </table>
-        {{/stuck.hasany}}
-        {{^stuck.hasany}}
-            <p class="text-muted">{{#str}}ops:nostuck, local_catquizlab{{/str}}</p>
-        {{/stuck.hasany}}
-
-        {{#empty}}
-            <div class="alert alert-warning" role="status">
-                <strong>{{#str}}ops:emptyheading, local_catquizlab{{/str}}</strong>
-                <p class="mb-1">{{#str}}ops:emptyexplain, local_catquizlab{{/str}}</p>
-                <ul class="small mb-2">
-                    {{#rows}}<li>#{{attemptid}} (run {{runid}}, {{twinid}}) &mdash; {{since}}</li>{{/rows}}
-                </ul>
-                <form method="post" action="{{formurl}}">
-                    <input type="hidden" name="sesskey" value="{{sesskey}}">
-                    <input type="hidden" name="action" value="purgeempty">
-                    <button type="submit" class="btn btn-sm btn-secondary">
-                        {{#str}}ops:purgeempty, local_catquizlab{{/str}}
-                    </button>
-                </form>
-            </div>
-        {{/empty}}
-
-        <form method="post" action="{{formurl}}">
-            <input type="hidden" name="sesskey" value="{{sesskey}}">
-            <input type="hidden" name="action" value="releaseorphans">
-            <button type="submit" class="btn btn-secondary">{{#str}}ops:releaseorphans, local_catquizlab{{/str}}</button>
-        </form>
-    </div>
-</div>
-
-<div class="card mb-3">
-    <div class="card-body">
-        <h3 class="h5">{{#str}}ops:runs, local_catquizlab{{/str}}</h3>
-        {{#inflight.hasany}}
-            <table class="table table-sm">
-                <tbody>
-                    {{#inflight.rows}}
-                        <tr>
-                            <td>#{{runid}} {{cellkey}}</td>
-                            <td>{{status}}</td>
-                            <td>{{collected}}/{{total}}</td>
-                            <td>
-                                <form method="post" action="{{pauseurl}}" class="d-inline">
-                                    <input type="hidden" name="sesskey" value="{{sesskey}}">
-                                    <input type="hidden" name="action" value="{{pauseaction}}">
-                                    <input type="hidden" name="runid" value="{{runid}}">
-                                    <button type="submit" class="btn btn-sm btn-outline-secondary">
-                                        {{#paused}}{{#str}}ops:resumerun, local_catquizlab{{/str}}{{/paused}}
-                                        {{^paused}}{{#str}}ops:pauserun, local_catquizlab{{/str}}{{/paused}}
-                                    </button>
-                                </form>
-                            </td>
-                        </tr>
-                    {{/inflight.rows}}
-                </tbody>
-            </table>
-        {{/inflight.hasany}}
-        {{^inflight.hasany}}
-            <p class="text-muted mb-0">{{#str}}ops:nothinginflight, local_catquizlab{{/str}}</p>
-        {{/inflight.hasany}}
-    </div>
-</div>

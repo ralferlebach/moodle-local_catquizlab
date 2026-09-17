@@ -121,40 +121,11 @@
         </div>
     </div>
 
-    {{#container}}
-        {{#configured}}
-            <div class="mb-3">
-                <span class="text-muted">{{#str}}container:label, local_catquizlab{{/str}}</span>
-                <a href="{{courseurl}}">{{coursename}}</a>
-                <a href="{{settingsurl}}" class="ml-2">{{#str}}container:change, local_catquizlab{{/str}}</a>
-            </div>
-        {{/configured}}
-        {{^configured}}
-            <div class="alert alert-warning">
-                <p class="mb-2">{{#str}}container:nocourse, local_catquizlab{{/str}}</p>
-                <a href="{{settingsurl}}" class="btn btn-secondary">
-                    {{#str}}container:choose, local_catquizlab{{/str}}
-                </a>
-            </div>
-        {{/configured}}
-    {{/container}}
 
     {{#disabled}}
         <div class="alert alert-warning">{{#str}}manage:disabled, local_catquizlab{{/str}}</div>
     {{/disabled}}
 
-    {{#environment}}
-        <details class="local-catquizlab-section mb-4">
-            <summary class="local-catquizlab-summary">
-                <span class="h5">{{#str}}manage:environment, local_catquizlab{{/str}}</span>
-            </summary>
-            <div class="mt-2">
-                {{#items}}
-                    <div class="{{class}}">{{text}}</div>
-                {{/items}}
-            </div>
-        </details>
-    {{/environment}}
 
     {{!
     The state line moved into the shell, where every page gets it. Rendering
@@ -220,51 +191,4 @@
         {{/hasany}}
     {{/experiments}}
 
-    {{#runs}}
-        <h2 class="h4 mt-4">{{#str}}manage:runs, local_catquizlab{{/str}}</h2>
-        {{#hassummary}}
-            <div class="text-muted mb-2">{{summary}}</div>
-        {{/hassummary}}
-        {{#hasany}}
-            <table class="generaltable table-sm">
-                <caption class="sr-only">{{#str}}manage:runs, local_catquizlab{{/str}}</caption>
-                <thead>
-                    <tr>
-                        <th scope="col">{{#str}}run:id, local_catquizlab{{/str}}</th>
-                        <th scope="col">{{#str}}manage:col_experiment, local_catquizlab{{/str}}</th>
-                        <th scope="col">{{#str}}form:strategy, local_catquizlab{{/str}}</th>
-                        <th scope="col">{{#str}}form:variant, local_catquizlab{{/str}}</th>
-                        <th scope="col">{{#str}}form:stratum, local_catquizlab{{/str}}</th>
-                        <th scope="col">{{#str}}run:status, local_catquizlab{{/str}}</th>
-                        <th scope="col">{{#str}}run:progress, local_catquizlab{{/str}}</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    {{#rows}}
-                        <tr>
-                            <td><a href="{{detailurl}}">{{id}}</a></td>
-                            <td>{{experiment}}</td>
-                            <td>{{strategylabel}}</td>
-                            <td>{{variantlabel}}</td>
-                            <td>{{stratumlabel}}</td>
-                            <td><span class="badge {{statusclass}}">{{statuslabel}}</span></td>
-                            <td>
-                                <div class="progress" style="height:0.75rem;">
-                                    <div class="progress-bar {{progressclass}}" role="progressbar"
-                                         style="width:{{progress}}%;"
-                                         aria-valuenow="{{progress}}" aria-valuemin="0" aria-valuemax="100"
-                                         aria-label="{{progresslabel}}"></div>
-                                </div>
-                                <span class="small text-muted">{{progress}}&nbsp;%</span>
-                            </td>
-                        </tr>
-                    {{/rows}}
-                </tbody>
-            </table>
-            <a href="{{runsurl}}">{{#str}}manage:allruns, local_catquizlab{{/str}}</a>
-        {{/hasany}}
-        {{^hasany}}
-            <div class="alert alert-info">{{#str}}manage:noruns, local_catquizlab{{/str}}</div>
-        {{/hasany}}
-    {{/runs}}
 </div>

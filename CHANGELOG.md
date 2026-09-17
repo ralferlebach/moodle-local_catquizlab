@@ -6,6 +6,46 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.6.51] — 2026-09-17
+
+Issues #52, #54 and #55: each step shows its own step.
+
+### The plan step showed three other steps
+`manage.mustache` carried the experiment course, an environment listing and the
+run table. All three describe a different part of the process, and a reader on
+the plan could not tell which step they were on because the plan answered
+questions belonging to two others. Removed — the plan is now experiments, and
+the actions that create them.
+
+### Preparation had six cards, four of them second copies
+Workers, tasks, the queue and the active runs were on the preparation tab **and**
+on step 3. Not misplaced: duplicated, and competing with the originals. Whoever
+changed one would have had to remember the other.
+
+Preparation is two cards now — the wizard and the self-test — which is what
+"can this installation run anything" needs, and nothing else.
+
+### The experiment course moved rather than vanished
+Taking the container block out of the plan removed the only way to set the
+experiment course, which is not a tidy-up but a loss. It lives in preparation
+now, beside the wizard that creates it: `Experiment course: … Change` when one
+is set, `Choose an experiment course` when none is.
+
+The Behat suite caught this, not me.
+
+### The scenarios moved with the content
+Six scenarios asserted the old layout. They assert the new one — following the
+tab to where the thing now lives — rather than asserting what the interface used
+to look like. The one that looked for an "All runs" link out of the plan now
+uses the tab, because the plan no longer lists runs and has nothing to link out
+of.
+
+### Verification
+PHPUnit 666 tests / 3544 assertions, Behat 32 scenarios / 232 steps, phpcs with
+the Moodle standard clean, PHPDoc clean, 1069 strings per language.
+
+---
+
 ## [0.6.50] — 2026-09-17
 
 The 2026091703 audit: #71, #58, #74, #73, and #53/#72.

@@ -70,7 +70,9 @@ Feature: Defining and running CAT experiments from the web interface
       | replications | 2          |
     And the experiment "Behat runs" has been expanded into runs
     And I navigate to "Reports > CAT experiment suite" in site administration
-    When I follow "All runs"
+    # The runs live on step 3. The plan step no longer lists them, so there is
+    # no "All runs" link out of it — the tab is the way there.
+    When I follow "3. Progress"
     Then I should see "Runs"
     And I should see "Behat runs"
     And I should see "Any status"
@@ -204,10 +206,10 @@ Feature: Defining and running CAT experiments from the web interface
     And I should see "Item level"
     And I should see "What the file will say about itself"
 
-  Scenario: The landing page says when no experiment course is configured
+  Scenario: Preparation says when no experiment course is configured
     When I navigate to "Reports > CAT experiment suite" in site administration
-    Then I should see "No experiment course is configured"
-    And I should see "Choose an experiment course"
+    And I follow "1. Preparation"
+    Then I should see "Choose an experiment course"
 
   Scenario: A configured experiment course is shown and linked
     Given the following "courses" exist:
@@ -215,6 +217,7 @@ Feature: Defining and running CAT experiments from the web interface
       | CATLab Studies  | catlab    |
     And the course "catlab" is the experiment course
     When I navigate to "Reports > CAT experiment suite" in site administration
+    And I follow "1. Preparation"
     Then I should see "Experiment course:"
     And I should see "CATLab Studies"
 
@@ -231,9 +234,12 @@ Feature: Defining and running CAT experiments from the web interface
     And I should see "Vary the disturbance strength"
 
   @javascript
-  Scenario: The settings link from the landing page opens without a section error
+  Scenario: The settings link from preparation opens without a section error
+    # The experiment course moved to preparation, where it is created: on the
+    # plan step it was one of three things that made a plan unreadable as a plan.
     Given I log in as "admin"
     And I navigate to "Reports > CAT experiment suite" in site administration
+    And I follow "1. Preparation"
     When I follow "Choose an experiment course"
     Then I should not see "Section error"
     And I should see "CAT experiment suite"

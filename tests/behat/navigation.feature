@@ -11,7 +11,8 @@ Feature: Reaching the CAT experiment suite management page
   Scenario: The navbar button opens the management page
     When I follow "CATQUIZ-Lab"
     Then I should see "CAT experiment suite"
-    And I should see "Environment"
+    # The landing page is the experiment plan, so what it shows is experiments.
+    And I should see "Experiments"
 
   Scenario: The management page is listed under site administration reports
     When I navigate to "Reports > CAT experiment suite" in site administration
@@ -33,6 +34,9 @@ Feature: Reaching the CAT experiment suite management page
     And I should see "Token stored in the plugin setting"
     # Was a heading of the system card; the pipeline is step 5 of the process.
     And I should see "5. Pipeline"
+    # The queue, the workers and recovery are step 3: watching a run happen is
+    # not the same question as whether the installation can run anything.
+    And I follow "3. Progress"
     And I should see "Attempt queue"
     And I should see "Start workers"
     And I should see "Release orphaned claims"
