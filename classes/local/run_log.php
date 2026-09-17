@@ -332,8 +332,9 @@ class run_log {
         //
         // The budget is set just above the measured rate rather than at a
         // comfortable multiple of it, so a change in this plugin's share is
-        // caught rather than absorbed.
-        'materialise' => 45,
+        // caught rather than absorbed. Measured at 35.3 after the category
+        // lookup and the ID numbers were batched.
+        'materialise' => 40,
         'container'   => 500,
         // Per person.
         'people'      => 200,

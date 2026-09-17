@@ -6,6 +6,72 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.6.48] — 2026-09-17
+
+Issue #62: the queries, taken apart and reduced where they are mine.
+
+### Where they actually go
+Measured per item, separately:
+
+    Moodle's save_question():   27 queries
+    question category lookup:    1
+    setting the ID number:       4
+    registering with the engine: 4
+    the rest of materialising:  ~3
+
+Twenty-seven of about thirty-nine are Moodle's own question API. That is the
+half of this that is not a defect here, and knowing it stops the effort going
+into the wrong place.
+
+### What was reducible, reduced
+The **category lookup** fetched the same row once per item; it is the same
+category for every item on a scale. Held for the request.
+
+The **ID numbers** cost four queries each — two lookups and a uniqueness check
+per item — to write a label. They are now written together once every question
+exists: one join for all the entries, one read of the labels already taken, then
+the writes.
+
+The **engine verification** moved from once per item to once per scale, and the
+answer names the items the engine cannot see, so nothing about locating a
+failure was traded away.
+
+    before: 38.9 queries per item
+    after:  35.3 queries per item
+
+A ninth, not a tenth of what was reported. Against fourteen thousand items that
+is roughly 545,000 → 494,000 — an improvement, and not a solution.
+
+### A regression, caught by measuring the right thing
+The first version of the batching wrote no ID numbers at all: 0 of 120. The
+query count looked better precisely because the work was not being done. The
+flush had been inserted at an anchor that no longer existed and silently did
+nothing. Measured again after fixing it: 120 of 120, at 35.3 per item.
+
+Worth stating plainly, because "faster" and "not doing it" produce the same
+number.
+
+### The budget
+Now 40 per item, just above the measured 35.3. The previous rate of 38.9 would
+fail it, which is the point: this plugin's share is caught growing rather than
+absorbed into core's.
+
+### What is not done
+The 27 queries inside `save_question()` are untouched. Reducing them means
+writing question rows without Moodle's question API — plausible for synthetic
+items, and a decision about coupling to core's schema rather than an
+optimisation. It is not made here.
+
+So #62 is better and not finished. If it is closed, it should be closed on the
+measurement and the reduced share, not on the total.
+
+### Verification
+PHPUnit 666 tests / 3568 assertions, Behat 32 scenarios / 232 steps, phpcs with
+the Moodle standard clean, PHPDoc clean. Both rates above are readings from this
+instance on a 120-item pool.
+
+---
+
 ## [0.6.47] — 2026-09-17
 
 The 2026091617 audit, worked through. #58, #71, #53/#72, #73, #74, and an honest

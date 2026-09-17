@@ -261,6 +261,45 @@ class materialiser {
             self::record_ground_truth($runid, $poolid, $questionid, $spec);
         }
 
+        // The labels, written together now that every question exists.
+        self::flush_idnumbers();
+
+        // And the engine's verdict, asked once per scale rather than once per
+        // item. The answer names the items it cannot see, so nothing about
+        // locating a failure is given up for the saving.
+        if ($verify) {
+            foreach ($pending as $key => $specs) {
+                [$catscaleid, $contextid] = array_map('intval', explode(':', $key));
+
+                cat_item_provisioner::forget_visible_items();
+                $visible = cat_item_provisioner::visible_items($catscaleid, $contextid);
+
+                $seen = [];
+                foreach ($visible as $item) {
+                    $id = is_object($item)
+                        ? ($item->questionid ?? $item->id ?? 0)
+                        : (int) ($item['questionid'] ?? 0);
+                    $seen[(int) $id] = true;
+                }
+
+                foreach ($specs as $questionid => $spec) {
+                    if (isset($seen[(int) $questionid])) {
+                        continue;
+                    }
+
+                    $counts['faileditems']++;
+                    $counts['enginevisible'] = max(0, $counts['enginevisible'] - 1);
+                    $errors = self::record_error($errors, [
+                        'itemname'    => $spec['itemname'] ?? '',
+                        'questionid'  => (int) $questionid,
+                        'catscaleid'  => $catscaleid,
+                        'reason'      => cat_item_provisioner::REASON_NOT_VISIBLE,
+                        'engineerror' => '',
+                    ]);
+                }
+            }
+        }
+
         if ($poolid > 0) {
             $DB->set_field('local_catquizlab_pool', 'itemcount', $counts['enginevisible'], ['id' => $poolid]);
             $DB->set_field('local_catquizlab_pool', 'questioncategoryid', $categoryid, ['id' => $poolid]);
@@ -619,6 +658,90 @@ class materialiser {
      * @param array $rendered The rendered question (name, questiontext, single, answers).
      * @return int The new question id, or 0 on failure.
      */
+    /** @var array<int, \stdClass|null> Question categories already fetched this request. */
+    protected static $categorycache = [];
+
+    /** @var array<int, string> ID numbers waiting to be written in one pass. */
+    protected static $pendingidnumbers = [];
+
+    /**
+     * Write the deferred ID numbers, in as few queries as the shape allows.
+     *
+     * @return int How many were written.
+     */
+    protected static function flush_idnumbers(): int {
+        global $DB;
+
+        if (self::$pendingidnumbers === []) {
+            return 0;
+        }
+
+        $questionids = array_keys(self::$pendingidnumbers);
+        [$insql, $params] = $DB->get_in_or_equal($questionids, SQL_PARAMS_NAMED, 'q');
+
+        // One join for every question instead of two lookups each.
+        $entries = $DB->get_records_sql(
+            'SELECT qv.questionid, qbe.id AS entryid, qbe.questioncategoryid
+               FROM {question_versions} qv
+               JOIN {question_bank_entries} qbe ON qbe.id = qv.questionbankentryid
+              WHERE qv.questionid ' . $insql,
+            $params
+        );
+
+        // And one read of the labels already taken in those categories, rather
+        // than asking per question.
+        $categoryids = [];
+        foreach ($entries as $entry) {
+            $categoryids[(int) $entry->questioncategoryid] = true;
+        }
+
+        $taken = [];
+        if ($categoryids !== []) {
+            [$catsql, $catparams] = $DB->get_in_or_equal(array_keys($categoryids), SQL_PARAMS_NAMED, 'c');
+            $existing = $DB->get_records_select(
+                'question_bank_entries',
+                'questioncategoryid ' . $catsql . ' AND idnumber IS NOT NULL',
+                $catparams,
+                '',
+                'id, questioncategoryid, idnumber'
+            );
+
+            foreach ($existing as $row) {
+                $taken[$row->questioncategoryid . ':' . $row->idnumber] = (int) $row->id;
+            }
+        }
+
+        $written = 0;
+        foreach (self::$pendingidnumbers as $questionid => $idnumber) {
+            $entry = $entries[$questionid] ?? null;
+            if (!$entry) {
+                continue;
+            }
+
+            // A collision would fail the write, and an item without an ID
+            // number is better than a materialisation that stops over a label.
+            $key = $entry->questioncategoryid . ':' . $idnumber;
+            if (isset($taken[$key]) && $taken[$key] !== (int) $entry->entryid) {
+                continue;
+            }
+
+            $DB->set_field('question_bank_entries', 'idnumber', $idnumber, ['id' => $entry->entryid]);
+            $taken[$key] = (int) $entry->entryid;
+            $written++;
+        }
+
+        self::$pendingidnumbers = [];
+
+        return $written;
+    }
+
+    /**
+     * Create one multiple-choice question in a category.
+     *
+     * @param int $categoryid The question category.
+     * @param array $rendered Name, question text, answers and ID number.
+     * @return int The question id, or 0 when it could not be made.
+     */
     protected static function create_question(int $categoryid, array $rendered): int {
         global $USER, $DB, $CFG;
 
@@ -629,7 +752,14 @@ class materialiser {
         // do with the pool.
         require_once($CFG->libdir . '/questionlib.php');
 
-        $category = $DB->get_record('question_categories', ['id' => $categoryid]);
+        // The same category for every item on a scale, fetched once per item
+        // before. One query each is not much and twenty thousand of them is.
+        if (!array_key_exists($categoryid, self::$categorycache)) {
+            self::$categorycache[$categoryid] = $DB->get_record('question_categories', ['id' => $categoryid])
+                ?: null;
+        }
+
+        $category = self::$categorycache[$categoryid];
         if (!$category) {
             return 0;
         }
@@ -668,7 +798,9 @@ class materialiser {
         $questionid = (int) ($saved->id ?? 0);
 
         if ($questionid > 0 && !empty($rendered['idnumber'])) {
-            self::set_idnumber($questionid, (string) $rendered['idnumber']);
+            // Deferred: four queries per item to write a label, when the labels
+            // can be written together once the questions exist.
+            self::$pendingidnumbers[$questionid] = (string) $rendered['idnumber'];
         }
 
         return $questionid;

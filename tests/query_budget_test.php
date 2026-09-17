@@ -153,10 +153,11 @@ final class query_budget_test extends \advanced_testcase {
         $this->assertFalse(run_log::over_budget('materialise', 937, 24));
 
         // The budget sits just above the measured rate, so this plugin's share
-        // growing is caught rather than absorbed: 45 per item passes, 50 does
-        // not.
-        $this->assertFalse(run_log::over_budget('materialise', 45 * 24, 24));
-        $this->assertTrue(run_log::over_budget('materialise', 50 * 24, 24));
+        // growing is caught rather than absorbed: 40 per item passes, 45 does
+        // not. Before batching the category lookup and the ID numbers the rate
+        // was 38.9, which would fail this.
+        $this->assertFalse(run_log::over_budget('materialise', 36 * 24, 24));
+        $this->assertTrue(run_log::over_budget('materialise', 45 * 24, 24));
         $this->assertTrue(run_log::over_budget('materialise', 1900, 24));
 
         // The flat stages do not scale with anything, so their budget is a
