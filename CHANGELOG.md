@@ -6,6 +6,106 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.6.44] — 2026-09-17
+
+CI fixes for 0.6.43.
+
+### A duplicated upgrade block
+`moodle-plugin-ci savepoints` failed:
+
+    ERROR: Detected multiple 'savepoint' calls for version 2026091604
+
+A whole upgrade block had been pasted in a second time. It is idempotent, so it
+did no harm on a site that ran it — but two savepoints for one version means a
+step that can run twice, and the check exists because that is usually not
+harmless.
+
+Removed, and a test pins it: one savepoint per block, each matching its own
+condition, ascending, none claiming a version the plugin has not reached. Run
+against a deliberately duplicated block it reports
+`Duplicate savepoint versions: 2026091604` and fails.
+
+### PHPUnit on Moodle 5.x
+Six access-readiness tests failed on every 5.x job and passed here:
+
+    null value in column "questioncategory" violates not-null constraint
+
+The adaptive-quiz generator builds its own question pool when none is given, and
+what that produces is null on 5.x. The tests pass an explicit category now.
+
+This is the second finding this month that a one-version local environment
+cannot see, and both surfaced only in CI. Worth remembering when a change looks
+green locally.
+
+### Verification
+PHPUnit 648 tests / 3514 assertions, Behat 32 scenarios / 232 steps, phpcs with
+the Moodle standard clean, PHPDoc clean, all templates pass the Mustache linter,
+upgrade savepoints unique and ordered.
+
+### Still open
+#70 (code and issue audit), #73 (explaining the process), #74 (German
+terminology).
+
+---
+
+## [0.6.44] — 2026-09-17
+
+CI fixes, and #74: the agreed German terminology.
+
+### CI — two real defects, not flaky runs
+**PHPUnit on every matrix leg but the local one.** The access-readiness tests
+let the activity generator build its own question pool. On 4.5 that works; on
+5.x `questioncategory` is NOT NULL and the insert fails. The tests now create
+the category and pass it in — the kind of difference a one-version local
+environment cannot see.
+
+**`moodle-plugin-ci savepoints`.** A whole upgrade block had been pasted in
+twice, so two savepoints claimed version 2026091604. A site running that step
+twice does whatever the step does twice. The duplicate is gone, and a test now
+checks that every block has exactly one savepoint, at its own version, in
+ascending order — verified in the failing direction by re-inserting the
+duplicate and watching it go red.
+
+### #74 — The glossary, applied
+310 German strings rewritten to the agreed terms:
+
+    Worker            → Simulationsprozess
+    Worker runtime    → Ausführungsumgebung des Simulationsprozesses
+    Worker access     → Moodle-Zugang des Simulationsprozesses
+    Pipeline          → automatische Ausführungssteuerung
+    Task              → Hintergrundaufgabe
+    Run               → Versuchsdurchlauf
+    Attempt           → simulierte Testbearbeitung
+    Job / Claim       → Arbeitsauftrag / Reservierung
+    Heartbeat         → Lebenszeichen
+    Sweep / Cell      → Versuchsplan / Teilversuch
+    Provisioning      → technische Vorbereitung
+
+and the run statuses as the glossary words them: `Technische Vorbereitung
+eingeplant`, `Bereit zur Simulation`, `Simulation läuft`, `Ergebnisse werden
+zusammengeführt`.
+
+Three passes, because a blunt substitution is not a translation. English
+pluralises with a bracketed s and German does not, so `Versuchsdurchlauf(s)`
+became `Versuchsdurchläufe`. English compounds two nouns freely, so
+`simulierte Testbearbeitung-Arbeitsaufträge` became `Arbeitsaufträge für
+Testbearbeitungen`. And an adjective is capitalised at the start of a sentence
+and nowhere else, so `Versuchsdurchläufe und Technische Vorbereitung` became
+`… und technische Vorbereitung`.
+
+The English strings are untouched: the technical terms are the right ones there,
+and the glossary is about what the German interface says.
+
+### Verification
+PHPUnit 648 tests / 3514 assertions, Behat 32 scenarios / 232 steps, phpcs with
+the Moodle standard clean, PHPDoc clean, 1047 strings per language with
+identical keys.
+
+### Still open
+#70 (code and issue audit) and #73 (explaining the process to a newcomer).
+
+---
+
 ## [0.6.43] — 2026-09-16
 
 Issues #71, #72 and #69.

@@ -379,4 +379,47 @@ final class schema_test extends \advanced_testcase {
 
         $this->assertSame([], $empty, 'Empty directories in the plugin tree: ' . implode(', ', $empty));
     }
+
+    /**
+     * Each upgrade step has exactly one savepoint, at its own version.
+     *
+     * @return void
+     */
+    public function test_upgrade_savepoints_are_unique_and_ordered(): void {
+        global $CFG;
+        $this->resetAfterTest();
+
+        $source = file_get_contents($CFG->dirroot . '/local/catquizlab/db/upgrade.php');
+
+        preg_match_all('/if \(\$oldversion < (\d+)\)/', $source, $blocks);
+        preg_match_all('/upgrade_plugin_savepoint\(true, (\d+)/', $source, $savepoints);
+
+        $blockversions = array_map('intval', $blocks[1]);
+        $saveversions = array_map('intval', $savepoints[1]);
+
+        // Two savepoints for one version means an upgrade step was duplicated,
+        // and a site that runs it twice does whatever the step does twice.
+        // `moodle-plugin-ci savepoints` fails the build on this, and it did:
+        // a whole block had been pasted in a second time.
+        $this->assertSame(
+            count(array_unique($saveversions)),
+            count($saveversions),
+            'Duplicate savepoint versions: ' . implode(', ', array_diff_assoc(
+                $saveversions,
+                array_unique($saveversions)
+            ))
+        );
+
+        // One savepoint per block, each matching its own condition.
+        $this->assertSame($blockversions, $saveversions);
+
+        $sorted = $blockversions;
+        sort($sorted);
+        $this->assertSame($sorted, $blockversions, 'Upgrade blocks are not in ascending order.');
+
+        // And none of them claims a version the plugin has not reached.
+        $plugin = new \stdClass();
+        require($CFG->dirroot . '/local/catquizlab/version.php');
+        $this->assertLessThanOrEqual((int) $plugin->version, max($saveversions));
+    }
 }

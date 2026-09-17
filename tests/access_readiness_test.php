@@ -48,7 +48,19 @@ final class access_readiness_test extends \advanced_testcase {
         $runid = (int) $generator->create_run()->id;
 
         $course = $this->getDataGenerator()->create_course(['visible' => 1]);
-        $quiz = $this->getDataGenerator()->create_module('adaptivequiz', ['course' => $course->id]);
+
+        // The activity generator writes a row per question category, and on
+        // Moodle 5.x that column is NOT NULL. Leaving it to a default worked on
+        // 4.5 and failed everywhere else, which is the kind of difference a
+        // one-version local environment cannot see.
+        $category = $this->getDataGenerator()
+            ->get_plugin_generator('core_question')
+            ->create_question_category(['contextid' => \context_course::instance($course->id)->id]);
+
+        $quiz = $this->getDataGenerator()->create_module('adaptivequiz', [
+            'course' => $course->id,
+            'questionpool' => [$category->id],
+        ]);
         $user = $this->getDataGenerator()->create_user();
         $this->getDataGenerator()->enrol_user($user->id, $course->id, 'student');
 
