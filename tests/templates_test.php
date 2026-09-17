@@ -224,4 +224,38 @@ final class templates_test extends \advanced_testcase {
             );
         }
     }
+
+    /**
+     * No state change sits behind a link.
+     *
+     * @dataProvider template_provider
+     * @param string $name The template name.
+     * @param string $file Its path.
+     * @return void
+     */
+    public function test_no_state_change_behind_a_get(string $name, string $file): void {
+        global $OUTPUT;
+        $this->resetAfterTest();
+        $this->setAdminUser();
+
+        $source = file_get_contents($file);
+        preg_match('/Example context \(json\):([\s\S]*?)\n}}/', $source, $matches);
+        $context = json_decode(trim($matches[1] ?? ''), true);
+        if (!is_array($context)) {
+            $this->markTestSkipped($name . ' has no usable example context.');
+        }
+
+        $html = $OUTPUT->render_from_template('local_catquizlab/' . $name, $context);
+
+        preg_match_all('/<a[^>]+href="([^"]*\baction=[^"]*)"/', $html, $found);
+
+        // A state change behind a GET is one a prefetcher, a crawler or a back
+        // button can make on somebody's behalf — and pausing a run somebody is
+        // watching then looks like a bug in the plugin.
+        $this->assertSame(
+            [],
+            $found[1],
+            $name . ' links to an action instead of posting it: ' . implode(', ', $found[1])
+        );
+    }
 }

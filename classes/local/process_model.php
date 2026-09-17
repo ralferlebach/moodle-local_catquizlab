@@ -50,10 +50,16 @@ class process_model {
      * The chain, with the current position marked.
      *
      * @param string $currentstep One of the four process steps.
-     * @return array{stages: array[], step: string}
+     * @param int $experimentid The experiment whose real position to mark, or 0.
+     * @return array{stages: array[], step: string, reached: string}
      */
-    public static function chain(string $currentstep = ''): array {
+    public static function chain(string $currentstep = '', int $experimentid = 0): array {
         $component = 'local_catquizlab';
+
+        // Where the work actually is, not which tab is open. Marking by tab put
+        // "you are here" on five stages at once on the progress step, which
+        // tells somebody nothing they did not already know from the tab.
+        $reached = $experimentid > 0 ? self::reached_stage($experimentid) : '';
 
         $stages = [];
         $number = 0;
@@ -68,10 +74,77 @@ class process_model {
                 // status they do not recognise: is this waiting for me.
                 'automatic' => in_array($id, ['prepare', 'queue', 'collect', 'aggregate'], true),
                 'manual'    => in_array($id, ['define', 'variants', 'simulate', 'evaluate'], true),
-                'here'      => $currentstep !== '' && $step === $currentstep,
+                'here'      => $reached !== '' ? $id === $reached : false,
+                // The tab still colours the group, which is a weaker claim and
+                // an honest one.
+                'onthisstep' => $currentstep !== '' && $step === $currentstep,
             ];
         }
 
-        return ['stages' => $stages, 'step' => $currentstep];
+        return ['stages' => $stages, 'step' => $currentstep, 'reached' => $reached];
+    }
+
+    /**
+     * The stage this experiment has actually got to.
+     *
+     * The furthest thing that has happened, not the furthest thing that could:
+     * an experiment with thirty runs of which two are finished is still
+     * simulating, and saying it is evaluating would be a lie told by a maximum.
+     *
+     * @param int $experimentid The experiment.
+     * @return string The stage id, or '' when it cannot be told.
+     */
+    public static function reached_stage(int $experimentid): string {
+        global $DB;
+
+        if (!$DB->record_exists('local_catquizlab_experiment', ['id' => $experimentid])) {
+            return '';
+        }
+
+        $runs = $DB->get_records('local_catquizlab_run', ['experimentid' => $experimentid]);
+        if ($runs === []) {
+            // Defined, with nothing built from it yet.
+            return 'variants';
+        }
+
+        $runids = array_keys($runs);
+        [$insql, $params] = $DB->get_in_or_equal($runids, SQL_PARAMS_NAMED, 'r');
+
+        $statuses = [];
+        foreach ($runs as $run) {
+            $statuses[(int) $run->status] = true;
+        }
+
+        // Everything finished: the experiment is there to be read.
+        $unfinished = array_diff(array_keys($statuses), [registry::STATUS_FINISHED]);
+        if ($unfinished === []) {
+            return 'evaluate';
+        }
+
+        if (isset($statuses[registry::STATUS_AGGREGATING])) {
+            return 'aggregate';
+        }
+
+        $collected = $DB->count_records_select(
+            'local_catquizlab_attempt',
+            'runid ' . $insql . ' AND status = :collected',
+            $params + ['collected' => attempt_scheduler::STATUS_COLLECTED]
+        );
+
+        if (isset($statuses[registry::STATUS_RUNNING])) {
+            // Something has come back already, so collection is under way too;
+            // the simulating is what a person is waiting on.
+            return 'simulate';
+        }
+
+        if (isset($statuses[registry::STATUS_READY])) {
+            return $collected > 0 ? 'collect' : 'queue';
+        }
+
+        if (isset($statuses[registry::STATUS_SCHEDULED])) {
+            return 'prepare';
+        }
+
+        return 'variants';
     }
 }

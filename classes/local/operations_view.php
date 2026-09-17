@@ -102,11 +102,14 @@ class operations_view {
                 'collected' => $counts['collected'],
                 'failed'    => $counts['failed'],
                 'paused'    => $paused,
-                'pauseurl'  => (new \moodle_url($pageurl, [
-                    'action'  => $paused ? 'resumerun' : 'pauserun',
-                    'runid'   => (int) $run->id,
-                    'sesskey' => sesskey(),
-                ]))->out(false),
+                // Posted, not linked. A state change behind a GET is a state
+                // change a prefetcher, a crawler or a back button can make on
+                // somebody's behalf — and pausing a run they are watching is
+                // exactly the kind of thing that then looks like a bug in the
+                // plugin.
+                'pauseurl'  => (new \moodle_url($pageurl))->out(false),
+                'pauseaction' => $paused ? 'resumerun' : 'pauserun',
+                'sesskey'   => sesskey(),
             ];
         }, $DB->get_records_select(
             'local_catquizlab_run',

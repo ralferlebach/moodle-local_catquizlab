@@ -86,11 +86,14 @@
                     they stay, as secondary offers rather than peers of the
                     primary one.
                 }}
+                {{!
+                    No "new experiment" button here: it lives beside the
+                    experiment selector now, where the list of experiments is.
+                    Two places to start one is two places to check when somebody
+                    cannot find it.
+                }}
                 <div class="mb-4">
-                    <a href="{{newurl}}" class="btn btn-primary">
-                        {{#str}}manage:newexperiment, local_catquizlab{{/str}}
-                    </a>
-                    <span class="ml-3 small">
+                    <span class="small">
                         <a href="{{presetsurl}}">{{#str}}manage:presets, local_catquizlab{{/str}}</a>
                         &middot;
                         <a href="{{importurl}}">{{#str}}manage:importexperiment, local_catquizlab{{/str}}</a>

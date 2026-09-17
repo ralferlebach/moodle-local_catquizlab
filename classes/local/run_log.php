@@ -322,7 +322,18 @@ class run_log {
     public const QUERY_BUDGET = [
         'scales'      => 500,
         // Per item, not in total: this stage scales with the pool.
-        'materialise' => 60,
+        //
+        // Measured on this codebase: about 39 queries per item, of which 4 are
+        // this plugin registering the item with the CAT engine and the rest is
+        // Moodle's own question creation. So the reported 549,727 against some
+        // fourteen thousand items is very largely core's cost, not a defect
+        // here — which is worth knowing before anybody optimises the wrong
+        // thing.
+        //
+        // The budget is set just above the measured rate rather than at a
+        // comfortable multiple of it, so a change in this plugin's share is
+        // caught rather than absorbed.
+        'materialise' => 45,
         'container'   => 500,
         // Per person.
         'people'      => 200,

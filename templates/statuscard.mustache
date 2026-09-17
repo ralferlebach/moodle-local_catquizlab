@@ -16,7 +16,7 @@
     * good, watch, bad - flags for the level
     * state - what it is
     * reason - the evidence
-    * action - label and url, or null
+    * action - label, url, command, runid and sesskey, or null
 
     Example context (json):
     {
@@ -26,7 +26,7 @@
         "bad": true,
         "state": "Waiting for a worker",
         "reason": "6 attempt(s) claimed by nobody",
-        "action": {"label": "Start workers", "url": "/local/catquizlab/index.php?tab=setup"},
+        "action": {"label": "Start workers", "url": "/local/catquizlab/runs.php", "command": "provision", "runid": 4, "sesskey": "abc123"},
         "region": "catquizlab-queue"
     }
 }}
@@ -39,6 +39,15 @@
         <div class="small text-muted"{{#region}} data-region="{{.}}-reason"{{/region}}>{{reason}}</div>
     </div>
     {{#action}}
-        <a href="{{url}}" class="btn btn-sm btn-outline-primary ml-2 flex-shrink-0">{{label}}</a>
+        {{!
+            Posted, not linked. A state change behind a GET is one a prefetcher,
+            a crawler or a back button can make on somebody's behalf.
+        }}
+        <form method="post" action="{{url}}" class="d-inline ml-2 flex-shrink-0">
+            <input type="hidden" name="sesskey" value="{{sesskey}}">
+            <input type="hidden" name="action" value="{{command}}">
+            {{#runid}}<input type="hidden" name="runid" value="{{.}}">{{/runid}}
+            <button type="submit" class="btn btn-sm btn-outline-primary">{{label}}</button>
+        </form>
     {{/action}}
 </div>

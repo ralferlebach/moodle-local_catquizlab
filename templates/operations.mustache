@@ -343,10 +343,15 @@
                             <td>{{status}}</td>
                             <td>{{collected}}/{{total}}</td>
                             <td>
-                                <a href="{{pauseurl}}" class="btn btn-sm btn-outline-secondary">
-                                    {{#paused}}{{#str}}ops:resumerun, local_catquizlab{{/str}}{{/paused}}
-                                    {{^paused}}{{#str}}ops:pauserun, local_catquizlab{{/str}}{{/paused}}
-                                </a>
+                                <form method="post" action="{{pauseurl}}" class="d-inline">
+                                    <input type="hidden" name="sesskey" value="{{sesskey}}">
+                                    <input type="hidden" name="action" value="{{pauseaction}}">
+                                    <input type="hidden" name="runid" value="{{runid}}">
+                                    <button type="submit" class="btn btn-sm btn-outline-secondary">
+                                        {{#paused}}{{#str}}ops:resumerun, local_catquizlab{{/str}}{{/paused}}
+                                        {{^paused}}{{#str}}ops:pauserun, local_catquizlab{{/str}}{{/paused}}
+                                    </button>
+                                </form>
                             </td>
                         </tr>
                     {{/inflight.rows}}

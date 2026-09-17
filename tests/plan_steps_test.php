@@ -148,9 +148,24 @@ final class plan_steps_test extends \advanced_testcase {
      * @return void
      */
     public function test_the_process_chain_marks_where_you_are(): void {
+        global $DB;
         $this->resetAfterTest();
+        $this->setAdminUser();
 
-        $chain = \local_catquizlab\local\process_model::chain('progress');
+        // An experiment with runs that have not been provisioned: the work is
+        // at "prepare", whatever tab is open.
+        /** @var \local_catquizlab_generator $generator */
+        $generator = $this->getDataGenerator()->get_plugin_generator('local_catquizlab');
+        $runid = (int) $generator->create_run()->id;
+        $experimentid = (int) $DB->get_field('local_catquizlab_run', 'experimentid', ['id' => $runid]);
+        $DB->set_field(
+            'local_catquizlab_run',
+            'status',
+            \local_catquizlab\local\registry::STATUS_SCHEDULED,
+            ['id' => $runid]
+        );
+
+        $chain = \local_catquizlab\local\process_model::chain('progress', $experimentid);
 
         $this->assertCount(8, $chain['stages']);
 
@@ -172,10 +187,9 @@ final class plan_steps_test extends \advanced_testcase {
             }
         }
 
-        // The five stages that happen on the progress step.
-        $this->assertContains('prepare', $here);
-        $this->assertContains('simulate', $here);
-        $this->assertNotContains('define', $here);
-        $this->assertNotContains('evaluate', $here);
+        // Exactly one stage, and the one the work is actually at. Marking by
+        // tab put "you are here" on five stages at once, which tells somebody
+        // nothing they did not already know from the tab they opened.
+        $this->assertSame(['prepare'], $here);
     }
 }

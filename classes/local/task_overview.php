@@ -115,11 +115,10 @@ class task_overview {
                 // it is cron that is not running — and that is the single most
                 // common reason a pipeline sits still.
                 'overdue'   => !$disabled && $nextrun > 0 && (time() - $nextrun) > 900,
-                'runurl'    => (new \moodle_url('/local/catquizlab/tasks.php', [
-                    'action'    => 'runscheduled',
-                    'classname' => $classname,
-                    'sesskey'   => sesskey(),
-                ]))->out(false),
+                // Running a task is a state change, so it is posted. The URL
+                // stays bare and the parameters travel in the form.
+                'runurl'    => (new \moodle_url('/local/catquizlab/tasks.php'))->out(false),
+                'sesskey'   => sesskey(),
             ];
         }
 

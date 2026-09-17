@@ -96,7 +96,16 @@
             different tab is how somebody ends up making their second
             experiment by editing their first.
         }}
-        <a href="{{newurl}}" class="small">{{#str}}shell:newexperiment, local_catquizlab{{/str}}</a>
     {{/hasexperiments}}
+
+    {{!
+        Outside the selector block on purpose: an installation with no
+        experiments still needs a way to make one, and putting this behind
+        "there is at least one experiment" is a dead end on the step whose
+        whole job is to start them.
+    }}
+    {{#newurl}}
+        <a href="{{.}}" class="small">{{#str}}shell:newexperiment, local_catquizlab{{/str}}</a>
+    {{/newurl}}
 
 </div>

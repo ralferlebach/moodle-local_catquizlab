@@ -642,11 +642,14 @@ class run_lifecycle {
 
         $start = self::start($runid);
 
+        // The start() call reports 'started', not 'ok'. Reading the wrong key made every
+        // successful restart report as a failure — and the run had in fact
+        // restarted, so the message and the database disagreed.
         return [
-            'ok'        => !empty($start['ok']),
+            'ok'        => !empty($start['started']),
             'removed'   => $reset['removed'],
             'reason'    => (string) ($start['reason'] ?? ''),
-            'restarted' => !empty($start['ok']),
+            'restarted' => !empty($start['started']),
         ];
     }
 

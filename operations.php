@@ -281,6 +281,12 @@ if ($action !== '') {
     }
 
     if (($action === 'pauserun' || $action === 'resumerun') && $runid > 0) {
+        // Refused over GET, so a link that used to work stops working loudly
+        // rather than quietly continuing to change state.
+        if (!isset($_POST['action'])) {
+            throw new moodle_exception('invalidrequest', 'error');
+        }
+
         $paused = $action === 'pauserun';
         run_lifecycle::set_paused($runid, $paused);
         redirect(

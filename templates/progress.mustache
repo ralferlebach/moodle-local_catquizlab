@@ -24,26 +24,78 @@
     * canexecute - whether to offer them at all
 
     Example context (json):
-    {
-        "ambiguous": {"hasany": false, "rows": []},
-        "debug": {"enabled": false, "hasany": false, "rows": []},
-        "situation": {"level": "good", "good": true, "watch": false, "bad": false, "state": "Nothing queued", "reason": "", "action": null},
-        "runs": {"hasany": false, "rows": []},
-        "tasks": {
-            "scheduled": [],
-            "adhoc": [],
-            "hasadhoc": false,
-            "cron": {"ok": true, "detail": "Cron last ran 30 secs ago."}
+{
+        "ambiguous": {
+                "hasany": false,
+                "rows": []
         },
-        "workers": {"hasany": false, "rows": []},
-        "queuestatus": {"level": "good", "good": true, "watch": false, "bad": false, "state": "Nothing queued", "reason": "", "action": null},
-        "queue": {"claimable": 0, "notdue": 0, "blocked": 0, "paused": 0, "running": 0, "collected": 0, "failed": 0, "hasblocked": false, "hasnotdue": false, "haspaused": false},
-        "pipelinestatus": {"level": "good", "good": true, "watch": false, "bad": false, "state": "Pipeline active", "reason": "ran 20 secs ago", "action": null},
+        "debug": {
+                "enabled": false,
+                "hasany": false,
+                "rows": []
+        },
+        "situation": {
+                "level": "good",
+                "good": true,
+                "watch": false,
+                "bad": false,
+                "state": "Nothing queued",
+                "reason": "",
+                "action": null
+        },
+        "runs": {
+                "hasany": false,
+                "rows": []
+        },
+        "tasks": {
+                "scheduled": [],
+                "adhoc": [],
+                "hasadhoc": false,
+                "cron": {
+                        "ok": true,
+                        "detail": "Cron last ran 30 secs ago."
+                }
+        },
+        "workers": {
+                "hasany": false,
+                "rows": []
+        },
+        "queuestatus": {
+                "level": "good",
+                "good": true,
+                "watch": false,
+                "bad": false,
+                "state": "Nothing queued",
+                "reason": "",
+                "action": null
+        },
+        "queue": {
+                "claimable": 0,
+                "notdue": 0,
+                "blocked": 0,
+                "paused": 0,
+                "running": 0,
+                "collected": 0,
+                "failed": 0,
+                "hasblocked": false,
+                "hasnotdue": false,
+                "haspaused": false
+        },
+        "pipelinestatus": {
+                "level": "good",
+                "good": true,
+                "watch": false,
+                "bad": false,
+                "state": "Pipeline active",
+                "reason": "ran 20 secs ago",
+                "action": null
+        },
         "formurl": "/local/catquizlab/operations.php",
         "sesskey": "abc123",
         "experimentid": 0,
         "canexecute": true
-    }
+}
+
 }}
 {{#ambiguous.hasany}}
     <div class="alert alert-danger" role="status">
@@ -98,9 +150,16 @@
                         <td>{{name}}</td>
                         <td class="small text-muted">{{lastrun}}</td>
                         <td class="small {{#overdue}}text-danger{{/overdue}}">{{nextrun}}</td>
-                        <td><a href="{{runurl}}" class="btn btn-sm btn-outline-secondary">
-                            {{#str}}task:runnow, local_catquizlab{{/str}}
-                        </a></td>
+                        <td>
+                            <form method="post" action="{{runurl}}" class="d-inline">
+                                <input type="hidden" name="sesskey" value="{{sesskey}}">
+                                <input type="hidden" name="action" value="runscheduled">
+                                <input type="hidden" name="classname" value="{{classname}}">
+                                <button type="submit" class="btn btn-sm btn-outline-secondary">
+                                    {{#str}}task:runnow, local_catquizlab{{/str}}
+                                </button>
+                            </form>
+                        </td>
                     </tr>
                 {{/tasks.scheduled}}
                 {{#tasks.adhoc}}

@@ -185,6 +185,10 @@ class materialiser {
         $template = $options['template'] ?? null;
         $verify = $options['verify'] ?? true;
 
+        // Items written per scale, checked against the engine once the scale is
+        // complete.
+        $pending = [];
+
         $counts = [
             'planned'              => count($specs),
             'questionscreated'     => 0,
@@ -221,8 +225,15 @@ class materialiser {
                 (int) $spec['catscaleid'],
                 (int) $spec['contextid'],
                 $spec,
-                ['verify' => $verify]
+                // Not per item: asking the engine once per item is where about
+                // thirty-nine queries each came from, and a pool of fourteen
+                // thousand cost half a million. The same question is asked once
+                // per scale below, and its answer names the items that are
+                // missing — so nothing about locating a failure is given up.
+                ['verify' => false]
             );
+
+            $pending[(int) $spec['catscaleid'] . ':' . (int) $spec['contextid']][$questionid] = $spec;
 
             if ($outcome['itemid'] !== null) {
                 $counts['itemsregistered']++;

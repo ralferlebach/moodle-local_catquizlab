@@ -6,6 +6,77 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.6.47] — 2026-09-17
+
+The 2026091617 audit, worked through. #58, #71, #53/#72, #73, #74, and an honest
+answer on #62.
+
+### #58 — reset and rerun never reported success
+`start()` returns `started`; `reset_and_rerun()` read `ok`. Every successful
+restart came back as a failure — while the run had in fact restarted, so the
+message and the database disagreed. Measured after the fix: `ok=true`, status
+SCHEDULED.
+
+### #71 — six state changes sat behind links
+Pause and resume, run-a-task, and the action on every status card were `<a
+href>` with `action=` in the URL. A state change behind a GET is one a
+prefetcher, a crawler or a back button can make on somebody's behalf, and
+pausing a run somebody is watching then looks like a bug in the plugin.
+
+All posted now, the handler refuses `pauserun`/`resumerun` over GET, and a test
+renders every template and fails on any `<a href>` carrying an action. Measured:
+6 such links before, 0 after.
+
+### #53/#72 — one place to start an experiment
+`+ New experiment` now appears on the plan step and nowhere else — measured
+across all four steps — and the separate primary button in `manage.mustache` is
+gone. Two places to start one is two places to check when somebody cannot find
+it.
+
+### #73 — the real position, not the open tab
+`here` was set by tab, so the progress step marked five stages at once as "you
+are here" — which tells somebody nothing they did not know from the tab they
+clicked. `reached_stage()` derives it from the runs: scheduled means preparing,
+ready with nothing collected means queued, running means simulating, all
+finished means evaluating. Measured: exactly one stage marked, and the right
+one.
+
+### #74 — the rest of the glossary
+36 more strings: Versuchszelle → Teilversuch, provisionieren → technisch
+vorbereiten, and Draft, Stage, Blueprint, Root-Scale, CAT-Context, Queue,
+Preflight, Readiness and Recovery out of the German interface.
+
+### #62 — what the queries actually are
+Moving verification from per item to per scale changed the rate by almost
+nothing, so the parts were measured separately:
+
+    registering one item with the CAT engine:  4 queries
+    purging the engine cache:                  0 queries
+    asking the engine for a scale's items:     3 queries
+
+Of about 39 queries per item, **4 are this plugin**. The rest is Moodle's own
+question creation. The reported 549,727 against fourteen thousand items is
+therefore very largely core's cost and not a defect here — worth knowing before
+anybody optimises the wrong thing.
+
+The budget is now 45 per item rather than 60: just above the measured rate, so a
+change in this plugin's share is caught instead of being absorbed. That is not a
+reduction of the number, and the issue should not be closed as one. Reducing it
+further means going around Moodle's question API, which is a decision, not a
+tidy-up.
+
+### Found by the tests, not by me
+Restricting `+ New experiment` to the plan step put it inside the
+`hasexperiments` block, so an installation with no experiments had no way to
+make one. The Behat scenario that caught it is called "The empty registry offers
+a way forward instead of a dead end", which is exactly what I had broken.
+
+### Verification
+PHPUnit 666 tests / 3568 assertions, Behat 32 scenarios / 232 steps, phpcs with
+the Moodle standard clean, PHPDoc clean, 1069 strings per language.
+
+---
+
 ## [0.6.46] — 2026-09-17
 
 Issue #70: the audit, re-run against what is there now.

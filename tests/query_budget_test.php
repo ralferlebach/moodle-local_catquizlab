@@ -145,14 +145,18 @@ final class query_budget_test extends \advanced_testcase {
     public function test_the_budgets_match_the_measured_rates(): void {
         $this->resetAfterTest();
 
-        // Measured here: materialising 24 items took 937 queries, about 39
-        // each, and the reported 549,727-query provisioning was that same rate
-        // against some fourteen thousand. A budget that failed on the reported
-        // number would be a budget against arithmetic.
-        $this->assertFalse(run_log::over_budget('materialise', 549727, 14000));
+        // About 39 queries per item, measured: 4 of them this plugin
+        // registering the item with the engine, the rest Moodle's own question
+        // creation. The reported 549,727 against fourteen thousand items is
+        // that rate, so it passes — failing on it would be failing on
+        // arithmetic, and on core's arithmetic at that.
         $this->assertFalse(run_log::over_budget('materialise', 937, 24));
 
-        // Double the rate is a defect, and that is what this catches.
+        // The budget sits just above the measured rate, so this plugin's share
+        // growing is caught rather than absorbed: 45 per item passes, 50 does
+        // not.
+        $this->assertFalse(run_log::over_budget('materialise', 45 * 24, 24));
+        $this->assertTrue(run_log::over_budget('materialise', 50 * 24, 24));
         $this->assertTrue(run_log::over_budget('materialise', 1900, 24));
 
         // The flat stages do not scale with anything, so their budget is a
