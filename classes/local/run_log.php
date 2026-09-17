@@ -129,8 +129,12 @@ class run_log {
                 'detail'      => $detail === [] ? null : json_encode($detail, JSON_UNESCAPED_SLASHES),
                 'dbqueries'   => (int) ($measure['dbqueries'] ?? 0),
                 'duration'    => round((float) ($measure['duration'] ?? 0), 3),
-                'userid'      => (int) ($USER->id ?? 0),
-                'timecreated' => time(),
+                // The same id the debug trace carries, so one click can be read
+                // as one sequence across both.
+                'correlationid' => debug_trace::correlation_id(),
+                'taskclassname' => debug_trace::task_classname(),
+                'userid'        => (int) ($USER->id ?? 0),
+                'timecreated'   => time(),
             ]);
         } catch (\Throwable $e) {
             return 0;
@@ -254,6 +258,8 @@ class run_log {
 
             $rows[] = [
                 'id'        => (int) $row->id,
+                'correlationid' => (string) ($row->correlationid ?? ''),
+                'taskclassname' => (string) ($row->taskclassname ?? ''),
                 'attemptno' => (int) $row->attemptno,
                 'event'     => $row->event,
                 'stage'     => (string) $row->stage,
@@ -261,6 +267,9 @@ class run_log {
                 'summary'   => self::summarise($detail),
                 'dbqueries' => (int) $row->dbqueries,
                 'duration'  => round((float) $row->duration, 3),
+                // Said the way a person would: a stage that took eight hours is
+                // not usefully described as 30720 seconds.
+                'durationtext' => duration::human((float) $row->duration),
                 // Flagged against the stage's own budget rather than one number
                 // for everything: 900 queries is unremarkable for materialising
                 // a pool and alarming for creating a course.

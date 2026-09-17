@@ -248,6 +248,8 @@
         <FIELD NAME="contextid" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false" COMMENT="The engine CAT context id."/>
         <FIELD NAME="level" TYPE="int" LENGTH="2" NOTNULL="true" DEFAULT="0" SEQUENCE="false" COMMENT="0=root/global, 1=category, 2=subscale."/>
         <FIELD NAME="categoryindex" TYPE="int" LENGTH="10" NOTNULL="false" SEQUENCE="false" COMMENT="1-based category index in the profile (null for the root)."/>
+        <FIELD NAME="nodekey" TYPE="char" LENGTH="40" NOTNULL="true" DEFAULT="root" SEQUENCE="false" COMMENT="The logical position in the tree: root, c1, c1s2. What makes one root per run enforceable, where a physical scale id cannot."/>
+        <FIELD NAME="generation" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="1" SEQUENCE="false" COMMENT="Which provisioning generation built this node. Only one may be live; older ones exist so an installation that already has them can be repaired rather than refused."/>
         <FIELD NAME="subscaleindex" TYPE="int" LENGTH="10" NOTNULL="false" SEQUENCE="false" COMMENT="1-based subscale index in the profile (null unless level 2)."/>
         <FIELD NAME="name" TYPE="char" LENGTH="255" NOTNULL="true" SEQUENCE="false" COMMENT="The scale name."/>
         <FIELD NAME="timecreated" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
@@ -258,6 +260,7 @@
         <KEY NAME="runid" TYPE="foreign" FIELDS="runid" REFTABLE="local_catquizlab_run" REFFIELDS="id"/>
       </KEYS>
       <INDEXES>
+        <INDEX NAME="runnodekey" UNIQUE="true" FIELDS="runid, generation, nodekey" COMMENT="One logical node per run per generation. UNIQUE(runid, catscaleid) could not express this: two different scale ids are both valid roots as far as it is concerned."/>
         <INDEX NAME="runid-catscaleid" UNIQUE="true" FIELDS="runid, catscaleid"/>
       </INDEXES>
     </TABLE>
@@ -297,6 +300,9 @@
         <FIELD NAME="detail" TYPE="text" NOTNULL="false" SEQUENCE="false" COMMENT="Reason, error or measurement, as JSON."/>
         <FIELD NAME="dbqueries" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false" COMMENT="Queries used by this step. A provisioning that took 549727 of them is the reason this is recorded."/>
         <FIELD NAME="duration" TYPE="number" LENGTH="10" DECIMALS="3" NOTNULL="true" DEFAULT="0" SEQUENCE="false" COMMENT="Seconds the step took."/>
+        <FIELD NAME="correlationid" TYPE="char" LENGTH="32" NOTNULL="false" SEQUENCE="false" COMMENT="The same id the debug trace carries, so the two can be read as one sequence."/>
+        <FIELD NAME="taskid" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false" COMMENT="The ad-hoc task that was running, where one was."/>
+        <FIELD NAME="taskclassname" TYPE="char" LENGTH="120" NOTNULL="false" SEQUENCE="false" COMMENT="Which task class, so a failure names the thing that failed."/>
         <FIELD NAME="userid" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false" COMMENT="Who caused it, where a person did."/>
         <FIELD NAME="timecreated" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="false"/>
       </FIELDS>
@@ -317,6 +323,8 @@
         <FIELD NAME="outcome" TYPE="char" LENGTH="20" NOTNULL="false" SEQUENCE="false" COMMENT="ok, refused or error."/>
         <FIELD NAME="detail" TYPE="text" NOTNULL="false" SEQUENCE="false" COMMENT="Result, reason or exception."/>
         <FIELD NAME="runid" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false" COMMENT="The run it concerned, where one did."/>
+        <FIELD NAME="correlationid" TYPE="char" LENGTH="32" NOTNULL="false" SEQUENCE="false" COMMENT="One click, one id, carried through service, lifecycle, task and worker. Without it the entries are a list of things that happened near each other."/>
+        <FIELD NAME="taskclassname" TYPE="char" LENGTH="120" NOTNULL="false" SEQUENCE="false" COMMENT="The task that was running, where one was."/>
         <FIELD NAME="userid" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
         <FIELD NAME="timecreated" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="false"/>
       </FIELDS>
@@ -325,6 +333,7 @@
       </KEYS>
       <INDEXES>
         <INDEX NAME="timecreated" UNIQUE="false" FIELDS="timecreated"/>
+        <INDEX NAME="correlationid" UNIQUE="false" FIELDS="correlationid"/>
       </INDEXES>
     </TABLE>
   </TABLES>

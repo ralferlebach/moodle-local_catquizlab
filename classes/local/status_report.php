@@ -184,7 +184,7 @@ class status_report {
                 get_string('report:workeron', $component, (object) [
                     'attempt'   => $attemptid,
                     'run'       => $runid,
-                    'heartbeat' => format_time($ago),
+                    'heartbeat' => duration::human($ago),
                 ]),
                 null
             );
@@ -329,7 +329,7 @@ class status_report {
                 'id'  => (int) $row->id,
                 'due' => $due <= time()
                     ? get_string('task:duenow', $component)
-                    : get_string('task:duein', $component, format_time($due - time())),
+                    : get_string('task:duein', $component, duration::human($due - time())),
             ];
         }
 

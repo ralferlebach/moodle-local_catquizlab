@@ -77,7 +77,7 @@ class operations_view {
                 'runid'     => (int) $row->runid,
                 'owner'     => $row->leaseowner,
                 'tries'     => (int) $row->tries,
-                'since'     => format_time(time() - (int) $row->timemodified),
+                'since'     => duration::human(time() - (int) $row->timemodified),
                 'lasterror' => $row->lasterror,
             ];
         }, $DB->get_records(

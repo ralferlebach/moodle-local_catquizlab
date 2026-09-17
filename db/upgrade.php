@@ -252,6 +252,228 @@ function xmldb_local_catquizlab_upgrade($oldversion): bool {
         upgrade_plugin_savepoint(true, 2026091414, 'local', 'catquizlab');
     }
 
+    if ($oldversion < 2026091604) {
+        // UNIQUE(runid, catscaleid) stopped the same physical scale appearing
+        // twice and said nothing about a run owning two different roots, which
+        // is the shape the defect actually took. A logical key can say it.
+        $table = new xmldb_table('local_catquizlab_scalemap');
+
+        $nodekey = new xmldb_field(
+            'nodekey',
+            XMLDB_TYPE_CHAR,
+            '40',
+            null,
+            XMLDB_NOTNULL,
+            null,
+            'root',
+            'subscaleindex'
+        );
+        if (!$dbman->field_exists($table, $nodekey)) {
+            $dbman->add_field($table, $nodekey);
+        }
+
+        $generation = new xmldb_field(
+            'generation',
+            XMLDB_TYPE_INTEGER,
+            '10',
+            null,
+            XMLDB_NOTNULL,
+            null,
+            '1',
+            'nodekey'
+        );
+        if (!$dbman->field_exists($table, $generation)) {
+            $dbman->add_field($table, $generation);
+        }
+
+        // Existing rows get their logical key from the indices they already
+        // carry, and their generation from the order the roots were created —
+        // so an installation with duplicates can take the index rather than
+        // being refused by it.
+        foreach ($DB->get_fieldset_sql('SELECT DISTINCT runid FROM {local_catquizlab_scalemap}') as $runid) {
+            $generationno = 0;
+            $context = [];
+
+            foreach ($DB->get_records('local_catquizlab_scalemap', ['runid' => $runid], 'id ASC') as $row) {
+                $contextid = (int) $row->contextid;
+                if (!array_key_exists($contextid, $context)) {
+                    $context[$contextid] = ++$generationno;
+                }
+
+                $level = (int) $row->level;
+                if ($level === 0) {
+                    $key = 'root';
+                } else if ($level === 1) {
+                    $key = 'c' . (int) $row->categoryindex;
+                } else {
+                    $key = 'c' . (int) $row->categoryindex . 's' . (int) $row->subscaleindex;
+                }
+
+                $DB->update_record('local_catquizlab_scalemap', (object) [
+                    'id'         => $row->id,
+                    'nodekey'    => $key,
+                    'generation' => $context[$contextid],
+                ]);
+            }
+        }
+
+        // Now that every row has one, the column can say so.
+        $notnull = new xmldb_field(
+            'nodekey',
+            XMLDB_TYPE_CHAR,
+            '40',
+            null,
+            XMLDB_NOTNULL,
+            null,
+            null,
+            'subscaleindex'
+        );
+        $dbman->change_field_notnull($table, $notnull);
+
+        $index = new xmldb_index('runnodekey', XMLDB_INDEX_UNIQUE, ['runid', 'generation', 'nodekey']);
+        if (!$dbman->index_exists($table, $index)) {
+            $dbman->add_index($table, $index);
+        }
+
+        upgrade_plugin_savepoint(true, 2026091604, 'local', 'catquizlab');
+    }
+
+    if ($oldversion < 2026091604) {
+        // The invariant this enforces could not be expressed before:
+        // UNIQUE(runid, catscaleid) stops the same scale id appearing twice and
+        // says nothing about two different ids both being roots of one run,
+        // which is exactly the shape that broke run #4.
+        $table = new xmldb_table('local_catquizlab_scalemap');
+
+        // Added nullable, filled, then tightened. A NOT NULL column with an
+        // empty-string default is rewritten to NULL by Moodle's own DDL layer,
+        // so the default cannot carry the existing rows across — the fill
+        // below has to.
+        $nodekey = new xmldb_field('nodekey', XMLDB_TYPE_CHAR, '40', null, null, null, null, 'subscaleindex');
+        if (!$dbman->field_exists($table, $nodekey)) {
+            $dbman->add_field($table, $nodekey);
+        }
+
+        $generation = new xmldb_field(
+            'generation',
+            XMLDB_TYPE_INTEGER,
+            '10',
+            null,
+            XMLDB_NOTNULL,
+            null,
+            '1',
+            'nodekey'
+        );
+        if (!$dbman->field_exists($table, $generation)) {
+            $dbman->add_field($table, $generation);
+        }
+
+        // Fill both from what the rows already say. The key is derived rather
+        // than invented: level and the two indexes describe the position, and
+        // always did — it simply was not written down anywhere a database
+        // could check.
+        foreach ($DB->get_records('local_catquizlab_scalemap', null, 'runid ASC, id ASC') as $row) {
+            $level = (int) $row->level;
+            if ($level === 0) {
+                $key = 'root';
+            } else if ($level === 1) {
+                $key = 'c' . (int) $row->categoryindex;
+            } else {
+                $key = 'c' . (int) $row->categoryindex . 's' . (int) $row->subscaleindex;
+            }
+
+            $DB->set_field('local_catquizlab_scalemap', 'nodekey', $key, ['id' => $row->id]);
+        }
+
+        // Installations polluted before this have several generations, and the
+        // unique index would refuse to be created over them. Numbering them by
+        // context — oldest first, since each generation has its own — keeps the
+        // history rather than deleting somebody's data during an upgrade.
+        foreach ($DB->get_fieldset_sql('SELECT DISTINCT runid FROM {local_catquizlab_scalemap}') as $runid) {
+            $contexts = $DB->get_fieldset_sql(
+                'SELECT DISTINCT contextid FROM {local_catquizlab_scalemap}
+                  WHERE runid = ? ORDER BY contextid ASC',
+                [$runid]
+            );
+
+            if (count($contexts) < 2) {
+                continue;
+            }
+
+            // The newest is generation 1, so "the current tree" is the same
+            // number on every run whether or not it has a history.
+            $contexts = array_reverse($contexts);
+            foreach ($contexts as $index => $contextid) {
+                $DB->set_field(
+                    'local_catquizlab_scalemap',
+                    'generation',
+                    $index + 1,
+                    ['runid' => $runid, 'contextid' => $contextid]
+                );
+            }
+        }
+
+        // Now that every row has one, the column can say so.
+        $notnull = new xmldb_field(
+            'nodekey',
+            XMLDB_TYPE_CHAR,
+            '40',
+            null,
+            XMLDB_NOTNULL,
+            null,
+            null,
+            'subscaleindex'
+        );
+        $dbman->change_field_notnull($table, $notnull);
+
+        $index = new xmldb_index('runnodekey', XMLDB_INDEX_UNIQUE, ['runid', 'generation', 'nodekey']);
+        if (!$dbman->index_exists($table, $index)) {
+            $dbman->add_index($table, $index);
+        }
+
+        upgrade_plugin_savepoint(true, 2026091604, 'local', 'catquizlab');
+    }
+
+    if ($oldversion < 2026091609) {
+        // One click produces entries in the debug trace, the run log, a task
+        // and a worker. Without a shared id they are a list of things that
+        // happened near each other, and reading a defect means guessing which
+        // belong together.
+        $additions = [
+            'local_catquizlab_debug' => [
+                ['correlationid', XMLDB_TYPE_CHAR, '32', null, null, 'runid'],
+                ['taskclassname', XMLDB_TYPE_CHAR, '120', null, null, 'correlationid'],
+            ],
+            'local_catquizlab_runlog' => [
+                ['correlationid', XMLDB_TYPE_CHAR, '32', null, null, 'duration'],
+                ['taskid', XMLDB_TYPE_INTEGER, '10', XMLDB_NOTNULL, '0', 'correlationid'],
+                ['taskclassname', XMLDB_TYPE_CHAR, '120', null, null, 'taskid'],
+            ],
+        ];
+
+        foreach ($additions as $tablename => $fields) {
+            $table = new xmldb_table($tablename);
+            if (!$dbman->table_exists($table)) {
+                continue;
+            }
+
+            foreach ($fields as [$name, $type, $precision, $notnull, $default, $previous]) {
+                $field = new xmldb_field($name, $type, $precision, null, $notnull, null, $default, $previous);
+                if (!$dbman->field_exists($table, $field)) {
+                    $dbman->add_field($table, $field);
+                }
+            }
+        }
+
+        $table = new xmldb_table('local_catquizlab_debug');
+        $index = new xmldb_index('correlationid', XMLDB_INDEX_NOTUNIQUE, ['correlationid']);
+        if ($dbman->table_exists($table) && !$dbman->index_exists($table, $index)) {
+            $dbman->add_index($table, $index);
+        }
+
+        upgrade_plugin_savepoint(true, 2026091609, 'local', 'catquizlab');
+    }
+
     return true;
 }
 

@@ -69,6 +69,14 @@ class aggregate_results extends \core\task\adhoc_task {
      * @return void
      */
     public function execute(): void {
+        // Announce which task this is, and continue the id of the click that
+        // queued it: a failure inside a task otherwise reads as a failure from
+        // nowhere.
+        \local_catquizlab\local\debug_trace::enter_task(
+            '\\local_catquizlab\\task\\aggregate_results',
+            (string) ($this->get_custom_data()->correlationid ?? '')
+        );
+
         $data = $this->get_custom_data();
         $runid = (int) ($data->runid ?? 0);
         if ($runid <= 0) {

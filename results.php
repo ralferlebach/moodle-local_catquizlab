@@ -37,6 +37,26 @@ use local_catquizlab\output\results_page;
 
 $tab = optional_param('tab', 'overview', PARAM_ALPHA);
 
+// The package is a file, so it has to be sent before the page starts.
+if (optional_param('action', '', PARAM_ALPHA) === 'package') {
+    require_sesskey();
+    $packageid = required_param('experimentid', PARAM_INT);
+    require_capability('local/catquizlab:view', context_system::instance());
+
+    $package = \local_catquizlab\local\reproducibility::package($packageid);
+
+    send_file(
+        json_encode($package, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE),
+        'catquizlab-experiment-' . $packageid . '.json',
+        0,
+        0,
+        true,
+        true,
+        'application/json'
+    );
+    exit;
+}
+
 $filter = [];
 foreach (['experimentid', 'replication'] as $key) {
     $value = optional_param($key, 0, PARAM_INT);
@@ -112,6 +132,36 @@ echo $OUTPUT->header();
 // The same frame as every other CatQuizLab page: opening a run used to drop
 // the reader out of the process they were in the middle of.
 echo \local_catquizlab\output\shell::render('results', optional_param('experimentid', 0, PARAM_INT));
+
+// Above the analyses, not beside them: a mean over 40 of 120 planned attempts
+// is not a worse version of the same number, it is a different number, and the
+// reader has to know that before reading it.
+$reproexperiment = optional_param('experimentid', 0, PARAM_INT);
+if ($reproexperiment > 0) {
+    $completeness = \local_catquizlab\local\reproducibility::completeness($reproexperiment);
+
+    echo $OUTPUT->notification(
+        $completeness['summary'],
+        $completeness['complete']
+            ? \core\output\notification::NOTIFY_SUCCESS
+            : \core\output\notification::NOTIFY_WARNING
+    );
+
+    if ($completeness['hasunfinished']) {
+        echo html_writer::tag('p', html_writer::link(
+            $completeness['progressurl'],
+            get_string('repro:openprogress', $component)
+        ));
+    }
+
+    echo $OUTPUT->single_button(
+        new moodle_url('/local/catquizlab/results.php', [
+            'experimentid' => $reproexperiment, 'action' => 'package', 'sesskey' => sesskey(),
+        ]),
+        get_string('repro:download', $component),
+        'post'
+    );
+}
 
 echo $OUTPUT->heading(get_string('heading:results', $component));
 echo html_writer::tag('p', get_string('results:intro', $component), ['class' => 'text-muted']);

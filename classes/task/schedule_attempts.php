@@ -49,6 +49,14 @@ class schedule_attempts extends \core\task\adhoc_task {
      * @return void
      */
     public function execute(): void {
+        // Announce which task this is, and continue the id of the click that
+        // queued it: a failure inside a task otherwise reads as a failure from
+        // nowhere.
+        \local_catquizlab\local\debug_trace::enter_task(
+            '\\local_catquizlab\\task\\schedule_attempts',
+            (string) ($this->get_custom_data()->correlationid ?? '')
+        );
+
         if (!get_config('local_catquizlab', 'enabled')) {
             mtrace('local_catquizlab: experiment runs are disabled — skipping attempt scheduling.');
             return;

@@ -88,7 +88,12 @@ class scale_inventory {
     }
 
     /**
-     * The root scale of a run, without throwing when there are several.
+     * The root scale of a run, when there is exactly one.
+     *
+     * Several is not a question with a best answer. Picking the newest looks
+     * reasonable and is a guess: the run's items were materialised into one of
+     * them, and which one is not knowable from the map alone. So a run in that
+     * state does not get a root — it gets recovery.
      *
      * @param int $runid The run.
      * @return int|null
@@ -96,7 +101,36 @@ class scale_inventory {
     public static function current_root(int $runid): ?int {
         $generations = self::generations($runid);
 
+        if (count($generations) !== 1) {
+            return null;
+        }
+
+        return (int) $generations[0]['rootscaleid'];
+    }
+
+    /**
+     * The newest generation's root, for inventory and cleanup only.
+     *
+     * Deliberately separate from current_root(): this is what the cleanup keeps,
+     * not what a test may be built on.
+     *
+     * @param int $runid The run.
+     * @return int|null
+     */
+    public static function newest_root(int $runid): ?int {
+        $generations = self::generations($runid);
+
         return $generations === [] ? null : (int) $generations[0]['rootscaleid'];
+    }
+
+    /**
+     * Whether this run needs its scale tree repaired before it can run.
+     *
+     * @param int $runid The run.
+     * @return bool
+     */
+    public static function recovery_required(int $runid): bool {
+        return count(self::generations($runid)) > 1;
     }
 
     /**
@@ -139,11 +173,30 @@ class scale_inventory {
             return ['ok' => false, 'removed' => [], 'reason' => 'nothing-to-clean'];
         }
 
-        if (run_lifecycle::has_open_attempts($runid)) {
-            // A worker mid-attempt is reading from one of these trees. Which
-            // one is not worth guessing.
+        // A worker mid-attempt is reading from one of these trees, and which
+        // one is not worth guessing — but "has open attempts" is not the same
+        // question. A run in this state hands out no work, so its claimed
+        // attempts can never finish: refusing on their account made the repair
+        // impossible for exactly the runs that need it.
+        //
+        // What matters is whether a worker is alive and holding one.
+        $held = $DB->count_records_select(
+            'local_catquizlab_attempt',
+            'runid = :runid AND status = :running AND leaseexpires > :now',
+            [
+                'runid'   => $runid,
+                'running' => attempt_scheduler::STATUS_RUNNING,
+                'now'     => time(),
+            ]
+        );
+
+        if ($held > 0) {
             return ['ok' => false, 'removed' => [], 'reason' => 'run-is-being-played'];
         }
+
+        // Claims nobody is holding go back, so the repair leaves a queue that
+        // can be played once the tree is sound again.
+        attempt_scheduler::reclaim_stale($runid, 0);
 
         $removed = ['generations' => 0, 'nodes' => 0, 'engineitems' => 0, 'enginescales' => 0];
 

@@ -196,12 +196,6 @@ class setup_wizard {
                 get_string('health:activity', $component),
                 environment::adaptivequiz_available()
             ),
-            self::step(
-                'phpcli',
-                get_string('health:phpcli', $component),
-                $phpok,
-                self::php_cli_detail($php, $component)
-            ),
         ], get_string('wizard:enginehint', $component));
     }
 
@@ -233,7 +227,23 @@ class setup_wizard {
             return get_string('health:phpclinotexecutable', $component, $php);
         }
 
-        return $php;
+        // Being executable is not being the right thing: a path to the FPM or
+        // CGI binary runs and then behaves differently enough that a task using
+        // it fails in ways nobody traces back to here.
+        $probe = [];
+        @exec(escapeshellarg($php) . ' -r "echo PHP_SAPI, \" \", PHP_VERSION;" 2>/dev/null', $probe);
+        $reported = trim((string) ($probe[0] ?? ''));
+
+        if ($reported === '') {
+            return get_string('health:phpclinoanswer', $component, $php);
+        }
+
+        [$sapi, $version] = array_pad(explode(' ', $reported, 2), 2, '');
+        if ($sapi !== 'cli') {
+            return get_string('health:phpclinotcli', $component, (object) ['path' => $php, 'sapi' => $sapi]);
+        }
+
+        return get_string('health:phpcliok', $component, (object) ['path' => $php, 'version' => $version]);
     }
 
     /**
@@ -344,6 +354,10 @@ class setup_wizard {
      * @return array
      */
     protected static function readiness_stage(string $component): array {
+        // The PHP CLI path is deliberately absent: an installation with working
+        // cron and this plugin's own run-now can execute everything, and
+        // refusing to call it ready over a path Moodle core needs for a
+        // different button would be refusing over the wrong thing.
         $ready = environment::catquiz_available()
             && environment::adaptivequiz_available()
             && worker_access::verify()['ok']
@@ -368,7 +382,17 @@ class setup_wizard {
      * @return array
      */
     protected static function pipeline_stage(string $component): array {
+        global $CFG;
+
         $task = \core\task\manager::get_scheduled_task(self::TASK);
+
+        // Three ways a task can be made to run, and they do not fail together.
+        // Treating the PHP CLI path as a hard prerequisite was too strict: an
+        // installation with working cron runs everything it needs, and this
+        // plugin's own "run now" executes the task in-process. Only Moodle's own
+        // run-now shells out.
+        $php = trim((string) ($CFG->pathtophp ?? ''));
+        $phpok = $php !== '' && is_executable($php);
 
         return self::stage('pipeline', get_string('wizard:pipeline', $component), [
             self::step(
@@ -384,6 +408,14 @@ class setup_wizard {
             // Without cron the task exists and never runs, which looks exactly
             // like a task that is disabled.
             self::step('cron', get_string('wizard:cron', $component), self::cron_recent()),
+            // Reported for what it actually gates rather than as a blocker: this
+            // plugin's own run-now works without it.
+            self::step(
+                'phpcli',
+                get_string('health:phpcli', $component),
+                $phpok,
+                self::php_cli_detail($php, $component)
+            ),
         ], get_string('wizard:pipelinehint', $component));
     }
 
@@ -448,11 +480,14 @@ class setup_wizard {
             // The engine is installed by an administrator; a button here would
             // be a promise this plugin cannot keep. The PHP path is different:
             // it is a setting, and one this page can fill in.
-            'engine'      => ['label' => get_string('health:setphpcli', $component), 'action' => 'setphpcli'],
+            // The engine is installed by an administrator; a button here would
+            // be a promise this plugin cannot keep.
+            'engine'      => null,
             'environment' => ['label' => get_string('wizard:run', $component), 'action' => 'wizard'],
             'access'      => ['label' => get_string('access:setup', $component), 'action' => 'setupaccess'],
             'runtime'     => ['label' => get_string('runtime:setup', $component), 'action' => 'setupruntime'],
             'pipeline'    => ['label' => get_string('wizard:runandenable', $component), 'action' => 'wizardstart'],
+            'phpcli'      => ['label' => get_string('health:setphpcli', $component), 'action' => 'setphpcli'],
             'readiness'   => ['label' => get_string('wizard:run', $component), 'action' => 'wizard'],
         ];
 

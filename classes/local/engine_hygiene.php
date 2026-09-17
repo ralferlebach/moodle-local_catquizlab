@@ -95,7 +95,7 @@ class engine_hygiene {
                 'attemptid' => (int) $row->id,
                 'runid'     => (int) $row->runid,
                 'twinid'    => (string) $row->twinid,
-                'since'     => format_time(time() - (int) $row->timemodified),
+                'since'     => duration::human(time() - (int) $row->timemodified),
             ];
         }, $rows));
     }

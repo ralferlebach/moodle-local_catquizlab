@@ -56,6 +56,89 @@ class debug_trace {
     /** @var int How many entries to keep. */
     public const KEEP = 2000;
 
+    /** @var string Nothing is recorded. */
+    public const LEVEL_OFF = 'off';
+
+    /** @var string Operator actions and state changes. */
+    public const LEVEL_ACTION = 'action';
+
+    /** @var string And service calls, tasks and worker reports. */
+    public const LEVEL_VERBOSE = 'verbose';
+
+    /** @var string And the exception detail behind a failure. */
+    public const LEVEL_TRACE = 'trace';
+
+    /** @var string|null The id tying this request's entries together. */
+    protected static $correlationid = null;
+
+    /** @var string|null The task class running right now. */
+    protected static $task = null;
+
+    /**
+     * The id every entry of this request carries.
+     *
+     * One click produces entries in the trace, the run log, an ad-hoc task and
+     * a worker. Without a shared id they are a list of things that happened
+     * near each other, and reading a defect means guessing which belong
+     * together.
+     *
+     * @return string
+     */
+    public static function correlation_id(): string {
+        if (self::$correlationid === null) {
+            self::$correlationid = substr(md5(uniqid((string) mt_rand(), true)), 0, 32);
+        }
+
+        return self::$correlationid;
+    }
+
+    /**
+     * Adopt an id from elsewhere — a task carrying one from the click that queued it.
+     *
+     * @param string $correlationid The id to continue.
+     * @return void
+     */
+    public static function continue_correlation(string $correlationid): void {
+        if (trim($correlationid) !== '') {
+            self::$correlationid = substr(trim($correlationid), 0, 32);
+        }
+    }
+
+    /**
+     * The recording level.
+     *
+     * @return string
+     */
+    public static function level(): string {
+        $level = (string) get_config('local_catquizlab', 'debuglevel');
+
+        return in_array($level, [self::LEVEL_ACTION, self::LEVEL_VERBOSE, self::LEVEL_TRACE], true)
+            ? $level
+            : self::LEVEL_OFF;
+    }
+
+    /**
+     * Whether a channel is recorded at the current level.
+     *
+     * @param string $channel The channel.
+     * @return bool
+     */
+    protected static function records(string $channel): bool {
+        $level = self::level();
+
+        if ($level === self::LEVEL_OFF) {
+            return false;
+        }
+
+        if ($level === self::LEVEL_ACTION) {
+            // What a person did and what changed because of it. The rest is
+            // volume that makes those two harder to find.
+            return in_array($channel, [self::UI, self::LIFECYCLE], true);
+        }
+
+        return true;
+    }
+
     /** @var string[] Parameter names never written down. */
     protected const SECRET = ['token', 'wstoken', 'password', 'sesskey', 'secret'];
 
@@ -65,7 +148,63 @@ class debug_trace {
      * @return bool
      */
     public static function enabled(): bool {
-        return (int) get_config('local_catquizlab', 'debugmode') === 1;
+        return self::level() !== self::LEVEL_OFF;
+    }
+
+    /**
+     * Say which task is running, and continue the id that queued it.
+     *
+     * Declared rather than guessed: Moodle knows what is running, and asking it
+     * from inside the run is a lookup that answers "something is running"
+     * rather than "this is".
+     *
+     * @param string $classname The task class.
+     * @param string $correlationid The id from the action that queued it, if any.
+     * @return void
+     */
+    public static function enter_task(string $classname, string $correlationid = ''): void {
+        self::$task = $classname;
+        self::continue_correlation($correlationid);
+    }
+
+    /**
+     * Leave the task context.
+     *
+     * @return void
+     */
+    public static function leave_task(): void {
+        self::$task = null;
+    }
+
+    /**
+     * Forget the correlation id and the task context.
+     *
+     * A web request ends and takes these with it; a test process runs many
+     * scenarios and would otherwise carry one scenario's task into the next.
+     *
+     * @return void
+     */
+    public static function reset_for_testing(): void {
+        self::$correlationid = null;
+        self::$task = null;
+    }
+
+    /**
+     * The task running right now, where one is.
+     *
+     * @return string|null
+     */
+    protected static function current_task(): ?string {
+        return self::$task;
+    }
+
+    /**
+     * The task class running right now, for anything that stores it.
+     *
+     * @return string|null
+     */
+    public static function task_classname(): ?string {
+        return self::$task;
     }
 
     /**
@@ -89,7 +228,7 @@ class debug_trace {
     ): void {
         global $DB, $USER, $PAGE;
 
-        if (!self::enabled() || !$DB->get_manager()->table_exists('local_catquizlab_debug')) {
+        if (!self::records($channel) || !$DB->get_manager()->table_exists('local_catquizlab_debug')) {
             return;
         }
 
@@ -101,8 +240,10 @@ class debug_trace {
                 'params'      => self::redact($params),
                 'outcome'     => $outcome,
                 'detail'      => $detail === [] ? null : json_encode($detail, JSON_UNESCAPED_SLASHES),
-                'runid'       => $runid,
-                'userid'      => (int) ($USER->id ?? 0),
+                'runid'         => $runid,
+                'correlationid' => self::correlation_id(),
+                'taskclassname' => self::current_task(),
+                'userid'        => (int) ($USER->id ?? 0),
                 'timecreated' => time(),
             ]);
 
@@ -149,7 +290,7 @@ class debug_trace {
         }
 
         $conditions = [];
-        foreach (['channel', 'runid'] as $key) {
+        foreach (['channel', 'runid', 'correlationid'] as $key) {
             if (!empty($filter[$key])) {
                 $conditions[$key] = $filter[$key];
             }
@@ -159,6 +300,11 @@ class debug_trace {
         foreach ($DB->get_records('local_catquizlab_debug', $conditions, 'id DESC', '*', 0, $limit) as $row) {
             $rows[] = [
                 'id'      => (int) $row->id,
+                // The thread through the entries: filtering on it turns the
+                // list into the sequence of one click.
+                'correlationid' => (string) ($row->correlationid ?? ''),
+                'shortid'       => substr((string) ($row->correlationid ?? ''), 0, 8),
+                'taskclassname' => (string) ($row->taskclassname ?? ''),
                 'channel' => $row->channel,
                 'action'  => $row->action,
                 'page'    => (string) $row->page,

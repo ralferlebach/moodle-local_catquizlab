@@ -218,6 +218,19 @@ class purger {
             return ['ok' => false, 'removed' => [], 'reason' => 'experiment-not-found'];
         }
 
+        // A worker mid-attempt is asked to finish and stop, not overruled.
+        // Forcing past it strands the claim it holds and leaves a browser
+        // playing a quiz whose questions are being deleted underneath it.
+        $stopping = self::ask_workers_to_stop($experimentid);
+        if ($stopping > 0 && !$force) {
+            return [
+                'ok'       => false,
+                'removed'  => [],
+                'reason'   => 'workers-stopping',
+                'stopping' => $stopping,
+            ];
+        }
+
         $totals = ['runs' => 0];
         foreach ($DB->get_records('local_catquizlab_run', ['experimentid' => $experimentid], 'id ASC', 'id') as $run) {
             $result = self::delete_run((int) $run->id, $deep, $force);
@@ -236,6 +249,40 @@ class purger {
         $totals['experiment'] = 1;
 
         return ['ok' => true, 'removed' => array_filter($totals), 'reason' => ''];
+    }
+
+    /**
+     * Ask any worker playing this experiment to finish and stop.
+     *
+     * @param int $experimentid The experiment.
+     * @return int How many workers were asked.
+     */
+    protected static function ask_workers_to_stop(int $experimentid): int {
+        global $DB;
+
+        $owners = $DB->get_fieldset_sql(
+            'SELECT DISTINCT a.leaseowner
+               FROM {local_catquizlab_attempt} a
+               JOIN {local_catquizlab_run} r ON r.id = a.runid
+              WHERE r.experimentid = :experimentid
+                AND a.status = :running
+                AND a.leaseexpires > :now
+                AND a.leaseowner IS NOT NULL',
+            [
+                'experimentid' => $experimentid,
+                'running'      => attempt_scheduler::STATUS_RUNNING,
+                'now'          => time(),
+            ]
+        );
+
+        $asked = 0;
+        foreach (array_filter($owners) as $workerid) {
+            if (worker_registry::request_stop((string) $workerid)) {
+                $asked++;
+            }
+        }
+
+        return $asked;
     }
 
     /**
@@ -374,6 +421,11 @@ class purger {
     /**
      * The engine-side objects a run created: its activity and its questions.
      *
+     * Public because a reset needs exactly this too. A reset that clears the lab
+     * rows and leaves the engine objects behind loses the mapping that said
+     * which objects belonged to which run — and an engine object nobody owns is
+     * not a leftover, it is a scale a later selection can still find.
+     *
      * Only what this run made, and only when asked. The scales and their items
      * can be shared with other runs of the same experiment, so they are removed
      * through the lab's own record of what it created rather than by walking
@@ -382,7 +434,7 @@ class purger {
      * @param int $runid The run.
      * @return array<string, int>
      */
-    protected static function delete_engine_objects(int $runid): array {
+    public static function delete_engine_objects(int $runid): array {
         global $DB, $CFG;
         require_once($CFG->dirroot . '/course/lib.php');
 

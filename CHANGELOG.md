@@ -6,6 +6,626 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.6.42] — 2026-09-16
+
+Release gate, RG-002 — the last one.
+
+### A form that asks for everything answers nothing
+The editor is one long form. That is honest about the data and unhelpful about
+the work: somebody defining their first experiment cannot tell which fields
+belong together, which are still empty, or whether what they have is enough to
+run.
+
+The same fields, described as the eight decisions they are, above the form:
+
+    ✓ 1. Name and purpose
+    ✓ 2. Model and strategy
+      3. Item pool
+      4. Simulated people
+      5. CAT budgets
+      6. Design and replications
+      7. Validate
+      8. Create runs
+
+    Next: 3. Item pool
+
+Nothing is hidden and no field moves. The form stays what it is; this says where
+in it somebody stands.
+
+Validating is not a seventh ceremony — it follows from the six decisions above
+it, and a spinner that checks what is already known would be theatre. Creating
+the runs is the eighth, because it is the thing the whole form is for, and
+leaving it off the list made the form feel like it ended before the work did.
+Once the runs exist, the plan points at step 3, where they can be watched.
+
+### The release gate is complete
+RG-001 through RG-015, over seven releases:
+
+    001 one shell per page          002 the plan as a process
+    003 a self-test that tests      004 PHP CLI gates one path of three
+    005 reset without leftovers     006 purge with its own authority
+    007 the invariant in the DB     008 nine consistency checks
+    009 access as the user sees it  010 one id through every layer
+    011 task metadata in the log    012 regions patched, not reloaded
+    013 completeness and a package  014 rate measured, reduced, gated
+    015 durations read as time
+
+### Verification
+PHPUnit 640 tests / 3497 assertions, Behat 32 scenarios / 232 steps, phpcs with
+the Moodle standard clean, PHPDoc clean, 1042 language strings per language.
+
+---
+
+## [0.6.41] — 2026-09-16
+
+Release gate, the rest of RG-014: the query budget is a gate, not a reading.
+
+### Measuring did not stop it getting worse
+0.6.34 found where 549,727 queries went and reduced the pool check from 39 to
+1.17 per item. Nothing stopped the next change from putting them back.
+
+Four budgets now fail the build:
+
+    twenty engine lookups of one scale        ≤ 5 queries
+    breaking down a queue of 60 attempts      ≤ 15 queries
+    reading 50 debug entries                  ≤ 3 queries
+    the per-stage rates this codebase has
+
+They gate the **rate**, which is the only part of the number that is
+actionable. A large pool costing many queries is arithmetic; a small pool
+suddenly costing twice as many per item is a defect. So the budget passes the
+reported 549,727 against fourteen thousand items and fails 1,900 against
+twenty-four.
+
+The thresholds are generous on purpose: a gate that fires on noise gets raised
+until it fires on nothing.
+
+### Verified in the failing direction
+The engine-lookup cache was disabled and the test run:
+
+    Twenty lookups of one scale cost 21 queries
+    Tests: 1, Failures: 1
+
+restored, and green again. A gate nobody has seen fail is a gate nobody knows
+works.
+
+They run inside `moodle-plugin-ci phpunit`, so they are in every CI run already.
+
+### Verification
+PHPUnit 634 tests / 3479 assertions, Behat 32 scenarios / 232 steps, phpcs with
+the Moodle standard clean, PHPDoc clean.
+
+### Still open from the release gate
+RG-002 — the experiment plan as a guided eight-step process. It is the last one,
+and the largest.
+
+---
+
+## [0.6.40] — 2026-09-16
+
+Release gate, RG-013: what a result is worth, stated with it.
+
+### Completeness, above the analyses
+A number from a simulation is worth what the reader can check about it, and the
+first thing to check is how much of the design actually ran. That was below the
+charts, or nowhere.
+
+    Incomplete: 0 of 3 attempt(s) collected, 1 run(s) not finished.
+    The analyses below cover what was collected, which is a different
+    quantity from what was designed.
+
+A mean over 40 of 120 planned attempts is not a worse version of the same
+number; it is a different number, and the reader has to know before reading it.
+The unfinished runs link to step 3, where they can be dealt with.
+
+### A reproducibility package
+One JSON file: the definition as typed, the definition as the plugin understood
+it, every run with its seeds and manifest and execution log, the versions of all
+four plugins and of Moodle, and the completeness statement.
+
+The seeds are the whole claim: without them the design is a description and not
+an instruction. The versions matter for the same reason — a result from a
+version nobody can name is a result nobody can reproduce.
+
+### Found while testing
+The package normalised the *decoded* definition, so a definition that does not
+decode arrived as an empty array and normalised to defaults — a package that
+looked complete and described something that never ran. It reads the stored text
+now, and says plainly when that text can no longer be understood.
+
+### Verification
+PHPUnit 630 tests / 3468 assertions, Behat 32 scenarios / 232 steps, phpcs with
+the Moodle standard clean, PHPDoc clean. The completeness reading above is from
+this instance.
+
+### Still open from the release gate
+RG-002, and the CI query budget from RG-014.
+
+---
+
+## [0.6.39] — 2026-09-16
+
+Release gate, RG-012: the page updates instead of reloading.
+
+### What a reload costs
+The first live updater reloaded the whole page whenever the overall verdict
+changed — and that is the thing somebody watching a run notices most. The scroll
+position goes, an open detail closes, and a form half filled in is gone. Two
+minutes of watching a queue drain meant two or three of those.
+
+### Patched in place
+The service returns the text of each region, and the module writes it:
+
+    running: 1 → 0, navigations: 0
+
+Text rather than markup: the page already has the elements, and sending HTML
+for them would put two places in charge of what a status card looks like.
+
+A reload is kept for the one change that cannot be patched honestly — the page
+gaining or losing rows. Adding a run row from JavaScript would mean a second
+renderer deciding what a run row looks like, and two renderers disagree
+eventually. A fingerprint of the row counts decides which case it is.
+
+The interval is two seconds on a visible tab, and polling stops on a hidden one
+and after a long idle.
+
+### Found while measuring
+The page this exists for did not have it. The updater was wired into the
+overview and never into step 3 — the page somebody actually watches while a run
+plays. The first two measurements showed no change at all for that reason, which
+is a better outcome than shipping it and being told.
+
+### Verification
+PHPUnit 626 tests / 3447 assertions, Behat 32 scenarios / 232 steps, phpcs with
+the Moodle standard clean, PHPDoc clean, all six template example contexts
+parseable. The reading above is from this instance, with an attempt completed
+from outside the page.
+
+### Still open from the release gate
+RG-002, RG-013, and the CI query budget from RG-014.
+
+---
+
+## [0.6.38] — 2026-09-16
+
+Release gate, RG-010 and RG-011: one click, one id, one sequence.
+
+### The problem with a list
+The debug trace recorded actions, state changes, tasks and worker reports, in
+order — and nothing said which of them belonged together. On an installation
+where two people work, or where a task runs while somebody presses a button, the
+entries are a list of things that happened near each other, and reading a defect
+means guessing.
+
+### A correlation id, carried
+Every entry now carries one id, and a task adopts the id of the click that
+queued it:
+
+    ui         resetrerun             —                c3627cf2
+    lifecycle  run_failed             —                c3627cf2
+    lifecycle  orchestration_started  orchestrate_run  c3627cf2
+    task       orchestrate            orchestrate_run  c3627cf2
+
+Filtering on it turns the list into the sequence of one action. The run log
+carries the same id, so the two logs read as one.
+
+Tasks announce themselves rather than being guessed at: asking Moodle from
+inside a run answers "something is running", not "this is". A failure inside a
+task otherwise reads as a failure from nowhere.
+
+### Four levels instead of a switch
+`off`, `action`, `verbose`, `trace`. `action` keeps what a person did and what
+changed because of it — the rest is volume that makes those two harder to find.
+`verbose` adds services, tasks and workers; `trace` adds the exception detail.
+
+### Fixed while testing
+The task context is static and survived between tests, so one scenario's task
+was recorded against another's entries. A web request ends and takes it with it;
+a test process does not. There is a reset for that now.
+
+### Verification
+PHPUnit 626 tests / 3447 assertions, Behat 32 scenarios / 232 steps, phpcs with
+the Moodle standard clean, PHPDoc clean. The sequence above is a real recording
+from this instance.
+
+### Still open from the release gate
+RG-002, RG-012, RG-013, and the CI query budget from RG-014.
+
+---
+
+## [0.6.37] — 2026-09-16
+
+Release gate, RG-008: the scale tree check, completed.
+
+### Four more questions
+The check asked five things and stopped where the reported failure had been. It
+asks nine now:
+
+    ✓ Exactly one root scale
+    ✓ Exactly one CAT context
+    ✓ Every mapped scale exists in the engine
+    ✓ No duplicate nodes
+    ✓ Every parent reference points into this run      ← new
+    ✓ No cycles in the tree                            ← new
+    ✓ Every node the blueprint calls for is present    ← new
+    ✓ No nodes beyond the blueprint                    ← new
+    ✓ Node count matches the blueprint
+
+A node whose parent is not in this run's map belongs to a tree the run does not
+own, and the engine will walk it anyway. A cycle makes every walk of the tree a
+hang rather than an error. And a missing subscale and a stray extra one are
+separate defects with separate repairs, so they are separate checks — the node
+count alone reports both as "the wrong number".
+
+### Machine-readable, and naming the objects
+The verdict carries the failing check ids for anything that has to branch on it,
+and the root and context ids rather than only their counts. A report that names
+the objects beats one that counts them.
+
+Measured against a deliberately broken tree — one subscale removed, one node
+given a parent outside the run:
+
+    × Every mapped scale exists in the engine      8 of 9 present.
+    × Every parent reference points into this run  Nodes with a parent outside: c9s9
+    × Every node the blueprint calls for is present  Missing: c1s1
+    × No nodes beyond the blueprint                Unexpected: c9s9
+
+    codes: enginescales, parents, expectedkeys, nounexpectedkeys
+
+### Verification
+PHPUnit 623 tests / 3437 assertions, Behat 32 scenarios / 232 steps, phpcs with
+the Moodle standard clean, PHPDoc clean. Both readings above are from this
+instance.
+
+### Still open from the release gate
+RG-002, RG-010 to RG-013, and the CI query budget from RG-014.
+
+---
+
+## [0.6.36] — 2026-09-16
+
+Release gate, RG-006: deleting, made production-safe.
+
+### Its own authority
+`local/catquizlab:purge`, carrying `RISK_DATALOSS` and granted to managers. It
+was `:execute` before — the same capability as starting a run and stopping a
+worker. Someone who may operate the lab can now do their whole job without ever
+being able to destroy a measurement, and whoever may destroy one was given that
+deliberately. Tested: an operator with `:execute` and without `:purge` is
+refused.
+
+### The name, typed
+A button that only needs a click is a button that gets clicked, and this one
+removes runs, attempts, people, generated questions and adaptive quizzes. The
+confirmation names what goes and asks for the experiment's name in a field; a
+mismatch deletes nothing.
+
+### A worker is asked, not overruled
+`force` used to mean "delete anyway". Forcing past a worker mid-attempt strands
+the claim it holds and leaves a browser playing a quiz whose questions are being
+deleted underneath it.
+
+The delete now asks every worker holding a live claim on the experiment to
+finish its attempt and stop, and refuses:
+
+    Löschen: ok=false, Grund=workers-stopping, gebeten=1
+    Stopp angefordert nachher: ja
+    Experiment existiert noch: ja
+
+The stop request is the mechanism already built for graceful shutdown: the
+worker reads it at its next heartbeat, finishes the attempt it is playing,
+reports it and exits.
+
+### Verification
+PHPUnit 620 tests / 3428 assertions, Behat 32 scenarios / 232 steps, phpcs with
+the Moodle standard clean, PHPDoc clean. The refusal above is a reading from
+this instance.
+
+### Still open from the release gate
+RG-002, RG-008, RG-010 to RG-013, and the CI query budget from RG-014.
+
+---
+
+## [0.6.35] — 2026-09-16
+
+Release gate, RG-003: a self-test that tests.
+
+### The readiness step added up flags
+Every check on the preparation tab reads configuration: a token exists, a path is
+executable, a plugin is installed. All six can be green on an installation where
+nothing runs, because "the browser is installed in the cache the worker reads"
+and "the browser starts" are different claims and only the second matters.
+
+### Six things done rather than read
+    ✓ Worker access is configured
+    ✓ Web service answers the stored token      — called, with the stored token
+    ✓ Node and the worker dependencies
+    ✓ Browser starts                            — started and closed cleanly
+    ✓ Experiment course is usable
+    ✓ Pipeline task executes                    — run, in this request
+
+It is slow — seconds, because it starts a browser and runs a task — which is why
+it is a button, and why the result is kept for the page rather than recomputed
+on every load.
+
+### What it found immediately
+Run against an installation whose six configuration checks were green, it
+reported two blockers: the scheduled task was disabled, and the web service did
+not answer.
+
+The second was the more interesting one. Moodle's own `curl` blocks local
+addresses, which is right for a URL a user supplied and wrong here — this is the
+site calling itself at the address the worker is configured to use. Without the
+exemption the check reports "The URL is blocked" as a service failure, which
+sends somebody looking at the token. The response text is now included in the
+failure, because "The URL is blocked" and an HTML login page are different
+problems and the text is what tells them apart.
+
+### Verification
+PHPUnit 618 tests / 3419 assertions, Behat 32 scenarios / 232 steps, phpcs with
+the Moodle standard clean, PHPDoc clean. The six-green reading above is from
+this instance, after fixing the two the test found.
+
+### Still open from the release gate
+RG-002, RG-006, RG-008, RG-010 to RG-013, and the CI query budget from RG-014.
+
+---
+
+## [0.6.34] — 2026-09-16
+
+Release gate, RG-014: where the queries go, and where they stopped going.
+
+### Found
+`is_visible()` asks the engine for a scale's item list, and the pool check calls
+it once per item — while the items of a run sit on a handful of scales. That is
+the thirty-nine queries per item, and the half million against a pool of
+fourteen thousand.
+
+The engine's answer is held for the request now. Measured on a pool of 120
+items:
+
+    checking an existing pool:  4680 queries  →  140 queries
+                                39 per item   →  1.17 per item
+
+### Not fixed, and why
+Creating items is unchanged, at about 41 queries each. The verification there
+deliberately runs per item and against a freshly purged cache — it exists to
+catch an engine snapshot taken while a scale held one item fewer, which is a
+real defect this codebase has had. Holding an answer across the write that
+changes it is exactly what that check is for.
+
+Reducing that path means batching the verification to the end of the stage,
+which trades a per-item error location for speed. That is a decision about
+diagnostics, not an optimisation, and it is not made here.
+
+### A regression I introduced and measured
+The first version of this cache did hold the answer across the write. The run
+failed with `engine-item-not-visible`: 120 items planned, 6 visible — each scale
+answering from the list it had when its first item was written. The invalidation
+now sits beside the engine's own cache purge, where it belongs, and a test pins
+both halves.
+
+### Verification
+PHPUnit 618 tests / 3418 assertions, Behat 32 scenarios / 232 steps, phpcs with
+the Moodle standard clean, PHPDoc clean. Both numbers above are readings from
+this instance, before and after.
+
+### Still open from the release gate
+RG-002, RG-003, RG-006, RG-008, RG-010 to RG-013, and the CI query budget from
+RG-014.
+
+---
+
+## [0.6.33] — 2026-09-16
+
+Release gate, RG-007: the database refuses a second root.
+
+### Why the old key could not
+`UNIQUE(runid, catscaleid)` prevented the same physical scale appearing twice
+under one run, and that was never the problem. Two generations have two
+different scale ids, so as far as that key is concerned both are perfectly valid
+roots — which is exactly how run #4 came to own roots 334 through 1444.
+
+A logical key expresses what was meant: `nodekey` — `root`, `c1`, `c1s2` — with
+`UNIQUE(runid, generation, nodekey)`. Measured: the second root insert is
+refused by the database rather than by any code that has to remember to check.
+
+### Ambiguity blocks, it does not get resolved by guessing
+`current_root()` returns nothing when a run owns several generations, rather
+than picking the newest. Picking the newest looks reasonable and is a guess: the
+run's items were materialised into one of them, and which one is not knowable
+from the map alone. An attempt played on the wrong tree produces a wrong answer
+nobody can detect, which is worse than no answer.
+
+So such a run hands out no work at all — `is_runnable()` refuses it, the test
+stage refuses it, and the interface says what to do about it.
+
+### A dead end, removed
+A run in that state hands out no work, so any attempt already claimed on it can
+never finish. The cleanup refused to run while attempts were open — which made
+repair impossible for exactly the runs that needed it.
+
+It now asks the right question: is a worker *alive and holding* one. Stranded
+claims are handed back, and the repair proceeds. A live worker still blocks it,
+because which of the trees it is reading from is not worth guessing.
+
+### Verification
+PHPUnit 616 tests / 3414 assertions, Behat 32 scenarios / 232 steps, phpcs with
+the Moodle standard clean, PHPDoc clean. Measured end to end: two generations →
+not runnable → cleanup → one generation → runnable.
+
+### Still open from the release gate
+RG-002, RG-003, RG-006, RG-008, RG-010 to RG-014.
+
+---
+
+## [0.6.32] — 2026-09-16
+
+Release gate, RG-005: a reset that leaves nothing behind.
+
+### The problem
+`reset()` cleared the lab rows — attempts, people, items, the scale map — and
+left the engine objects standing. That is worse than leaving both: clearing the
+scale map while leaving the scales behind loses the record of which scales
+belonged to which run, and an engine object nobody owns is not a leftover. It is
+a scale a later selection can still find.
+
+### The reset now takes what provisioning made
+Measured on a freshly provisioned run:
+
+    removed: activity 1, questions 24, engine scales 4, tasks 1,
+             attempts 2, people 2, items 24, scale map 4
+
+    engine scales afterwards: 0 of 4
+    questions afterwards:     0 of 24
+
+Its queued tasks go too — one that wakes up to provision a run that has been
+reset would provision it a second time.
+
+**Kept, on purpose:** the execution log, the cell key and the seed. The first is
+what went wrong last time, which is what somebody needs while looking at the next
+attempt; the other two are what make this run this run.
+
+### A preview, and one action instead of two
+The confirmation names what would go and what would stay, rather than warning
+that it cannot be undone.
+
+**Reset and run again** is one action. The two halves were always done together
+and never as one thing, so a reset that succeeded and a start that was forgotten
+looked exactly like a run nobody had touched.
+
+### Fixed while testing
+The preview refused what the reset itself would have allowed — it checked for
+open attempts where the reset checks for open attempts *on a running run*. A
+preview that refuses what the action permits teaches people to ignore the
+preview.
+
+### Verification
+PHPUnit 611 tests / 3391 assertions, Behat 32 scenarios / 232 steps, phpcs with
+the Moodle standard clean, PHPDoc clean.
+
+### Still open from the release gate
+RG-002, RG-003, RG-006 to RG-008, RG-010 to RG-014.
+
+---
+
+## [0.6.31] — 2026-09-16
+
+Release gate, RG-009: access asked as the simulated person would ask it.
+
+### The failure this ends
+Provisioning enrolled people, created an activity and checked that the objects
+existed. They did. The course was hidden, so every enrolled student was told the
+course was unavailable — and the worker logged in correctly, reached the
+activity and found that sentence where the start button belonged.
+
+What came back, ninety seconds later, was:
+
+    No question was presented; the attempt never started.
+
+True, and three steps from the cause. An access failure and a missing question
+need completely different responses, and only one of them is about the test.
+
+### Added
+`access_readiness` asks Moodle the questions the user's own browser will ask,
+before the run is called READY, through one of its simulated people — one, not
+all of them, since they are provisioned identically and asking the same six
+questions two hundred times answers nothing the first did not:
+
+    ✓ Simulated user account is active
+    ✓ Experiment course is visible to students
+    ✓ Simulated user is enrolled and active
+    ✓ Course is accessible to the simulated user
+    ✓ Adaptive quiz is visible to the simulated user
+    ✓ Simulated user may attempt the quiz
+
+Eight codes rather than one failure, because each has its own repair:
+`course-hidden`, `course-not-accessible`, `user-not-enrolled`,
+`enrolment-suspended`, `user-inactive`, `activity-not-visible`,
+`availability-restricted`, `missing-attempt-capability`.
+
+On the reported shape:
+
+    course-hidden — The experiment course is hidden. Its enrolled students are
+    told it is unavailable, and the worker finds that sentence where the start
+    button belongs.
+
+It runs as a provisioning stage between readiness and the attempts: a run whose
+people cannot open the activity should not have attempts made for them.
+
+**Repair** undoes what this plugin caused — a course it made and hid, an
+activity it hid — and reports the rest. A removed capability or an availability
+restriction is a decision somebody made, and undoing a decision quietly is worse
+than reporting it. Tested in both directions.
+
+### Verification
+PHPUnit 608 tests / 3382 assertions, Behat 32 scenarios / 232 steps, phpcs with
+the Moodle standard clean, PHPDoc clean. Measured on this instance: hidden
+course → `course-hidden` → repaired → reachable.
+
+### Still open from the release gate
+RG-002, RG-003, RG-005 to RG-008, RG-010 to RG-014.
+
+---
+
+## [0.6.30] — 2026-09-16
+
+Release gate, first three: RG-001, RG-004, RG-015.
+
+### RG-001 — One shell per page, structurally
+`experiment.php` rendered the frame three times, `compare.php`, `import.php` and
+`report.php` twice: several pages call it from more than one branch — a
+confirmation dialogue and the main output — and a branch that falls through to
+another produced two tab rows and two experiment selectors, giving the reader
+two places to answer the same question.
+
+Fixed in the frame rather than per page, because per page is a fix that comes
+undone the next time somebody adds a branch: it renders once per request and
+returns nothing after that.
+
+The experiment editor now takes the experiment it is editing as its context,
+rather than whatever the URL happened to carry. Opening an editor is choosing an
+experiment.
+
+### RG-004 — The PHP CLI path gates one path of three
+Treating it as a hard engine prerequisite was too strict. A task can be made to
+run three ways, and they do not fail together: Moodle cron runs everything it
+needs without it, this plugin's own "run now" executes the task in-process, and
+only Moodle core's run-now shells out.
+
+So it sits beside the pipeline now, reported for what it actually gates, and
+readiness no longer refuses over it. It is also validated rather than merely
+found: the binary is asked for its SAPI and version, because a path to the FPM
+or CGI binary runs and then behaves differently enough that a task using it
+fails in ways nobody traces back to here.
+
+    /usr/bin/php (PHP 8.3.6, CLI)
+    /usr/bin/php-fpm runs, but reports itself as "fpm-fcgi" rather than CLI
+
+### RG-015 — Durations read as time
+    failed before, retrying in 30720 s      →  ... in 8 hours 32 mins
+
+`format_time()` is gone from every call site, replaced by a `duration` helper
+that wraps it for the two cases it handles badly: a measured step below one
+second, where "0 secs" loses the measurement, and zero, where the reader wants
+words rather than a count. Applied to retry delays, task due times, cron age,
+heartbeats, claim ages and stage durations.
+
+### Verification
+PHPUnit 602 tests / 3369 assertions, Behat 32 scenarios / 232 steps, phpcs with
+the Moodle standard clean, PHPDoc clean. The retry delay above is a real reading
+from this instance with `faildelay` set to the reported value.
+
+### Still open from the release gate
+RG-002, RG-003, RG-005 to RG-014. The three closed here were chosen for being
+defects with a definite shape; the rest are substantial pieces of work — a
+guided plan process, a real end-to-end selftest, ownership-complete reset,
+production-safe purge, a database-level scale invariant, access readiness from
+the simulated user's view, debug correlation, region-level live updates, the
+results package, and the query-rate reduction with a CI budget.
+
+---
+
 ## [0.6.29] — 2026-09-14
 
 Issue #68: the scale tree answers for itself.

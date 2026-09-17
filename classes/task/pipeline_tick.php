@@ -53,6 +53,13 @@ class pipeline_tick extends \core\task\scheduled_task {
      * @return void
      */
     public function execute(): void {
+        // Announce which task this is, and continue the id of the click that
+        // queued it: a failure inside a task otherwise reads as a failure from
+        // nowhere.
+        // A scheduled task starts its own sequence: nothing queued it, so
+        // there is no id to continue.
+        \local_catquizlab\local\debug_trace::enter_task('\\local_catquizlab\\task\\pipeline_tick');
+
         if (!get_config('local_catquizlab', 'enabled')) {
             return;
         }

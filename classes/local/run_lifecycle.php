@@ -529,6 +529,129 @@ class run_lifecycle {
     }
 
     /**
+     * What resetting this run would remove, before it removes it.
+     *
+     * @param int $runid The run.
+     * @return array{ok: bool, counts: array, keeps: string[]}
+     */
+    public static function preview_reset(int $runid): array {
+        global $DB;
+
+        $counts = [];
+        $tables = [
+            'local_catquizlab_attempt'  => 'attempts',
+            'local_catquizlab_person'   => 'people',
+            'local_catquizlab_item'     => 'items',
+            'local_catquizlab_scalemap' => 'scales',
+            'local_catquizlab_result'   => 'results',
+        ];
+
+        foreach ($tables as $table => $label) {
+            if ($DB->get_manager()->table_exists($table)) {
+                $counts[$label] = $DB->count_records($table, ['runid' => $runid]);
+            }
+        }
+
+        $run = $DB->get_record('local_catquizlab_run', ['id' => $runid]);
+        if ($run && (int) $run->testcmid > 0) {
+            $counts['activity'] = 1;
+        }
+
+        if ($DB->get_manager()->table_exists('local_catquizlab_item')) {
+            $counts['questions'] = $DB->count_records_select(
+                'local_catquizlab_item',
+                'runid = ? AND questionid > 0',
+                [$runid]
+            );
+        }
+
+        $counts['tasks'] = self::queued_tasks_for($runid);
+
+        // The same condition the reset itself applies, not a stricter one: a
+        // preview that refuses what the action would allow teaches people to
+        // ignore the preview.
+        $status = $run ? (int) $run->status : 0;
+        $blocked = $status === registry::STATUS_RUNNING && self::has_open_attempts($runid);
+
+        // The log is the exception, on purpose: what went wrong last time is
+        // what somebody needs while looking at the next attempt.
+        return [
+            'ok'     => !$blocked,
+            'counts' => array_filter($counts),
+            'keeps'  => ['log', 'cellkey', 'seed'],
+        ];
+    }
+
+    /**
+     * How many of this plugin's tasks are queued for a run.
+     *
+     * @param int $runid The run.
+     * @return int
+     */
+    protected static function queued_tasks_for(int $runid): int {
+        global $DB;
+
+        [$insql, $params] = $DB->get_in_or_equal(task_overview::ADHOC, SQL_PARAMS_NAMED, 'cls');
+
+        $count = 0;
+        foreach ($DB->get_records_select('task_adhoc', 'classname ' . $insql, $params) as $row) {
+            $data = json_decode((string) $row->customdata, true) ?: [];
+            if ((int) ($data['runid'] ?? 0) === $runid) {
+                $count++;
+            }
+        }
+
+        return $count;
+    }
+
+    /**
+     * The confirmation text for a reset, naming what would go.
+     *
+     * @param int $runid The run.
+     * @param string $component For the strings.
+     * @return string
+     */
+    public static function reset_preview_message(int $runid, string $component): string {
+        $preview = self::preview_reset($runid);
+
+        $lines = [];
+        foreach ($preview['counts'] as $label => $count) {
+            $lines[] = $count . ' ' . get_string('purge:count' . $label, $component);
+        }
+
+        return get_string('run:confirmreset', $component, $runid)
+            . \html_writer::tag('p', implode(', ', $lines) ?: '-', ['class' => 'mt-2'])
+            . \html_writer::tag('p', get_string('run:resetkeeps', $component), ['class' => 'small text-muted']);
+    }
+
+    /**
+     * Reset a run and start it again, as one action.
+     *
+     * The two halves were always done together and never as one thing, so a
+     * reset that succeeded and a start that was forgotten looked exactly like a
+     * run nobody had touched.
+     *
+     * @param int $runid The run.
+     * @return array{ok: bool, removed: array, reason: string, restarted: bool}
+     */
+    public static function reset_and_rerun(int $runid): array {
+        $reset = self::reset($runid);
+        if (empty($reset['ok'])) {
+            return $reset + ['restarted' => false];
+        }
+
+        $start = self::start($runid);
+
+        return [
+            'ok'        => !empty($start['ok']),
+            'removed'   => $reset['removed'],
+            'reason'    => (string) ($start['reason'] ?? ''),
+            'restarted' => !empty($start['ok']),
+        ];
+    }
+
+
+    /**
      * Put a run back to draft, clearing what provisioning created.
      *
      * Re-checking suits a run whose cause was fixed outside it — a pool
@@ -549,11 +672,12 @@ class run_lifecycle {
      * @return array{ok: bool, removed: array, reason: string}
      */
     public static function reset(int $runid): array {
+        global $DB;
+
         // A new execution attempt rather than a clean slate: the log of what
         // went wrong last time is exactly what somebody needs while looking at
         // this one, and the number is what keeps the two apart.
         run_log::new_attempt($runid, 'reset to draft');
-        global $DB;
 
         $run = $DB->get_record('local_catquizlab_run', ['id' => $runid]);
         if (!$run) {
@@ -567,7 +691,16 @@ class run_lifecycle {
             return ['ok' => false, 'removed' => [], 'reason' => 'run-is-being-played'];
         }
 
-        $removed = [];
+        // The engine objects go with the lab rows. Clearing the scale map while
+        // leaving the scales behind loses the record of which scales belonged
+        // to this run — and an engine object nobody owns is not a leftover, it
+        // is a scale a later selection can still find.
+        $removed = purger::delete_engine_objects($runid);
+
+        // Its queued tasks too: one that wakes up to provision a run that has
+        // been reset would provision it a second time.
+        $removed['tasks'] = purger::kill_tasks($runid);
+
         foreach (
             [
             'local_catquizlab_attempt'   => 'attempts',
@@ -718,9 +851,18 @@ class run_lifecycle {
 
         $status = (int) $DB->get_field('local_catquizlab_run', 'status', ['id' => $runid]);
 
-        // Only these two: a scheduled run has not been provisioned yet, and
-        // everything past RUNNING is either aggregating or finished.
-        return in_array($status, [registry::STATUS_READY, registry::STATUS_RUNNING], true);
+        if (!in_array($status, [registry::STATUS_READY, registry::STATUS_RUNNING], true)) {
+            // A scheduled run has not been provisioned yet, and everything past
+            // RUNNING is either aggregating or finished.
+            return false;
+        }
+
+        // A run owning several scale generations hands out nothing. Its items
+        // were materialised into one of them and which one is not knowable from
+        // the map, so an attempt played now draws from a tree that may be the
+        // wrong one — and a wrong answer nobody can detect is worse than no
+        // answer.
+        return !scale_inventory::recovery_required($runid);
     }
 
     /**

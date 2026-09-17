@@ -168,6 +168,21 @@ final class schema_test extends \advanced_testcase {
         $this->resetAfterTest();
 
         $upgrade = file_get_contents($CFG->dirroot . '/local/catquizlab/db/upgrade.php');
+
+        // Only fields that are added. A field declared NOT NULL for
+        // change_field_notnull() is the correct end of the nullable-fill-tighten
+        // sequence, and flagging it would push the next person back towards the
+        // default this test exists to prevent.
+        $tightened = [];
+        if (preg_match_all("/change_field_notnull\(\s*\\$\w+,\s*\\$(\w+)/", $upgrade, $calls)) {
+            foreach ($calls[1] as $variable) {
+                $pattern = "/\\$" . preg_quote($variable, '/') . "\s*=\s*new xmldb_field\(\s*'([^']+)'/";
+                if (preg_match($pattern, $upgrade, $named)) {
+                    $tightened[] = $named[1];
+                }
+            }
+        }
+
         preg_match_all(
             "/new xmldb_field\\(\s*'([^']+)',\s*(XMLDB_TYPE_\w+),\s*[^,]*,\s*[^,]*,\s*([^,]*),\s*[^,]*,\s*([^,]*),/",
             $upgrade,
@@ -178,6 +193,9 @@ final class schema_test extends \advanced_testcase {
         foreach ($matches as $match) {
             [, $name, $type, $notnull, $default] = $match;
             if (trim($notnull) !== 'XMLDB_NOTNULL') {
+                continue;
+            }
+            if (in_array($name, $tightened, true)) {
                 continue;
             }
             $default = trim($default);
@@ -272,6 +290,21 @@ final class schema_test extends \advanced_testcase {
         $version = (int) $plugin->version;
 
         $upgrade = file_get_contents($CFG->dirroot . '/local/catquizlab/db/upgrade.php');
+
+        // Only fields that are added. A field declared NOT NULL for
+        // change_field_notnull() is the correct end of the nullable-fill-tighten
+        // sequence, and flagging it would push the next person back towards the
+        // default this test exists to prevent.
+        $tightened = [];
+        if (preg_match_all("/change_field_notnull\(\s*\\$\w+,\s*\\$(\w+)/", $upgrade, $calls)) {
+            foreach ($calls[1] as $variable) {
+                $pattern = "/\\$" . preg_quote($variable, '/') . "\s*=\s*new xmldb_field\(\s*'([^']+)'/";
+                if (preg_match($pattern, $upgrade, $named)) {
+                    $tightened[] = $named[1];
+                }
+            }
+        }
+
         preg_match_all('/upgrade_plugin_savepoint\(true,\s*(\d+)/', $upgrade, $matches);
 
         $this->assertNotEmpty($matches[1], 'The upgrade path has no savepoints.');

@@ -65,34 +65,65 @@ $PAGE->set_url($pageurl);
 // undone".
 if ($action === 'delete' && $id > 0) {
     require_sesskey();
-    require_capability('local/catquizlab:execute', $context);
+    // Its own capability: someone who may start runs and stop workers can do
+    // their whole job without ever being able to destroy a measurement.
+    require_capability('local/catquizlab:purge', $context);
 
     $deep = optional_param('deep', 1, PARAM_BOOL);
     $preview = \local_catquizlab\local\purger::preview_experiment($id, (bool) $deep);
+    $typed = optional_param('confirmname', '', PARAM_TEXT);
 
-    if (!optional_param('confirm', 0, PARAM_BOOL)) {
+    // Typing the name is the confirmation. A button that only needs a click is
+    // a button that gets clicked, and this one destroys measurements.
+    if ($typed !== '' && trim($typed) !== trim($preview['name'])) {
+        redirect(
+            $manageurl,
+            get_string('purge:namemismatch', $component),
+            null,
+            \core\output\notification::NOTIFY_WARNING
+        );
+    }
+
+    if (trim($typed) !== trim($preview['name'])) {
         $lines = [];
         foreach ($preview['counts'] as $label => $count) {
             $lines[] = $count . ' ' . get_string('purge:count' . $label, $component);
         }
 
-        $message = get_string('purge:confirmexperiment', $component, $preview['name'])
-            . html_writer::tag('p', implode(', ', $lines), ['class' => 'mt-2']);
+        $message = html_writer::tag('p', get_string('purge:typename', $component, (object) [
+            'counts' => implode(', ', $lines) ?: '-',
+            'name'   => s($preview['name']),
+        ]));
 
         foreach ($preview['blockers'] as $blocker) {
-            $message .= html_writer::tag('p', $blocker, ['class' => 'text-danger mb-0']);
+            $message .= html_writer::tag('p', $blocker, ['class' => 'text-danger']);
         }
 
         echo $OUTPUT->header();
         echo \local_catquizlab\output\shell::render('plan', $id);
-        echo $OUTPUT->confirm(
-            $message,
-            new moodle_url('/local/catquizlab/experiment.php', [
-                'id' => $id, 'action' => 'delete', 'sesskey' => sesskey(),
-                'confirm' => 1, 'deep' => $deep,
-            ]),
-            $manageurl
-        );
+        echo $OUTPUT->notification($message, \core\output\notification::NOTIFY_WARNING);
+
+        echo html_writer::start_tag('form', [
+            'method' => 'post',
+            'action' => (new moodle_url('/local/catquizlab/experiment.php'))->out(false),
+        ]);
+        echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'id', 'value' => $id]);
+        echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'action', 'value' => 'delete']);
+        echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'sesskey', 'value' => sesskey()]);
+        echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'deep', 'value' => (int) $deep]);
+        echo html_writer::tag('label', get_string('purge:confirmname', $component), [
+            'for' => 'catquizlab-confirmname',
+        ]);
+        echo html_writer::empty_tag('input', [
+            'type' => 'text', 'name' => 'confirmname', 'id' => 'catquizlab-confirmname',
+            'class' => 'form-control mb-2', 'autocomplete' => 'off',
+        ]);
+        echo html_writer::empty_tag('input', [
+            'type' => 'submit', 'class' => 'btn btn-danger',
+            'value' => get_string('purge:deleteexperiment', $component),
+        ]);
+        echo html_writer::link($manageurl, get_string('cancel'), ['class' => 'btn btn-secondary ml-2']);
+        echo html_writer::end_tag('form');
         echo $OUTPUT->footer();
         exit;
     }
@@ -106,7 +137,9 @@ if ($action === 'delete' && $id > 0) {
     if (!$result['ok']) {
         redirect(
             $manageurl,
-            get_string('purge:refused', $component, $result['reason']),
+            $result['reason'] === 'workers-stopping'
+                ? get_string('purge:workerstopping', $component)
+                : get_string('purge:refused', $component, $result['reason']),
             null,
             \core\output\notification::NOTIFY_WARNING
         );
@@ -305,7 +338,17 @@ echo $OUTPUT->header();
 
 // The same frame as every other CatQuizLab page: opening a run used to drop
 // the reader out of the process they were in the middle of.
-echo \local_catquizlab\output\shell::render('plan', optional_param('experimentid', 0, PARAM_INT));
+// The experiment being edited is the context, not whatever the URL carried:
+// opening an editor is choosing an experiment.
+echo \local_catquizlab\output\shell::render('plan', $id > 0 ? $id : optional_param('experimentid', 0, PARAM_INT));
+
+// Which of the eight decisions have been made, beside the form that asks for
+// them. The form asks for everything at once and answers nothing about where
+// somebody stands in it.
+echo $OUTPUT->render_from_template(
+    'local_catquizlab/plansteps',
+    \local_catquizlab\local\plan_steps::state($id)
+);
 
 // The same frame as every other CatQuizLab page: opening a run used to
 // drop the reader out of the process they were in the middle of.

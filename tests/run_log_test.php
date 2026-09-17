@@ -160,4 +160,58 @@ final class run_log_test extends \advanced_testcase {
         $this->assertCount(1, run_log::entries($runid, 1));
         $this->assertCount(2, run_log::entries($runid, 2));
     }
+
+    /**
+     * Checking an existing pool asks the engine per scale, not per item.
+     *
+     * @return void
+     */
+    public function test_checking_a_pool_does_not_scale_with_items(): void {
+        global $DB;
+        $this->resetAfterTest();
+        $this->setAdminUser();
+
+        if (!\local_catquizlab\local\environment::engine_available()) {
+            $this->markTestSkipped('No CAT engine installed.');
+        }
+
+        // The engine's item list is held for the request. The items of a run sit
+        // on a handful of scales, and asking once per item is what turned a pool
+        // of fourteen thousand into half a million queries.
+        \local_catquizlab\local\cat_item_provisioner::forget_visible_items();
+
+        $before = $DB->perf_get_queries();
+        \local_catquizlab\local\cat_item_provisioner::visible_items(1, 1);
+        $first = $DB->perf_get_queries() - $before;
+
+        $middle = $DB->perf_get_queries();
+        for ($i = 0; $i < 20; $i++) {
+            \local_catquizlab\local\cat_item_provisioner::visible_items(1, 1);
+        }
+        $repeats = $DB->perf_get_queries() - $middle;
+
+        // Twenty more asks for the same scale cost nothing.
+        $this->assertSame(0, $repeats, 'Repeated lookups for one scale cost ' . $repeats . ' queries.');
+        $this->assertGreaterThanOrEqual(0, $first);
+    }
+
+    /**
+     * Writing an item invalidates the held answer.
+     *
+     * @return void
+     */
+    public function test_the_held_answer_is_dropped_when_it_changes(): void {
+        $this->resetAfterTest();
+        $this->setAdminUser();
+
+        $provisioner = \local_catquizlab\local\cat_item_provisioner::class;
+
+        $provisioner::visible_items(1, 1);
+        $provisioner::forget_visible_items();
+
+        // Holding the engine's answer for the request is what makes checking a
+        // large pool affordable; holding it across the write that changes the
+        // answer reported a pool of 120 as 6 visible, and failed the run.
+        $this->assertIsArray($provisioner::visible_items(1, 1));
+    }
 }

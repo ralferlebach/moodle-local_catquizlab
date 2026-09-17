@@ -185,7 +185,8 @@ final class run_cleanup_test extends \advanced_testcase {
         $DB->insert_record('local_catquizlab_scalemap', (object) [
             'runid' => $run->id, 'catscaleid' => 101, 'parentcatscaleid' => 0, 'contextid' => 10,
             'level' => scale_provisioner::LEVEL_SUBSCALE, 'categoryindex' => 1, 'subscaleindex' => 1,
-            'name' => '1:1', 'timecreated' => $now, 'timemodified' => $now,
+            'name' => '1:1', 'nodekey' => 'n1',
+            'timecreated' => $now, 'timemodified' => $now,
         ]);
 
         $counts = run_cleanup::cleanup($run->id);

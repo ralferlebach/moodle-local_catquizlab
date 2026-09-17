@@ -284,4 +284,133 @@ final class purger_test extends \advanced_testcase {
         // must survive — and does.
         $this->assertSame(0, $DB->count_records('local_catquizlab_runlog', ['runid' => $runid]));
     }
+
+    /**
+     * Resetting takes the engine objects with it.
+     *
+     * @return void
+     */
+    public function test_reset_leaves_no_engine_objects(): void {
+        global $DB;
+        $this->resetAfterTest();
+        $this->setAdminUser();
+
+        $runid = $this->make_run(registry::STATUS_FAILED, 2);
+
+        // Stand in for what provisioning creates on the engine side.
+        $DB->insert_record('local_catquizlab_scalemap', (object) [
+            'runid' => $runid, 'level' => \local_catquizlab\local\scale_provisioner::LEVEL_ROOT,
+            'catscaleid' => 4242, 'contextid' => 99,
+            'categoryindex' => 0, 'subscaleindex' => 0, 'nodekey' => 'n1',
+            'timecreated' => time(),
+        ]);
+
+        \local_catquizlab\local\run_lifecycle::reset($runid);
+
+        // Clearing the scale map while leaving the scales behind loses the
+        // record of which scales belonged to this run — and an engine object
+        // nobody owns is not a leftover, it is a scale a later selection can
+        // still find.
+        $this->assertSame(0, $DB->count_records('local_catquizlab_scalemap', ['runid' => $runid]));
+        $this->assertSame(0, $DB->count_records('local_catquizlab_attempt', ['runid' => $runid]));
+        $this->assertSame(0, (int) $DB->get_field('local_catquizlab_run', 'testcmid', ['id' => $runid]));
+    }
+
+    /**
+     * The reset preview names what would go, and what would stay.
+     *
+     * @return void
+     */
+    public function test_the_reset_preview_names_both_sides(): void {
+        $this->resetAfterTest();
+        $this->setAdminUser();
+
+        $runid = $this->make_run(registry::STATUS_FAILED, 3);
+        $preview = \local_catquizlab\local\run_lifecycle::preview_reset($runid);
+
+        $this->assertTrue($preview['ok']);
+        $this->assertSame(3, $preview['counts']['attempts']);
+        // The log survives on purpose: what went wrong last time is what
+        // somebody needs while looking at the next attempt.
+        $this->assertContains('log', $preview['keeps']);
+        $this->assertContains('seed', $preview['keeps']);
+    }
+
+    /**
+     * Reset and rerun is one action, not two that can half-happen.
+     *
+     * @return void
+     */
+    public function test_reset_and_rerun_restarts_the_run(): void {
+        global $DB;
+        $this->resetAfterTest();
+        $this->setAdminUser();
+
+        $runid = $this->make_run(registry::STATUS_FAILED, 1);
+
+        $result = \local_catquizlab\local\run_lifecycle::reset_and_rerun($runid);
+
+        // A reset that succeeded and a start that was forgotten looked exactly
+        // like a run nobody had touched.
+        $this->assertArrayHasKey('restarted', $result);
+        $this->assertNotSame(
+            registry::STATUS_FAILED,
+            (int) $DB->get_field('local_catquizlab_run', 'status', ['id' => $runid])
+        );
+    }
+
+    /**
+     * Deleting needs its own authority.
+     *
+     * @return void
+     */
+    public function test_purging_is_its_own_capability(): void {
+        $this->resetAfterTest();
+
+        $capability = get_capability_info('local/catquizlab:purge');
+
+        // Someone who may start runs and stop workers can do their whole job
+        // without ever being able to destroy a measurement.
+        $this->assertNotEmpty($capability);
+        $this->assertNotSame(0, (int) $capability->riskbitmask & RISK_DATALOSS);
+
+        $context = \context_system::instance();
+        $operator = $this->getDataGenerator()->create_user();
+        $roleid = $this->getDataGenerator()->create_role();
+        assign_capability('local/catquizlab:execute', CAP_ALLOW, $roleid, $context->id);
+        role_assign($roleid, $operator->id, $context->id);
+
+        $this->assertTrue(has_capability('local/catquizlab:execute', $context, $operator));
+        $this->assertFalse(has_capability('local/catquizlab:purge', $context, $operator));
+    }
+
+    /**
+     * A worker mid-attempt is asked to stop, not overruled.
+     *
+     * @return void
+     */
+    public function test_a_playing_worker_is_asked_to_stop(): void {
+        global $DB;
+        $this->resetAfterTest();
+        $this->setAdminUser();
+
+        $runid = $this->make_run(registry::STATUS_RUNNING, 0);
+        $experimentid = (int) $DB->get_field('local_catquizlab_run', 'experimentid', ['id' => $runid]);
+
+        worker_registry::acquire_slot(1, 'playing');
+        $DB->insert_record('local_catquizlab_attempt', (object) [
+            'runid' => $runid, 'personid' => 0, 'status' => attempt_scheduler::STATUS_RUNNING,
+            'tries' => 1, 'leaseowner' => 'playing', 'leaseexpires' => time() + 3600,
+            'nextruntime' => 0, 'timecreated' => time(), 'timemodified' => time(),
+        ]);
+
+        $result = purger::delete_experiment($experimentid, true, false);
+
+        // Forcing past it strands the claim and leaves a browser playing a quiz
+        // whose questions are being deleted underneath it.
+        $this->assertFalse($result['ok']);
+        $this->assertSame('workers-stopping', $result['reason']);
+        $this->assertTrue(worker_registry::stop_requested('playing'));
+        $this->assertTrue($DB->record_exists('local_catquizlab_experiment', ['id' => $experimentid]));
+    }
 }

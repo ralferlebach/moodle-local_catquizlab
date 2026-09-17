@@ -46,16 +46,30 @@ final class scale_inventory_test extends \advanced_testcase {
     protected function give_generations(int $runid, array $pairs): void {
         global $DB;
 
-        foreach ($pairs as [$root, $context]) {
+        // Continue from whatever this run already has, so a test can add a
+        // second generation to a run that has one — which is how a polluted
+        // installation came to look the way it does.
+        $generation = (int) $DB->get_field_sql(
+            'SELECT COALESCE(MAX(generation), 0) FROM {local_catquizlab_scalemap} WHERE runid = ?',
+            [$runid]
+        );
+
+        foreach ($pairs as $index => [$root, $context]) {
+            $generation++;
+
             $DB->insert_record('local_catquizlab_scalemap', (object) [
                 'runid' => $runid, 'level' => scale_provisioner::LEVEL_ROOT,
                 'catscaleid' => $root, 'contextid' => $context,
-                'categoryindex' => 0, 'subscaleindex' => 0, 'timecreated' => time(),
+                'categoryindex' => 0, 'subscaleindex' => 0,
+                'nodekey' => 'root', 'generation' => $generation,
+                'timecreated' => time(),
             ]);
             $DB->insert_record('local_catquizlab_scalemap', (object) [
                 'runid' => $runid, 'level' => scale_provisioner::LEVEL_SUBSCALE,
                 'catscaleid' => $root + 1, 'contextid' => $context,
-                'categoryindex' => 1, 'subscaleindex' => 1, 'timecreated' => time(),
+                'categoryindex' => 1, 'subscaleindex' => 1,
+                'nodekey' => 'c1s1', 'generation' => $generation,
+                'timecreated' => time(),
             ]);
         }
     }
@@ -88,8 +102,14 @@ final class scale_inventory_test extends \advanced_testcase {
         // stage, long after the second tree was created, with a message about a
         // database call rather than about the run.
         $this->assertTrue(scale_inventory::is_ambiguous($runid));
-        $this->assertSame(556, scale_inventory::current_root($runid));
         $this->assertCount(3, scale_inventory::generations($runid));
+
+        // Picking the newest looks reasonable and is a guess: the run's items
+        // were materialised into one of them, and which one is not knowable
+        // from the map. So there is no current root — there is recovery.
+        $this->assertNull(scale_inventory::current_root($runid));
+        $this->assertTrue(scale_inventory::recovery_required($runid));
+        $this->assertSame(556, scale_inventory::newest_root($runid));
     }
 
     /**
@@ -134,6 +154,7 @@ final class scale_inventory_test extends \advanced_testcase {
 
         $this->assertTrue($result['ok']);
         $this->assertFalse(scale_inventory::is_ambiguous($runid));
+        // One left, so there is a current root again.
         $this->assertSame(556, scale_inventory::current_root($runid));
         $this->assertSame(2, $DB->count_records('local_catquizlab_scalemap', ['runid' => $runid]));
     }
@@ -151,6 +172,7 @@ final class scale_inventory_test extends \advanced_testcase {
         $this->give_generations($runid, [[100, 1]]);
 
         $this->assertFalse(scale_inventory::is_ambiguous($runid));
+        $this->assertFalse(scale_inventory::recovery_required($runid));
         $this->assertFalse(scale_inventory::preview_cleanup($runid)['ok']);
         $this->assertSame('nothing-to-clean', scale_inventory::cleanup($runid)['reason']);
     }
@@ -255,5 +277,215 @@ final class scale_inventory_test extends \advanced_testcase {
 
         $this->assertSame(1, $health['facts']['roots']);
         $this->assertSame(1, $health['facts']['contexts']);
+    }
+
+    /**
+     * The database refuses a second root, whatever its scale id.
+     *
+     * @return void
+     */
+    public function test_the_database_refuses_a_second_root(): void {
+        global $DB;
+        $this->resetAfterTest();
+        $this->setAdminUser();
+
+        $runid = $this->make_run();
+        $row = [
+            'runid' => $runid, 'catscaleid' => 1001, 'parentcatscaleid' => 0, 'contextid' => 1,
+            'level' => scale_provisioner::LEVEL_ROOT, 'categoryindex' => 0, 'subscaleindex' => 0,
+            'nodekey' => 'root', 'generation' => 1, 'name' => 'R',
+            'timecreated' => time(), 'timemodified' => time(),
+        ];
+        $DB->insert_record('local_catquizlab_scalemap', (object) $row);
+
+        // UNIQUE(runid, catscaleid) let this through: two different scale ids
+        // are both valid roots as far as it can tell, which is exactly the
+        // shape the defect took.
+        $row['catscaleid'] = 2002;
+        $this->expectException(\dml_exception::class);
+        $DB->insert_record('local_catquizlab_scalemap', (object) $row);
+    }
+
+    /**
+     * The node key describes the position, not the ids.
+     *
+     * @return void
+     */
+    public function test_node_keys_describe_the_position(): void {
+        $this->resetAfterTest();
+
+        $this->assertSame('root', scale_provisioner::node_key(['level' => 0]));
+        $this->assertSame('c2', scale_provisioner::node_key(['level' => 1, 'categoryindex' => 2]));
+        $this->assertSame(
+            'c1s3',
+            scale_provisioner::node_key(['level' => 2, 'categoryindex' => 1, 'subscaleindex' => 3])
+        );
+    }
+
+    /**
+     * A run with several generations hands out no work.
+     *
+     * @return void
+     */
+    public function test_an_ambiguous_run_is_not_runnable(): void {
+        global $DB;
+        $this->resetAfterTest();
+        $this->setAdminUser();
+
+        $runid = $this->make_run();
+        $DB->set_field(
+            'local_catquizlab_run',
+            'status',
+            \local_catquizlab\local\registry::STATUS_READY,
+            ['id' => $runid]
+        );
+
+        $this->give_generations($runid, [[100, 1]]);
+        $this->assertTrue(\local_catquizlab\local\run_lifecycle::is_runnable($runid));
+
+        $this->give_generations($runid, [[200, 2]]);
+
+        // The run's items were materialised into one of these trees, and which
+        // one is not knowable from the map. An attempt played now may draw from
+        // the wrong one, and a wrong answer nobody can detect is worse than no
+        // answer.
+        $this->assertTrue(scale_inventory::recovery_required($runid));
+        $this->assertNull(scale_inventory::current_root($runid));
+        $this->assertFalse(\local_catquizlab\local\run_lifecycle::is_runnable($runid));
+    }
+
+    /**
+     * Cleanup is possible on a run whose attempts can never finish.
+     *
+     * @return void
+     */
+    public function test_cleanup_is_not_blocked_by_stranded_claims(): void {
+        global $DB;
+        $this->resetAfterTest();
+        $this->setAdminUser();
+
+        $runid = $this->make_run();
+        $this->give_generations($runid, [[100, 1], [200, 2]]);
+
+        // Claimed, with a lease nobody is holding any more. Such a run hands
+        // out no work, so this attempt can never finish — refusing the repair
+        // on its account made repair impossible for exactly the runs needing
+        // it.
+        $DB->insert_record('local_catquizlab_attempt', (object) [
+            'runid' => $runid, 'personid' => 0,
+            'status' => \local_catquizlab\local\attempt_scheduler::STATUS_RUNNING,
+            'tries' => 1, 'leaseowner' => 'gone', 'leaseexpires' => time() - 3600,
+            'nextruntime' => 0, 'timecreated' => time(), 'timemodified' => time(),
+        ]);
+
+        $result = scale_inventory::cleanup($runid);
+
+        $this->assertTrue($result['ok'], $result['reason']);
+        $this->assertFalse(scale_inventory::recovery_required($runid));
+    }
+
+    /**
+     * A live worker still blocks the repair.
+     *
+     * @return void
+     */
+    public function test_a_live_claim_blocks_cleanup(): void {
+        global $DB;
+        $this->resetAfterTest();
+        $this->setAdminUser();
+
+        $runid = $this->make_run();
+        $this->give_generations($runid, [[100, 1], [200, 2]]);
+
+        $DB->insert_record('local_catquizlab_attempt', (object) [
+            'runid' => $runid, 'personid' => 0,
+            'status' => \local_catquizlab\local\attempt_scheduler::STATUS_RUNNING,
+            'tries' => 1, 'leaseowner' => 'alive', 'leaseexpires' => time() + 3600,
+            'nextruntime' => 0, 'timecreated' => time(), 'timemodified' => time(),
+        ]);
+
+        // A worker mid-attempt is reading from one of these trees, and which
+        // one is not worth guessing.
+        $this->assertSame('run-is-being-played', scale_inventory::cleanup($runid)['reason']);
+    }
+
+    /**
+     * A parent pointing outside the run is named.
+     *
+     * @return void
+     */
+    public function test_a_foreign_parent_is_named(): void {
+        global $DB;
+        $this->resetAfterTest();
+        $this->setAdminUser();
+
+        $runid = $this->make_run();
+        $this->give_generations($runid, [[100, 1]]);
+
+        $DB->insert_record('local_catquizlab_scalemap', (object) [
+            'runid' => $runid, 'level' => scale_provisioner::LEVEL_SUBSCALE,
+            'catscaleid' => 777, 'parentcatscaleid' => 666, 'contextid' => 1,
+            'nodekey' => 'c9s9', 'generation' => 1,
+            'categoryindex' => 9, 'subscaleindex' => 9, 'timecreated' => time(),
+        ]);
+
+        $health = \local_catquizlab\local\scale_health::check($runid);
+
+        // A node whose parent is not in this run's map belongs to a tree the
+        // run does not own, and the engine will walk it anyway.
+        $this->assertFalse($health['ok']);
+        $this->assertContains('parents', $health['codes']);
+        $this->assertStringContainsString('c9s9', $health['checks'][4]['detail']);
+    }
+
+    /**
+     * A cycle is found rather than walked.
+     *
+     * @return void
+     */
+    public function test_a_cycle_is_found(): void {
+        global $DB;
+        $this->resetAfterTest();
+        $this->setAdminUser();
+
+        $runid = $this->make_run();
+
+        // Two nodes each claiming the other as parent: a walk of this tree does
+        // not end, so finding it is the difference between an error and a hang.
+        foreach ([[501, 502, 'root'], [502, 501, 'c1']] as [$id, $parent, $key]) {
+            $DB->insert_record('local_catquizlab_scalemap', (object) [
+                'runid' => $runid, 'level' => scale_provisioner::LEVEL_ROOT,
+                'catscaleid' => $id, 'parentcatscaleid' => $parent, 'contextid' => 1,
+                'nodekey' => $key, 'generation' => 1,
+                'categoryindex' => null, 'subscaleindex' => null, 'timecreated' => time(),
+            ]);
+        }
+
+        $health = \local_catquizlab\local\scale_health::check($runid);
+
+        $this->assertContains('acyclic', $health['codes']);
+    }
+
+    /**
+     * The verdict carries machine-readable codes and the ids.
+     *
+     * @return void
+     */
+    public function test_the_verdict_is_machine_readable(): void {
+        $this->resetAfterTest();
+        $this->setAdminUser();
+
+        $runid = $this->make_run();
+        $this->give_generations($runid, [[100, 1], [200, 2]]);
+
+        $health = \local_catquizlab\local\scale_health::check($runid);
+
+        // A report that names the objects beats one that counts them. The order
+        // is the map's own, which is what somebody reading the table sees.
+        $this->assertContains('oneroot', $health['codes']);
+        $this->assertCount(2, $health['facts']['rootids']);
+        $this->assertContains(100, $health['facts']['rootids']);
+        $this->assertContains(200, $health['facts']['rootids']);
+        $this->assertCount(2, $health['facts']['contextids']);
     }
 }

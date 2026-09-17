@@ -11,16 +11,16 @@
 // GNU General Public License for more details.
 
 /**
- * Keep the overview's counters and verdict current while workers run.
+ * Keep the operations view current while work is being done.
  *
- * The page was rendered once and then went stale behind the work it describes,
- * so watching a queue drain meant reloading. This updates the numbers in place
- * and reloads the page only when the overall verdict changes — that is where
- * the rest of the page, the run rows and their progress, stops matching what
- * the counters say.
+ * The first version reloaded the whole page whenever the overall verdict
+ * changed, which is the thing somebody watching a run notices most: the scroll
+ * position goes, an open detail closes, and a form half filled in is gone.
  *
- * Polling stops when the tab is hidden and when the page has been idle for a
- * long time: a browser tab left open overnight should not keep asking.
+ * So the regions are patched in place, and a reload is kept for the one case
+ * that cannot be patched — the page gaining or losing rows. Adding a run row
+ * from here would mean a second renderer deciding what a run row looks like,
+ * and two renderers disagree eventually.
  *
  * @module     local_catquizlab/livestatus
  * @copyright  2026 Ralf Erlebach
@@ -29,14 +29,14 @@
 
 import Ajax from 'core/ajax';
 
-/** @var {number} How often to ask, in milliseconds. */
-const INTERVAL = 5000;
+/** @var {number} How often to ask while the tab is visible. */
+const INTERVAL = 2000;
 
-/** @var {number} Stop polling after this long without the page being looked at. */
+/** @var {number} Stop asking after this long without the page being looked at. */
 const MAX_IDLE = 30 * 60 * 1000;
 
-/** @var {string|null} The verdict the page was rendered with. */
-let renderedState = null;
+/** @var {string|null} The shape the page was rendered with. */
+let renderedShape = null;
 
 /** @var {number} When polling started. */
 let startedAt = 0;
@@ -45,7 +45,7 @@ let startedAt = 0;
 let timer = null;
 
 /**
- * Write one value into its element, if the page has one.
+ * Write one value into its region, if the page has one.
  *
  * @param {string} region The data-region name.
  * @param {string|number} value What to show.
@@ -86,23 +86,21 @@ const poll = async() => {
         setRegion('catquizlab-collected', status.collected);
         setRegion('catquizlab-failed', status.failed);
 
-        const headline = document.querySelector('[data-region="catquizlab-situation"] strong');
-        if (headline && headline.textContent !== status.headline) {
-            headline.textContent = status.headline;
-        }
+        (status.regions || []).forEach((region) => {
+            setRegion(region.name, region.text);
+        });
 
-        if (renderedState === null) {
-            renderedState = status.changed;
-        } else if (renderedState !== status.changed) {
-            // The verdict decides more than one line: the colour of the banner,
-            // whether there is a button, and which run rows are actionable.
-            // Patching all of that from here would be a second renderer.
+        if (renderedShape === null) {
+            renderedShape = status.shape;
+        } else if (renderedShape !== status.shape) {
+            // The page has more or fewer rows than it was rendered with. That
+            // is the one change patching cannot make honestly.
             window.location.reload();
         }
     } catch (error) {
         // A failed poll is not worth an error message on a page somebody is
-        // watching: the next one is five seconds away, and a page that shouts
-        // about a transient network error is a page people stop trusting.
+        // watching: a page that shouts about a transient network error is a
+        // page people stop trusting.
         stop();
     }
 };
@@ -118,19 +116,19 @@ const stop = () => {
 };
 
 /**
- * Start keeping the overview current.
+ * Start keeping the view current.
  *
- * @param {string} state The verdict the page was rendered with.
+ * @param {string} shape The shape the page was rendered with.
  */
-export const init = (state) => {
-    renderedState = state || null;
+export const init = (shape) => {
+    renderedShape = shape || null;
     startedAt = Date.now();
 
     stop();
     timer = window.setInterval(poll, INTERVAL);
 
-    // Ask once as soon as the tab is looked at again, rather than waiting out
-    // the interval on a page that may be minutes stale.
+    // Ask as soon as the tab is looked at again, rather than waiting out the
+    // interval on a page that may be minutes stale.
     document.addEventListener('visibilitychange', () => {
         if (!document.hidden) {
             poll();

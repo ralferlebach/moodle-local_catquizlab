@@ -87,7 +87,9 @@
 <div class="card mb-3">
     <div class="card-body">
         <h3 class="h5">{{#str}}task:heading, local_catquizlab{{/str}}</h3>
-        {{#pipelinestatus}}<div class="mb-3">{{> local_catquizlab/statuscard }}</div>{{/pipelinestatus}}
+        {{#pipelinestatus}}
+            <div class="mb-3" data-card="pipeline">{{> local_catquizlab/statuscard }}</div>
+        {{/pipelinestatus}}
 
         <table class="table table-sm mb-2">
             <tbody>
@@ -146,7 +148,9 @@
 <div class="card mb-3">
     <div class="card-body">
         <h3 class="h5">{{#str}}ops:queue, local_catquizlab{{/str}}</h3>
-        {{#queuestatus}}<div class="mb-2">{{> local_catquizlab/statuscard }}</div>{{/queuestatus}}
+        {{#queuestatus}}
+            <div class="mb-2" data-card="queue">{{> local_catquizlab/statuscard }}</div>
+        {{/queuestatus}}
         <ul class="list-unstyled small mb-0">
             <li>{{#str}}queue:claimable, local_catquizlab{{/str}}
                 <span data-region="catquizlab-queued">{{queue.claimable}}</span></li>

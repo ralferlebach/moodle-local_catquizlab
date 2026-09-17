@@ -75,7 +75,8 @@ final class worker_registry_test extends \advanced_testcase {
         $scaleid = 900000 + $runid;
         $DB->insert_record('local_catquizlab_scalemap', (object) [
             'runid' => $runid, 'level' => \local_catquizlab\local\scale_provisioner::LEVEL_SUBSCALE,
-            'catscaleid' => $scaleid, 'categoryindex' => 1, 'subscaleindex' => 1, 'timecreated' => time(),
+            'catscaleid' => $scaleid, 'categoryindex' => 1, 'subscaleindex' => 1, 'nodekey' => 'n1',
+            'timecreated' => time(),
         ]);
 
         for ($i = 0; $i < 12; $i++) {

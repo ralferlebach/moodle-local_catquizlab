@@ -45,6 +45,9 @@ use local_catquizlab\local\situation;
  * @license    http://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
  */
 class shell {
+    /** @var bool Whether the frame has already gone out in this request. */
+    protected static $rendered = false;
+
     /** @var string Step 1: is the installation able to run anything. */
     public const STEP_PREPARE = 'prepare';
 
@@ -81,7 +84,28 @@ class shell {
     public static function render(string $current, int $experimentid = 0): string {
         global $OUTPUT;
 
+        // Once per request, whatever the page does. Several pages call this from
+        // more than one branch — a confirmation dialogue and the main output,
+        // say — and a branch that falls through to another produced the frame
+        // twice: two tab rows, two experiment selectors, and a reader with two
+        // places to answer the same question.
+        if (self::$rendered) {
+            return '';
+        }
+        self::$rendered = true;
+
         return $OUTPUT->render_from_template('local_catquizlab/shell', self::context($current, $experimentid));
+    }
+
+    /**
+     * Forget that the frame was rendered.
+     *
+     * For tests, which run several page renders in one process.
+     *
+     * @return void
+     */
+    public static function reset_for_testing(): void {
+        self::$rendered = false;
     }
 
     /**

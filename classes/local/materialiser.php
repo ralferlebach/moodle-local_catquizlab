@@ -333,6 +333,11 @@ class materialiser {
     protected static function existing_pool(int $runid, int $planned, bool $verify): ?array {
         global $DB;
 
+        // The engine's answer is cached per request, and this check runs after
+        // items may have been written. Asking from a stale list would report a
+        // pool as visible that the engine has not seen yet.
+        cat_item_provisioner::forget_visible_items();
+
         $items = $DB->get_records('local_catquizlab_item', ['runid' => $runid]);
         if (count($items) !== $planned || $planned === 0) {
             return null;

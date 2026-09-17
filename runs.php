@@ -127,6 +127,24 @@ if ($action !== '' && $runid > 0) {
         );
     }
 
+    if ($action === 'repairaccess') {
+        require_sesskey();
+        require_capability('local/catquizlab:execute', $context);
+
+        $result = \local_catquizlab\local\access_readiness::repair($runid);
+
+        redirect(
+            $returnurl,
+            $result['fixed'] === []
+                ? get_string('access:repairnothing', $component)
+                : get_string('access:repaired', $component, implode(', ', $result['fixed'])),
+            null,
+            $result['ok']
+                ? \core\output\notification::NOTIFY_SUCCESS
+                : \core\output\notification::NOTIFY_WARNING
+        );
+    }
+
     if ($action === 'cleanscales') {
         require_sesskey();
         require_capability('local/catquizlab:execute', $context);
@@ -149,6 +167,43 @@ if ($action !== '' && $runid > 0) {
         }
 
         redirect($returnurl, get_string('scales:cleanupdone', $component, implode(', ', $parts)));
+    }
+
+    if ($action === 'resetrerun') {
+        require_sesskey();
+        require_capability('local/catquizlab:execute', $context);
+
+        if (!optional_param('confirm', 0, PARAM_BOOL)) {
+            echo $OUTPUT->header();
+            echo \local_catquizlab\output\shell::render('progress', 0);
+            echo $OUTPUT->confirm(
+                \local_catquizlab\local\run_lifecycle::reset_preview_message($runid, $component),
+                new moodle_url('/local/catquizlab/runs.php', [
+                    'runid' => $runid, 'action' => 'resetrerun', 'sesskey' => sesskey(), 'confirm' => 1,
+                ]),
+                $returnurl
+            );
+            echo $OUTPUT->footer();
+            exit;
+        }
+
+        $result = \local_catquizlab\local\run_lifecycle::reset_and_rerun($runid);
+
+        $parts = [];
+        foreach ($result['removed'] as $label => $count) {
+            $parts[] = $count . ' ' . $label;
+        }
+
+        redirect(
+            $returnurl,
+            $result['ok']
+                ? get_string('run:resetrerun', $component, implode(', ', $parts) ?: '-')
+                : get_string('run:resetrefused', $component, $result['reason'] ?: '-'),
+            null,
+            $result['ok']
+                ? \core\output\notification::NOTIFY_SUCCESS
+                : \core\output\notification::NOTIFY_WARNING
+        );
     }
 
     if ($action === 'reset') {
@@ -307,6 +362,13 @@ echo \local_catquizlab\output\shell::render('progress', optional_param('experime
 // the operations page, the queue on a third, recovery on a fourth — and holding
 // the pieces together was left to the reader.
 if ($runid === 0) {
+    // This is the page somebody watches while a run is playing, so it is the
+    // page that has to keep itself current. It was the one page without the
+    // updater.
+    $PAGE->requires->js_call_amd('local_catquizlab/livestatus', 'init', [
+        \local_catquizlab\external\live_status::current_shape(),
+    ]);
+
     echo $OUTPUT->render_from_template(
         'local_catquizlab/progress',
         \local_catquizlab\local\progress_view::context(optional_param('experimentid', 0, PARAM_INT))
@@ -346,6 +408,40 @@ if ($runid > 0) {
         [get_string('run:progress', $component), $run['progress'] . '%'],
     ];
     echo html_writer::table($table);
+
+    // Whether the simulated person can reach the test at all. An access failure
+    // must never surface as a missing question: the two need completely
+    // different responses, and only one of them is about the test.
+    $access = \local_catquizlab\local\access_readiness::check($runid);
+    if ($access['checks'] !== []) {
+        echo $OUTPUT->heading(get_string('access:heading', $component), 4);
+        echo $OUTPUT->notification(
+            $access['summary'],
+            $access['ok']
+                ? \core\output\notification::NOTIFY_SUCCESS
+                : \core\output\notification::NOTIFY_ERROR
+        );
+
+        if (!$access['ok']) {
+            $accesstable = new html_table();
+            foreach ($access['checks'] as $check) {
+                $accesstable->data[] = [
+                    $check['ok'] ? '&check;' : '&times;',
+                    s($check['label']),
+                    s($check['detail']),
+                ];
+            }
+            echo html_writer::table($accesstable);
+
+            echo $OUTPUT->single_button(
+                new moodle_url('/local/catquizlab/runs.php', [
+                    'runid' => $runid, 'action' => 'repairaccess', 'sesskey' => sesskey(),
+                ]),
+                get_string('access:repair', $component),
+                'post'
+            );
+        }
+    }
 
     // Whether the tree is sound, in the plugin's own terms. The old failure
     // was a database warning about a call; this is a statement about the run.
@@ -423,7 +519,7 @@ if ($runid > 0) {
             $cost = $entry['dbqueries'] > 0
                 ? get_string('runlog:costvalue', $component, (object) [
                     'queries'  => $entry['dbqueries'],
-                    'duration' => $entry['duration'],
+                    'duration' => $entry['durationtext'],
                 ])
                 : '';
             if ($entry['expensive']) {
@@ -509,6 +605,15 @@ if ($runid > 0) {
             get_string('purge:deleterundeep', $component),
             'post'
         );
+        if (!empty($allowed['reset'])) {
+            $buttons .= $OUTPUT->single_button(
+                new moodle_url('/local/catquizlab/runs.php', [
+                    'runid' => $runid, 'action' => 'resetrerun', 'sesskey' => sesskey(),
+                ]),
+                get_string('action:resetrerun', $component),
+                'post'
+            );
+        }
         if (!empty($allowed['reset'])) {
             $buttons .= $OUTPUT->single_button(
                 new moodle_url('/local/catquizlab/runs.php', [

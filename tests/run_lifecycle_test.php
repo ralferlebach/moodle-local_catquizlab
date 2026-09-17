@@ -119,6 +119,9 @@ final class run_lifecycle_test extends \advanced_testcase {
                 'catscaleid'    => $scaleid,
                 'categoryindex' => 1,
                 'subscaleindex' => $index,
+                // The logical position the unique index is on. Without it every
+                // row falls back to the default and collides.
+                'nodekey'       => 'c1s' . $index,
                 'timecreated'   => time(),
             ]);
 

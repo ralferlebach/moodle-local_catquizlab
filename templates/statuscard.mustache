@@ -26,7 +26,8 @@
         "bad": true,
         "state": "Waiting for a worker",
         "reason": "6 attempt(s) claimed by nobody",
-        "action": {"label": "Start workers", "url": "/local/catquizlab/index.php?tab=setup"}
+        "action": {"label": "Start workers", "url": "/local/catquizlab/index.php?tab=setup"},
+        "region": "catquizlab-queue"
     }
 }}
 <div class="d-flex align-items-start justify-content-between">
@@ -34,8 +35,8 @@
         <span class="badge {{#good}}badge-success{{/good}}{{#watch}}badge-warning{{/watch}}{{#bad}}badge-danger{{/bad}}">
             {{#good}}&check;{{/good}}{{#watch}}!{{/watch}}{{#bad}}&times;{{/bad}}
         </span>
-        <strong>{{state}}</strong>
-        {{#reason}}<div class="small text-muted">{{.}}</div>{{/reason}}
+        <strong{{#region}} data-region="{{.}}-state"{{/region}}>{{state}}</strong>
+        <div class="small text-muted"{{#region}} data-region="{{.}}-reason"{{/region}}>{{reason}}</div>
     </div>
     {{#action}}
         <a href="{{url}}" class="btn btn-sm btn-outline-primary ml-2 flex-shrink-0">{{label}}</a>

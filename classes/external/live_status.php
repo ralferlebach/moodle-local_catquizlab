@@ -86,10 +86,75 @@ class live_status extends external_api {
             'state'          => $verdict['state'],
             'headline'       => $verdict['headline'],
             'detail'         => $verdict['detail'],
-            // The page reloads itself when this changes: a state change is
-            // where the rest of the page — run rows, progress, buttons — stops
-            // matching what the counters say.
+            // A reload is the fallback, not the mechanism. It happens when the
+            // shape of the page changes — a run appearing, a worker arriving —
+            // because those add rows, and adding rows from JavaScript would be
+            // a second renderer disagreeing with the first.
             'changed'        => $verdict['state'],
+            'shape'          => self::shape(),
+            'regions'        => self::regions(),
+        ];
+    }
+
+    /**
+     * Return structure.
+     *
+     * @return external_single_structure
+     */
+    /**
+     * The shape the page is being rendered with, for the live updater.
+     *
+     * Counts, not contents: a run finishing changes its row and is patched; a
+     * run appearing changes how many rows there are and is not.
+     *
+     * @return string
+     */
+    public static function current_shape(): string {
+        return self::shape();
+    }
+
+    /**
+     * A fingerprint of what the page is made of.
+     *
+     * @return string
+     */
+    protected static function shape(): string {
+        global $DB;
+
+        return implode(':', [
+            $DB->count_records('local_catquizlab_run'),
+            $DB->count_records('local_catquizlab_worker'),
+            $DB->count_records_select(
+                'local_catquizlab_run',
+                'status <> :finished',
+                ['finished' => \local_catquizlab\local\registry::STATUS_FINISHED]
+            ),
+        ]);
+    }
+
+    /**
+     * The text of each region the page keeps current.
+     *
+     * Text rather than markup: the page already has the elements, and sending
+     * HTML for them would mean two places deciding what a status card looks
+     * like.
+     *
+     * @return array[]
+     */
+    protected static function regions(): array {
+        $queue = \local_catquizlab\local\status_report::queue();
+        $pipeline = \local_catquizlab\local\status_report::pipeline();
+        $situation = \local_catquizlab\local\situation::assess();
+
+        return [
+            // The situation names its sentence 'headline'; its 'state' is the
+            // machine-readable level.
+            ['name' => 'catquizlab-situation-state', 'text' => (string) $situation['headline']],
+            ['name' => 'catquizlab-situation-reason', 'text' => (string) $situation['detail']],
+            ['name' => 'catquizlab-queue-state', 'text' => (string) $queue['state']],
+            ['name' => 'catquizlab-queue-reason', 'text' => (string) $queue['reason']],
+            ['name' => 'catquizlab-pipeline-state', 'text' => (string) $pipeline['state']],
+            ['name' => 'catquizlab-pipeline-reason', 'text' => (string) $pipeline['reason']],
         ];
     }
 
@@ -110,6 +175,14 @@ class live_status extends external_api {
             'headline'       => new external_value(PARAM_TEXT, 'One sentence about what is going on.'),
             'detail'         => new external_value(PARAM_TEXT, 'Why, when that helps.'),
             'changed'        => new external_value(PARAM_ALPHA, 'The verdict, for change detection.'),
+            'shape'          => new external_value(PARAM_TEXT, 'A fingerprint of how many rows the page has.'),
+            'regions'        => new \core_external\external_multiple_structure(
+                new external_single_structure([
+                    'name' => new external_value(PARAM_ALPHANUMEXT, 'The data-region to write into.'),
+                    'text' => new external_value(PARAM_TEXT, 'What it should say.'),
+                ]),
+                'The regions the page keeps current.'
+            ),
         ]);
     }
 }

@@ -44,7 +44,7 @@ final class debug_trace_test extends \advanced_testcase {
         $this->resetAfterTest();
         $this->setAdminUser();
 
-        set_config('debugmode', 0, 'local_catquizlab');
+        set_config('debuglevel', 'off', 'local_catquizlab');
         debug_trace::record(debug_trace::UI, 'provision', ['runid' => 4]);
 
         // An installation that records every action all the time is one where
@@ -62,7 +62,7 @@ final class debug_trace_test extends \advanced_testcase {
         $this->resetAfterTest();
         $this->setAdminUser();
 
-        set_config('debugmode', 1, 'local_catquizlab');
+        set_config('debuglevel', 'verbose', 'local_catquizlab');
 
         debug_trace::record(debug_trace::UI, 'provision', ['runid' => 4], 'ok', [], 4);
         debug_trace::record(debug_trace::LIFECYCLE, 'run_failed', [], 'ok', ['reason' => 'pool'], 4);
@@ -85,7 +85,7 @@ final class debug_trace_test extends \advanced_testcase {
         $this->resetAfterTest();
         $this->setAdminUser();
 
-        set_config('debugmode', 1, 'local_catquizlab');
+        set_config('debuglevel', 'verbose', 'local_catquizlab');
         debug_trace::record(debug_trace::UI, 'setup', [
             'runid'   => 7,
             'sesskey' => 'abc123',
@@ -111,7 +111,7 @@ final class debug_trace_test extends \advanced_testcase {
         $this->resetAfterTest();
         $this->setAdminUser();
 
-        set_config('debugmode', 1, 'local_catquizlab');
+        set_config('debuglevel', 'verbose', 'local_catquizlab');
 
         try {
             throw new \coding_exception('something specific');
@@ -137,7 +137,7 @@ final class debug_trace_test extends \advanced_testcase {
         $this->resetAfterTest();
         $this->setAdminUser();
 
-        set_config('debugmode', 1, 'local_catquizlab');
+        set_config('debuglevel', 'verbose', 'local_catquizlab');
 
         // An action name far longer than the column, and a non-scalar
         // parameter. A plugin that breaks while writing about itself is worse
@@ -156,11 +156,100 @@ final class debug_trace_test extends \advanced_testcase {
         $this->resetAfterTest();
         $this->setAdminUser();
 
-        set_config('debugmode', 1, 'local_catquizlab');
+        set_config('debuglevel', 'verbose', 'local_catquizlab');
         debug_trace::record(debug_trace::UI, 'one');
         debug_trace::record(debug_trace::UI, 'two');
 
         $this->assertSame(2, debug_trace::clear());
         $this->assertSame([], debug_trace::entries());
+    }
+
+    /**
+     * One click carries one id through every layer.
+     *
+     * @return void
+     */
+    public function test_one_action_is_one_sequence(): void {
+        $this->resetAfterTest();
+        $this->setAdminUser();
+
+        // A test process runs many scenarios in one PHP process, and a task
+        // context left behind by another would be recorded against this one.
+        debug_trace::reset_for_testing();
+
+        set_config('debuglevel', 'verbose', 'local_catquizlab');
+
+        $correlation = debug_trace::correlation_id();
+
+        debug_trace::record(debug_trace::UI, 'resetrerun', ['runid' => 4], 'ok', [], 4);
+        debug_trace::enter_task('\\local_catquizlab\\task\\orchestrate_run', $correlation);
+        debug_trace::record(debug_trace::LIFECYCLE, 'orchestration_started', [], 'ok', [], 4);
+        debug_trace::leave_task();
+
+        // Without a shared id the entries are a list of things that happened
+        // near each other, and reading a defect means guessing which belong
+        // together.
+        $sequence = debug_trace::entries(['correlationid' => $correlation]);
+        $this->assertCount(2, $sequence);
+
+        // Newest first: the lifecycle entry ran inside the task, the click that
+        // started it did not. A failure inside a task otherwise reads as a
+        // failure from nowhere.
+        $this->assertStringContainsString('orchestrate_run', $sequence[0]['taskclassname']);
+        $this->assertSame('', $sequence[1]['taskclassname']);
+        $this->assertSame('orchestration_started', $sequence[0]['action']);
+        $this->assertSame('resetrerun', $sequence[1]['action']);
+    }
+
+    /**
+     * The level decides what is worth keeping.
+     *
+     * @return void
+     */
+    public function test_the_level_filters_channels(): void {
+        $this->resetAfterTest();
+        $this->setAdminUser();
+
+        set_config('debuglevel', 'action', 'local_catquizlab');
+
+        debug_trace::record(debug_trace::UI, 'pressed');
+        debug_trace::record(debug_trace::LIFECYCLE, 'changed');
+        debug_trace::record(debug_trace::SERVICE, 'called');
+        debug_trace::record(debug_trace::WORKER, 'reported');
+
+        // What a person did and what changed because of it. The rest is volume
+        // that makes those two harder to find.
+        $actions = debug_trace::entries();
+        $this->assertCount(2, $actions);
+
+        set_config('debuglevel', 'verbose', 'local_catquizlab');
+        debug_trace::record(debug_trace::SERVICE, 'called');
+        $this->assertCount(3, debug_trace::entries());
+    }
+
+    /**
+     * The run log carries the same id.
+     *
+     * @return void
+     */
+    public function test_the_run_log_shares_the_id(): void {
+        $this->resetAfterTest();
+        $this->setAdminUser();
+
+        set_config('debuglevel', 'verbose', 'local_catquizlab');
+
+        /** @var \local_catquizlab_generator $generator */
+        $generator = $this->getDataGenerator()->get_plugin_generator('local_catquizlab');
+        $runid = (int) $generator->create_run()->id;
+
+        $correlation = debug_trace::correlation_id();
+        \local_catquizlab\local\run_log::record($runid, \local_catquizlab\local\run_log::START_REQUESTED);
+
+        $entries = \local_catquizlab\local\run_log::entries($runid);
+        $last = end($entries);
+
+        // One id joins the two logs, so a click and its consequences read as
+        // one sequence rather than two lists.
+        $this->assertSame($correlation, $last['correlationid']);
     }
 }

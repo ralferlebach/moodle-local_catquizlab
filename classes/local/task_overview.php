@@ -104,13 +104,13 @@ class task_overview {
                 'disabled'  => $disabled,
                 'enabled'   => !$disabled,
                 'lastrun'   => $lastrun > 0
-                    ? get_string('task:ranago', $component, format_time(time() - $lastrun))
+                    ? get_string('task:ranago', $component, duration::human(time() - $lastrun))
                     : get_string('task:neverran', $component),
                 'nextrun'   => $disabled
                     ? get_string('task:notscheduled', $component)
                     : ($nextrun <= time()
                         ? get_string('task:duenow', $component)
-                        : get_string('task:duein', $component, format_time($nextrun - time()))),
+                        : get_string('task:duein', $component, duration::human($nextrun - time()))),
                 // Overdue by more than a quarter of an hour is not slow cron,
                 // it is cron that is not running — and that is the single most
                 // common reason a pipeline sits still.
@@ -147,12 +147,15 @@ class task_overview {
                 'subject'   => self::describe($data),
                 'due'       => (int) $row->nextruntime <= time()
                     ? get_string('task:duenow', $component)
-                    : get_string('task:duein', $component, format_time((int) $row->nextruntime - time())),
+                    : get_string('task:duein', $component, duration::human((int) $row->nextruntime - time())),
                 // A task that has failed and is waiting out its backoff is not
                 // the same as one that has not started, and the count is the
                 // only thing that says which.
+                // The delay a failed task is waiting out. This is the value the
+                // report named: 30720 s, where "8 hours 32 mins" says whether
+                // it is worth waiting for.
                 'failures'  => (int) $row->faildelay > 0
-                    ? get_string('task:failing', $component, format_time((int) $row->faildelay))
+                    ? get_string('task:failing', $component, duration::human((int) $row->faildelay))
                     : '',
                 'running'   => !empty($row->timestarted),
             ];
@@ -184,7 +187,7 @@ class task_overview {
         // threshold — it is the difference between "running" and "not".
         return [
             'ok'     => $ago < HOURSECS,
-            'detail' => get_string('task:cronlast', $component, format_time($ago)),
+            'detail' => get_string('task:cronlast', $component, duration::human($ago)),
         ];
     }
 

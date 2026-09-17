@@ -334,7 +334,7 @@ if ($tab === 'settings') {
         'worker_node_path'   => (string) get_config($component, 'worker_node_path'),
         'worker_concurrency' => (int) (get_config($component, 'worker_concurrency') ?: 1),
         'worker_max_jobs'    => (int) get_config($component, 'worker_max_jobs'),
-        'debugmode'          => (int) get_config($component, 'debugmode'),
+        'debuglevel'         => (string) get_config($component, 'debuglevel') ?: 'off',
     ]);
 }
 
@@ -364,7 +364,9 @@ if ($tab === 'experiments') {
     // Keeps the counters current while workers run, so watching a queue drain
     // does not mean reloading the page during exactly the minutes somebody is
     // watching it.
-    $PAGE->requires->js_call_amd('local_catquizlab/livestatus', 'init', [$situation['state']]);
+    $PAGE->requires->js_call_amd('local_catquizlab/livestatus', 'init', [
+        \local_catquizlab\external\live_status::current_shape(),
+    ]);
 }
 
 if ($tab === 'experiments') {

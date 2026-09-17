@@ -155,6 +155,25 @@ if ($action !== '') {
         redirect($pageurl, get_string('debug:cleared', $component, $count));
     }
 
+    if ($action === 'selftest') {
+        // Seconds, not milliseconds: it starts a browser and runs a task. The
+        // session is closed first so the rest of the site stays usable.
+        \core\session\manager::write_close();
+        $result = \local_catquizlab\local\selftest::run();
+        \core\session\manager::restart();
+
+        $SESSION->local_catquizlab_selftest = $result;
+
+        redirect(
+            $pageurl,
+            $result['summary'],
+            null,
+            $result['ok']
+                ? \core\output\notification::NOTIFY_SUCCESS
+                : \core\output\notification::NOTIFY_WARNING
+        );
+    }
+
     if ($action === 'setphpcli') {
         // Moodle's own setting, written the way Moodle writes it — and only by
         // somebody who may change site configuration, because that is whose

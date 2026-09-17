@@ -76,6 +76,16 @@ class run_orchestrator {
      */
     public const STAGE_READINESS = 'readiness';
 
+    /**
+     * Stage: can the simulated person actually reach the test.
+     *
+     * After the test exists and before the queue is built, because a run whose
+     * people cannot open the activity should not have attempts made for them.
+     *
+     * @var string
+     */
+    public const STAGE_ACCESS = 'access';
+
     /** @var string Stage: create the queue of attempts to be played. */
     public const STAGE_ATTEMPTS = 'attempts';
 
@@ -99,6 +109,7 @@ class run_orchestrator {
             self::STAGE_PEOPLE,
             self::STAGE_TEST,
             self::STAGE_READINESS,
+            self::STAGE_ACCESS,
             self::STAGE_ATTEMPTS,
         ];
     }
@@ -531,7 +542,34 @@ class run_orchestrator {
                 return self::stage_test($context);
             case self::STAGE_PEOPLE:
                 return self::stage_people($context);
+            case self::STAGE_ACCESS:
+                // Asked before the run is called READY, in the user's own
+                // terms. Checked afterwards it arrives as "no question was
+                // presented", which is true and three steps from the cause.
+                $access = access_readiness::check((int) $context['runid']);
+
+                return [
+                    'ok'     => $access['ok'],
+                    'reason' => $access['ok'] ? '' : $access['summary'],
+                    'facts'  => ['code' => $access['code']],
+                ];
+
             case self::STAGE_READINESS:
+                // Recovery before readiness: a run with several trees cannot be
+                // called ready, because which tree its items live in is exactly
+                // what nobody can say.
+                if (scale_inventory::recovery_required((int) $context['runid'])) {
+                    return [
+                        'ok'     => false,
+                        'reason' => get_string(
+                            'scales:recoveryrequired',
+                            'local_catquizlab',
+                            (int) $context['runid']
+                        ),
+                        'facts'  => ['code' => 'recovery-required'],
+                    ];
+                }
+
                 // The run comes from the shared context like every other stage
                 // uses it. Reaching for an undefined $runid here meant the
                 // readiness stage threw on every provisioning — introduced when

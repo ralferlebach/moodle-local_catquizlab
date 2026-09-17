@@ -247,4 +247,69 @@ final class situation_test extends \advanced_testcase {
             $this->assertNotEmpty(get_string($key, 'local_catquizlab'));
         }
     }
+
+    /**
+     * The frame goes out once per request, whatever the page does.
+     *
+     * @return void
+     */
+    public function test_the_shell_renders_once(): void {
+        $this->resetAfterTest();
+        $this->setAdminUser();
+
+        \local_catquizlab\output\shell::reset_for_testing();
+
+        $first = \local_catquizlab\output\shell::render('plan', 0);
+        $second = \local_catquizlab\output\shell::render('plan', 0);
+
+        // Several pages call this from more than one branch — a confirmation
+        // dialogue and the main output — and a branch that fell through to
+        // another produced two tab rows and two experiment selectors.
+        $this->assertNotSame('', $first);
+        $this->assertSame('', $second);
+    }
+
+    /**
+     * Durations read as time, not as a count of seconds.
+     *
+     * @return void
+     */
+    public function test_durations_are_human(): void {
+        $this->resetAfterTest();
+
+        // The reported value. "30720 s" is a correct answer to a question
+        // nobody asked; whether it is worth waiting for is the question.
+        $this->assertStringContainsString('8 hours', \local_catquizlab\local\duration::human(30720));
+
+        // Below a second, format_time() rounds to "0 secs" and the measurement
+        // is gone — a stage that took 0.7 s is worth saying so.
+        $this->assertStringContainsString('0.70', \local_catquizlab\local\duration::human(0.7));
+        $this->assertNotSame('', \local_catquizlab\local\duration::human(0));
+    }
+
+    /**
+     * The PHP CLI path gates one path, not readiness as a whole.
+     *
+     * @return void
+     */
+    public function test_php_cli_does_not_block_readiness(): void {
+        $this->resetAfterTest();
+        $this->setAdminUser();
+
+        set_config('pathtophp', '');
+
+        $ids = [];
+        foreach (\local_catquizlab\local\setup_wizard::state()['stages'] as $stage) {
+            foreach ($stage['steps'] as $step) {
+                $ids[$step['id']] = $stage['id'];
+            }
+        }
+
+        // An installation with working cron runs everything it needs, and this
+        // plugin's own run-now executes the task in-process. Only Moodle's own
+        // run-now shells out — so this belongs beside the pipeline, not in
+        // front of the engine.
+        $this->assertArrayHasKey('phpcli', $ids);
+        $this->assertSame('pipeline', $ids['phpcli']);
+    }
 }

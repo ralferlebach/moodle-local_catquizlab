@@ -103,8 +103,13 @@ class settings_form extends \moodleform {
             : get_string('settingsform:tokenpresent', $component, \core_text::substr($token, 0, 6))
         );
 
-        $mform->addElement('advcheckbox', 'debugmode', get_string('debug:mode', $component));
-        $mform->addHelpButton('debugmode', 'debug:mode', $component);
+        $mform->addElement('select', 'debuglevel', get_string('debug:level', $component), [
+            'off'     => get_string('debug:leveloff', $component),
+            'action'  => get_string('debug:levelaction', $component),
+            'verbose' => get_string('debug:levelverbose', $component),
+            'trace'   => get_string('debug:leveltrace', $component),
+        ]);
+        $mform->addHelpButton('debuglevel', 'debug:level', $component);
 
         $this->add_action_buttons(false, get_string('settingsform:save', $component));
     }

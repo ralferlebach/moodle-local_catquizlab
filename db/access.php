@@ -81,6 +81,19 @@ $capabilities = [
         ],
     ],
 
+    // Deleting an experiment outright is not the same authority as running one.
+    // Somebody who may start runs and stop workers can do their whole job
+    // without ever being able to destroy a measurement — and the person who
+    // may destroy it should have been given that deliberately.
+    'local/catquizlab:purge' => [
+        'riskbitmask'  => RISK_DATALOSS,
+        'captype'      => 'write',
+        'contextlevel' => CONTEXT_SYSTEM,
+        'archetypes'   => [
+            'manager' => CAP_ALLOW,
+        ],
+    ],
+
     'local/catquizlab:worker' => [
         'captype'      => 'read',
         'contextlevel' => CONTEXT_SYSTEM,

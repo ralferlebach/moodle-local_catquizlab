@@ -128,6 +128,68 @@ class scale_health {
                 : get_string('scalehealth:duplicatekeys', $component, $duplicates)
         );
 
+        // Parent references that point somewhere. A node whose parent is not in
+        // this run's map belongs to a tree the run does not own, and the engine
+        // will walk it anyway.
+        $known = [];
+        foreach ($rows as $row) {
+            $known[(int) $row->catscaleid] = true;
+        }
+
+        $orphans = [];
+        foreach ($rows as $row) {
+            $parent = (int) $row->parentcatscaleid;
+            if ($parent !== 0 && !isset($known[$parent])) {
+                $orphans[] = (string) $row->nodekey;
+            }
+        }
+        $checks[] = self::check_row(
+            'parents',
+            get_string('scalehealth:parents', $component),
+            $orphans === [],
+            $orphans === [] ? '' : get_string('scalehealth:orphannodes', $component, implode(', ', $orphans))
+        );
+
+        // A cycle makes the tree infinite, and every walk of it a hang rather
+        // than an error.
+        $checks[] = self::check_row(
+            'acyclic',
+            get_string('scalehealth:acyclic', $component),
+            !self::has_cycle($rows),
+            ''
+        );
+
+        // The keys the blueprint calls for, present and no others. A missing
+        // subscale and a stray extra one are different defects, so they are
+        // reported separately.
+        $expectedkeys = self::expected_keys($runid);
+        if ($expectedkeys !== []) {
+            $actualkeys = [];
+            foreach ($rows as $row) {
+                $actualkeys[] = (string) $row->nodekey;
+            }
+            $actualkeys = array_unique($actualkeys);
+
+            $missing = array_diff($expectedkeys, $actualkeys);
+            $unexpected = array_diff($actualkeys, $expectedkeys);
+
+            $checks[] = self::check_row(
+                'expectedkeys',
+                get_string('scalehealth:expectedkeys', $component),
+                $missing === [],
+                $missing === [] ? '' : get_string('scalehealth:missingkeys', $component, implode(', ', $missing))
+            );
+
+            $checks[] = self::check_row(
+                'nounexpectedkeys',
+                get_string('scalehealth:nounexpected', $component),
+                $unexpected === [],
+                $unexpected === []
+                    ? ''
+                    : get_string('scalehealth:unexpectedkeys', $component, implode(', ', $unexpected))
+            );
+        }
+
         // The shape the blueprint asked for, where the run still knows it.
         $blueprint = self::blueprint_nodes($runid);
         if ($blueprint > 0) {
@@ -147,9 +209,19 @@ class scale_health {
             $ok = $ok && !empty($check['ok']);
         }
 
+        $codes = [];
+        foreach ($checks as $check) {
+            if (empty($check['ok'])) {
+                $codes[] = (string) $check['id'];
+            }
+        }
+
         return [
             'ok'      => $ok,
             'checks'  => $checks,
+            // The failing check ids, for anything that has to branch on this
+            // rather than read it.
+            'codes'   => $codes,
             'summary' => $ok
                 ? get_string('scalehealth:consistent', $component, (object) [
                     'contexts' => count($contexts),
@@ -158,13 +230,83 @@ class scale_health {
                 ])
                 : get_string('scalehealth:inconsistent', $component),
             'facts'   => [
-                'roots'    => count($roots),
-                'contexts' => count($contexts),
-                'nodes'    => count($rows),
-                'scales'   => $expected,
-                'present'  => $present,
+                'roots'      => count($roots),
+                'contexts'   => count($contexts),
+                'nodes'      => count($rows),
+                'scales'     => $expected,
+                'present'    => $present,
+                // The ids themselves, so a report names the objects rather
+                // than only counting them.
+                'rootids'    => $roots,
+                'contextids' => array_keys($contexts),
             ],
         ];
+    }
+
+    /**
+     * Whether the parent references form a cycle.
+     *
+     * @param array $rows The map rows.
+     * @return bool
+     */
+    protected static function has_cycle(array $rows): bool {
+        $parents = [];
+        foreach ($rows as $row) {
+            $parents[(int) $row->catscaleid] = (int) $row->parentcatscaleid;
+        }
+
+        foreach (array_keys($parents) as $start) {
+            $seen = [];
+            $node = $start;
+
+            // Bounded by the number of nodes: a walk longer than the tree has
+            // revisited something, and following it further only confirms it.
+            while ($node !== 0 && isset($parents[$node])) {
+                if (isset($seen[$node])) {
+                    return true;
+                }
+                $seen[$node] = true;
+                $node = $parents[$node];
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * The logical keys this run's blueprint calls for.
+     *
+     * @param int $runid The run.
+     * @return string[]
+     */
+    protected static function expected_keys(int $runid): array {
+        global $DB;
+
+        $manifest = json_decode(
+            (string) $DB->get_field('local_catquizlab_run', 'manifestjson', ['id' => $runid]),
+            true
+        ) ?: [];
+
+        $scales = $manifest['config']['definition']['pool']['scales'] ?? null;
+        if (!is_array($scales)) {
+            return [];
+        }
+
+        $categories = max(0, (int) ($scales['categories'] ?? 0));
+        $subcategories = max(0, (int) ($scales['subcategories'] ?? 0));
+        if ($categories === 0) {
+            return [];
+        }
+
+        $keys = ['root'];
+        for ($c = 1; $c <= $categories; $c++) {
+            $keys[] = 'c' . $c;
+            for ($sub = 1; $sub <= $subcategories; $sub++) {
+                $keys[] = 'c' . $c . 's' . $sub;
+            }
+        }
+
+        return $keys;
     }
 
     /**

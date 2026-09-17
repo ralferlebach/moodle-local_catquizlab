@@ -32,6 +32,7 @@
             "hasadhoc": false,
             "cron": {"ok": true, "detail": "Cron last ran 30 secs ago."}
         },
+        "selftest": null,
         "queuestatus": {"level": "good", "good": true, "watch": false, "bad": false, "state": "Nothing queued", "reason": "", "action": null},
         "pipelinestatus": {"level": "good", "good": true, "watch": false, "bad": false, "state": "Pipeline active", "reason": "ran 20 secs ago", "action": null},
         "taskadminurl": "/admin/tool/task/scheduledtasks.php",
@@ -155,6 +156,38 @@
                 <pre class="mb-0 small">{{output}}</pre>
             </div>
         {{/selftest}}
+    </div>
+</div>
+
+<div class="card mb-3">
+    <div class="card-body">
+        <h3 class="h5">{{#str}}selftest:heading, local_catquizlab{{/str}}</h3>
+        <p class="small text-muted">{{#str}}selftest:explain, local_catquizlab{{/str}}</p>
+
+        {{#selftest}}
+            <div class="alert {{#ok}}alert-success{{/ok}}{{^ok}}alert-danger{{/ok}}" role="status">
+                {{summary}}
+            </div>
+            <table class="table table-sm">
+                <tbody>
+                    {{#checks}}
+                        <tr>
+                            <td style="width: 2rem;">{{#ok}}&check;{{/ok}}{{#failed}}&times;{{/failed}}</td>
+                            <td>{{label}}</td>
+                            <td class="small text-muted">{{detail}}</td>
+                        </tr>
+                    {{/checks}}
+                </tbody>
+            </table>
+        {{/selftest}}
+
+        <form method="post" action="{{formurl}}">
+            <input type="hidden" name="sesskey" value="{{sesskey}}">
+            <input type="hidden" name="action" value="selftest">
+            <button type="submit" class="btn btn-primary">
+                {{#str}}selftest:run, local_catquizlab{{/str}}
+            </button>
+        </form>
     </div>
 </div>
 

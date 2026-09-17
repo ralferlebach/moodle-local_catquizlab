@@ -66,8 +66,8 @@
              role="status" data-region="catquizlab-situation">
             <div class="d-flex align-items-center justify-content-between">
                 <div>
-                    <strong>{{state}}</strong>
-                    {{#reason}}<span class="small"> — {{.}}</span>{{/reason}}
+                    <strong data-region="catquizlab-situation-state">{{state}}</strong>
+                    <span class="small" data-region="catquizlab-situation-reason">{{reason}}</span>
                 </div>
                 {{#action}}<a href="{{url}}" class="btn btn-sm btn-primary ml-2">{{label}}</a>{{/action}}
             </div>

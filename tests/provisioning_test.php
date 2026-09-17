@@ -671,6 +671,12 @@ final class provisioning_test extends \advanced_testcase {
                 'catscaleid'    => $scaleid,
                 'categoryindex' => $level >= 1 ? 1 : null,
                 'subscaleindex' => $level === 2 ? 1 : null,
+                // The logical position, which the unique index is on. Without
+                // it every row lands on the default and collides — which is the
+                // index doing its job.
+                // Distinct per row: several subscales in one fixture share a
+                // level, and the index is on the logical position, not on it.
+                'nodekey'       => $level === 0 ? 'root' : 'n' . $scaleid,
                 'timecreated'   => time(),
             ]);
         }

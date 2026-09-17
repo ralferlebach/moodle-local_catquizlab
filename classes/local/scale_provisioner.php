@@ -139,6 +139,11 @@ class scale_provisioner {
                 'level'            => $node['level'],
                 'categoryindex'    => $node['categoryindex'],
                 'subscaleindex'    => $node['subscaleindex'],
+                // The logical position, which is what the unique index is on.
+                // A physical scale id cannot express "one root per run": two
+                // different ids are both valid roots as far as it can tell.
+                'nodekey'          => self::node_key($node),
+                'generation'       => 1,
                 'name'             => $node['name'],
                 'timecreated'      => $now,
                 'timemodified'     => $now,
@@ -248,7 +253,7 @@ class scale_provisioner {
      * @param array $node The plan node.
      * @return string
      */
-    protected static function node_key(array $node): string {
+    public static function node_key(array $node): string {
         if ($node['level'] === self::LEVEL_ROOT) {
             return 'root';
         }
@@ -257,6 +262,7 @@ class scale_provisioner {
         }
         return 'c' . $node['categoryindex'] . 's' . $node['subscaleindex'];
     }
+
 
     /**
      * The scales this run already has, if the engine still knows them.
@@ -277,10 +283,15 @@ class scale_provisioner {
             return null;
         }
 
-        // The newest generation, chosen the same way everywhere: a run that
-        // already owns several must not quietly gain another, and picking by
-        // iteration order would make "the root" mean whatever came back first.
+        // Several generations is not something to pick the newest from. Picking
+        // silently is how an installation carried a dozen of them without
+        // anybody being told: whatever the choice, the run is in a state that
+        // needs deciding about, not guessing at.
         $generations = scale_inventory::generations($runid);
+        if (count($generations) > 1) {
+            throw new \moodle_exception('scales:recoveryrequired', 'local_catquizlab', '', count($generations));
+        }
+
         $root = $generations === [] ? 0 : (int) $generations[0]['rootscaleid'];
         $contextid = $generations === [] ? 0 : (int) $generations[0]['contextid'];
 

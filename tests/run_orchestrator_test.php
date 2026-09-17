@@ -48,7 +48,12 @@ final class run_orchestrator_test extends \advanced_testcase {
             // checked afterwards, a run that cannot start has already had its
             // queue built, and a failed run with 150 claimable attempts is
             // worse than no check at all.
-            ['scales', 'materialise', 'container', 'people', 'test', 'readiness', 'attempts'],
+            //
+            // Access comes between readiness and the attempts: a run whose
+            // people cannot open the activity should not have attempts made for
+            // them, and the failure must not arrive later disguised as a
+            // missing question.
+            ['scales', 'materialise', 'container', 'people', 'test', 'readiness', 'access', 'attempts'],
             run_orchestrator::plan_stages()
         );
     }
