@@ -107,7 +107,10 @@ class operations_view {
                 // somebody's behalf — and pausing a run they are watching is
                 // exactly the kind of thing that then looks like a bug in the
                 // plugin.
-                'pauseurl'  => (new \moodle_url($pageurl))->out(false),
+                // Posted where the handler is. Correcting the method and
+                // leaving the target is half a fix: the form went to
+                // index.php and pauserun is handled in operations.php.
+                'pauseurl'  => (new \moodle_url('/local/catquizlab/operations.php'))->out(false),
                 'pauseaction' => $paused ? 'resumerun' : 'pauserun',
                 'sesskey'   => sesskey(),
             ];

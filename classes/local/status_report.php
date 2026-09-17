@@ -86,10 +86,11 @@ class status_report {
                     ]) . ' ' . $cron['detail']
                     : get_string('report:notaskqueued', $component) . ' ' . $cron['detail'],
                 [
-                    'label' => get_string('action:provision', $component),
-                    'url'   => (new \moodle_url('/local/catquizlab/runs.php', [
-                        'runid' => $runid, 'action' => 'provision', 'sesskey' => sesskey(),
-                    ]))->out(false),
+                    'label'   => get_string('action:provision', $component),
+                    'url'     => (new \moodle_url('/local/catquizlab/runs.php'))->out(false),
+                    'command' => 'provision',
+                    'runid'   => $runid,
+                    'sesskey' => sesskey(),
                 ]
             );
         }
@@ -102,10 +103,11 @@ class status_report {
                 get_string('report:runfailed', $component),
                 $failure['reason'] !== '' ? $failure['reason'] : get_string('report:noreason', $component),
                 [
-                    'label' => get_string('action:recheck', $component),
-                    'url'   => (new \moodle_url('/local/catquizlab/runs.php', [
-                        'runid' => $runid, 'action' => 'recheck', 'sesskey' => sesskey(),
-                    ]))->out(false),
+                    'label'   => get_string('action:recheck', $component),
+                    'url'     => (new \moodle_url('/local/catquizlab/runs.php'))->out(false),
+                    'command' => 'recheck',
+                    'runid'   => $runid,
+                    'sesskey' => sesskey(),
                 ]
             );
         }

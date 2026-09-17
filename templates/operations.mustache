@@ -206,9 +206,14 @@
                         <td class="small text-muted">{{lastrun}}</td>
                         <td class="small {{#overdue}}text-danger{{/overdue}}">{{nextrun}}</td>
                         <td>
-                            <a href="{{runurl}}" class="btn btn-sm btn-outline-secondary">
-                                {{#str}}task:runnow, local_catquizlab{{/str}}
-                            </a>
+                            <form method="post" action="{{runurl}}" class="d-inline">
+                                <input type="hidden" name="sesskey" value="{{sesskey}}">
+                                <input type="hidden" name="action" value="runscheduled">
+                                <input type="hidden" name="classname" value="{{classname}}">
+                                <button type="submit" class="btn btn-sm btn-outline-secondary">
+                                    {{#str}}task:runnow, local_catquizlab{{/str}}
+                                </button>
+                            </form>
                         </td>
                     </tr>
                     {{#overdue}}

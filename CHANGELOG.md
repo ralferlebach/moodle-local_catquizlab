@@ -6,6 +6,54 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.6.49] — 2026-09-17
+
+The 2026091701 audit: #71's three remaining faults, and #74's.
+
+### #71 — the method was fixed, the targets were not
+Three faults, all mine, all from converting links to forms without following
+each one to its handler:
+
+**Pause and resume posted to the wrong controller.** The form's action was
+`index.php?tab=setup` while `pauserun` is handled in `operations.php`. Correcting
+the verb and leaving the target is half a fix.
+
+**"Run now" was still a link in `operations.mustache`.** I converted the copy in
+`progress.mustache` and not this one — and since the URL had deliberately lost
+its `action` parameter, the link now led to `tasks.php` demanding a parameter it
+was no longer given. The visible button was broken in a way it had not been
+before the fix.
+
+**The status card's data contract was one-sided.** The template expected `url`,
+`command`, `runid` and `sesskey`; `status_report` still supplied only `label`
+and `url`, so the forms posted no action at all. It supplies the full set now
+for the two actions that change state, and the card renders a plain link for the
+two that only navigate — a form for a navigation would post nothing and mean
+nothing.
+
+Measured in a browser: pressing "Run now" returns **"The task ran."**
+
+### #74 — one object, one name
+`Arbeitsauftrag` was my own coinage for what the glossary calls a
+Testbearbeitung, and two names for one object is the defect a glossary exists to
+prevent. Gone, along with the last `Sweep`.
+
+**And one bad translation worth naming: `Node` had become `Knoten`.** Node.js is
+a proper noun; `Knoten` is what a scale tree has. Somebody reading "Knoten muss
+vorhanden und ausführbar sein" would look for the wrong thing entirely. Three
+strings fixed.
+
+Plus the grammar the blunt pass left: "eine Teilversuch", "alle eingereihten
+simulierte Testbearbeitungen", "die Simulationsprozess-Registry".
+
+### Verification
+PHPUnit 666 tests / 3568 assertions, Behat 32 scenarios / 232 steps, phpcs with
+the Moodle standard clean, PHPDoc clean, 1069 strings per language. Every form
+on the operations and progress views posts to the file that handles it —
+checked by rendering them and reading the targets.
+
+---
+
 ## [0.6.48] — 2026-09-17
 
 Issue #62: the queries, taken apart and reduced where they are mine.
