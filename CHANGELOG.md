@@ -6,6 +6,52 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.6.45] — 2026-09-17
+
+Issue #73: the process, explained where somebody is standing in it.
+
+### The gap
+The interface shows a queue, a task, a worker and a run without saying how they
+follow from one another. Somebody can read every panel on every tab and still
+not know what happens first, what produces what, what runs by itself, or when
+results appear.
+
+### Eight stages, folded away
+On every tab, behind "How does this work?":
+
+    1. Define the experiment              waits for you
+    2. Create the variants                waits for you
+    3. Prepare each run technically       runs by itself   ← you are here
+    4. Queue the test sittings            runs by itself   ← you are here
+    5. Simulate the test sittings         waits for you    ← you are here
+    6. Collect the data                   runs by itself   ← you are here
+    7. Combine the results per run        runs by itself   ← you are here
+    8. Evaluate the experiment            waits for you
+
+Each says what it produces — "two strategies by three pool variants is six
+sub-experiments; at five replications that is thirty runs" — and whether it is
+waiting for a person. Those two are what somebody needs from a status they do
+not recognise, and neither was anywhere in the interface.
+
+It is closed by default: a reader who knows the process should not scroll past
+it, and one who does not should not have to go looking.
+
+### Verification
+PHPUnit 652 tests / 3548 assertions, Behat 32 scenarios / 232 steps, phpcs with
+the Moodle standard clean, PHPDoc clean.
+
+### A note on testing this one
+Checking it in a browser produced `Section error!` on every page. That is what
+Moodle says when a plugin's `settings.php` has not been loaded — which happens
+when the version in version.php is ahead of the version in the database. The
+plugin was fine; the upgrade had not been run. Worth writing down, because the
+message names a section and the cause is a pending upgrade.
+
+### Still open
+#70 — the code and issue audit.
+
+---
+
 ## [0.6.44] — 2026-09-17
 
 CI fixes for 0.6.43.

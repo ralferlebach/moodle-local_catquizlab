@@ -94,7 +94,11 @@ class shell {
         }
         self::$rendered = true;
 
-        return $OUTPUT->render_from_template('local_catquizlab/shell', self::context($current, $experimentid));
+        return $OUTPUT->render_from_template('local_catquizlab/shell', self::context($current, $experimentid))
+            . $OUTPUT->render_from_template(
+                'local_catquizlab/processmodel',
+                \local_catquizlab\local\process_model::chain($current)
+            );
     }
 
     /**

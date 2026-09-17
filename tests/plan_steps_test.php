@@ -141,4 +141,41 @@ final class plan_steps_test extends \advanced_testcase {
         $this->assertTrue($state['hasruns']);
         $this->assertStringContainsString('runs.php', $state['progressurl']);
     }
+
+    /**
+     * The process chain says what produces what, and who has to act.
+     *
+     * @return void
+     */
+    public function test_the_process_chain_marks_where_you_are(): void {
+        $this->resetAfterTest();
+
+        $chain = \local_catquizlab\local\process_model::chain('progress');
+
+        $this->assertCount(8, $chain['stages']);
+
+        $here = [];
+        foreach ($chain['stages'] as $stage) {
+            $this->assertNotSame('', $stage['produces'], $stage['id'] . ' says what it produces');
+
+            // Running by itself and waiting for you are the two
+            // things somebody needs from a status they do not recognise, so
+            // every stage is one or the other and never both.
+            $this->assertNotSame(
+                $stage['automatic'],
+                $stage['manual'],
+                $stage['id'] . ' is either automatic or manual'
+            );
+
+            if ($stage['here']) {
+                $here[] = $stage['id'];
+            }
+        }
+
+        // The five stages that happen on the progress step.
+        $this->assertContains('prepare', $here);
+        $this->assertContains('simulate', $here);
+        $this->assertNotContains('define', $here);
+        $this->assertNotContains('evaluate', $here);
+    }
 }
