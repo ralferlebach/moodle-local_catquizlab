@@ -74,6 +74,9 @@ class debug_trace {
     /** @var string|null The task class running right now. */
     protected static $task = null;
 
+    /** @var array The id, retry delay and attempt count of that task. */
+    protected static $taskmeta = [];
+
     /**
      * The id every entry of this request carries.
      *
@@ -160,11 +163,38 @@ class debug_trace {
      *
      * @param string $classname The task class.
      * @param string $correlationid The id from the action that queued it, if any.
+     * @param int $taskid The ad-hoc task row, where there is one.
+     * @param int $faildelay How long it is waiting out after a failure.
+     * @param int $attempt How many attempts remain.
      * @return void
      */
-    public static function enter_task(string $classname, string $correlationid = ''): void {
+    public static function enter_task(
+        string $classname,
+        string $correlationid = '',
+        int $taskid = 0,
+        int $faildelay = 0,
+        int $attempt = 0
+    ): void {
         self::$task = $classname;
+        self::$taskmeta = [
+            'taskid'    => $taskid,
+            'faildelay' => $faildelay,
+            'attempt'   => $attempt,
+        ];
         self::continue_correlation($correlationid);
+    }
+
+    /**
+     * What is known about the task running right now.
+     *
+     * A failure inside a task that has already failed twice and is waiting out
+     * an eight-hour delay is a different situation from a first attempt, and
+     * the log said the same thing about both.
+     *
+     * @return array{taskid: int, faildelay: int, attempt: int}
+     */
+    public static function task_meta(): array {
+        return self::$taskmeta + ['taskid' => 0, 'faildelay' => 0, 'attempt' => 0];
     }
 
     /**
@@ -174,6 +204,7 @@ class debug_trace {
      */
     public static function leave_task(): void {
         self::$task = null;
+        self::$taskmeta = [];
     }
 
     /**
@@ -187,6 +218,7 @@ class debug_trace {
     public static function reset_for_testing(): void {
         self::$correlationid = null;
         self::$task = null;
+        self::$taskmeta = [];
     }
 
     /**

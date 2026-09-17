@@ -133,6 +133,7 @@ class run_log {
                 // as one sequence across both.
                 'correlationid' => debug_trace::correlation_id(),
                 'taskclassname' => debug_trace::task_classname(),
+                'taskid'        => debug_trace::task_meta()['taskid'],
                 'userid'        => (int) ($USER->id ?? 0),
                 'timecreated'   => time(),
             ]);
@@ -260,6 +261,7 @@ class run_log {
                 'id'        => (int) $row->id,
                 'correlationid' => (string) ($row->correlationid ?? ''),
                 'taskclassname' => (string) ($row->taskclassname ?? ''),
+                'taskid'        => (int) ($row->taskid ?? 0),
                 'attemptno' => (int) $row->attemptno,
                 'event'     => $row->event,
                 'stage'     => (string) $row->stage,

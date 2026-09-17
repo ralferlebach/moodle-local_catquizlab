@@ -6,6 +6,50 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.6.52] — 2026-09-17
+
+Issues #66, #67 and #61.
+
+### #66 — a root existing is not a tree being sound
+`existing_scales()` checked that the root scale still existed and reused the
+tree on that alone. A run whose subscales were half deleted has a root, and
+reusing it means materialising into a shape the engine cannot serve — which
+surfaces much later as items it will not hand out.
+
+It runs the same consistency check the interface does, and rebuilds when the
+tree fails it. Measured: a healthy tree is reused; deleting one subscale from
+the engine makes the next call refuse and rebuild.
+
+**Structure only, not the blueprint comparisons.** `scale_health` reads the
+expected shape from the run's manifest while provisioning is handed a blueprint
+as an argument, and the two can legitimately differ. The first version compared
+everything and broke idempotency for exactly that reason — the existing test
+caught it, and the fix is to check what is actually broken (one root, one
+context, engine scales present, unique nodes, valid parents, no cycles) rather
+than what merely differs.
+
+### #67 — the contexts went with the generations
+`scale_inventory::cleanup()` deleted the abandoned scales and left their CAT
+contexts standing. A context with no scales is invisible in every list and still
+counts as a context — the engine's own selection walks them.
+
+They are removed now, and **only when empty**: another run may share one, and a
+shared context deleted from under it is a worse failure than a leftover.
+Measured: two generations cleaned, one context removed, the shared one left.
+
+### #61 — what the log says about a task
+Every ad-hoc task now reports its task row id, its retry delay and its remaining
+attempts. A failure on a third attempt waiting out an eight-hour delay is a
+different situation from a first attempt, and the log said the same thing about
+both. The id is stored on the run log row; the delay and attempt count travel
+with the trace.
+
+### Verification
+PHPUnit 666 tests / 3544 assertions, Behat 32 scenarios / 235 steps, phpcs with
+the Moodle standard clean, PHPDoc clean.
+
+---
+
 ## [0.6.51] — 2026-09-17
 
 Issues #52, #54 and #55: each step shows its own step.

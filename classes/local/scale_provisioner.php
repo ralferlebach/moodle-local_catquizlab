@@ -308,6 +308,31 @@ class scale_provisioner {
             return null;
         }
 
+        // The root existing is not the tree being sound. A run whose subscales
+        // were half deleted has a root, and reusing it means materialising into
+        // a shape the engine cannot serve — which surfaces much later as items
+        // it will not hand out.
+        //
+        // Structure only, not the blueprint comparisons: scale_health reads the
+        // shape from the run's manifest while provisioning is given a blueprint
+        // as an argument, and the two can legitimately differ — a caller
+        // provisioning a shape the manifest does not describe is not a run with
+        // a broken tree.
+        $structural = ['oneroot', 'onecontext', 'enginescales', 'uniquekeys', 'parents', 'acyclic'];
+        $health = scale_health::check($runid);
+        $broken = array_intersect($health['codes'], $structural);
+
+        if ($broken !== []) {
+            $DB->delete_records('local_catquizlab_scalemap', ['runid' => $runid]);
+
+            run_log::record($runid, run_log::STAGE_FAILED, [
+                'reason' => 'stale-scale-tree-rebuilt',
+                'codes'  => implode(',', $broken),
+            ], 'scales');
+
+            return null;
+        }
+
         return ['contextid' => $contextid, 'rootscaleid' => $root, 'count' => count($rows)];
     }
 }

@@ -230,6 +230,23 @@ class scale_inventory {
                 'runid' => $runid, 'contextid' => $contextid,
             ]);
             $DB->delete_records('local_catquizlab_scalemap', ['runid' => $runid, 'contextid' => $contextid]);
+
+            // The CAT context the generation lived in, once nothing is left in
+            // it. A context with no scales is invisible in every list and still
+            // counts as a context — the engine's own selection walks them, and
+            // an empty one is a question nobody can answer from the interface.
+            //
+            // Only when it is empty: another run may share it, and a shared
+            // context deleted from under it is a worse failure than a leftover.
+            if (
+                $contextid > 0
+                    && $DB->get_manager()->table_exists('local_catquiz_catcontext')
+                    && !$DB->record_exists('local_catquiz_catscales', ['contextid' => $contextid])
+            ) {
+                $DB->delete_records('local_catquiz_catcontext', ['id' => $contextid]);
+                $removed['contexts'] = ($removed['contexts'] ?? 0) + 1;
+            }
+
             $removed['generations']++;
         }
 

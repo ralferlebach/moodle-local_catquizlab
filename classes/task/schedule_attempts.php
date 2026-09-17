@@ -52,9 +52,15 @@ class schedule_attempts extends \core\task\adhoc_task {
         // Announce which task this is, and continue the id of the click that
         // queued it: a failure inside a task otherwise reads as a failure from
         // nowhere.
+        // Which task row this is, and what it has been through: a failure on a
+        // third attempt waiting out an eight-hour delay is a different
+        // situation from a first, and the log said the same about both.
         \local_catquizlab\local\debug_trace::enter_task(
             '\\local_catquizlab\\task\\schedule_attempts',
-            (string) ($this->get_custom_data()->correlationid ?? '')
+            (string) ($this->get_custom_data()->correlationid ?? ''),
+            (int) $this->get_id(),
+            (int) $this->get_fail_delay(),
+            (int) $this->get_attempts_available()
         );
 
         if (!get_config('local_catquizlab', 'enabled')) {
