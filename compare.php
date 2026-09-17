@@ -100,9 +100,6 @@ echo $OUTPUT->header();
 // the reader out of the process they were in the middle of.
 echo \local_catquizlab\output\shell::render('results', optional_param('experimentid', 0, PARAM_INT));
 
-// The same frame as every other CatQuizLab page: opening a run used to
-// drop the reader out of the process they were in the middle of.
-echo \local_catquizlab\output\shell::render('results', (int) ($experimentid ?? optional_param('experimentid', 0, PARAM_INT)));
 echo $OUTPUT->heading(get_string('heading:compare', $component, format_string($experiment->name)));
 
 // Choosing what to compare and on which metric.

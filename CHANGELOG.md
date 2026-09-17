@@ -6,6 +6,59 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.6.50] — 2026-09-17
+
+The 2026091703 audit: #71, #58, #74, #73, and #53/#72.
+
+### #71 — the last broken action path
+`status_report::pipeline()` still handed the bare `tasks.php` URL to a card that
+renders an action with no `command` as a link — so the one button on the card
+that says "nothing is running" led to a request `tasks.php` rejects for want of
+an action. It carries the full posted contract now, and the card passes
+`classname` through for task actions.
+
+### #58 — a table that never existed
+The audit found `local_catquizlab_subscale` missing from the reset, and it was
+right that it was missing. It is also not in `install.xml`, not in any upgrade
+step and not in the database: four places named it, each behind a
+`table_exists()` guard, so they had always been dead.
+
+Dead code that makes an audit believe a reset leaves results behind is worse
+than no code. All four references removed.
+
+### #74 — one layer fewer, and the declensions
+`Auftrag zur Testbearbeitung` was still a second name for a Testbearbeitung, so
+the layer is gone. `geclaimt` became `übernommen`. And the declensions the blunt
+pass left: `Anteil der simulierte Testbearbeitungen`, `Für diesen simulierten
+Testbearbeitungen`, `einen simulierte Testbearbeitung`.
+
+### #73 — the CLI hint is gone from the interface
+    Noch keine Versuchsdurchläufe definiert. Mit dem CLI (cli/sweep.php) …
+
+Sending somebody to a shell, from a GUI whose whole point is not needing one,
+contradicts the process model printed three inches above it. It now says where
+in the interface runs are made.
+
+### #53/#72 — order, fallback, and dead calls
+The shell reads **title → tabs → selector → status**: the status describes the
+experiment the selector chose, so it follows it.
+
+An `experimentid` for an experiment that no longer exists falls back to all
+experiments, rather than scoping the reader to nothing and looking like a broken
+query instead of a stale bookmark.
+
+And the second `shell::render()` calls in `experiment.php` and `compare.php` are
+gone. The render guard made them harmless, which is exactly why they were worth
+removing: a call that only works because something else suppresses it is a trap
+for whoever removes that something.
+
+### Verification
+PHPUnit 666 tests / 3568 assertions, Behat 32 scenarios / 232 steps, phpcs with
+the Moodle standard clean, PHPDoc clean, every template example context
+parseable.
+
+---
+
 ## [0.6.49] — 2026-09-17
 
 The 2026091701 audit: #71's three remaining faults, and #74's.

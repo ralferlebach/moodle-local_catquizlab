@@ -16,7 +16,7 @@
     * good, watch, bad - flags for the level
     * state - what it is
     * reason - the evidence
-    * action - label, url, command, runid and sesskey, or null
+    * action - label, url, command, and runid or classname, plus sesskey; or null
 
     Example context (json):
     {
@@ -48,6 +48,7 @@
                 <input type="hidden" name="sesskey" value="{{sesskey}}">
                 <input type="hidden" name="action" value="{{command}}">
                 {{#runid}}<input type="hidden" name="runid" value="{{.}}">{{/runid}}
+                {{#classname}}<input type="hidden" name="classname" value="{{.}}">{{/classname}}
                 <button type="submit" class="btn btn-sm btn-outline-primary">{{label}}</button>
             </form>
         {{/command}}

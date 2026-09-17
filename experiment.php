@@ -350,9 +350,6 @@ echo $OUTPUT->render_from_template(
     \local_catquizlab\local\plan_steps::state($id)
 );
 
-// The same frame as every other CatQuizLab page: opening a run used to
-// drop the reader out of the process they were in the middle of.
-echo \local_catquizlab\output\shell::render('plan', (int) ($experimentid ?? optional_param('experimentid', 0, PARAM_INT)));
 echo $OUTPUT->heading($id > 0
     ? get_string('heading:editexperiment', $component)
     : get_string('heading:newexperiment', $component));

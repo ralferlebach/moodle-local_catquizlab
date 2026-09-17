@@ -45,19 +45,6 @@
         <a href="{{settingsurl}}" class="small">{{#str}}tab:settings, local_catquizlab{{/str}}</a>
     </div>
 
-    {{#situation}}
-        <div class="alert {{#good}}alert-info{{/good}}{{#watch}}alert-warning{{/watch}}{{#bad}}alert-danger{{/bad}} py-2 mb-2"
-             role="status" data-region="catquizlab-situation">
-            <div class="d-flex align-items-center justify-content-between">
-                <div>
-                    <strong data-region="catquizlab-situation-state">{{state}}</strong>
-                    <span class="small" data-region="catquizlab-situation-reason">{{reason}}</span>
-                </div>
-                {{#action}}<a href="{{url}}" class="btn btn-sm btn-primary ml-2">{{label}}</a>{{/action}}
-            </div>
-        </div>
-    {{/situation}}
-
     <ul class="nav nav-tabs mb-2">
         {{#steps}}
             <li class="nav-item">
@@ -107,5 +94,19 @@
     {{#newurl}}
         <a href="{{.}}" class="small">{{#str}}shell:newexperiment, local_catquizlab{{/str}}</a>
     {{/newurl}}
+
+    {{#situation}}
+        <div class="alert {{#good}}alert-info{{/good}}{{#watch}}alert-warning{{/watch}}{{#bad}}alert-danger{{/bad}} py-2 mb-2"
+             role="status" data-region="catquizlab-situation">
+            <div class="d-flex align-items-center justify-content-between">
+                <div>
+                    <strong data-region="catquizlab-situation-state">{{state}}</strong>
+                    <span class="small" data-region="catquizlab-situation-reason">{{reason}}</span>
+                </div>
+                {{#action}}<a href="{{url}}" class="btn btn-sm btn-primary ml-2">{{label}}</a>{{/action}}
+            </div>
+        </div>
+    {{/situation}}
+
 
 </div>

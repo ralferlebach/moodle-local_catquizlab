@@ -264,7 +264,20 @@ class status_report {
                 self::BAD,
                 get_string('report:pipelinestopped', $component),
                 $cron['detail'],
-                $tick !== null ? ['label' => get_string('task:runnow', $component), 'url' => $tick['runurl']] : null
+                // The full posted contract, not just the URL. When the task
+                // overview stopped putting the action in the query string, this
+                // card kept handing the bare URL to a link — and tasks.php
+                // requires the action, so the one button on the card that says
+                // "nothing is running" led to an invalid request.
+                $tick !== null
+                    ? [
+                        'label'     => get_string('task:runnow', $component),
+                        'url'       => $tick['runurl'],
+                        'command'   => 'runscheduled',
+                        'classname' => $tick['classname'] ?? '',
+                        'sesskey'   => $tick['sesskey'] ?? sesskey(),
+                    ]
+                    : null
             );
         }
 

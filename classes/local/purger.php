@@ -295,7 +295,7 @@ class purger {
         global $DB;
 
         $count = 0;
-        foreach (['local_catquizlab_result', 'local_catquizlab_subscale'] as $table) {
+        foreach (['local_catquizlab_result'] as $table) {
             if ($DB->get_manager()->table_exists($table)) {
                 $count += $DB->count_records($table, ['runid' => $runid]);
                 $DB->delete_records($table, ['runid' => $runid]);
@@ -402,7 +402,6 @@ class purger {
             'local_catquizlab_item'     => 'items',
             'local_catquizlab_scalemap' => 'scales',
             'local_catquizlab_result'   => 'results',
-            'local_catquizlab_subscale' => 'subscales',
             ] as $table => $label
         ) {
             if (!$DB->get_manager()->table_exists($table)) {

@@ -82,7 +82,14 @@ class shell {
      * @return string
      */
     public static function render(string $current, int $experimentid = 0): string {
-        global $OUTPUT;
+        global $OUTPUT, $DB;
+
+        // An id for an experiment that has been deleted, or was never there,
+        // would otherwise leave the reader scoped to nothing: an empty results
+        // page that looks like a broken query rather than a stale bookmark.
+        if ($experimentid > 0 && !$DB->record_exists('local_catquizlab_experiment', ['id' => $experimentid])) {
+            $experimentid = 0;
+        }
 
         // Once per request, whatever the page does. Several pages call this from
         // more than one branch — a confirmation dialogue and the main output,
