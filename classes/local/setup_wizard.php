@@ -500,6 +500,11 @@ class setup_wizard {
             'label'   => $action['label'],
             'url'     => $ops->out(false),
             'command' => $action['action'],
+            // Carried here rather than reached for with {{../../sesskey}}. That
+            // path was one level short, so the field rendered empty and Moodle
+            // answered "your session has most likely timed out" — which sent
+            // people looking at their login for a template bug.
+            'sesskey' => sesskey(),
         ];
     }
 

@@ -188,4 +188,40 @@ final class templates_test extends \advanced_testcase {
             );
         }
     }
+
+    /**
+     * No form posts an empty sesskey.
+     *
+     * @dataProvider template_provider
+     * @param string $name The template name.
+     * @param string $file Its path.
+     * @return void
+     */
+    public function test_no_form_posts_an_empty_sesskey(string $name, string $file): void {
+        global $OUTPUT;
+        $this->resetAfterTest();
+        $this->setAdminUser();
+
+        $source = file_get_contents($file);
+        preg_match('/Example context \(json\):([\s\S]*?)\n}}/', $source, $matches);
+        $context = json_decode(trim($matches[1] ?? ''), true);
+        if (!is_array($context)) {
+            $this->markTestSkipped($name . ' has no usable example context.');
+        }
+
+        $html = $OUTPUT->render_from_template('local_catquizlab/' . $name, $context);
+
+        preg_match_all('/name="sesskey" value="([^"]*)"/', $html, $found);
+        foreach ($found[1] as $value) {
+            // An empty key makes Moodle answer "your session has most likely
+            // timed out", which sends people to look at their login for what is
+            // a template bug. It happened: {{../../sesskey}} was one level
+            // short, and two buttons on the setup tab were unusable.
+            $this->assertNotSame(
+                '',
+                trim($value),
+                $name . ' renders a form with an empty sesskey.'
+            );
+        }
+    }
 }

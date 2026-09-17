@@ -43,6 +43,34 @@
         <a href="{{settingsurl}}" class="small">{{#str}}tab:settings, local_catquizlab{{/str}}</a>
     </div>
 
+    {{#situation}}
+        <div class="alert {{#good}}alert-info{{/good}}{{#watch}}alert-warning{{/watch}}{{#bad}}alert-danger{{/bad}} py-2 mb-2"
+             role="status" data-region="catquizlab-situation">
+            <div class="d-flex align-items-center justify-content-between">
+                <div>
+                    <strong data-region="catquizlab-situation-state">{{state}}</strong>
+                    <span class="small" data-region="catquizlab-situation-reason">{{reason}}</span>
+                </div>
+                {{#action}}<a href="{{url}}" class="btn btn-sm btn-primary ml-2">{{label}}</a>{{/action}}
+            </div>
+        </div>
+    {{/situation}}
+
+    <ul class="nav nav-tabs mb-2">
+        {{#steps}}
+            <li class="nav-item">
+                <a class="nav-link {{#current}}active{{/current}}" href="{{url}}">
+                    {{number}}. {{label}}
+                </a>
+            </li>
+        {{/steps}}
+    </ul>
+
+{{!
+    Below the tabs on purpose. The selector scopes what the current step shows,
+    so it belongs under the step rather than above the navigation — put over the
+    tabs it read as a filter on the whole plugin, which it is not.
+}}
     {{#hasexperiments}}
         <form method="get" action="{{selecturl}}" class="form-inline mb-2">
             <label for="catquizlab-experiment" class="mr-2">
@@ -61,26 +89,4 @@
         </form>
     {{/hasexperiments}}
 
-    {{#situation}}
-        <div class="alert {{#good}}alert-info{{/good}}{{#watch}}alert-warning{{/watch}}{{#bad}}alert-danger{{/bad}} py-2 mb-2"
-             role="status" data-region="catquizlab-situation">
-            <div class="d-flex align-items-center justify-content-between">
-                <div>
-                    <strong data-region="catquizlab-situation-state">{{state}}</strong>
-                    <span class="small" data-region="catquizlab-situation-reason">{{reason}}</span>
-                </div>
-                {{#action}}<a href="{{url}}" class="btn btn-sm btn-primary ml-2">{{label}}</a>{{/action}}
-            </div>
-        </div>
-    {{/situation}}
-
-    <ul class="nav nav-tabs">
-        {{#steps}}
-            <li class="nav-item">
-                <a class="nav-link {{#current}}active{{/current}}" href="{{url}}">
-                    {{number}}. {{label}}
-                </a>
-            </li>
-        {{/steps}}
-    </ul>
 </div>

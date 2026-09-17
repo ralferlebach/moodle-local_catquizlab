@@ -6,6 +6,45 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.6.43] — 2026-09-16
+
+Issues #71, #72 and #69.
+
+### #71 — "Your session has most likely timed out" (P0)
+Two buttons on the preparation tab posted an empty `sesskey`, so Moodle answered
+with its session-timeout message — and the reader concluded their login was the
+problem, or that experiments are tied to a browser session. Neither is true:
+experiments are rows, and only the CSRF check is session-bound.
+
+The cause was `{{../../sesskey}}`, one template level short of where the key
+sits. Counting levels is right until somebody adds a wrapper, so the key now
+travels inside the action it belongs to and no template reaches for it across
+levels.
+
+Measured before and after: 13 sesskey fields, 2 of them empty → 0 empty. A test
+now renders every template from its example context and fails on any empty one.
+
+### #72 — The experiment selector belongs under the tabs
+Above them it read as a filter on the whole plugin. It scopes what the current
+step shows, so it sits under the step it scopes.
+
+### #69 — The last raw seconds
+Attempt runtimes in the results were printed as `5400 s`. They read as spans of
+time now, like every other duration since 0.6.30: four seconds stays four
+seconds, and an hour and a half reads as an hour and a half. The reader is
+asking how long it took, not counting.
+
+### Verification
+PHPUnit 647 tests / 3513 assertions, Behat 32 scenarios / 232 steps, phpcs with
+the Moodle standard clean, PHPDoc clean.
+
+### Still open
+#70 (code and issue audit), #73 (explaining the process to a newcomer) and #74
+(consistent German terminology) — all three about what the plugin says rather
+than what it does.
+
+---
+
 ## [0.6.42] — 2026-09-16
 
 Release gate, RG-002 — the last one.

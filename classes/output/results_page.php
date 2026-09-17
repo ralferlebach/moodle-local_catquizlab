@@ -1674,7 +1674,11 @@ class results_page {
     }
 
     /**
-     * Format a runtime statistic in seconds.
+     * Format a runtime statistic as a span of time.
+     *
+     * An attempt that took four seconds reads as seconds; one that took an hour
+     * and a half reads as an hour and a half rather than as 5400 s. The reader
+     * is asking how long it took, not counting.
      *
      * @param array $stat A block from {@see results_query::describe_values()}.
      * @return string
@@ -1684,7 +1688,7 @@ class results_page {
             return '—';
         }
 
-        return format_float($stat['mean'] / 1000, 2) . '&nbsp;s';
+        return \local_catquizlab\local\duration::human($stat['mean'] / 1000);
     }
 
     /**

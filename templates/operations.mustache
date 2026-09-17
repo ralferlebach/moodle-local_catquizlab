@@ -62,7 +62,7 @@
                     {{#hint}}<p class="small text-muted ml-4 mb-1">{{.}}</p>{{/hint}}
                     {{#action}}
                         <form method="post" action="{{url}}" class="ml-4">
-                            <input type="hidden" name="sesskey" value="{{../../sesskey}}">
+                            <input type="hidden" name="sesskey" value="{{sesskey}}">
                             <input type="hidden" name="action" value="{{command}}">
                             <button type="submit" class="btn btn-sm btn-primary">{{label}}</button>
                         </form>
