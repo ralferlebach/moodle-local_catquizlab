@@ -6,6 +6,52 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.6.55] — 2026-09-17
+
+Issue #75: two actions, and the state model they need.
+
+### The premise
+Everything this plugin does for a person reduces to *prepare this experiment*
+and *run it*. Which background task advances which run, which worker claims
+which sitting, what state a queue is in — all of that the plugin has to know and
+nobody should have to decide. The interface asked anyway, one button per
+internal step, so operating an experiment meant understanding its machinery.
+
+### `experiment_runner::prepare()`
+One call takes an experiment from a definition to queued sittings: validate,
+create the runs, provision each one, enrol the people, check access, queue the
+attempts. Measured on a two-run experiment: **2 of 2 ready, 4 attempts queued,
+5.4 seconds** — and a second press changes nothing, because pressing a button
+twice is what people do when the first press seemed not to work.
+
+**Validation happens before any mutation.** A definition that cannot be read
+leaves nothing half-built: tested with broken JSON, zero runs created.
+
+**Blockers name the run and the stage.** A bare "provisioning failed" for an
+experiment of thirty runs is not something anybody can act on.
+
+### Three states instead of thirty
+`draft`, `preparing`, `ready`, `running`, `finished`, `blocked` — for the
+experiment, derived from its runs. The per-run statuses stay exactly as they
+are; they are the plugin's bookkeeping, and reporting them as the experiment's
+state is how somebody ends up reading a table of thirty rows to answer one
+question.
+
+A failure anywhere blocks the whole experiment, deliberately: a result over the
+runs that happened to work is a different quantity from the one that was
+designed.
+
+### What this is not
+The internals are untouched — same services, same tasks, same stages. This is a
+façade over them. It is also not yet wired into the interface: that is #76, #77
+and #83, which come next.
+
+### Verification
+PHPUnit 674 tests / 3579 assertions, Behat 32 scenarios / 235 steps, phpcs with
+the Moodle standard clean, PHPDoc clean.
+
+---
+
 ## [0.6.54] — 2026-09-17
 
 Issues #79, #82 and #84.
