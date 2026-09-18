@@ -20,6 +20,7 @@ use core_external\external_api;
 use core_external\external_function_parameters;
 use core_external\external_single_structure;
 use core_external\external_value;
+use local_catquizlab\local\worker_launcher;
 use local_catquizlab\local\worker_registry;
 
 /**
@@ -82,6 +83,18 @@ class worker_heartbeat extends external_api {
             (int) $params['attemptid'],
             (string) $params['state']
         );
+
+        // A worker on its way out, with work still claimable and nobody left to
+        // claim it. Waiting for the next scheduled tick would stop an
+        // experiment for up to five minutes because a browser process reached
+        // its rotation limit — a resource setting deciding a scientific run.
+        if (in_array((string) $params['state'], ['stopping', 'stopped'], true)) {
+            $replacement = worker_registry::replacement_needed();
+
+            if ($replacement['needed']) {
+                worker_launcher::launch_pool(worker_launcher::config_from_settings(), 1);
+            }
+        }
 
         return [
             // A worker the registry does not know has outlived its own record —

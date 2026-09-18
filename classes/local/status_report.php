@@ -169,6 +169,24 @@ class status_report {
                 );
             }
 
+            // A worker that has just rotated out leaves a moment with nothing
+            // in flight. That is planned replacement, not a stall, and calling
+            // it "waiting for a worker" would have somebody investigating a
+            // resource setting working exactly as configured.
+            $rotating = worker_registry::summary()['starting'] > 0;
+
+            if ($rotating) {
+                return self::card(
+                    self::GOOD,
+                    get_string('report:runrotating', $component),
+                    get_string('report:progress', $component, (object) [
+                        'done'  => $counts['collected'],
+                        'total' => $counts['total'],
+                    ]),
+                    null
+                );
+            }
+
             // Prepared, nothing being played: true whether the workers are busy
             // elsewhere, still starting, or about to pick this up. Saying so is
             // more use than claiming progress that is not happening.

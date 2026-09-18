@@ -118,14 +118,21 @@
     something goes wrong — but they are recovery, and offering them as peers of
     this one is what made operating an experiment feel like operating machinery.
 }}
+{{!
+    Where an interrupted live update says so. Empty until it has something to
+    report, because a page that carries a permanent warning box teaches people
+    to stop seeing it.
+}}
+<div data-region="catquizlab-liveerror" class="alert alert-warning" role="status" style="display: none;"></div>
+
 {{#runner}}
     <div class="card mb-3">
         <div class="card-body d-flex align-items-center justify-content-between">
             <div>
-                <strong>{{label}}</strong>
+                <strong data-region="catquizlab-experiment-state">{{label}}</strong>
                 <div class="small text-muted">
                     {{runs.finished}} / {{runs.total}} &middot;
-                    {{attempts.collected}} / {{attempts.planned}}
+                    <span data-region="catquizlab-experiment-progress">{{attempts.collected}} / {{attempts.planned}}</span>
                 </div>
             </div>
             <div>
@@ -186,7 +193,17 @@
                                 <a href="{{url}}">#{{id}}</a>
                                 <div class="small text-muted">{{cellkey}}</div>
                             </td>
-                            <td>{{#status}}{{> local_catquizlab/statuscard }}{{/status}}</td>
+                            {{!
+                                Named so a poll can update this row in place.
+                                The head and the table used to be refreshed by
+                                two different mechanisms a few seconds apart,
+                                and disagreed for as long as that took.
+                            }}
+                            <td>
+                                <span data-region="catquizlab-run-{{id}}-state" class="d-none"></span>
+                                <span data-region="catquizlab-run-{{id}}-progress" class="d-none"></span>
+                                {{#status}}{{> local_catquizlab/statuscard }}{{/status}}
+                            </td>
                         </tr>
                     {{/runs.rows}}
                 </tbody>

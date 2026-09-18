@@ -38,6 +38,12 @@ const MAX_IDLE = 30 * 60 * 1000;
 /** @var {string|null} The shape the page was rendered with. */
 let renderedShape = null;
 
+/** @var {number} Which experiment the page is showing. */
+let experimentId = 0;
+
+/** @var {number} Consecutive failed polls. */
+let failures = 0;
+
 /** @var {number} When polling started. */
 let startedAt = 0;
 
@@ -52,8 +58,18 @@ let timer = null;
  */
 const setRegion = (region, value) => {
     const node = document.querySelector(`[data-region="${region}"]`);
-    if (node && node.textContent !== String(value)) {
+    if (!node) {
+        return;
+    }
+
+    if (node.textContent !== String(value)) {
         node.textContent = String(value);
+    }
+
+    // A region with nothing to say stays out of the way. Notices that are
+    // always present are notices people stop reading.
+    if (node.hasAttribute('style') || node.classList.contains('alert')) {
+        node.style.display = String(value) === '' ? 'none' : '';
     }
 };
 
@@ -77,8 +93,14 @@ const poll = async() => {
     try {
         const status = await Ajax.call([{
             methodname: 'local_catquizlab_live_status',
-            args: {},
+            // The experiment the page is showing. Polling globally while the
+            // table beside it showed one experiment made the two disagree by
+            // construction.
+            args: {experimentid: experimentId},
         }])[0];
+
+        failures = 0;
+        setRegion('catquizlab-liveerror', '');
 
         setRegion('catquizlab-liveworkers', status.liveworkers);
         setRegion('catquizlab-queued', status.queued);
@@ -90,6 +112,27 @@ const poll = async() => {
             setRegion(region.name, region.text);
         });
 
+        // The run rows, from the same verdict the page was rendered with —
+        // there is no second opinion about a run's state on this side.
+        (status.runs || []).forEach((run) => {
+            setRegion(`catquizlab-run-${run.runid}-state`, run.state);
+            setRegion(`catquizlab-run-${run.runid}-progress`, `${run.done} / ${run.total}`);
+
+            const bar = document.querySelector(`[data-region="catquizlab-run-${run.runid}-bar"]`);
+            if (bar) {
+                bar.style.width = `${run.percent}%`;
+                bar.setAttribute('aria-valuenow', String(run.percent));
+            }
+        });
+
+        if (status.experiment) {
+            setRegion('catquizlab-experiment-state', status.experiment.label);
+            setRegion(
+                'catquizlab-experiment-progress',
+                `${status.experiment.done} / ${status.experiment.total}`
+            );
+        }
+
         if (renderedShape === null) {
             renderedShape = status.shape;
         } else if (renderedShape !== status.shape) {
@@ -98,10 +141,15 @@ const poll = async() => {
             window.location.reload();
         }
     } catch (error) {
-        // A failed poll is not worth an error message on a page somebody is
-        // watching: a page that shouts about a transient network error is a
-        // page people stop trusting.
-        stop();
+        // Said, not swallowed. Stopping silently left somebody watching a page
+        // that had quietly stopped being live, which is worse than a transient
+        // network error: they read stale numbers as current ones.
+        failures++;
+
+        if (failures >= 3) {
+            setRegion('catquizlab-liveerror', M.util.get_string('live:interrupted', 'local_catquizlab'));
+            stop();
+        }
     }
 };
 
@@ -119,9 +167,12 @@ const stop = () => {
  * Start keeping the view current.
  *
  * @param {string} shape The shape the page was rendered with.
+ * @param {number} experimentid The experiment the page is showing, or 0.
  */
-export const init = (shape) => {
+export const init = (shape, experimentid) => {
     renderedShape = shape || null;
+    experimentId = parseInt(experimentid, 10) || 0;
+    failures = 0;
     startedAt = Date.now();
 
     stop();

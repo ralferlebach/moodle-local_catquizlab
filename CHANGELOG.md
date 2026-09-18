@@ -6,6 +6,52 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.6.62] — 2026-09-18
+
+Issues #93 and #94 — both consequences of my own earlier changes.
+
+### #93 — a rotation limit was stopping experiments
+A worker plays a set number of sittings and exits. That is a resource setting:
+how long one browser process lives. It says nothing about the experiment, and
+until now it stopped one — the next worker came with the five-minute scheduler
+tick, so an experiment with hundreds of sittings queued sat idle because a
+browser reached its configured limit.
+
+A worker reporting that it is stopping now triggers an immediate replacement,
+but only when one is actually needed: work still claimable and nobody left to
+claim it. Two workers started because one rotated would be a different bug.
+
+**And rotation no longer reads as a stall.** `summary()` counts `starting`
+separately from `live`, so the run card can say *Simulation running, worker being
+replaced* rather than *waiting for a worker* — which would have somebody
+investigating a setting that is working exactly as configured.
+
+### #94 — the header and the table disagreed by construction
+The live poll asked about the whole installation (`args: {}`) while the table
+beside it showed one experiment. They were answering different questions a few
+seconds apart, and the difference looked like a bug in the numbers.
+
+The poll takes the experiment in view and returns one snapshot: the experiment's
+own figures, and a row per run carrying `state`, `done`, `total`, `percent`,
+`open` and `failed`. Every verdict comes from `status_report::run()` — the same
+service that renders the page — so a row updated by a poll and a row drawn by a
+page load say the same thing because they came from the same place. There is no
+second opinion about a run's state on the JavaScript side.
+
+    Experiment: finished 10/10 (100%)
+    Run 186: Run finished  10/10 (100%)
+
+**A failed poll is now said rather than swallowed.** It used to stop silently
+after one error, leaving somebody watching a page that had quietly stopped being
+live — reading stale numbers as current ones. After three consecutive failures
+it says so and stops.
+
+### Verification
+PHPUnit 679 tests / 3598 assertions, Behat 32 scenarios / 235 steps, phpcs with
+the Moodle standard clean, PHPDoc clean, AMD built, 1113 strings per language.
+
+---
+
 ## [0.6.61] — 2026-09-18
 
 An interface end-to-end run, and the defect it found on its first honest pass.
