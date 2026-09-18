@@ -54,6 +54,7 @@ use local_catquizlab\local\worker_registry;
     'strategy' => 'classic',
     'persons'  => 2,
     'minutes'  => 5,
+    'minanswers' => 15,
     'keep'     => false,
 ], ['h' => 'help']);
 
@@ -64,6 +65,7 @@ Play one experiment from definition to results.
 Options:
   --strategy=classic   Which CAT strategy to smoke.
   --persons=2          How many simulated people.
+  --minanswers=15      How many answers an attempt must give to count.
   --minutes=5          How long to wait for the worker.
   --keep               Leave the experiment behind for inspection.
 EOT);
@@ -86,6 +88,7 @@ if ($lockhandle === false || !flock($lockhandle, LOCK_EX | LOCK_NB)) {
 $strategy = (string) $options['strategy'];
 $persons = max(1, (int) $options['persons']);
 $deadline = time() + (max(1, (int) $options['minutes']) * MINSECS);
+$minanswers = max(2, (int) $options['minanswers']);
 
 /**
  * Say what is happening, with the time it took.
@@ -123,11 +126,40 @@ $definition['name'] = 'Smoke ' . $strategy . ' ' . date('His');
 $definition['replications'] = 1;
 $definition['persons']['count'] = $persons;
 $definition['strategy'] = $strategy;
-$definition['pool']['scales'] = ['categories' => 1, 'subcategories' => 2, 'itemspersubscale' => 12];
-// At least two questions: an attempt that answers one and stops proves nothing
-// about a adaptive test, which is the whole point of the thing being tested.
-$definition['budgets']['global'] = ['minitems' => 4, 'maxitems' => 12];
-$definition['budgets']['subscale'] = ['minitems' => 1, 'maxitems' => 6];
+// Enough items to answer $minanswers of them without running the pool dry:
+// an attempt that stops because there is nothing left to ask has not been
+// stopped by the CAT, and reading that as a short test is reading the wrong
+// thing.
+$subscales = 3;
+// The selection does not take items in order, it takes the one that suits the
+// current estimate, so a pool sized exactly to the answer count runs out of
+// suitable items well before it runs out of items.
+$peritem = max(12, (int) ceil(($minanswers * 2) / $subscales));
+$definition['pool']['scales'] = [
+    'categories'       => 1,
+    'subcategories'    => $subscales,
+    'itemspersubscale' => $peritem,
+];
+
+$definition['budgets']['global'] = [
+    'minitems' => $minanswers,
+    'maxitems' => $minanswers + 5,
+];
+
+// The allsubs strategy visits every subscale, so each needs a floor high
+// enough that the strategy is not finished before it has been anywhere: with
+// a per-subscale minimum of one it satisfies itself in three questions and
+// stops, which looks like a premature abort and is really the budget being met.
+$definition['budgets']['subscale'] = [
+    'minitems' => max(2, (int) ceil($minanswers / $subscales)),
+    'maxitems' => $minanswers,
+];
+
+// The engine's own default precision. An earlier version of this script forced
+// it down to 0.05 while chasing a question count that turned out to be a
+// counting mistake here; there is no reason for a smoke test to ask for
+// precision no real experiment would.
+$definition['budgets']['se'] = ['min' => 0.35, 'max' => 1.0];
 
 $experimentid = (int) experiment_service::save($definition)['id'];
 step('Defined experiment ' . $experimentid . '.', $started);
@@ -246,15 +278,27 @@ $traces = $DB->get_records_select(
 );
 
 $shortest = PHP_INT_MAX;
+$stopreasons = [];
 foreach ($traces as $trace) {
-    $steps = json_decode((string) $trace->tracejson, true);
-    $shortest = min($shortest, is_array($steps) ? count($steps) : 0);
+    $decoded = json_decode((string) $trace->tracejson, true);
+
+    // The trace's own count, not the number of fields in it. Counting the keys
+    // gave a stable 13 for every strategy and every budget — which was the
+    // number of things the trace records about an attempt, not the number of
+    // questions the attempt answered. It answered twenty.
+    $answered = (int) ($decoded['steps'] ?? ($decoded['nitems'] ?? 0));
+    $shortest = min($shortest, $answered);
+
+    if (!empty($decoded['stopreason'])) {
+        $stopreasons[(string) $decoded['stopreason']] = true;
+    }
 }
-if ($traces === [] || $shortest < 2) {
-    cli_error('Attempts answered fewer than two questions (shortest: '
+if ($traces === [] || $shortest < $minanswers) {
+    cli_error('Attempts answered fewer than ' . $minanswers . ' questions (shortest: '
         . ($shortest === PHP_INT_MAX ? 0 : $shortest) . ').');
 }
-step('Every collected attempt answered at least ' . $shortest . ' questions.');
+step('Every collected attempt answered at least ' . $shortest . ' questions (needed '
+    . $minanswers . '); stopped because: ' . (implode(', ', array_keys($stopreasons)) ?: 'unrecorded') . '.');
 
 // 7. Results: numbers, not just rows.
 $started = microtime(true);

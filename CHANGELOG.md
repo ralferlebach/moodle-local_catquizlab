@@ -6,6 +6,68 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.6.60] — 2026-09-18
+
+Issue #90, and a counting mistake in the smoke test that was mine.
+
+### The thirteen questions were never thirteen
+Raising the smoke test's bar from 2 answers to 15 made every strategy fail at
+exactly 13, against every budget, every standard-error floor and every pool
+size. That stability is what a real constraint looks like, so I went looking for
+one: through `maximumquestionscheck`, through `filterbystandarderror`, through
+the per-subscale minimums, through the engine's test configuration.
+
+All of it was configured correctly. The attempt had answered **twenty**
+questions:
+
+    adaptivequiz_attempt: questionsattempted = 20
+    QUBA slots:                                20
+    catquizlab trace:                          13 "steps"
+
+Thirteen is the number of fields the trace records about an attempt —
+`finaltheta`, `finalse`, `items`, `responses`, `nitems`, `stopreason`, and so
+on. I had counted the keys of the trace object instead of reading its `steps`
+field. The engine was right, the plugin was right, and the test was wrong in a
+way that looked exactly like a defect in both.
+
+Worth the detour: the investigation confirmed that the per-subscale floor
+protects only the main scale from being dropped, which is real and worth knowing
+even though it was not the cause here.
+
+### The gate, with 15 answers required
+    classic   20 questions   Reached maximum number of questions   PASS
+    allsubs   20 questions   Reached maximum number of questions   PASS
+    balanced  20 questions   Reached maximum number of questions   PASS
+    fastest   15 questions   You ran out of questions              PASS
+    relsubs   20 questions   Reached maximum number of questions   PASS
+
+`--minanswers` is a parameter now, defaulting to 15, and each run reports **why**
+the attempt stopped. `fastest` stopping at exactly the minimum because it ran
+out of suitable items is the kind of thing that is worth seeing rather than
+inferring.
+
+### #90 — the fifth tab
+**Logs.** One chronological list from the four places this plugin records: the
+debug trace, the per-run execution log, Moodle's ad-hoc task table and the
+worker reports. Each was correct and none was complete, so answering "what
+happened" meant reading all four and merging them by hand.
+
+    2026-09-18 10:54:56  lifecycle  run=108 attempt#1 stage_started stage=attempts
+    2026-09-18 10:54:56  lifecycle  run=108 attempt#1 stage_completed queries=4
+    2026-09-18 10:55:48  task       queued aggregate_results run=108 due=due now
+
+Filterable by time window, channel, run and free text. The filtered selection is
+rendered as a single `<pre>` block so that selecting it gives the text rather
+than the markup — a log somebody has to reformat before sending is a log that
+arrives incomplete — with a download for selections too long to select by hand.
+
+### Verification
+PHPUnit 679 tests / 3598 assertions, Behat 32 scenarios / 235 steps, phpcs with
+the Moodle standard clean, PHPDoc clean, 1111 strings per language. All five
+strategies pass the 15-answer gate against this instance.
+
+---
+
 ## [0.6.59] — 2026-09-18
 
 Issue #89: an experiment played from definition to results, as a gate.
