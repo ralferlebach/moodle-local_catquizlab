@@ -6,6 +6,103 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.6.54] — 2026-09-17
+
+Issues #79, #82 and #84.
+
+### #79 — the self-test that had never run
+`operations.php` had **two** handlers for `action=selftest`. The first, older
+one ran the browser launcher and returned; the end-to-end self-test added in
+0.6.35 sat thirty lines below it and was never reached. PHP does not warn about
+this and a reader does not notice it.
+
+Removing the first exposed a second fault in the second: it called
+`\core\session\manager::restart()`, which does not exist. The handler threw on
+its first real use — 0.6.35 said the self-test was measured, and it was, from
+the CLI. Through the button it had never worked.
+
+Both fixed. Measured through the browser: the button now runs the six real
+checks and reports what it finds.
+
+A third thing fell out of it: installing a browser and running the self-test
+shared one session slot and produce different shapes, so whichever ran last was
+read as the other. Separate slots now.
+
+### #82 — two times, now labelled
+The task table showed the last run and the next run side by side with no
+headings. They say opposite things about whether something is wrong, and a
+reader had to guess which was which. `Task | Last run | Next automatic run`.
+
+### #84 — nothing is a state, not an empty page
+With no results the overview returned an empty string, leaving filter controls
+above nothing — which reads as a broken page rather than as "there is nothing
+yet", and those need different responses. It now says so, explains what produces
+results, and links to step 3 where the answer to "why is there nothing" actually
+is.
+
+### Verification
+PHPUnit 669 tests / 3565 assertions, Behat 32 scenarios / 235 steps, phpcs with
+the Moodle standard clean, PHPDoc clean, 1083 strings per language.
+
+### Still open
+#75, #76, #77, #78, #80, #81 and #83 — the two-step execution architecture and
+the status-truth issues. Those are a redesign of how a run is started and
+watched, not corrections, and they are not started here.
+
+---
+
+## [0.6.53] — 2026-09-17
+
+Issues #63, #64 and #65 — the last three from the audit.
+
+### #63 — the recording is governed, not just switched on
+**Its own capability.** `local/catquizlab:debug`, `RISK_PERSONAL`, managers only.
+The recording holds what every operator did, with parameters; running
+experiments is not a reason to read that. An operator with `:execute` and
+without `:debug` sees no console — tested.
+
+**Bounded by age as well as count.** Seven days, beside the 2000 entries. A quiet
+installation kept two thousand entries for months, and a record of what somebody
+did in June is not diagnosis, it is a log of colleagues nobody asked for.
+
+**A download.** The console answers "what just happened" on screen; the export
+answers "here is what happened" to somebody who is not at the screen — with the
+site, the versions, the level and the retention policy beside the entries. Same
+redaction, because the secrets were removed on the way in.
+
+### #64 — the PHP path, chosen or typed
+Several PHP versions on one server is the normal case after an upgrade.
+`php_cli_candidates()` finds them all and reports what each says it is:
+
+    /usr/bin/php      PHP 8.3.6 (cli)
+    /usr/bin/php8.3   PHP 8.3.6 (cli)
+
+Non-CLI binaries are left out rather than offered, because an FPM binary runs
+and then behaves differently enough that a task using it fails in ways nobody
+traces back here.
+
+A typed path is validated before it is stored — absolute, present, executable,
+answering, and actually CLI — each with its own message. An unvalidated path
+becomes a scheduled task that quietly does nothing, which is the failure the
+whole check exists to prevent.
+
+### #65 — deep deletion takes its own accounts
+A hundred simulated students left in the user list is something, and deep
+deletion promises to leave nothing. Enrolments and accounts now go with it.
+
+**Only its own.** Ownership is read from the run number this plugin stamps into
+the usernames it creates. Tested in both directions: `catlab_r82_p1` goes,
+`a_real_person` enrolled in the same course stays. Deleting a real user because
+they happened to be in an experiment course would be unforgivable.
+
+### Verification
+PHPUnit 669 tests / 3565 assertions, Behat 32 scenarios / 235 steps, phpcs with
+the Moodle standard clean, PHPDoc clean, 1077 strings per language.
+
+Every issue from the 2026091703 audit is now addressed.
+
+---
+
 ## [0.6.52] — 2026-09-17
 
 Issues #66, #67 and #61.

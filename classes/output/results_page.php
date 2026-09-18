@@ -349,7 +349,10 @@ class results_page {
         $component = 'local_catquizlab';
         $rows = $this->query->observations();
         if ($rows === []) {
-            return '';
+            // An empty string here left the reader with filter controls above
+            // nothing, which reads as a broken page rather than as "there is
+            // nothing yet" — and those need different responses.
+            return $this->render_no_data();
         }
 
         $out = \html_writer::tag('h3', get_string('results:globalgroup', $component), ['class' => 'h5']);
@@ -396,6 +399,35 @@ class results_page {
 
         return $out;
     }
+
+    /**
+     * What to show when the selection has produced nothing.
+     *
+     * @return string
+     */
+    protected function render_no_data(): string {
+        global $OUTPUT;
+
+        $component = 'local_catquizlab';
+
+        $out = $OUTPUT->notification(
+            \html_writer::tag('strong', get_string('results:nodata', $component))
+                . \html_writer::tag('p', get_string('results:nodataexplain', $component), ['class' => 'mb-0']),
+            \core\output\notification::NOTIFY_INFO
+        );
+
+        // Where the answer to "why is there nothing" actually is.
+        $experimentid = (int) ($this->filter['experimentid'] ?? 0);
+        $out .= \html_writer::tag('p', \html_writer::link(
+            new \moodle_url('/local/catquizlab/runs.php', $experimentid > 0
+                ? ['experimentid' => $experimentid]
+                : []),
+            get_string('results:toprogress', $component)
+        ));
+
+        return $out;
+    }
+
 
     /**
      * The global metrics tab: the full global picture and its cost.

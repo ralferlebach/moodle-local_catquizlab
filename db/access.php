@@ -94,6 +94,18 @@ $capabilities = [
         ],
     ],
 
+    // Reading the debug trace is its own authority: it records what every
+    // operator did, with parameters, and an operator who may run experiments
+    // has no business reading a colleague's actions by default.
+    'local/catquizlab:debug' => [
+        'riskbitmask'  => RISK_PERSONAL,
+        'captype'      => 'read',
+        'contextlevel' => CONTEXT_SYSTEM,
+        'archetypes'   => [
+            'manager' => CAP_ALLOW,
+        ],
+    ],
+
     'local/catquizlab:worker' => [
         'captype'      => 'read',
         'contextlevel' => CONTEXT_SYSTEM,

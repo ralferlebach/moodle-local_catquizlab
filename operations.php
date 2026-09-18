@@ -140,27 +140,45 @@ if ($action !== '') {
 
     if ($action === 'installbrowser') {
         $result = worker_launcher::install_browser(worker_launcher::config_from_settings());
-        $SESSION->catquizlab_selftest = $result;
+        $SESSION->local_catquizlab_browserinstall = $result;
         redirect($pageurl);
     }
 
-    if ($action === 'selftest') {
-        $result = worker_launcher::self_test(worker_launcher::config_from_settings());
-        $SESSION->catquizlab_selftest = $result;
-        redirect($pageurl);
+    if ($action === 'exportdebug') {
+        require_sesskey();
+        require_capability('local/catquizlab:debug', $context);
+
+        $package = \local_catquizlab\local\debug_trace::export();
+
+        send_file(
+            json_encode($package, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE),
+            'catquizlab-debug-' . date('Ymd-His') . '.json',
+            0,
+            0,
+            true,
+            true,
+            'application/json'
+        );
+        exit;
     }
 
     if ($action === 'cleardebug') {
+        require_capability('local/catquizlab:debug', $context);
         $count = \local_catquizlab\local\debug_trace::clear();
         redirect($pageurl, get_string('debug:cleared', $component, $count));
     }
 
     if ($action === 'selftest') {
+        require_sesskey();
+
         // Seconds, not milliseconds: it starts a browser and runs a task. The
-        // session is closed first so the rest of the site stays usable.
-        \core\session\manager::write_close();
+        // result has to outlive that, so it goes in the session — which means
+        // the session stays open. Closing it to keep the rest of the site
+        // responsive was the intent, and `manager::restart()` does not exist,
+        // so the handler threw on its first real use. It had never had one: an
+        // older browser-only handler for the same action sat above it and
+        // returned first.
         $result = \local_catquizlab\local\selftest::run();
-        \core\session\manager::restart();
 
         $SESSION->local_catquizlab_selftest = $result;
 
@@ -175,6 +193,33 @@ if ($action !== '') {
     }
 
     if ($action === 'setphpcli') {
+        // A path somebody typed, checked before it is stored: an unvalidated
+        // path here becomes a scheduled task that quietly does nothing, which
+        // is the failure this whole check exists to prevent.
+        $typed = trim(optional_param('phpclipath', '', PARAM_RAW_TRIMMED));
+        if ($typed !== '') {
+            require_capability('moodle/site:config', $context);
+
+            $verdict = \local_catquizlab\local\setup_wizard::validate_php_cli($typed);
+            if (!$verdict['ok']) {
+                // The notcli case names both the path and what it reported itself
+                // as; the others name only the path.
+                $reasondata = $verdict['reason'] === 'notcli'
+                    ? (object) ['path' => $typed, 'sapi' => $verdict['version']]
+                    : $typed;
+
+                redirect(
+                    $pageurl,
+                    get_string('health:phpcli' . $verdict['reason'], $component, $reasondata),
+                    null,
+                    \core\output\notification::NOTIFY_WARNING
+                );
+            }
+
+            set_config('pathtophp', $typed);
+            redirect($pageurl, get_string('health:phpcliset', $component, $typed));
+        }
+
         // Moodle's own setting, written the way Moodle writes it — and only by
         // somebody who may change site configuration, because that is whose
         // setting it is.

@@ -144,6 +144,19 @@
         {{/pipelinestatus}}
 
         <table class="table table-sm mb-2">
+            {{!
+                Two times side by side with no headings: a reader had to guess
+                which was the last run and which the next, and the two say
+                opposite things about whether anything is wrong.
+            }}
+            <thead>
+                <tr>
+                    <th>{{#str}}task:name, local_catquizlab{{/str}}</th>
+                    <th>{{#str}}task:lastrun, local_catquizlab{{/str}}</th>
+                    <th>{{#str}}task:nextrun, local_catquizlab{{/str}}</th>
+                    <th></th>
+                </tr>
+            </thead>
             <tbody>
                 {{#tasks.scheduled}}
                     <tr>
@@ -261,7 +274,15 @@
                         </tbody>
                     </table>
                 </div>
-                <form method="post" action="{{formurl}}">
+                <p class="small text-muted mb-2">{{debug.retention}}</p>
+                <form method="post" action="{{formurl}}" class="d-inline">
+                    <input type="hidden" name="sesskey" value="{{sesskey}}">
+                    <input type="hidden" name="action" value="exportdebug">
+                    <button type="submit" class="btn btn-sm btn-outline-secondary">
+                        {{#str}}debug:export, local_catquizlab{{/str}}
+                    </button>
+                </form>
+                <form method="post" action="{{formurl}}" class="d-inline">
                     <input type="hidden" name="sesskey" value="{{sesskey}}">
                     <input type="hidden" name="action" value="cleardebug">
                     <button type="submit" class="btn btn-sm btn-outline-secondary">

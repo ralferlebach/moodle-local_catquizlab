@@ -56,6 +56,9 @@ class debug_trace {
     /** @var int How many entries to keep. */
     public const KEEP = 2000;
 
+    /** @var int Seconds after which an entry is dropped regardless of count. */
+    public const KEEP_SECONDS = 7 * DAYSECS;
+
     /** @var string Nothing is recorded. */
     public const LEVEL_OFF = 'off';
 
@@ -354,6 +357,33 @@ class debug_trace {
     }
 
     /**
+     * The recording as a file somebody can attach to a bug report.
+     *
+     * The console answers "what just happened" on screen; this answers "here is
+     * what happened" to somebody who is not at the screen. Same redaction: the
+     * parameters were already stored with the secrets removed, so there is
+     * nothing to strip on the way out.
+     *
+     * @param array $filter channel, runid or correlationid.
+     * @param int $limit How many entries.
+     * @return array
+     */
+    public static function export(array $filter = [], int $limit = self::KEEP): array {
+        global $CFG;
+
+        return [
+            'generated'  => date('c'),
+            'site'       => $CFG->wwwroot,
+            'moodle'     => $CFG->release,
+            'plugin'     => (string) get_config('local_catquizlab', 'version'),
+            'level'      => self::level(),
+            'retention'  => ['entries' => self::KEEP, 'days' => self::KEEP_SECONDS / DAYSECS],
+            'filter'     => $filter,
+            'entries'    => self::entries($filter, $limit),
+        ];
+    }
+
+    /**
      * Forget everything recorded so far.
      *
      * @return int How many entries went.
@@ -378,6 +408,15 @@ class debug_trace {
      */
     protected static function trim(): void {
         global $DB;
+
+        // Age as well as count. A quiet installation keeps two thousand entries
+        // for months, and a recording of what somebody did in June is not
+        // diagnosis — it is a log of colleagues nobody asked for.
+        $DB->delete_records_select(
+            'local_catquizlab_debug',
+            'timecreated < ?',
+            [time() - self::KEEP_SECONDS]
+        );
 
         $count = $DB->count_records('local_catquizlab_debug');
         if ($count <= self::KEEP) {

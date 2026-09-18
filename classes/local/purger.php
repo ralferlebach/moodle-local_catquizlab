@@ -176,6 +176,10 @@ class purger {
 
         if ($deep) {
             $removed += self::delete_engine_objects($runid);
+            // The accounts and enrolments this run created. Deep deletion is the
+            // one that promises to leave nothing, and leaving a hundred
+            // simulated students in the user list is leaving something.
+            $removed += self::delete_simulated_people($runid);
         }
 
         $removed += self::delete_lab_rows($runid);
@@ -415,6 +419,67 @@ class purger {
         }
 
         return $removed;
+    }
+
+    /**
+     * Remove the simulated people a run created, and their enrolments.
+     *
+     * Only accounts this plugin made: they are recognisable by the run that
+     * owns them, and deleting a user somebody else created because it happened
+     * to be enrolled in an experiment course would be unforgivable.
+     *
+     * @param int $runid The run.
+     * @return array What went.
+     */
+    public static function delete_simulated_people(int $runid): array {
+        global $DB, $CFG;
+        require_once($CFG->dirroot . '/user/lib.php');
+        require_once($CFG->libdir . '/enrollib.php');
+
+        $people = $DB->get_records('local_catquizlab_person', ['runid' => $runid]);
+        if ($people === []) {
+            return [];
+        }
+
+        $run = $DB->get_record('local_catquizlab_run', ['id' => $runid]);
+        $courseid = $run ? (int) $run->courseid : 0;
+
+        $removed = ['enrolments' => 0, 'users' => 0];
+        foreach ($people as $person) {
+            $userid = (int) $person->moodleuserid;
+            if ($userid === 0) {
+                continue;
+            }
+
+            if ($courseid > 0) {
+                $coursecontext = \context_course::instance($courseid);
+                $enrolled = is_enrolled($coursecontext, (object) ['id' => $userid], '', false);
+
+                foreach (enrol_get_instances($courseid, true) as $instance) {
+                    $plugin = enrol_get_plugin($instance->enrol);
+                    if ($plugin && $enrolled) {
+                        $plugin->unenrol_user($instance, $userid);
+                        $removed['enrolments']++;
+                    }
+                }
+            }
+
+            $user = $DB->get_record('user', ['id' => $userid, 'deleted' => 0]);
+
+            // The run number in the username is what this plugin stamps on the
+            // accounts it creates, and it names the run being deleted. An
+            // account without it belongs to somebody else, and deleting a real
+            // user because they happened to be enrolled in an experiment course
+            // would be unforgivable.
+            $ours = $user && str_contains((string) $user->username, '_r' . $runid . '_');
+
+            if ($ours) {
+                delete_user($user);
+                $removed['users']++;
+            }
+        }
+
+        return array_filter($removed);
     }
 
     /**

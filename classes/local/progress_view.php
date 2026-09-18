@@ -101,11 +101,18 @@ class progress_view {
             $ambiguous[] = $affected;
         }
 
-        $debug = debug_trace::enabled() ? debug_trace::entries([], 60) : [];
+        // Its own capability: the recording holds what every operator did, with
+        // parameters, and running experiments is not a reason to read that.
+        $candebug = has_capability('local/catquizlab:debug', \context_system::instance());
+        $debug = ($candebug && debug_trace::enabled()) ? debug_trace::entries([], 60) : [];
 
         return [
             'debug'       => [
-                'enabled' => debug_trace::enabled(),
+                'enabled' => $candebug && debug_trace::enabled(),
+                'retention' => get_string('debug:retention', 'local_catquizlab', (object) [
+                    'entries' => debug_trace::KEEP,
+                    'days'    => debug_trace::KEEP_SECONDS / DAYSECS,
+                ]),
                 'hasany'  => $debug !== [],
                 'rows'    => $debug,
             ],

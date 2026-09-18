@@ -252,20 +252,100 @@ class setup_wizard {
      * @return string|null
      */
     public static function find_php_cli(): ?string {
-        $candidates = ['/usr/bin/php', '/usr/local/bin/php', '/opt/php/bin/php'];
+        $found = self::php_cli_candidates();
+
+        return $found === [] ? null : $found[0]['path'];
+    }
+
+    /**
+     * Every usable PHP binary on this server, with what each one says it is.
+     *
+     * More than one is the normal case on a server that has been upgraded: 8.1
+     * beside 8.3, or a distribution PHP beside a vendor build. Picking the first
+     * and not saying the others exist is how somebody ends up running tasks on a
+     * version their site does not support.
+     *
+     * @return array[] Each with path, version and sapi.
+     */
+    public static function php_cli_candidates(): array {
+        $paths = [
+            '/usr/bin/php',
+            '/usr/local/bin/php',
+            '/opt/php/bin/php',
+            '/usr/bin/php8.3',
+            '/usr/bin/php8.2',
+            '/usr/bin/php8.1',
+        ];
 
         $which = @exec('command -v php 2>/dev/null');
         if (is_string($which) && trim($which) !== '') {
-            array_unshift($candidates, trim($which));
+            array_unshift($paths, trim($which));
         }
 
-        foreach ($candidates as $candidate) {
-            if (is_executable($candidate)) {
-                return $candidate;
+        $found = [];
+        foreach (array_unique($paths) as $path) {
+            if (!is_executable($path) || isset($found[$path])) {
+                continue;
             }
+
+            $probe = [];
+            @exec(escapeshellarg($path) . ' -r "echo PHP_SAPI, \" \", PHP_VERSION;" 2>/dev/null', $probe);
+            $reported = trim((string) ($probe[0] ?? ''));
+            if ($reported === '') {
+                continue;
+            }
+
+            [$sapi, $version] = array_pad(explode(' ', $reported, 2), 2, '');
+
+            // Only ones that are actually the CLI: an FPM binary runs and then
+            // behaves differently enough that a task using it fails in ways
+            // nobody traces back to here.
+            if ($sapi !== 'cli') {
+                continue;
+            }
+
+            $found[$path] = ['path' => $path, 'version' => $version, 'sapi' => $sapi];
         }
 
-        return null;
+        return array_values($found);
+    }
+
+    /**
+     * Whether a path somebody typed is a PHP CLI binary this server can run.
+     *
+     * @param string $path The path to check.
+     * @return array{ok: bool, reason: string, version: string}
+     */
+    public static function validate_php_cli(string $path): array {
+        $path = trim($path);
+
+        if ($path === '' || !preg_match('#^/[^\0]+$#', $path)) {
+            return ['ok' => false, 'reason' => 'notabsolute', 'version' => ''];
+        }
+
+        if (!file_exists($path)) {
+            return ['ok' => false, 'reason' => 'notthere', 'version' => ''];
+        }
+
+        if (!is_executable($path)) {
+            return ['ok' => false, 'reason' => 'notexecutable', 'version' => ''];
+        }
+
+        $probe = [];
+        @exec(escapeshellarg($path) . ' -r "echo PHP_SAPI, \" \", PHP_VERSION;" 2>/dev/null', $probe);
+        $reported = trim((string) ($probe[0] ?? ''));
+
+        if ($reported === '') {
+            return ['ok' => false, 'reason' => 'noanswer', 'version' => ''];
+        }
+
+        [$sapi, $version] = array_pad(explode(' ', $reported, 2), 2, '');
+
+        if ($sapi !== 'cli') {
+            return ['ok' => false, 'reason' => 'notcli', 'version' => $sapi];
+        }
+
+        return ['ok' => true, 'reason' => '', 'version' => $version];
     }
 
     /**

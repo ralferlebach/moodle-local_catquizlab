@@ -181,4 +181,95 @@ final class audit_test extends \advanced_testcase {
         $this->assertNotEmpty($capability);
         $this->assertNotSame(0, (int) $capability->riskbitmask & RISK_DATALOSS);
     }
+
+    /**
+     * The debug recording is gated, bounded and exportable.
+     *
+     * @return void
+     */
+    public function test_the_debug_recording_is_governed(): void {
+        $this->resetAfterTest();
+
+        $capability = get_capability_info('local/catquizlab:debug');
+
+        // It records what every operator did, with parameters. Running
+        // experiments is not a reason to read that.
+        $this->assertNotEmpty($capability);
+
+        $context = \context_system::instance();
+        $operator = $this->getDataGenerator()->create_user();
+        $roleid = $this->getDataGenerator()->create_role();
+        assign_capability('local/catquizlab:execute', CAP_ALLOW, $roleid, $context->id);
+        role_assign($roleid, $operator->id, $context->id);
+        $this->assertFalse(has_capability('local/catquizlab:debug', $context, $operator));
+
+        // Bounded by age as well as count: a quiet installation would otherwise
+        // keep a log of colleagues for months.
+        $this->assertGreaterThan(0, debug_trace::KEEP_SECONDS);
+
+        $this->setAdminUser();
+        $export = debug_trace::export();
+        foreach (['generated', 'site', 'moodle', 'plugin', 'level', 'retention', 'entries'] as $key) {
+            $this->assertArrayHasKey($key, $export);
+        }
+    }
+
+    /**
+     * A PHP path is validated before it is stored, and alternatives are offered.
+     *
+     * @return void
+     */
+    public function test_the_php_path_is_validated(): void {
+        $this->resetAfterTest();
+
+        $wizard = \local_catquizlab\local\setup_wizard::class;
+
+        // An unvalidated path becomes a scheduled task that quietly does
+        // nothing, which is the failure this check exists to prevent.
+        $this->assertFalse($wizard::validate_php_cli('php')['ok']);
+        $this->assertSame('notabsolute', $wizard::validate_php_cli('php')['reason']);
+        $this->assertSame('notthere', $wizard::validate_php_cli('/nothing/here')['reason']);
+
+        // Several PHP versions on one server is the normal case after an
+        // upgrade, and picking the first without saying so is how somebody runs
+        // tasks on a version their site does not support.
+        foreach ($wizard::php_cli_candidates() as $candidate) {
+            $this->assertSame('cli', $candidate['sapi']);
+            $this->assertNotSame('', $candidate['version']);
+        }
+    }
+
+    /**
+     * Deep deletion takes the accounts it created, and only those.
+     *
+     * @return void
+     */
+    public function test_deep_deletion_removes_its_own_users(): void {
+        global $DB;
+        $this->resetAfterTest();
+        $this->setAdminUser();
+
+        /** @var \local_catquizlab_generator $generator */
+        $generator = $this->getDataGenerator()->get_plugin_generator('local_catquizlab');
+        $runid = (int) $generator->create_run()->id;
+
+        $ours = $this->getDataGenerator()->create_user(['username' => 'catlab_r' . $runid . '_p1']);
+        $theirs = $this->getDataGenerator()->create_user(['username' => 'a_real_person']);
+
+        foreach ([$ours, $theirs] as $user) {
+            $DB->insert_record('local_catquizlab_person', (object) [
+                'runid' => $runid, 'twinid' => 't' . $user->id, 'moodleuserid' => $user->id,
+                'truetheta' => 0, 'profile' => 'conforming',
+                'timecreated' => time(), 'timemodified' => time(),
+            ]);
+        }
+
+        \local_catquizlab\local\purger::delete_simulated_people($runid);
+
+        // Deleting a real user because they happened to be enrolled in an
+        // experiment course would be unforgivable, so ownership is read from
+        // the run number this plugin stamps on the accounts it makes.
+        $this->assertFalse($DB->record_exists('user', ['id' => $ours->id, 'deleted' => 0]));
+        $this->assertTrue($DB->record_exists('user', ['id' => $theirs->id, 'deleted' => 0]));
+    }
 }

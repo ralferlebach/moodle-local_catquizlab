@@ -185,12 +185,14 @@ class operations_view {
 
             return $rows === [] ? null : ['count' => count($rows), 'rows' => $rows];
         })(),
-        // Kept for one page load: a self-test result is worth reading once, and
-        // storing it would turn a diagnostic into state to maintain.
-        'selftest'   => (static function () {
+        // The browser installation's own output, kept for one page load. It
+        // used to share a slot with the self-test, so whichever ran last was
+        // read as the other — and since the shapes differ, the reader saw an
+        // exit code where a list of checks belonged.
+        'browserinstall' => (static function () {
             global $SESSION;
-            $result = $SESSION->catquizlab_selftest ?? null;
-            unset($SESSION->catquizlab_selftest);
+            $result = $SESSION->local_catquizlab_browserinstall ?? null;
+            unset($SESSION->local_catquizlab_browserinstall);
             if ($result === null) {
                 return null;
             }
@@ -200,6 +202,17 @@ class operations_view {
                 'output'  => $result['output'],
                 'command' => $result['command'],
             ];
+        })(),
+        // The end-to-end self-test: six things done rather than read. Its
+        // handler existed since 0.6.35 and had never run, because an older
+        // browser-only handler for the same action sat above it in the file and
+        // returned first.
+        'selftest'   => (static function () {
+            global $SESSION;
+            $result = $SESSION->local_catquizlab_selftest ?? null;
+            unset($SESSION->local_catquizlab_selftest);
+
+            return is_array($result) ? $result : null;
         })(),
         ];
     }
