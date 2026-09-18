@@ -378,6 +378,31 @@ function xmldb_local_catquizlab_upgrade($oldversion): bool {
         upgrade_plugin_savepoint(true, 2026091609, 'local', 'catquizlab');
     }
 
+    if ($oldversion < 2026091710) {
+        // Experiments waiting their turn. A queue held in a task's memory
+        // forgets everything the moment cron restarts, and somebody who queued
+        // five experiments before going home would find none of them had run.
+        $table = new xmldb_table('local_catquizlab_execqueue');
+        $table->add_field('id', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, XMLDB_SEQUENCE);
+        $table->add_field('experimentid', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, '0');
+        $table->add_field('state', XMLDB_TYPE_CHAR, '20', null, XMLDB_NOTNULL, null, 'waiting');
+        $table->add_field('position', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, '0');
+        $table->add_field('reason', XMLDB_TYPE_TEXT, null, null, null, null, null);
+        $table->add_field('userid', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, '0');
+        $table->add_field('timecreated', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, '0');
+        $table->add_field('timestarted', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, '0');
+        $table->add_field('timefinished', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, '0');
+        $table->add_key('primary', XMLDB_KEY_PRIMARY, ['id']);
+        $table->add_index('statepos', XMLDB_INDEX_NOTUNIQUE, ['state', 'position']);
+        $table->add_index('experimentid', XMLDB_INDEX_NOTUNIQUE, ['experimentid']);
+
+        if (!$dbman->table_exists($table)) {
+            $dbman->create_table($table);
+        }
+
+        upgrade_plugin_savepoint(true, 2026091710, 'local', 'catquizlab');
+    }
+
     return true;
 }
 

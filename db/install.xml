@@ -336,5 +336,25 @@
         <INDEX NAME="correlationid" UNIQUE="false" FIELDS="correlationid"/>
       </INDEXES>
     </TABLE>
+    <TABLE NAME="local_catquizlab_execqueue" COMMENT="Experiments waiting to be run, in the order they were asked for. Persistent because a queue held in a task's memory forgets everything the moment cron restarts.">
+      <FIELDS>
+        <FIELD NAME="id" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="true"/>
+        <FIELD NAME="experimentid" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="false" COMMENT="The experiment to run."/>
+        <FIELD NAME="state" TYPE="char" LENGTH="20" NOTNULL="true" SEQUENCE="false" COMMENT="waiting, running, finished or cancelled."/>
+        <FIELD NAME="position" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false" COMMENT="Where in the line it stands; the order somebody asked for is the order they get."/>
+        <FIELD NAME="reason" TYPE="text" NOTNULL="false" SEQUENCE="false" COMMENT="Why it stopped, where it did."/>
+        <FIELD NAME="userid" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false" COMMENT="Who queued it."/>
+        <FIELD NAME="timecreated" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="false"/>
+        <FIELD NAME="timestarted" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
+        <FIELD NAME="timefinished" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
+      </FIELDS>
+      <KEYS>
+        <KEY NAME="primary" TYPE="primary" FIELDS="id"/>
+      </KEYS>
+      <INDEXES>
+        <INDEX NAME="statepos" UNIQUE="false" FIELDS="state, position"/>
+        <INDEX NAME="experimentid" UNIQUE="false" FIELDS="experimentid"/>
+      </INDEXES>
+    </TABLE>
   </TABLES>
 </XMLDB>

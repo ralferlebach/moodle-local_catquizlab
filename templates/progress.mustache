@@ -112,6 +112,68 @@
     </div>
 {{/ambiguous.hasany}}
 
+{{!
+    The one action that matters, above everything the plugin does to carry it
+    out. The per-run buttons below are still there and are still needed when
+    something goes wrong — but they are recovery, and offering them as peers of
+    this one is what made operating an experiment feel like operating machinery.
+}}
+{{#runner}}
+    <div class="card mb-3">
+        <div class="card-body d-flex align-items-center justify-content-between">
+            <div>
+                <strong>{{label}}</strong>
+                <div class="small text-muted">
+                    {{runs.finished}} / {{runs.total}} &middot;
+                    {{attempts.collected}} / {{attempts.planned}}
+                </div>
+            </div>
+            <div>
+                {{#canprepare}}
+                    <form method="post" action="{{formurl}}" class="d-inline">
+                        <input type="hidden" name="sesskey" value="{{sesskey}}">
+                        <input type="hidden" name="action" value="prepareexperiment">
+                        <input type="hidden" name="experimentid" value="{{experimentid}}">
+                        <button type="submit" class="btn btn-primary">
+                            {{#str}}runner:prepare, local_catquizlab{{/str}}
+                        </button>
+                    </form>
+                {{/canprepare}}
+                {{#canstart}}
+                    <form method="post" action="{{formurl}}" class="d-inline">
+                        <input type="hidden" name="sesskey" value="{{sesskey}}">
+                        <input type="hidden" name="action" value="startexperiment">
+                        <input type="hidden" name="experimentid" value="{{experimentid}}">
+                        <button type="submit" class="btn btn-primary">
+                            {{#str}}runner:start, local_catquizlab{{/str}}
+                        </button>
+                    </form>
+                {{/canstart}}
+                {{#queued}}
+                    <span class="badge badge-info">{{#str}}runner:queued, local_catquizlab{{/str}}</span>
+                {{/queued}}
+            </div>
+        </div>
+    </div>
+{{/runner}}
+
+{{#execqueue.hasany}}
+    <div class="card mb-3">
+        <div class="card-body">
+            <h3 class="h6">{{#str}}runner:queueheading, local_catquizlab{{/str}}</h3>
+            <ol class="small mb-0">
+                {{#execqueue.rows}}
+                    <li>
+                        {{name}}
+                        {{#running}}<span class="badge badge-success">{{#str}}runner:staterunning, local_catquizlab{{/str}}</span>{{/running}}
+                        {{#waiting}}<span class="text-muted">{{queuedago}}</span>{{/waiting}}
+                    </li>
+                {{/execqueue.rows}}
+            </ol>
+        </div>
+    </div>
+{{/execqueue.hasany}}
+
 <div class="card mb-3">
     <div class="card-body">
         <h3 class="h5">{{#str}}progress:runs, local_catquizlab{{/str}}</h3>

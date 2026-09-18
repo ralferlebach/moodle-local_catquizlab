@@ -6,6 +6,57 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.6.56] — 2026-09-17
+
+Issues #76, #77 and #83: the two actions, in the interface.
+
+### #83 — one start, and the machinery below it
+Step 3 leads with a single card: the experiment's state, its progress, and
+whichever of the two buttons applies — **Prepare experiment** or **Run
+experiment**. The per-run and per-worker controls are all still there, below it.
+They are recovery, and offering them as peers of the one action anybody normally
+wants is what made operating an experiment feel like operating machinery.
+
+### #76 — preparation as one process
+The button runs `experiment_runner::prepare()` over every run of the experiment
+and reports one verdict. Blockers name the run, the cell and the stage — the
+first three, because a wall of thirty is not more informative than three and a
+count.
+
+### #77 — a queue that survives cron
+`local_catquizlab_execqueue`: experiments waiting their turn, in the order they
+were asked for, advanced by the pipeline tick.
+
+Measured:
+
+    queue 36 → position 1
+    queue 69 → position 2
+    queue 36 again → already-queued
+    advance → started 36
+    advance → started 0 (busy)
+
+**A table, not a list in memory**, because a queue a task holds forgets
+everything the moment cron restarts, and somebody who lines up five experiments
+before going home would find none of them had run.
+
+**Strictly one at a time**, because two experiments running together share the
+worker pool: each takes twice as long and neither had the machine to itself,
+which for a timing-sensitive simulation is a measurement error rather than a
+scheduling preference.
+
+Readiness is checked again when an entry reaches the front, not only when it was
+queued — an experiment can be reset or fail while it waits, and one that has is
+skipped with a reason rather than stalling the line behind it.
+
+### Verification
+PHPUnit 677 tests / 3595 assertions, Behat 32 scenarios / 235 steps, phpcs with
+the Moodle standard clean, PHPDoc clean, 1098 strings per language.
+
+### Still open
+#78, #80 and #81 — live progress at three levels, and the status-truth pair.
+
+---
+
 ## [0.6.55] — 2026-09-17
 
 Issue #75: two actions, and the state model they need.

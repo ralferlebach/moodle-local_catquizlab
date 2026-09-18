@@ -162,4 +162,92 @@ final class experiment_runner_test extends \advanced_testcase {
         // seemed not to work.
         $this->assertSame($before, $DB->count_records('local_catquizlab_run', ['experimentid' => $experimentid]));
     }
+
+    /**
+     * The queue holds the order, and runs one experiment at a time.
+     *
+     * @return void
+     */
+    public function test_the_queue_runs_one_at_a_time(): void {
+        global $DB;
+        $this->resetAfterTest();
+        $this->setAdminUser();
+
+        /** @var \local_catquizlab_generator $generator */
+        $generator = $this->getDataGenerator()->get_plugin_generator('local_catquizlab');
+
+        $ids = [];
+        for ($i = 0; $i < 2; $i++) {
+            $runid = (int) $generator->create_run()->id;
+            $DB->set_field('local_catquizlab_run', 'status', registry::STATUS_READY, ['id' => $runid]);
+            $ids[] = (int) $DB->get_field('local_catquizlab_run', 'experimentid', ['id' => $runid]);
+        }
+
+        $first = \local_catquizlab\local\execution_queue::enqueue($ids[0]);
+        $second = \local_catquizlab\local\execution_queue::enqueue($ids[1]);
+
+        // The order they asked for is the order they get.
+        $this->assertTrue($first['ok']);
+        $this->assertLessThan($second['position'], $first['position']);
+
+        // Asking twice does not mean running twice.
+        $this->assertSame('already-queued', \local_catquizlab\local\execution_queue::enqueue($ids[0])['reason']);
+
+        $started = \local_catquizlab\local\execution_queue::advance();
+        $this->assertSame($ids[0], $started['started']);
+
+        // Two experiments running together share the worker pool, so neither
+        // had the machine to itself — for a timing-sensitive simulation that is
+        // a measurement error, not a scheduling preference.
+        $this->assertSame(0, \local_catquizlab\local\execution_queue::advance()['started']);
+        $this->assertSame('busy', \local_catquizlab\local\execution_queue::advance()['reason']);
+    }
+
+    /**
+     * An experiment that is not ready cannot be queued.
+     *
+     * @return void
+     */
+    public function test_only_a_ready_experiment_joins_the_queue(): void {
+        $this->resetAfterTest();
+        $this->setAdminUser();
+
+        /** @var \local_catquizlab_generator $generator */
+        $generator = $this->getDataGenerator()->get_plugin_generator('local_catquizlab');
+        $experimentid = (int) $generator->create_experiment()->id;
+
+        // It would otherwise reach the front of the line and fail there, having
+        // held up everything behind it.
+        $result = \local_catquizlab\local\execution_queue::enqueue($experimentid);
+        $this->assertFalse($result['ok']);
+        $this->assertSame('not-ready', $result['reason']);
+    }
+
+    /**
+     * A queue entry whose experiment stopped being ready is skipped, not stuck.
+     *
+     * @return void
+     */
+    public function test_an_entry_that_lost_readiness_is_skipped(): void {
+        global $DB;
+        $this->resetAfterTest();
+        $this->setAdminUser();
+
+        /** @var \local_catquizlab_generator $generator */
+        $generator = $this->getDataGenerator()->get_plugin_generator('local_catquizlab');
+        $runid = (int) $generator->create_run()->id;
+        $experimentid = (int) $DB->get_field('local_catquizlab_run', 'experimentid', ['id' => $runid]);
+        $DB->set_field('local_catquizlab_run', 'status', registry::STATUS_READY, ['id' => $runid]);
+
+        \local_catquizlab\local\execution_queue::enqueue($experimentid);
+
+        // An experiment can be reset or fail while it waits, and a queue that
+        // stops on the first one of those is a queue nobody can leave running.
+        $DB->set_field('local_catquizlab_run', 'status', registry::STATUS_FAILED, ['id' => $runid]);
+
+        $result = \local_catquizlab\local\execution_queue::advance();
+        $this->assertSame(0, $result['started']);
+        $this->assertSame('skipped-not-ready', $result['reason']);
+        $this->assertSame([], \local_catquizlab\local\execution_queue::entries());
+    }
 }

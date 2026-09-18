@@ -60,6 +60,15 @@ class pipeline_tick extends \core\task\scheduled_task {
         // there is no id to continue.
         \local_catquizlab\local\debug_trace::enter_task('\\local_catquizlab\\task\\pipeline_tick');
 
+        // The execution queue moves here, because this is the thing that runs
+        // by itself. Somebody who queued five experiments before going home
+        // should find five results, not five experiments still waiting for a
+        // button.
+        $advanced = \local_catquizlab\local\execution_queue::advance();
+        if ($advanced['started'] > 0) {
+            mtrace('local_catquizlab: started queued experiment ' . $advanced['started'] . '.');
+        }
+
         if (!get_config('local_catquizlab', 'enabled')) {
             return;
         }

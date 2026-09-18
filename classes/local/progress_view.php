@@ -107,6 +107,17 @@ class progress_view {
         $debug = ($candebug && debug_trace::enabled()) ? debug_trace::entries([], 60) : [];
 
         return [
+            // The two actions the whole interface reduces to, and the line of
+            // experiments waiting their turn.
+            'runner'      => $experimentid > 0
+                ? experiment_runner::state($experimentid) + [
+                    'experimentid' => $experimentid,
+                    'queued'       => execution_queue::state_of($experimentid),
+                    'formurl'      => (new \moodle_url('/local/catquizlab/runs.php'))->out(false),
+                    'sesskey'      => sesskey(),
+                ]
+                : null,
+            'execqueue'   => ['hasany' => execution_queue::entries() !== [], 'rows' => execution_queue::entries()],
             'debug'       => [
                 'enabled' => $candebug && debug_trace::enabled(),
                 'retention' => get_string('debug:retention', 'local_catquizlab', (object) [
