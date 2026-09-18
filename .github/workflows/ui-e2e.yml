@@ -1,0 +1,177 @@
+name: Interface end-to-end
+
+# Started by hand, because it installs Moodle, provisions an experiment and
+# plays five sittings through a real browser: minutes of runner time for a
+# question nobody asks on every push.
+#
+# Everything it does, it does through the interface. No CLI script sets up the
+# experiment, no SQL seeds the queue — the point is that the buttons work, and a
+# test that reaches around them cannot tell anybody that.
+on:
+  workflow_dispatch:
+    inputs:
+      persons:
+        description: 'Simulated people'
+        required: false
+        default: '5'
+      keepvideo:
+        description: 'Keep video and trace for passing runs too'
+        required: false
+        default: 'true'
+
+permissions:
+  contents: read
+
+jobs:
+  ui-e2e:
+    name: "Interface end-to-end (Playwright)"
+    runs-on: ubuntu-24.04
+    if: github.event_name == 'workflow_dispatch' && inputs.run_e2e
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: moodle
+          POSTGRES_DB: moodle
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - name: Check out the plugin
+        uses: actions/checkout@v4
+        with:
+          path: plugin
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.3'
+          extensions: pgsql, gd, soap, intl, mbstring, curl, zip, bcmath
+          ini-values: max_input_vars=8000, memory_limit=1024M
+
+      - name: Check out Moodle
+        run: git clone --depth 1 -b MOODLE_405_STABLE https://github.com/moodle/moodle.git moodle
+
+      - name: Check out the CAT engine and its host activity
+        run: |
+          git clone --depth 1 https://github.com/ralferlebach/moodle-local_catquiz.git \
+              moodle/local/catquiz
+          git clone --depth 1 https://github.com/ralferlebach/moodle-mod_adaptivequiz.git \
+              moodle/mod/adaptivequiz
+          git clone --depth 1 https://github.com/ralferlebach/moodle-adaptivequizcatmodel_catquiz.git \
+              moodle/mod/adaptivequiz/catmodel/catquiz
+          git clone --depth 1 https://github.com/ralferlebach/moodle-local_wunderbyte_table.git \
+              moodle/local/wunderbyte_table
+          cp -r plugin moodle/local/catquizlab
+
+      - name: Configure Moodle
+        run: |
+          mkdir -p "$HOME/moodledata"
+          cat > moodle/config.php <<'PHP'
+          <?php
+          unset($CFG);
+          global $CFG;
+          $CFG = new stdClass();
+          $CFG->dbtype    = 'pgsql';
+          $CFG->dblibrary = 'native';
+          $CFG->dbhost    = '127.0.0.1';
+          $CFG->dbname    = 'moodle';
+          $CFG->dbuser    = 'postgres';
+          $CFG->dbpass    = 'moodle';
+          $CFG->prefix    = 'mdl_';
+          $CFG->dboptions = ['dbpersist' => 0, 'dbport' => 5432, 'dbsocket' => '', 'dbcollation' => ''];
+          $CFG->wwwroot   = 'http://127.0.0.1:8000';
+          $CFG->dataroot  = getenv('HOME') . '/moodledata';
+          $CFG->admin     = 'admin';
+          $CFG->directorypermissions = 0777;
+          require_once(__DIR__ . '/lib/setup.php');
+          PHP
+
+      - name: Install Moodle
+        working-directory: moodle
+        run: |
+          php admin/cli/install_database.php --agree-license \
+              --adminpass='Admin123!' --adminemail=admin@example.com \
+              --fullname="CATLab E2E" --shortname="CATLabE2E"
+
+      # Everything the worker needs is prepared by the plugin's own CLI rather
+      # than assembled in YAML, so the E2E job exercises the same provisioning
+      # path an operator uses.
+      - name: Provision an experiment, a run and a worker token
+        id: prepare
+        working-directory: moodle
+        run: php local/catquizlab/cli/e2e_prepare.php --persons=1 >> "$GITHUB_OUTPUT"
+
+      - name: Start the web server
+        working-directory: moodle
+        run: |
+          nohup php -S 127.0.0.1:8000 -t . > /tmp/webserver.log 2>&1 &
+          for i in $(seq 1 20); do
+            if curl -sf -o /dev/null http://127.0.0.1:8000/; then exit 0; fi
+            sleep 1
+          done
+          echo "The web server did not come up." >&2
+          cat /tmp/webserver.log >&2
+          exit 1
+
+      - name: Install Playwright and its browser
+        working-directory: moodle/local/catquizlab/tests/playwright
+        run: |
+          npm install --no-audit --no-fund
+          npx playwright install --with-deps chromium
+
+      - name: Install the worker's dependencies
+        working-directory: moodle/local/catquizlab/worker
+        run: npm install --no-audit --no-fund
+
+      # The plugin starts its own workers, and the pipeline task is what makes
+      # a queued experiment actually run. Without cron the interface would show
+      # an experiment waiting forever, which is correct behaviour and a useless
+      # test.
+      - name: Run Moodle cron in the background
+        working-directory: moodle
+        run: |
+          nohup bash -c 'while true; do php admin/cli/cron.php >> /tmp/cron.log 2>&1; sleep 20; done' &
+          sleep 5
+
+      - name: Play one experiment through the interface
+        working-directory: moodle/local/catquizlab/tests/playwright
+        env:
+          MOODLE_URL: http://127.0.0.1:8000
+          MOODLE_ADMIN: admin
+          MOODLE_ADMIN_PASSWORD: 'Admin#12345'
+          PERSONS: ${{ github.event.inputs.persons || '5' }}
+        run: npx playwright test --reporter=list,html,json
+
+      # Everything somebody would want to look at afterwards, in one file: the
+      # video of the run, the trace, the screenshots, the HTML report, and the
+      # logs from Moodle, the worker and cron. A passing run is packaged too —
+      # watching the interface work is how somebody checks that it still does.
+      - name: Package the evidence
+        if: always()
+        run: |
+          mkdir -p evidence
+          cp -r moodle/local/catquizlab/tests/playwright/artifacts evidence/artifacts || true
+          cp -r moodle/local/catquizlab/tests/playwright/report evidence/report || true
+          cp /tmp/webserver.log evidence/webserver.log || true
+          cp /tmp/cron.log evidence/cron.log || true
+          mkdir -p evidence/worker-logs
+          cp "$HOME"/moodledata*/local_catquizlab/worker-logs/*.log evidence/worker-logs/ 2>/dev/null || true
+          find evidence -name '*.webm' -o -name '*.zip' -o -name '*.png' | head -40
+
+      - name: Upload the results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: catquizlab-ui-e2e
+          path: evidence
+          retention-days: 14
+          if-no-files-found: warn

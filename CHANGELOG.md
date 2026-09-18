@@ -6,6 +6,77 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.6.61] — 2026-09-18
+
+An interface end-to-end run, and the defect it found on its first honest pass.
+
+### Two buttons that did nothing
+`runs.php` guards its action handling with:
+
+    if ($action !== '' && $runid > 0) {
+
+The experiment-level actions added in 0.6.56 — **Prepare experiment** and **Run
+experiment** — sit inside that block and carry an experiment id and no run id.
+They were never reachable. The buttons rendered, the forms posted, the page came
+back without a word, and the experiment stayed a draft with no runs.
+
+Called through the façade the same preparation worked perfectly:
+
+    prepare: ok=true state=ready 1/1
+
+Code correct, interface dead. No unit test and no CLI smoke test could see
+that — which is the entire argument for this run existing.
+
+Moved ahead of the run-scoped block. Measured through a real POST:
+
+    Experiment prepared: 1 of 1 runs ready.
+    Runs afterwards: 1
+
+### The run
+`.github/workflows/ui-e2e.yml`, **manual only**: it installs Moodle, provisions
+an experiment and plays five people's sittings through a real browser, which is
+minutes of runner time for a question nobody asks on every push.
+
+Everything happens through the interface. No CLI script sets anything up, no SQL
+seeds the queue. The parameters are entered in the form: 15–20 questions per
+test, 3–5 per scale, standard error 0.3–2.5, no time limits, five simulated
+people.
+
+    1 passed (7.2m)
+    UI smoke: finished | attempts: {"planned":10,"collected":10}
+
+Video, trace and screenshots are kept for **every** run, not only failures: a
+passing run is what somebody wants to watch when they are asking whether the
+interface still works, and a recording that only exists after a failure cannot
+answer that. All of it, plus the HTML report and the Moodle, cron and worker
+logs, is uploaded as one artifact.
+
+### Eleven runs to get there
+Each failure was a real obstacle: collapsed form sections, CAT-engine links
+matching the same words, two `.nav-tabs` on one page, a navigation button caught
+by `.first()` when submitting, a swallowed sign-in error, the experiment never
+selected in the shell, and finally no cron — without which a queued experiment
+correctly waits forever and the test times out on a system that is working.
+
+Two were fixed in the plugin rather than in the test: the step tabs now carry
+`data-region="catquizlab-steps"`, because matching on a class name is matching
+on a coincidence.
+
+### The worker end-to-end job
+Both failures from the reported logs are fixed. `e2e_prepare.php` creates the
+experiment course when none is configured — on a fresh CI installation the
+setting points nowhere, and the job died at `stage:container`. And its errors
+are emitted as a single-line `setup_error=…`; the previous message contained
+colons and broke `$GITHUB_OUTPUT`, so the job reported a parse error instead of
+the cause.
+
+### Verification
+PHPUnit 679 tests / 3598 assertions, Behat 32 scenarios / 235 steps, phpcs with
+the Moodle standard clean, PHPDoc clean, both workflows parse, and the interface
+run passes against this instance.
+
+---
+
 ## [0.6.60] — 2026-09-18
 
 Issue #90, and a counting mistake in the smoke test that was mine.

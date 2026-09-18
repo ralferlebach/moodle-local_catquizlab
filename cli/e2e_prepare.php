@@ -35,6 +35,7 @@ require_once($CFG->dirroot . '/webservice/lib.php');
 
 use local_catquizlab\local\attempt_scheduler;
 use local_catquizlab\local\environment;
+use local_catquizlab\local\experiment_container;
 use local_catquizlab\local\experiment_definition;
 use local_catquizlab\local\experiment_service;
 use local_catquizlab\local\registry;
@@ -166,11 +167,32 @@ function local_catquizlab_e2e_prepare(string $name, int $persons): int {
     $sweep = experiment_service::create_sweep($experimentid);
     $runid = (int) reset($sweep['runs']);
 
+    // The course the experiment lives in. Provisioning creates one when the
+    // setting points nowhere, and on a fresh CI installation it points nowhere
+    // — which failed the whole job at stage:container with
+    // no-experiment-course-configured.
+    if ((int) get_config('local_catquizlab', 'experimentcourseid') === 0) {
+        $courseid = experiment_container::ensure_course();
+        if ($courseid === 0) {
+            cli_writeln('setup_error=no-experiment-course-could-be-created');
+            return 1;
+        }
+        set_config('experimentcourseid', $courseid, 'local_catquizlab');
+        cli_writeln('# experiment course: ' . $courseid);
+    }
+
     $setup = run_orchestrator::setup($runid, [
         'questioncategoryid' => local_catquizlab_e2e_question_category(),
     ]);
     if (empty($setup['ok'])) {
-        cli_writeln('Run setup failed: ' . ($setup['reason'] ?? 'unknown'));
+        // One line, no colons in the key, nothing a workflow will try to parse
+        // as an output assignment: the previous message broke $GITHUB_OUTPUT
+        // and the job reported a parse error instead of the failure.
+        cli_writeln('setup_error=' . str_replace(
+            ["\n", "\r"],
+            ' ',
+            (string) ($setup['reason'] ?? 'unknown')
+        ));
         return 1;
     }
 
@@ -180,13 +202,13 @@ function local_catquizlab_e2e_prepare(string $name, int $persons): int {
         $queued = $DB->count_records('local_catquizlab_attempt', ['runid' => $runid]);
     }
     if ($queued === 0) {
-        cli_writeln('No attempts were queued; the worker would have nothing to claim.');
+        cli_writeln('setup_error=no-attempts-queued');
         return 1;
     }
 
     $token = local_catquizlab_e2e_token();
     if ($token === null) {
-        cli_writeln('No worker token could be issued.');
+        cli_writeln('setup_error=no-worker-token');
         return 1;
     }
 

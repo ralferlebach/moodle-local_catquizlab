@@ -74,6 +74,59 @@ require_capability('local/catquizlab:view', $context);
 
 // State-changing actions. Each is a POST guarded by sesskey and the execute
 // capability, so a link in a mail cannot cancel somebody's sweep.
+// Experiment-level actions, before the run-scoped block below. They carry an
+// experiment id and no run id, so inside that block they were unreachable:
+// the button rendered, the form posted, the page came back without a word,
+// and the experiment stayed a draft with no runs.
+if ($action === 'prepareexperiment') {
+    require_sesskey();
+    require_capability('local/catquizlab:execute', $context);
+
+    $target = required_param('experimentid', PARAM_INT);
+    $result = \local_catquizlab\local\experiment_runner::prepare($target);
+
+    $back = new moodle_url('/local/catquizlab/runs.php', ['experimentid' => $target]);
+    $message = get_string(
+        $result['ok'] ? 'runner:prepared' : 'runner:blocked',
+        $component,
+        (object) ['prepared' => $result['prepared'], 'total' => $result['total']]
+    );
+
+    foreach (array_slice($result['blockers'], 0, 3) as $blocker) {
+        $message .= html_writer::empty_tag('br') . get_string('runner:blockerline', $component, (object) [
+            'runid'   => $blocker['runid'] ?? 0,
+            'cellkey' => $blocker['cellkey'] ?? '',
+            'stage'   => $blocker['stage'] ?? '',
+            'reason'  => $blocker['reason'] ?? '',
+        ]);
+    }
+
+    redirect($back, $message, null, $result['ok']
+        ? \core\output\notification::NOTIFY_SUCCESS
+        : \core\output\notification::NOTIFY_WARNING);
+}
+
+if ($action === 'startexperiment') {
+    require_sesskey();
+    require_capability('local/catquizlab:execute', $context);
+
+    $target = required_param('experimentid', PARAM_INT);
+    $queued = \local_catquizlab\local\execution_queue::enqueue($target);
+
+    $back = new moodle_url('/local/catquizlab/runs.php', ['experimentid' => $target]);
+
+    redirect(
+        $back,
+        $queued['ok']
+            ? get_string('runner:queuedat', $component, $queued['position'])
+            : get_string('runner:notready', $component),
+        null,
+        $queued['ok']
+            ? \core\output\notification::NOTIFY_SUCCESS
+            : \core\output\notification::NOTIFY_WARNING
+    );
+}
+
 if ($action !== '' && $runid > 0) {
     require_sesskey();
     require_capability('local/catquizlab:execute', $context);
@@ -127,54 +180,6 @@ if ($action !== '' && $runid > 0) {
         );
     }
 
-    if ($action === 'prepareexperiment') {
-        require_sesskey();
-        require_capability('local/catquizlab:execute', $context);
-
-        $target = required_param('experimentid', PARAM_INT);
-        $result = \local_catquizlab\local\experiment_runner::prepare($target);
-
-        $back = new moodle_url('/local/catquizlab/runs.php', ['experimentid' => $target]);
-        $message = get_string(
-            $result['ok'] ? 'runner:prepared' : 'runner:blocked',
-            $component,
-            (object) ['prepared' => $result['prepared'], 'total' => $result['total']]
-        );
-
-        foreach (array_slice($result['blockers'], 0, 3) as $blocker) {
-            $message .= html_writer::empty_tag('br') . get_string('runner:blockerline', $component, (object) [
-                'runid'   => $blocker['runid'] ?? 0,
-                'cellkey' => $blocker['cellkey'] ?? '',
-                'stage'   => $blocker['stage'] ?? '',
-                'reason'  => $blocker['reason'] ?? '',
-            ]);
-        }
-
-        redirect($back, $message, null, $result['ok']
-            ? \core\output\notification::NOTIFY_SUCCESS
-            : \core\output\notification::NOTIFY_WARNING);
-    }
-
-    if ($action === 'startexperiment') {
-        require_sesskey();
-        require_capability('local/catquizlab:execute', $context);
-
-        $target = required_param('experimentid', PARAM_INT);
-        $queued = \local_catquizlab\local\execution_queue::enqueue($target);
-
-        $back = new moodle_url('/local/catquizlab/runs.php', ['experimentid' => $target]);
-
-        redirect(
-            $back,
-            $queued['ok']
-                ? get_string('runner:queuedat', $component, $queued['position'])
-                : get_string('runner:notready', $component),
-            null,
-            $queued['ok']
-                ? \core\output\notification::NOTIFY_SUCCESS
-                : \core\output\notification::NOTIFY_WARNING
-        );
-    }
 
     if ($action === 'repairaccess') {
         require_sesskey();
