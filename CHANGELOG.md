@@ -6,6 +6,65 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.6.59] — 2026-09-18
+
+Issue #89: an experiment played from definition to results, as a gate.
+
+### Why this and not another unit test
+Every part of this plugin was tested and the whole did not work. A worker that
+played exactly one attempt, a heartbeat refused since 0.6.14, a status card
+claiming a simulation that was not running: none of those were visible to a unit
+test, and all of them were obvious the moment anybody watched an experiment try
+to run.
+
+`cli/smoke.php` watches. It defines an experiment, prepares it, starts a worker,
+waits for real attempts against Moodle's own question engine, aggregates, and
+checks the numbers — failing at the first step that does not hold.
+
+### Measured, on this instance
+    == CatQuizLab smoke test: classic ==
+      Setup complete.
+      Prepared 1/1 runs.
+      2 attempts queued.
+      Worker started and reported.
+      2 collected, 0 failed. (65.0s)
+      Every collected attempt answered at least 13 questions.
+      28 result rows.
+      bias 0.0545 · mae 0.4220 · correlation 1.0000 · meanlength 12.0000
+
+    PASS: 2 attempts played, 2 with estimates, 28 result rows.
+
+**Thirteen questions per attempt**, not one: the second question is the first
+that depended on how the first was answered, which is the mechanism under test.
+Answering one and stopping would pass a naive check and prove nothing about an
+adaptive test.
+
+All five strategies, run one after another:
+
+    classic  PASS    allsubs  PASS    balanced PASS
+    fastest  PASS    relsubs  PASS
+
+### A failure that was mine, not the plugin's
+`allsubs` failed the first time I ran it — because I had started two smoke tests
+at once. They defer each other's queues and compete for worker slots, so each
+waited out its timeout on the other's work. A strategy got an undeserved FAIL
+and I nearly went looking for a defect that was in the test.
+
+The script takes an exclusive lock now and refuses to run beside itself, and
+`cli/smoke_all.sh` runs the strategies sequentially for the same reason.
+
+### In CI
+Added to `worker-e2e.yml` after the existing single-attempt check, with the
+smoke logs and the worker logs collected on failure — the Moodle exception, the
+attempt and the stage, which is what the issue asked to keep.
+
+### Verification
+PHPUnit 677 tests / 3595 assertions, Behat 32 scenarios / 235 steps, phpcs with
+the Moodle standard clean, PHPDoc clean. The readings above are from real runs
+against this instance, not from the test suite.
+
+---
+
 ## [0.6.58] — 2026-09-17
 
 Issues #86, #87 and #88. #89 is not done — see below.

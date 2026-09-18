@@ -182,6 +182,27 @@ jobs:
         working-directory: moodle
         run: php local/catquizlab/cli/e2e_prepare.php --verify --runid=${{ steps.prepare.outputs.runid }}
 
+      # One attempt through the UI proves the worker can play a question. It
+      # does not prove that an experiment reaches results, and for five
+      # releases it did not: a worker that stopped after one attempt, a
+      # heartbeat refused since 0.6.14, and a status card claiming a simulation
+      # that was not running all passed every check this repository had.
+      - name: Play one experiment per strategy, definition to results
+        working-directory: moodle
+        env:
+          MOODLE_ROOT: ${{ github.workspace }}/moodle
+          MINUTES: 4
+        run: bash local/catquizlab/cli/smoke_all.sh
+
       - name: Collect logs on failure
         if: failure()
-        run: cat /tmp/webserver.log || true
+        run: |
+          cat /tmp/webserver.log || true
+          for log in /tmp/catquizlab-smoke/*.log; do
+            echo "=== $log ==="
+            cat "$log" || true
+          done
+          for log in "$HOME"/moodledata*/local_catquizlab/worker-logs/*.log; do
+            echo "=== $log ==="
+            tail -50 "$log" || true
+          done
