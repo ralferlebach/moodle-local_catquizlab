@@ -330,11 +330,84 @@ async function onFinishPage(page) {
  */
 async function describePage(page) {
     const title = await page.title().catch(() => '');
-    const text = await page
-        .evaluate(() => document.body.innerText.replace(/\s+/g, ' ').slice(0, 200))
-        .catch(() => '');
 
-    return `url=${page.url()} title="${title}" page="${text}"`;
+    const found = await page
+        .evaluate(() => {
+            const clean = (s) => (s || '').replace(/\s+/g, ' ').trim();
+
+            // Moodle puts its navigation, its site name and its user menu
+            // before the error, so the first 200 characters of the body were
+            // reliably the parts nobody needed. The error itself lives in one
+            // of these, and reporting "Zum Hauptinhalt Client01 Startseite…"
+            // instead of it is why a failure said nothing about itself.
+            const wheres = [
+                '.errormessage',
+                '.core-error-message',
+                '#region-main .alert-danger',
+                '#region-main .alert',
+                '.notifyproblem',
+                '.alert-danger',
+            ];
+
+            let message = '';
+            for (const sel of wheres) {
+                const el = document.querySelector(sel);
+                if (el && clean(el.innerText)) {
+                    message = clean(el.innerText);
+                    break;
+                }
+            }
+
+            // Moodle's debug block, where the site shows it: the exception
+            // class and the line that threw are the two things that turn "an
+            // error" into something anybody can act on.
+            let debug = '';
+            const debugel = document.querySelector('.notifytiny, [data-region="debug"], pre.notifytiny');
+            if (debugel) {
+                debug = clean(debugel.innerText).slice(0, 400);
+            }
+
+            let code = '';
+            const codeel = document.querySelector('[data-errorcode], .errorcode');
+            if (codeel) {
+                code = clean(codeel.getAttribute('data-errorcode') || codeel.innerText);
+            }
+
+            const main = document.querySelector('#region-main') || document.body;
+
+            return {
+                message: message,
+                debug: debug,
+                code: code,
+                // The main region rather than the whole body, so the fallback
+                // is at least the part of the page that is about this page.
+                body: clean(main.innerText).slice(0, 300),
+            };
+        })
+        .catch(() => ({message: '', debug: '', code: '', body: ''}));
+
+    // Anything that looks like a token goes, wherever it came from: an error
+    // report is a thing people paste into issues.
+    const redact = (s) => (s || '')
+        .replace(/([?&](?:wstoken|token|sesskey)=)[^&\s"']+/gi, '$1(hidden)')
+        .replace(/\b[a-f0-9]{32}\b/gi, '(hidden)');
+
+    const parts = [`url=${redact(page.url())}`, `title="${title}"`];
+
+    if (found.message) {
+        parts.push(`error="${redact(found.message)}"`);
+    }
+    if (found.code) {
+        parts.push(`errorcode="${redact(found.code)}"`);
+    }
+    if (found.debug) {
+        parts.push(`debug="${redact(found.debug)}"`);
+    }
+    if (!found.message) {
+        parts.push(`page="${redact(found.body)}"`);
+    }
+
+    return parts.join(' ');
 }
 
 async function currentQuestionRef(page) {
@@ -833,13 +906,21 @@ async function main() {
     });
 
     let played = 0;
+
+    // Why this worker stopped. "finished; played 1 attempt(s)" with 250 waiting
+    // is alarming or entirely routine depending on the reason, and the log said
+    // nothing either way.
+    let reason = 'queue-empty';
+
     try {
         for (;;) {
             if (MAX_JOBS > 0 && played >= MAX_JOBS) {
+                reason = 'max-jobs';
                 break;
             }
             const job = await claimJob();
             if (!job) {
+                reason = 'queue-empty';
                 break;
             }
 
@@ -859,9 +940,13 @@ async function main() {
                 // behind, which is the state the whole lease mechanism exists
                 // to prevent.
                 console.log(`Worker ${WORKER_ID} was asked to stop; finishing after this attempt.`);
+                reason = 'stop-requested';
                 break;
             }
         }
+    } catch (error) {
+        reason = 'fatal-error';
+        throw error;
     } finally {
         await browser.close();
     }
@@ -879,7 +964,7 @@ async function main() {
         // Nothing to do about it here; the reaper will notice in its own time.
     }
 
-    console.log(`Worker ${WORKER_ID} finished; played ${played} attempt(s).`);
+    console.log(`Worker ${WORKER_ID} finished; played ${played} attempt(s); reason=${reason}.`);
 }
 
 if (require.main === module) {

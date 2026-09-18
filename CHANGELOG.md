@@ -6,6 +6,56 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.6.58] — 2026-09-17
+
+Issues #86, #87 and #88. #89 is not done — see below.
+
+### #88 — the one that was mine
+0.6.36 added `request_stop()` so that deleting an experiment asks a worker to
+finish and leave. It never cleared the flag. Reusing a worker id reset the
+status, the pid and the heartbeat and left `stoprequested` standing, so the new
+worker was granted a stop it had never been asked for, at its first heartbeat —
+and finished after one attempt with hundreds waiting.
+
+`acquire_slot()` now clears everything belonging to the process that held the
+identity before: the stop flag, the current attempt, the worker state. Measured:
+stop requested, released, restarted, flag gone.
+
+The worker also says why it stopped — `queue-empty`, `max-jobs`,
+`stop-requested`, `fatal-error`. "Finished; played 1 attempt(s)" beside 250
+waiting is alarming or routine depending on the reason, and the log said nothing
+either way.
+
+### #87 — a stopping worker was recorded as running
+`report()` wrote `STATUS_RUNNING` whatever the worker said about itself, so a
+process that had reported `stopping` and exited showed as idle and live with its
+slot apparently taken — and the next start could be refused by a worker that no
+longer existed. A worker reporting that it is stopping is now recorded as
+stopped, holding no attempt. Measured: `live=1` while working, `live=0` after.
+
+### #86 — the error message, not the navigation
+`describePage()` took the first 200 characters of the body, which on a Moodle
+error page is the skip link, the site name and the breadcrumb. The failure
+reported `page="Zum Hauptinhalt Client01 Startseite…"` and said nothing about
+what went wrong.
+
+It now reads `.errormessage`, `.core-error-message`, `#region-main .alert-danger`
+and the rest before falling back, and reports the error, the error code and the
+debug block separately. Tokens, session keys and anything that looks like one
+are redacted, because an error report is a thing people paste into issues.
+
+### #89 — not done
+The end-to-end gate over a multi-question attempt across every strategy is not
+built. A worker run against this instance did play attempts through to
+collection, and the `played 1 attempt` pattern is gone — it played three — but
+that is an observation, not the gate the issue asks for. It stays open.
+
+### Verification
+PHPUnit 677 tests / 3595 assertions, Behat 32 scenarios / 235 steps, phpcs with
+the Moodle standard clean, PHPDoc clean, worker JS syntax clean.
+
+---
+
 ## [0.6.57] — 2026-09-17
 
 Issues #80 and #81 — and the reason both were possible.

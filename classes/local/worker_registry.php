@@ -121,12 +121,20 @@ class worker_registry {
             $DB->update_record('local_catquizlab_worker', (object) [
                 'id'           => $existing->id,
                 'slot'         => $slot,
-                'status'       => self::STATUS_STARTING,
-                'pid'          => $pid,
-                'hostname'     => gethostname() ?: null,
-                'lasterror'    => null,
-                'heartbeat'    => $now,
-                'timemodified' => $now,
+                'status'        => self::STATUS_STARTING,
+                'pid'           => $pid,
+                'hostname'      => gethostname() ?: null,
+                'lasterror'     => null,
+                // Everything that belonged to the process that used this
+                // identity before. A stop asked of it is not a stop asked of
+                // this one, and it was granted at the first heartbeat — which
+                // is why a worker with 250 attempts waiting played exactly one
+                // and finished.
+                'stoprequested' => 0,
+                'currentattempt' => 0,
+                'workerstate'   => 'starting',
+                'heartbeat'     => $now,
+                'timemodified'  => $now,
             ]);
 
             return (int) $existing->id;
@@ -139,10 +147,13 @@ class worker_registry {
                 'status'       => self::STATUS_STARTING,
                 'pid'          => $pid,
                 'hostname'     => gethostname() ?: null,
-                'jobsdone'     => 0,
-                'heartbeat'    => $now,
-                'timecreated'  => $now,
-                'timemodified' => $now,
+                'jobsdone'      => 0,
+                'stoprequested' => 0,
+                'currentattempt' => 0,
+                'workerstate'   => 'starting',
+                'heartbeat'     => $now,
+                'timecreated'   => $now,
+                'timemodified'  => $now,
             ]);
         } catch (\dml_exception $e) {
             // The unique index refused it: another process filled this identity
@@ -225,9 +236,18 @@ class worker_registry {
         $now = time();
         $DB->update_record('local_catquizlab_worker', (object) [
             'id'             => $worker->id,
-            'status'         => self::STATUS_RUNNING,
-            'currentattempt' => max(0, $attemptid),
+            // A worker reporting that it is stopping is not a worker running.
+            // Recording it as RUNNING left a finished process showing as idle
+            // and live, its slot apparently taken — so the next start could be
+            // refused with all-slots-busy by a process that had already exited.
+            'status'         => $state === 'stopping' || $state === 'stopped'
+                ? self::STATUS_STOPPED
+                : self::STATUS_RUNNING,
             'workerstate'    => $state,
+            // Nothing is being played by a worker on its way out.
+            'currentattempt' => in_array($state, ['stopping', 'stopped'], true)
+                ? 0
+                : max(0, $attemptid),
             'heartbeat'      => $now,
             'timemodified'   => $now,
         ]);
