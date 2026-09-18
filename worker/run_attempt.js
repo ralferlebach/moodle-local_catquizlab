@@ -816,6 +816,22 @@ async function selfTest() {
 async function main() {
     const puppeteer = require('puppeteer');
     const browser = await puppeteer.launch({headless: 'new', args: ['--no-sandbox']});
+
+    // Say so, before claiming anything. Everything above this line has now
+    // happened: Node ran, Puppeteer found a browser, and the web service
+    // answered. Moodle's launcher waits for exactly this, because a
+    // backgrounded shell command returning tells it none of those things — and
+    // reporting "1 worker started" on that basis is what put "workers: 1"
+    // beside "250 claimable, 0 in progress".
+    //
+    // A failure here is fatal on purpose: a worker that cannot reach Moodle has
+    // nothing to do, and one that stays up anyway holds a slot for nothing.
+    await callWs('local_catquizlab_worker_heartbeat', {
+        workerid: WORKER_ID,
+        attemptid: 0,
+        state: 'starting',
+    });
+
     let played = 0;
     try {
         for (;;) {

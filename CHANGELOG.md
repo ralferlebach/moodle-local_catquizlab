@@ -6,6 +6,57 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.6.57] — 2026-09-17
+
+Issues #80 and #81 — and the reason both were possible.
+
+### #80 — "started" meant a shell command returned
+`launch_pool()` counted a launch the moment `exec($command . ' &')` returned.
+That means the shell was asked to start something. It does not mean Node ran,
+that Puppeteer found a browser, or that the worker reached Moodle — and counting
+it anyway is why **"1 worker started"** appeared beside **"250 claimable, 0 in
+progress"**.
+
+The worker says so itself now: it registers as soon as Node, Puppeteer and the
+web service have all worked, and the launcher waits up to eight seconds for that
+before counting anything. A worker that never reports has its slot released and
+its last output kept, because a worker that dies on startup has already said
+why.
+
+Measured: a deliberately broken worker returns `launched=0, no-handshake` and
+leaves no registry row. A working one returns `launched=1` in 0.8 seconds.
+
+### The heartbeat had never worked
+Making the handshake explicit exposed why this was possible at all.
+`local_catquizlab_worker_heartbeat` was declared as an external function in
+0.6.14 and **never added to the worker's service**, so every heartbeat a worker
+ever sent came back `Access control exception`. The worker's own error handling
+swallowed it — a missed heartbeat is not worth abandoning an attempt over — so
+nothing ever looked wrong.
+
+The consequence: workers never reported, and their liveness was read from the
+registry row the launcher itself had written. Every "worker is alive" this
+plugin has displayed was the launcher agreeing with itself.
+
+### #81 — "Simulation running" now means simulation is running
+The run card showed *running* whenever any worker was live, so a run could read
+`running, 0%` beside `250 claimable, 0 in progress` — which cannot both be true,
+and the one a person acts on is the second.
+
+It asks whether **this run's** attempts are being held by a worker right now.
+When none are, it says `Prepared, waiting for a worker`, which is true whether
+the workers are busy elsewhere, still starting, or about to pick this up.
+Measured both ways.
+
+### Verification
+PHPUnit 677 tests / 3595 assertions, Behat 32 scenarios / 235 steps, phpcs with
+the Moodle standard clean, PHPDoc clean, worker JS syntax clean.
+
+### Still open
+#78 — live progress at experiment, run and sitting level.
+
+---
+
 ## [0.6.56] — 2026-09-17
 
 Issues #76, #77 and #83: the two actions, in the interface.

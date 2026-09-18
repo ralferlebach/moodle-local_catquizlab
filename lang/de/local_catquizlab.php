@@ -755,6 +755,7 @@ $string['report:runmissing'] = 'Diesen Versuchsdurchlauf gibt es nicht mehr.';
 $string['report:runrunning'] = 'Versuchsdurchlauf in Arbeit';
 $string['report:runs'] = 'Versuchsdurchläufe';
 $string['report:runtitle'] = 'Versuchsdurchlauf-Report — {$a}';
+$string['report:runwaiting'] = 'Vorbereitet, wartet auf einen Simulationsprozess';
 $string['report:sd'] = 'SD';
 $string['report:value'] = 'Wert';
 $string['report:viewreport'] = 'Report ansehen';

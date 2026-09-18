@@ -93,6 +93,12 @@ $services = [
             'local_catquizlab_oracle_answer',
             'local_catquizlab_job_claim',
             'local_catquizlab_job_complete',
+            // Declared as a function since 0.6.14 and never added to the
+            // service, so every heartbeat a worker sent was refused. The
+            // worker's own error handling swallowed it, so nothing looked
+            // wrong: workers simply never reported, and their runtime and
+            // liveness were read from the registry row the launcher wrote.
+            'local_catquizlab_worker_heartbeat',
         ],
         'restrictedusers' => 1,
         'enabled'         => 0,

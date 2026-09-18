@@ -55,6 +55,29 @@ class worker_registry {
     public const STATUS_CRASHED = 30;
 
     /**
+     * Whether this worker has reported since it was started.
+     *
+     * The slot is taken the moment a launch is attempted, so its existence
+     * proves nothing. A heartbeat is the worker itself saying it is up, which
+     * is the only evidence that distinguishes a running process from a shell
+     * command that returned.
+     *
+     * @param string $workerid The worker.
+     * @return bool
+     */
+    public static function has_reported(string $workerid): bool {
+        global $DB;
+
+        $row = $DB->get_record('local_catquizlab_worker', ['workerid' => $workerid], 'id, status');
+
+        // Not the heartbeat: acquiring the slot writes one, so its presence
+        // only proves that a launch was attempted. The status leaving STARTING
+        // is the worker itself saying it is up, which is the thing a shell
+        // command returning cannot fake.
+        return $row && (int) $row->status !== self::STATUS_STARTING;
+    }
+
+    /**
      * How long a worker may go quiet before it counts as gone.
      *
      * Generous on purpose: a worker playing one long attempt must not be

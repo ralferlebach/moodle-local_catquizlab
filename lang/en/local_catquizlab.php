@@ -755,6 +755,7 @@ $string['report:runmissing'] = 'This run no longer exists.';
 $string['report:runrunning'] = 'Run in progress';
 $string['report:runs'] = 'Runs';
 $string['report:runtitle'] = 'Run report — {$a}';
+$string['report:runwaiting'] = 'Prepared, waiting for a worker';
 $string['report:sd'] = 'SD';
 $string['report:value'] = 'Value';
 $string['report:viewreport'] = 'View report';

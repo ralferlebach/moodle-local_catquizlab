@@ -469,6 +469,7 @@ class worker_launcher {
         }
 
         $launched = 0;
+        $failures = [];
         foreach ($free as $slot) {
             $workerid = $prefix . '-' . $slot;
 
@@ -495,16 +496,75 @@ class worker_launcher {
             // no longer existed, with nothing to say why.
             $log = self::log_path($workerid);
             exec($command . ' >> ' . escapeshellarg($log) . ' 2>&1 &');
-            $launched++;
+
+            // A successful exec() of a backgrounded command means the shell was
+            // asked to start something. It does not mean Node ran, that
+            // Puppeteer found a browser, or that the worker reached Moodle —
+            // and counting it as a launch is why "workers started: 1" appeared
+            // beside "250 claimable, 0 in progress".
+            //
+            // So the worker has to say so itself. It registers a heartbeat as
+            // soon as it is up; until that arrives, nothing was started.
+            $handshake = self::await_handshake($workerid);
+            if ($handshake['ok']) {
+                $launched++;
+                continue;
+            }
+
+            // It never reported. Release the slot it was holding, and keep what
+            // it wrote on the way down: a worker that dies on startup has
+            // already said why, and throwing that away leaves a registry entry
+            // for a process that never existed.
+            worker_registry::release($workerid);
+            $failures[] = [
+                'workerid' => $workerid,
+                'reason'   => $handshake['reason'],
+                'output'   => self::log_tail($workerid, 400),
+            ];
+        }
+
+        $reason = '';
+        if ($launched === 0) {
+            $reason = $failures !== [] ? 'no-handshake' : 'no-slot-acquired';
         }
 
         return [
             'launched' => $launched,
             'skipped'  => $concurrency - $launched,
-            'reason'   => $launched > 0 ? '' : 'no-slot-acquired',
+            'reason'   => $reason,
+            'failures' => $failures,
             'exitcode' => 0,
-            'output'   => '',
+            'output'   => $failures === [] ? '' : (string) ($failures[0]['output'] ?? ''),
         ];
+    }
+
+    /**
+     * Wait for a worker to report that it is actually up.
+     *
+     * Short by design: a worker that is going to start does so in a second or
+     * two, and one that is going to fail has usually failed by then. Waiting
+     * longer would make the button feel broken for the case it is meant to
+     * diagnose.
+     *
+     * @param string $workerid The worker.
+     * @param float $seconds How long to wait.
+     * @return array{ok: bool, reason: string, waited: float}
+     */
+    protected static function await_handshake(string $workerid, float $seconds = 8.0): array {
+        $started = microtime(true);
+        $deadline = $started + $seconds;
+
+        while (microtime(true) < $deadline) {
+            // 200ms: short enough that a fast worker is not kept waiting, long
+            // enough that this is not a busy loop against the database.
+            usleep(200000);
+
+            if (worker_registry::has_reported($workerid)) {
+                return ['ok' => true, 'reason' => '', 'waited' => microtime(true) - $started];
+            }
+        }
+
+        return ['ok' => false, 'reason' => 'no-heartbeat', 'waited' => microtime(true) - $started];
     }
 
     /**

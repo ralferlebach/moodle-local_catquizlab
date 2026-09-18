@@ -51,6 +51,26 @@ class status_report {
     public const BAD = 'bad';
 
     /**
+     * How many of this run's attempts a worker is holding right now.
+     *
+     * @param int $runid The run.
+     * @return int
+     */
+    protected static function attempts_in_flight(int $runid): int {
+        global $DB;
+
+        return (int) $DB->count_records_select(
+            'local_catquizlab_attempt',
+            'runid = :runid AND status = :running AND leaseexpires > :now',
+            [
+                'runid'   => $runid,
+                'running' => attempt_scheduler::STATUS_RUNNING,
+                'now'     => time(),
+            ]
+        );
+    }
+
+    /**
      * The state of one run, with what it is waiting for.
      *
      * @param int|\stdClass $run The run or its id.
@@ -130,9 +150,31 @@ class status_report {
                 );
             }
 
+            // Simulation running means this run's attempts are being played,
+            // not that a worker exists somewhere. The two were read as the same
+            // thing, so a run could show "running, 0%" beside "250 claimable, 0
+            // in progress" — which cannot both be true, and the one a person
+            // acts on is the second.
+            $inflight = self::attempts_in_flight((int) $run->id);
+
+            if ($inflight > 0) {
+                return self::card(
+                    self::GOOD,
+                    get_string('report:runrunning', $component),
+                    get_string('report:progress', $component, (object) [
+                        'done'  => $counts['collected'],
+                        'total' => $counts['total'],
+                    ]),
+                    null
+                );
+            }
+
+            // Prepared, nothing being played: true whether the workers are busy
+            // elsewhere, still starting, or about to pick this up. Saying so is
+            // more use than claiming progress that is not happening.
             return self::card(
-                self::GOOD,
-                get_string('report:runrunning', $component),
+                $counts['open'] > 0 ? self::WATCH : self::GOOD,
+                get_string('report:runwaiting', $component),
                 get_string('report:progress', $component, (object) [
                     'done'  => $counts['collected'],
                     'total' => $counts['total'],
