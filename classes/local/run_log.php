@@ -71,6 +71,12 @@ class run_log {
     /** @var string The run failed. */
     public const RUN_FAILED = 'run_failed';
 
+    /** @var string Held automatically after failing the same way repeatedly. */
+    public const RUN_AUTOPAUSED = 'run_autopaused';
+
+    /** @var string Let go again by a person who dealt with the cause. */
+    public const RUN_RESUMED = 'run_resumed';
+
     /** @var string An attempt was claimed by a worker. */
     public const ATTEMPT_CLAIMED = 'attempt_claimed';
 

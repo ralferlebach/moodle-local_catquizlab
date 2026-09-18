@@ -6,6 +6,65 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.6.63] — 2026-09-18
+
+Issue #92, and the CI failure my last fix caused.
+
+### The CI job, again — and this one was mine
+The reported log:
+
+    Invalid format '# experiment course: 2'
+
+That line is mine. I added it last release as a diagnostic, and the step
+redirects the script's entire output into `$GITHUB_OUTPUT`, where anything that
+is not `key=value` is a parse error. I fixed a job and broke it with the fix.
+
+Diagnostics go to stderr now. But the real correction is in the workflow: it
+filters with `grep -E '^[a-z_]+='` instead of trusting the script, because
+Moodle's own fatal errors also go to stdout and no amount of care inside the
+script makes that safe. The full output is logged in a separate step, so
+nothing is lost.
+
+**And the failure hiding behind it:** `local_catquizlab_e2e_token()` called
+`create_role()` unconditionally. It worked exactly once per installation; the
+second run hit the unique shortname and died with "Error writing to database" —
+a message that says nothing about a role, and which then went into the output
+parser too. The role and the service membership are reused when they exist.
+Verified by running it twice in a row.
+
+### #92 — a run that fails ten times the same way now stops
+A run whose sittings all fail for one reason keeps failing for that reason.
+Retrying the eleventh produces an eleventh identical failure and some more
+minutes of a browser's time, while the experiment goes on reporting itself as
+running — so somebody watching sees progress that is only the failure counter
+moving.
+
+After ten consecutive failures the run is held, the experiment goes to
+**BLOCKED**, and the remaining sittings stay queued and out of reach rather than
+being spent on a known failure. Measured: ten failures, run held, five sittings
+held back, experiment blocked.
+
+**The cause, once:** errors are normalised — attempt ids, paths, hashes and
+timestamps stripped — and grouped, so ten reports of one fault read as
+
+    Division by zero (×10)
+
+rather than as ten separate problems burying the one line somebody needs.
+
+**Reading comes before retrying.** The card's action is *Show the error and the
+log*, which links into step 5 filtered to that run. *Clear the errors and
+continue* sits after it, because pressing it without looking produces the same
+ten failures. Measured: 10 sittings requeued, run back to READY.
+
+The trip and the reset are both recorded as `run_autopaused` and `run_resumed`,
+with the failure count and the last error.
+
+### Verification
+PHPUnit 679 tests / 3599 assertions, Behat 32 scenarios / 235 steps, phpcs with
+the Moodle standard clean, PHPDoc clean, 1120 strings per language.
+
+---
+
 ## [0.6.62] — 2026-09-18
 
 Issues #93 and #94 — both consequences of my own earlier changes.

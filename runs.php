@@ -127,6 +127,23 @@ if ($action === 'startexperiment') {
     );
 }
 
+// Letting a held run try again, after somebody has dealt with the cause. Not
+// offered automatically and not retried in a loop: the whole point of holding a
+// run is that repeating it without a change repeats the failure.
+if ($action === 'resetcircuit' && $runid > 0) {
+    require_sesskey();
+    require_capability('local/catquizlab:execute', $context);
+
+    $reset = \local_catquizlab\local\circuit_breaker::reset_and_continue($runid);
+
+    redirect(
+        new moodle_url('/local/catquizlab/runs.php', ['runid' => $runid]),
+        get_string('circuit:reset', $component, $reset['released']),
+        null,
+        \core\output\notification::NOTIFY_SUCCESS
+    );
+}
+
 if ($action !== '' && $runid > 0) {
     require_sesskey();
     require_capability('local/catquizlab:execute', $context);

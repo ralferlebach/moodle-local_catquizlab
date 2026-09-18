@@ -326,6 +326,18 @@ class attempt_scheduler {
             $update->nextruntime = $now + self::RETRY_BACKOFF * max(1, $tries);
         }
         $DB->update_record('local_catquizlab_attempt', $update);
+
+        // A sitting that has given up is the moment to ask whether this run is
+        // failing the same way over and over. Asking later — on a page load, in
+        // a scheduled task — means the pool spends minutes more on sittings
+        // that will fail identically.
+        if ($status === self::STATUS_FAILED) {
+            $runid = (int) $DB->get_field('local_catquizlab_attempt', 'runid', ['id' => $attemptid]);
+            if ($runid > 0) {
+                circuit_breaker::check($runid);
+            }
+        }
+
         return $status;
     }
 

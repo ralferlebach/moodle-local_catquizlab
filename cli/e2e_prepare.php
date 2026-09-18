@@ -95,7 +95,7 @@ function local_catquizlab_e2e_verify(int $runid): int {
     global $DB;
 
     if ($runid <= 0) {
-        cli_writeln('--verify needs --runid.');
+        fwrite(STDERR, '--verify needs --runid.' . PHP_EOL);
         return 1;
     }
 
@@ -111,16 +111,16 @@ function local_catquizlab_e2e_verify(int $runid): int {
         ['runid' => $runid, 'status' => registry::STATUS_FAILED]
     );
 
-    cli_writeln("Run {$runid}: {$finished}/{$total} attempts finished, {$failed} failed.");
+    fwrite(STDERR, "Run {$runid}: {$finished}/{$total} attempts finished, {$failed} failed." . PHP_EOL);
 
     if ($total === 0) {
-        cli_writeln('No attempts were queued for this run.');
+        fwrite(STDERR, 'No attempts were queued for this run.' . PHP_EOL);
         return 1;
     }
     if ($failed > 0 || $finished < $total) {
         // A worker that silently played nothing must not pass as success: the
         // whole point of the end-to-end job is that an attempt really ran.
-        cli_writeln('The worker did not complete every queued attempt.');
+        fwrite(STDERR, 'The worker did not complete every queued attempt.' . PHP_EOL);
         return 1;
     }
 
@@ -138,7 +138,7 @@ function local_catquizlab_e2e_prepare(string $name, int $persons): int {
     global $DB;
 
     if (!environment::engine_available() || !environment::adaptivequiz_available()) {
-        cli_writeln('The CAT engine or mod_adaptivequiz is missing; an end-to-end run is not possible.');
+        fwrite(STDERR, 'The CAT engine or mod_adaptivequiz is missing; an end-to-end run is not possible.' . PHP_EOL);
         return 1;
     }
 
@@ -178,7 +178,9 @@ function local_catquizlab_e2e_prepare(string $name, int $persons): int {
             return 1;
         }
         set_config('experimentcourseid', $courseid, 'local_catquizlab');
-        cli_writeln('# experiment course: ' . $courseid);
+        // Diagnostics go to stderr, where the workflow logs them and the
+        // output parser never sees them.
+        fwrite(STDERR, 'experiment course: ' . $courseid . PHP_EOL);
     }
 
     $setup = run_orchestrator::setup($runid, [
@@ -275,16 +277,34 @@ function local_catquizlab_e2e_token(): ?string {
 
     // The worker capability is the only privilege this account needs.
     $context = context_system::instance();
-    $roleid = create_role('CATLab worker', 'catlabworker' . $user->id, 'End-to-end worker account.');
+    $shortname = 'catlabworker' . $user->id;
+
+    // Reuse the role if it is already there. Creating it unconditionally
+    // worked exactly once per installation: the second run hit the unique
+    // shortname and died with "Error writing to database", which says nothing
+    // about a role and sent the whole step's output — including that message —
+    // into the workflow's output parser.
+    $existing = $DB->get_record('role', ['shortname' => $shortname]);
+    $roleid = $existing
+        ? (int) $existing->id
+        : create_role('CATLab worker', $shortname, 'End-to-end worker account.');
+
     set_role_contextlevels($roleid, [CONTEXT_SYSTEM]);
     assign_capability('local/catquizlab:worker', CAP_ALLOW, $roleid, $context->id, true);
     assign_capability('moodle/webservice:createtoken', CAP_ALLOW, $roleid, $context->id, true);
     role_assign($roleid, $user->id, $context->id);
-    $DB->insert_record('external_services_users', (object) [
-        'externalserviceid' => $service->id,
-        'userid'            => $user->id,
-        'timecreated'       => time(),
-    ]);
+
+    // Same for the service membership: a second row is a duplicate, not a
+    // second permission.
+    $membership = ['externalserviceid' => $service->id, 'userid' => $user->id];
+
+    if (!$DB->record_exists('external_services_users', $membership)) {
+        $DB->insert_record('external_services_users', (object) [
+            'externalserviceid' => $service->id,
+            'userid'            => $user->id,
+            'timecreated'       => time(),
+        ]);
+    }
 
     require_once($CFG->dirroot . '/lib/externallib.php');
 
