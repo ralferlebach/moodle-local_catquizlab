@@ -1,0 +1,1328 @@
+<?php
+// This file is part of Moodle - http://moodle.org/
+//
+// Moodle is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// Moodle is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with Moodle.  If not, see <http://www.gnu.org/licenses/>.
+
+/**
+ * The run lifecycle, from a created experiment to an evaluated result.
+ *
+ * The guiding invariant these tests exist for: an experiment may only appear as
+ * executed when its runs have been through the real execution path. An expanded
+ * sweep is not an execution, a scheduled run is not an attempt, and an attempt
+ * without a trace is not a result.
+ *
+ * @package    local_catquizlab
+ * @copyright  2026 Ralf Erlebach
+ * @license    http://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
+ */
+
+namespace local_catquizlab;
+
+use local_catquizlab\local\attempt_scheduler;
+use local_catquizlab\local\experiment_definition;
+use local_catquizlab\local\experiment_service;
+use local_catquizlab\local\preflight;
+use local_catquizlab\local\registry;
+use local_catquizlab\local\run_lifecycle;
+
+/**
+ * Lifecycle tests.
+ *
+ * @package    local_catquizlab
+ * @copyright  2026 Ralf Erlebach
+ * @license    http://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
+ * @covers     \local_catquizlab\local\run_lifecycle
+ * @covers     \local_catquizlab\local\preflight
+ */
+final class run_lifecycle_test extends \advanced_testcase {
+    /**
+     * Create an experiment with a two-cell sweep.
+     *
+     * @return int The experiment id.
+     */
+    protected function experiment_with_runs(): int {
+        $definition = experiment_definition::example_baseline();
+        $definition['name'] = 'Lifecycle';
+        $definition['sweep'] = ['factors' => ['strategy' => ['classic', 'fastest']]];
+
+        $experimentid = (int) experiment_service::save($definition)['id'];
+        experiment_service::create_sweep($experimentid);
+
+        return $experimentid;
+    }
+
+    /**
+     * Give the site everything preflight insists on.
+     *
+     * @return int The course id.
+     */
+    protected function satisfy_preflight(): int {
+        $course = $this->getDataGenerator()->create_course();
+        set_config('experimentcourseid', $course->id, 'local_catquizlab');
+
+        // A worker that could play the attempts. Without one preflight warns
+        // but does not block, so this only keeps the warning out of the way.
+        set_config('workernodepath', '/usr/bin/node', 'local_catquizlab');
+
+        return (int) $course->id;
+    }
+
+    /**
+     * Give a run a pool its CAT configuration could actually start from.
+     *
+     * The readiness check reads the engine's tables, so a run that exists only
+     * as a row cannot pass it — correctly, because such a run would queue jobs
+     * that fail before the first question. Tests about the lifecycle after
+     * provisioning therefore have to look like a provisioned run.
+     *
+     * @param int $runid The run.
+     * @param int $peritem Usable items per subscale.
+     * @return void
+     */
+    protected function give_the_run_a_pool(int $runid, int $peritem = 12): void {
+        global $DB;
+
+        if (!\local_catquizlab\local\environment::catquiz_available()) {
+            // Without the engine the check stands down, so there is nothing to
+            // satisfy and nothing to fake.
+            return;
+        }
+
+        $definition = ['budgets' => [
+            'global'   => ['minitems' => 4, 'maxitems' => 20],
+            'subscale' => ['minitems' => 1, 'maxitems' => 10],
+        ]];
+        $run = $DB->get_record('local_catquizlab_run', ['id' => $runid]);
+        $manifest = json_decode((string) $run->manifestjson, true) ?: [];
+        $manifest['config']['definition'] = array_merge(
+            $manifest['config']['definition'] ?? [],
+            $definition
+        );
+        $DB->set_field('local_catquizlab_run', 'manifestjson', json_encode($manifest), ['id' => $runid]);
+
+        foreach ([1, 2] as $index) {
+            $scaleid = $runid * 1000 + $index;
+            $DB->insert_record('local_catquizlab_scalemap', (object) [
+                'runid'         => $runid,
+                'level'         => \local_catquizlab\local\scale_provisioner::LEVEL_SUBSCALE,
+                'catscaleid'    => $scaleid,
+                'categoryindex' => 1,
+                'subscaleindex' => $index,
+                // The logical position the unique index is on. Without it every
+                // row falls back to the default and collides.
+                'nodekey'       => 'c1s' . $index,
+                'timecreated'   => time(),
+            ]);
+
+            for ($i = 0; $i < $peritem; $i++) {
+                $paramid = $DB->insert_record('local_catquiz_itemparams', (object) [
+                    'componentid' => 0, 'componentname' => 'question', 'contextid' => 1,
+                    'model' => 'raschbirnbaum', 'difficulty' => 0, 'discrimination' => 1,
+                    'guessing' => 0, 'status' => \local_catquizlab\local\cat_readiness::STATUS_KNOWN,
+                    'timecreated' => time(), 'timemodified' => time(),
+                ]);
+                $DB->insert_record('local_catquiz_items', (object) [
+                    'componentid' => 0, 'componentname' => 'question', 'catscaleid' => $scaleid,
+                    'contextid' => 1, 'activeparamid' => $paramid, 'status' => 0,
+                    'timecreated' => time(), 'timemodified' => time(),
+                ]);
+            }
+        }
+    }
+
+    /**
+     * Skip a test that needs a start to actually go through.
+     *
+     * Starting a run requires the engine and the host activity, because a run
+     * queued without them would look started and never move — that refusal is
+     * the point of the preflight. CI installs the suite without an engine on
+     * releases the engine does not support, and there a start cannot be
+     * exercised. The lifecycle transitions themselves are tested without one.
+     *
+     * @return void
+     */
+    protected function require_startable_site(): void {
+        if (!\local_catquizlab\local\environment::engine_available()) {
+            $this->markTestSkipped('No CAT engine installed; a start is refused by design.');
+        }
+    }
+
+    /**
+     * Put a run into the state a successful start would leave it in.
+     *
+     * Used by the tests that are about what happens after a start rather than
+     * about the start itself, so they run on a site without an engine too.
+     *
+     * @param int $runid The run.
+     * @return void
+     */
+    protected function pretend_started(int $runid): void {
+        global $DB;
+
+        $DB->set_field('local_catquizlab_run', 'status', registry::STATUS_SCHEDULED, ['id' => $runid]);
+        run_lifecycle::refresh_experiment($runid);
+    }
+
+    /**
+     * The run ids of an experiment.
+     *
+     * @param int $experimentid The experiment.
+     * @return int[]
+     */
+    protected function run_ids(int $experimentid): array {
+        global $DB;
+
+        return array_map('intval', array_keys(
+            $DB->get_records('local_catquizlab_run', ['experimentid' => $experimentid], 'id ASC', 'id')
+        ));
+    }
+
+    /**
+     * Add an attempt in a given state.
+     *
+     * @param int $runid The run.
+     * @param int $status One of attempt_scheduler's status constants.
+     * @return int The attempt id.
+     */
+    protected function add_attempt(int $runid, int $status = attempt_scheduler::STATUS_QUEUED): int {
+        global $DB;
+
+        return (int) $DB->insert_record('local_catquizlab_attempt', (object) [
+            'runid'        => $runid,
+            'personid'     => 0,
+            'status'       => $status,
+            'tries'        => 0,
+            'timecreated'  => time(),
+            'timemodified' => time(),
+        ]);
+    }
+
+    /**
+     * A run's status.
+     *
+     * @param int $runid The run.
+     * @return int
+     */
+    protected function run_status(int $runid): int {
+        global $DB;
+
+        return (int) $DB->get_field('local_catquizlab_run', 'status', ['id' => $runid]);
+    }
+
+    /**
+     * Creating a sweep does not make an experiment executed.
+     *
+     * @return void
+     */
+    public function test_create_sweep_does_not_claim_execution(): void {
+        global $DB;
+        $this->resetAfterTest();
+        $this->setAdminUser();
+
+        $experimentid = $this->experiment_with_runs();
+        $runs = $this->run_ids($experimentid);
+
+        $this->assertNotEmpty($runs);
+        foreach ($runs as $runid) {
+            $this->assertSame(registry::STATUS_DRAFT, $this->run_status($runid));
+        }
+
+        // The observed defect: an experiment reading "Executed" while every one
+        // of its runs was a draft at 0%. Creating runs is not running them.
+        $status = (int) $DB->get_field('local_catquizlab_experiment', 'status', ['id' => $experimentid]);
+        $this->assertSame(experiment_service::STATUS_EXPANDED, $status);
+        $this->assertNotSame(experiment_service::STATUS_EXECUTED, $status);
+    }
+
+    /**
+     * The experiment status follows its runs through the whole path.
+     *
+     * @return void
+     */
+    public function test_experiment_status_is_derived_from_its_runs(): void {
+        global $DB;
+        $this->resetAfterTest();
+        $this->setAdminUser();
+
+        $experimentid = $this->experiment_with_runs();
+        $runs = $this->run_ids($experimentid);
+
+        $this->assertSame(experiment_service::STATUS_EXPANDED, run_lifecycle::experiment_status($experimentid));
+
+        $DB->set_field('local_catquizlab_run', 'status', registry::STATUS_RUNNING, ['id' => $runs[0]]);
+        $this->assertSame(experiment_service::STATUS_RUNNING, run_lifecycle::experiment_status($experimentid));
+
+        foreach ($runs as $runid) {
+            $DB->set_field('local_catquizlab_run', 'status', registry::STATUS_FINISHED, ['id' => $runid]);
+        }
+        $this->assertSame(experiment_service::STATUS_EXECUTED, run_lifecycle::experiment_status($experimentid));
+
+        // Every run terminal but none finished is not an execution either.
+        foreach ($runs as $runid) {
+            $DB->set_field('local_catquizlab_run', 'status', registry::STATUS_FAILED, ['id' => $runid]);
+        }
+        $this->assertSame(experiment_service::STATUS_FAILED, run_lifecycle::experiment_status($experimentid));
+    }
+
+    /**
+     * Starting a draft run schedules it and queues the orchestrator.
+     *
+     * @return void
+     */
+    public function test_start_schedules_a_draft_run(): void {
+        $this->resetAfterTest();
+        $this->setAdminUser();
+        $this->satisfy_preflight();
+        $this->require_startable_site();
+
+        $runid = $this->run_ids($this->experiment_with_runs())[0];
+
+        $before = count(\core\task\manager::get_adhoc_tasks(\local_catquizlab\task\orchestrate_run::class));
+        $result = run_lifecycle::start($runid);
+        $after = count(\core\task\manager::get_adhoc_tasks(\local_catquizlab\task\orchestrate_run::class));
+
+        $this->assertTrue($result['started']);
+        $this->assertSame(registry::STATUS_SCHEDULED, $this->run_status($runid));
+        $this->assertSame($before + 1, $after, 'Starting a run must go through the shared orchestrator task.');
+    }
+
+    /**
+     * A run that is not a draft is not started again.
+     *
+     * @return void
+     */
+    public function test_only_draft_runs_can_be_started(): void {
+        global $DB;
+        $this->resetAfterTest();
+        $this->setAdminUser();
+        $this->satisfy_preflight();
+
+        $runid = $this->run_ids($this->experiment_with_runs())[0];
+        $DB->set_field('local_catquizlab_run', 'status', registry::STATUS_RUNNING, ['id' => $runid]);
+
+        // Restarting a running run would give it a second attempt queue.
+        $result = run_lifecycle::start($runid);
+
+        $this->assertFalse($result['started']);
+        $this->assertSame('run-not-in-draft', $result['reason']);
+        $this->assertSame(registry::STATUS_RUNNING, $this->run_status($runid));
+    }
+
+    /**
+     * Without an experiment course a run is not started at all.
+     *
+     * @return void
+     */
+    public function test_start_is_blocked_without_an_experiment_course(): void {
+        $this->resetAfterTest();
+        $this->setAdminUser();
+
+        set_config('experimentcourseid', 0, 'local_catquizlab');
+        $runid = $this->run_ids($this->experiment_with_runs())[0];
+
+        // Queueing it anyway would leave a run that looks started and never
+        // moves, which is worse than a refusal with a reason.
+        $result = run_lifecycle::start($runid);
+
+        $this->assertFalse($result['started']);
+        $this->assertNotSame('', $result['reason']);
+        $this->assertSame(registry::STATUS_DRAFT, $this->run_status($runid));
+    }
+
+    /**
+     * A configured but deleted course counts as not configured.
+     *
+     * @return void
+     */
+    public function test_deleted_experiment_course_blocks_the_start(): void {
+        $this->resetAfterTest();
+        $this->setAdminUser();
+
+        $courseid = $this->satisfy_preflight();
+        delete_course($courseid, false);
+
+        $check = preflight::check();
+
+        // The setting still holds an id, which is exactly why this has to be
+        // checked: it looks configured and fails deep inside a stage.
+        $this->assertFalse($check['ok']);
+        $this->assertSame(0, $check['course']);
+    }
+
+    /**
+     * Starting every draft run of an experiment.
+     *
+     * @return void
+     */
+    public function test_start_drafts_starts_all_of_them(): void {
+        $this->resetAfterTest();
+        $this->setAdminUser();
+        $this->satisfy_preflight();
+        $this->require_startable_site();
+
+        $experimentid = $this->experiment_with_runs();
+        $result = run_lifecycle::start_drafts($experimentid);
+
+        $this->assertGreaterThan(0, $result['started']);
+        $this->assertSame(0, $result['blocked']);
+        foreach ($this->run_ids($experimentid) as $runid) {
+            $this->assertSame(registry::STATUS_SCHEDULED, $this->run_status($runid));
+        }
+    }
+
+    /**
+     * Provisioning moves a scheduled run to ready, or fails it with a reason.
+     *
+     * @return void
+     */
+    public function test_provisioning_outcome_reaches_the_run(): void {
+        global $DB;
+        $this->resetAfterTest();
+        $this->setAdminUser();
+        $this->satisfy_preflight();
+
+        $runs = $this->run_ids($this->experiment_with_runs());
+
+        $this->give_the_run_a_pool($runs[0]);
+        $this->pretend_started($runs[0]);
+        run_lifecycle::provisioned($runs[0], true);
+        $this->assertSame(registry::STATUS_READY, $this->run_status($runs[0]));
+
+        $this->pretend_started($runs[1]);
+        run_lifecycle::provisioned($runs[1], false, 'stage:materialise (pool-too-small)');
+        $this->assertSame(registry::STATUS_FAILED, $this->run_status($runs[1]));
+
+        // The reason travels with the run: a status without one forces the next
+        // reader to reconstruct it from logs that may no longer exist.
+        $manifest = json_decode(
+            (string) $DB->get_field('local_catquizlab_run', 'manifestjson', ['id' => $runs[1]]),
+            true
+        );
+        $this->assertStringContainsString('materialise', $manifest['lifecycle']['failedreason']);
+    }
+
+    /**
+     * The first claimed attempt makes the run running.
+     *
+     * @return void
+     */
+    public function test_first_claim_moves_the_run_to_running(): void {
+        $this->resetAfterTest();
+        $this->setAdminUser();
+        $this->satisfy_preflight();
+
+        $runid = $this->run_ids($this->experiment_with_runs())[0];
+        $this->give_the_run_a_pool($runid);
+        $this->pretend_started($runid);
+        run_lifecycle::provisioned($runid, true);
+
+        $this->assertTrue(run_lifecycle::attempt_claimed($runid));
+        $this->assertSame(registry::STATUS_RUNNING, $this->run_status($runid));
+
+        // Later claims of the same run change nothing.
+        $this->assertFalse(run_lifecycle::attempt_claimed($runid));
+        $this->assertSame(registry::STATUS_RUNNING, $this->run_status($runid));
+    }
+
+    /**
+     * While attempts are open the run does not move on.
+     *
+     * @return void
+     */
+    public function test_run_waits_for_its_open_attempts(): void {
+        $this->resetAfterTest();
+        $this->setAdminUser();
+        $this->satisfy_preflight();
+
+        $runid = $this->run_ids($this->experiment_with_runs())[0];
+        $this->give_the_run_a_pool($runid);
+        $this->pretend_started($runid);
+        run_lifecycle::provisioned($runid, true);
+        run_lifecycle::attempt_claimed($runid);
+
+        $this->add_attempt($runid, attempt_scheduler::STATUS_COLLECTED);
+        $this->add_attempt($runid, attempt_scheduler::STATUS_QUEUED);
+
+        $this->assertNull(run_lifecycle::attempt_finished($runid));
+        $this->assertSame(registry::STATUS_RUNNING, $this->run_status($runid));
+    }
+
+    /**
+     * The last collected attempt hands the run to aggregation, once.
+     *
+     * @return void
+     */
+    public function test_last_attempt_queues_aggregation_exactly_once(): void {
+        $this->resetAfterTest();
+        $this->setAdminUser();
+        $this->satisfy_preflight();
+
+        $runid = $this->run_ids($this->experiment_with_runs())[0];
+        $this->give_the_run_a_pool($runid);
+        $this->pretend_started($runid);
+        run_lifecycle::provisioned($runid, true);
+        run_lifecycle::attempt_claimed($runid);
+        $this->add_attempt($runid, attempt_scheduler::STATUS_COLLECTED);
+
+        $before = count(\core\task\manager::get_adhoc_tasks(\local_catquizlab\task\aggregate_results::class));
+        $this->assertSame('aggregating', run_lifecycle::attempt_finished($runid));
+        $this->assertSame(registry::STATUS_AGGREGATING, $this->run_status($runid));
+
+        // Completion callbacks arrive more than once — a retried worker, a
+        // re-collected attempt — and the aggregation must not be queued twice.
+        $this->assertNull(run_lifecycle::attempt_finished($runid));
+        $this->assertNull(run_lifecycle::attempt_finished($runid));
+
+        $after = count(\core\task\manager::get_adhoc_tasks(\local_catquizlab\task\aggregate_results::class));
+        $this->assertSame($before + 1, $after);
+    }
+
+    /**
+     * A run whose attempts all failed does not go to aggregation.
+     *
+     * @return void
+     */
+    public function test_run_without_a_single_trace_fails(): void {
+        $this->resetAfterTest();
+        $this->setAdminUser();
+        $this->satisfy_preflight();
+
+        $runid = $this->run_ids($this->experiment_with_runs())[0];
+        $this->give_the_run_a_pool($runid);
+        $this->pretend_started($runid);
+        run_lifecycle::provisioned($runid, true);
+        run_lifecycle::attempt_claimed($runid);
+        $this->add_attempt($runid, attempt_scheduler::STATUS_FAILED);
+
+        // Aggregating nothing would produce an empty result set and a run
+        // marked finished, which is the failure mode this whole issue is about.
+        $this->assertSame('failed', run_lifecycle::attempt_finished($runid));
+        $this->assertSame(registry::STATUS_FAILED, $this->run_status($runid));
+    }
+
+    /**
+     * Successful aggregation finishes the run; a failed one fails it.
+     *
+     * @return void
+     */
+    public function test_aggregation_finalises_the_run(): void {
+        $this->resetAfterTest();
+        $this->setAdminUser();
+        $this->satisfy_preflight();
+
+        $runs = $this->run_ids($this->experiment_with_runs());
+
+        run_lifecycle::aggregated($runs[0], true);
+        $this->assertSame(registry::STATUS_FINISHED, $this->run_status($runs[0]));
+
+        run_lifecycle::aggregated($runs[1], false, 'aggregation-produced-no-results');
+        $this->assertSame(registry::STATUS_FAILED, $this->run_status($runs[1]));
+    }
+
+    /**
+     * There is no state "all attempts done, run stuck on running".
+     *
+     * @return void
+     */
+    public function test_a_completed_run_never_stays_running(): void {
+        $this->resetAfterTest();
+        $this->setAdminUser();
+        $this->satisfy_preflight();
+
+        $runid = $this->run_ids($this->experiment_with_runs())[0];
+        $this->give_the_run_a_pool($runid);
+        $this->pretend_started($runid);
+        run_lifecycle::provisioned($runid, true);
+        run_lifecycle::attempt_claimed($runid);
+        $this->add_attempt($runid, attempt_scheduler::STATUS_COLLECTED);
+        run_lifecycle::attempt_finished($runid);
+        run_lifecycle::aggregated($runid, true);
+
+        $this->assertFalse(run_lifecycle::has_open_attempts($runid));
+        $this->assertSame(registry::STATUS_FINISHED, $this->run_status($runid));
+        $this->assertTrue(registry::is_terminal($this->run_status($runid)));
+    }
+
+    /**
+     * The whole path, in order, with the experiment following along.
+     *
+     * @return void
+     */
+    public function test_the_full_path_from_draft_to_finished(): void {
+        global $DB;
+        $this->resetAfterTest();
+        $this->setAdminUser();
+        $this->satisfy_preflight();
+
+        $experimentid = $this->experiment_with_runs();
+        $runs = $this->run_ids($experimentid);
+
+        $seen = [];
+        $seen[] = $this->run_status($runs[0]);
+
+        $this->give_the_run_a_pool($runs[0]);
+        $this->pretend_started($runs[0]);
+        $seen[] = $this->run_status($runs[0]);
+
+        run_lifecycle::provisioned($runs[0], true);
+        $seen[] = $this->run_status($runs[0]);
+
+        run_lifecycle::attempt_claimed($runs[0]);
+        $seen[] = $this->run_status($runs[0]);
+
+        $this->add_attempt($runs[0], attempt_scheduler::STATUS_COLLECTED);
+        run_lifecycle::attempt_finished($runs[0]);
+        $seen[] = $this->run_status($runs[0]);
+
+        run_lifecycle::aggregated($runs[0], true);
+        $seen[] = $this->run_status($runs[0]);
+
+        $this->assertSame([
+            registry::STATUS_DRAFT,
+            registry::STATUS_SCHEDULED,
+            registry::STATUS_READY,
+            registry::STATUS_RUNNING,
+            registry::STATUS_AGGREGATING,
+            registry::STATUS_FINISHED,
+        ], $seen);
+
+        // One run finished, one still a draft: the experiment is running, not
+        // executed. It becomes executed only when no run is left to run.
+        $this->assertSame(
+            experiment_service::STATUS_RUNNING,
+            (int) $DB->get_field('local_catquizlab_experiment', 'status', ['id' => $experimentid])
+        );
+    }
+
+    /**
+     * The settings link points at the section settings.php registers.
+     *
+     * @return void
+     */
+    public function test_settings_url_matches_the_registered_section(): void {
+        global $CFG;
+        $this->resetAfterTest();
+
+        // The landing page linked to 'local_catquizlab' while settings.php
+        // registered 'local_catquizlab_settings', so the one link a fresh
+        // installation needs — to choose an experiment course — led to Moodle's
+        // sectionerror. Two literals that had to agree, in two files.
+        $settings = file_get_contents($CFG->dirroot . '/local/catquizlab/settings.php');
+        $this->assertStringContainsString('registry::SETTINGS_SECTION', $settings);
+        $this->assertStringNotContainsString("'local_catquizlab_settings',", $settings);
+
+        $index = file_get_contents($CFG->dirroot . '/local/catquizlab/index.php');
+        $this->assertStringNotContainsString("'section' => 'local_catquizlab'", $index);
+
+        $url = registry::settings_url();
+        $this->assertSame(registry::SETTINGS_SECTION, $url->param('section'));
+        $this->assertStringContainsString('/admin/settings.php', $url->out(false));
+    }
+
+    /**
+     * The state reported in the bug report cannot survive a start.
+     *
+     * @return void
+     */
+    public function test_the_reported_state_is_not_reachable_after_a_start(): void {
+        global $DB;
+        $this->resetAfterTest();
+        $this->setAdminUser();
+        $this->satisfy_preflight();
+        $this->require_startable_site();
+
+        // Reported: experiment "Executed", 16 runs all Draft at 0%, no results.
+        // Each half of that is now impossible on its own.
+        $experimentid = $this->experiment_with_runs();
+
+        $status = (int) $DB->get_field('local_catquizlab_experiment', 'status', ['id' => $experimentid]);
+        $this->assertNotSame(
+            experiment_service::STATUS_EXECUTED,
+            $status,
+            'An experiment whose runs are all drafts must not read as executed.'
+        );
+
+        run_lifecycle::start_drafts($experimentid);
+
+        $drafts = $DB->count_records('local_catquizlab_run', [
+            'experimentid' => $experimentid,
+            'status'       => registry::STATUS_DRAFT,
+        ]);
+        $this->assertSame(0, $drafts, 'After a start no run may still be a draft.');
+    }
+
+    /**
+     * Preflight names what is missing rather than failing silently.
+     *
+     * @return void
+     */
+    public function test_preflight_reports_every_blocker(): void {
+        $this->resetAfterTest();
+        $this->setAdminUser();
+
+        set_config('experimentcourseid', 0, 'local_catquizlab');
+        set_config('workernodepath', '', 'local_catquizlab');
+
+        $check = preflight::check();
+
+        $this->assertFalse($check['ok']);
+        $this->assertNotEmpty($check['blockers']);
+        // A missing worker does not stop a start: the run provisions and its
+        // attempts wait for a worker that may be started later.
+        $this->assertNotEmpty($check['warnings']);
+        $this->assertNotSame('', preflight::summary($check));
+    }
+
+    /**
+     * A run whose pool cannot serve its minimum never reaches ready.
+     *
+     * @return void
+     */
+    public function test_a_run_that_cannot_start_is_not_queued(): void {
+        $this->resetAfterTest();
+        $this->setAdminUser();
+        $this->satisfy_preflight();
+
+        if (!\local_catquizlab\local\environment::catquiz_available()) {
+            $this->markTestSkipped('No CAT engine installed; readiness stands down.');
+        }
+
+        $runid = $this->run_ids($this->experiment_with_runs())[0];
+        // Two items against a minimum of four: the test can never finish, and
+        // every queued attempt would fail the same way.
+        $this->give_the_run_a_pool($runid, 1);
+        $this->pretend_started($runid);
+
+        // Readiness is a provisioning stage now, checked before the attempts
+        // are created rather than after the whole run — so the orchestrator
+        // reports the failure and no queue is built at all.
+        $this->assertFalse(\local_catquizlab\local\cat_readiness::check($runid)['ok']);
+
+        run_lifecycle::provisioned($runid, false, 'cat-not-ready');
+
+        $this->assertSame(registry::STATUS_FAILED, $this->run_status($runid));
+        $this->assertFalse(run_lifecycle::has_open_attempts($runid));
+    }
+
+    /**
+     * The refusal names the arithmetic rather than only failing.
+     *
+     * @return void
+     */
+    public function test_readiness_states_why_a_run_cannot_start(): void {
+        global $DB;
+        $this->resetAfterTest();
+        $this->setAdminUser();
+
+        if (!\local_catquizlab\local\environment::catquiz_available()) {
+            $this->markTestSkipped('No CAT engine installed; readiness stands down.');
+        }
+
+        $runid = $this->run_ids($this->experiment_with_runs())[0];
+        $this->give_the_run_a_pool($runid, 1);
+
+        $result = \local_catquizlab\local\cat_readiness::check($runid);
+
+        $this->assertFalse($result['ok']);
+        $this->assertNotEmpty($result['reasons']);
+        // A message like "2 usable items against a minimum of 4" is actionable,
+        // where "not ready" is not: the reader still has to open the database.
+        $this->assertStringContainsString('2', \local_catquizlab\local\cat_readiness::summary($result));
+        $this->assertSame(2, $result['facts']['usable']);
+    }
+
+    /**
+     * Items the engine treats as pilots do not count as a pool.
+     *
+     * @return void
+     */
+    public function test_a_pool_of_pilot_questions_is_not_ready(): void {
+        global $DB;
+        $this->resetAfterTest();
+        $this->setAdminUser();
+
+        if (!\local_catquizlab\local\environment::catquiz_available()) {
+            $this->markTestSkipped('No CAT engine installed; readiness stands down.');
+        }
+
+        $runid = $this->run_ids($this->experiment_with_runs())[0];
+        $this->give_the_run_a_pool($runid, 12);
+
+        // Demote every parameter below the threshold at which the engine stops
+        // treating an item as a pilot. A pilot is administered and teaches the
+        // estimate nothing, so twenty-four of them are an empty pool.
+        $DB->execute('UPDATE {local_catquiz_itemparams} SET status = 1');
+
+        $result = \local_catquizlab\local\cat_readiness::check($runid);
+
+        $this->assertFalse($result['ok']);
+        $this->assertSame(0, $result['facts']['usable']);
+        $this->assertGreaterThan(0, $result['facts']['items']);
+    }
+
+    /**
+     * Per-subscale maxima cap the whole test.
+     *
+     * @return void
+     */
+    public function test_subscale_caps_are_checked_against_the_global_minimum(): void {
+        global $DB;
+        $this->resetAfterTest();
+        $this->setAdminUser();
+
+        if (!\local_catquizlab\local\environment::catquiz_available()) {
+            $this->markTestSkipped('No CAT engine installed; readiness stands down.');
+        }
+
+        $runid = $this->run_ids($this->experiment_with_runs())[0];
+        $this->give_the_run_a_pool($runid, 12);
+
+        // Two subscales capped at one question each allow two questions; the
+        // test asks for twenty. Neither number looks wrong on its own, which is
+        // exactly why this has to be computed rather than eyeballed.
+        $run = $DB->get_record('local_catquizlab_run', ['id' => $runid]);
+        $manifest = json_decode((string) $run->manifestjson, true);
+        $manifest['config']['definition']['budgets'] = [
+            'global'   => ['minitems' => 20, 'maxitems' => 25],
+            'subscale' => ['minitems' => 1, 'maxitems' => 1],
+        ];
+        // Only a strategy that enforces a minimum on every subscale makes these
+        // numbers multiply. Under the others the engine's base implementation
+        // leaves the candidates untouched, so the arithmetic describes a test it
+        // would never administer.
+        $manifest['config']['definition']['strategy'] = 'allsubs';
+        $DB->set_field('local_catquizlab_run', 'manifestjson', json_encode($manifest), ['id' => $runid]);
+
+        $result = \local_catquizlab\local\cat_readiness::check($runid);
+
+        $this->assertFalse($result['ok']);
+        $this->assertStringContainsString('20', \local_catquizlab\local\cat_readiness::summary($result));
+    }
+
+    /**
+     * Per-subscale minima multiply against the global maximum.
+     *
+     * @return void
+     */
+    public function test_subscale_floors_are_checked_against_the_global_maximum(): void {
+        global $DB;
+        $this->resetAfterTest();
+        $this->setAdminUser();
+
+        if (!\local_catquizlab\local\environment::catquiz_available()) {
+            $this->markTestSkipped('No CAT engine installed; readiness stands down.');
+        }
+
+        $runid = $this->run_ids($this->experiment_with_runs())[0];
+        $this->give_the_run_a_pool($runid, 12);
+
+        // Two subscales demanding five questions each need ten; the test allows
+        // four. This is the shape the reported configuration had, with twenty
+        // subscales at three questions each.
+        $run = $DB->get_record('local_catquizlab_run', ['id' => $runid]);
+        $manifest = json_decode((string) $run->manifestjson, true);
+        $manifest['config']['definition']['budgets'] = [
+            'global'   => ['minitems' => 2, 'maxitems' => 4],
+            'subscale' => ['minitems' => 5, 'maxitems' => 8],
+        ];
+        $manifest['config']['definition']['strategy'] = 'allsubs';
+        $DB->set_field('local_catquizlab_run', 'manifestjson', json_encode($manifest), ['id' => $runid]);
+
+        $result = \local_catquizlab\local\cat_readiness::check($runid);
+
+        $this->assertFalse($result['ok']);
+        $this->assertStringContainsString('10', \local_catquizlab\local\cat_readiness::summary($result));
+    }
+
+    /**
+     * A sound configuration passes.
+     *
+     * @return void
+     */
+    public function test_a_sound_configuration_is_ready(): void {
+        $this->resetAfterTest();
+        $this->setAdminUser();
+
+        if (!\local_catquizlab\local\environment::catquiz_available()) {
+            $this->markTestSkipped('No CAT engine installed; readiness stands down.');
+        }
+
+        $runid = $this->run_ids($this->experiment_with_runs())[0];
+        $this->give_the_run_a_pool($runid, 12);
+
+        $result = \local_catquizlab\local\cat_readiness::check($runid);
+
+        // The check has to let good configurations through, or it is just a
+        // more elaborate way of refusing to run.
+        $this->assertTrue($result['ok'], \local_catquizlab\local\cat_readiness::summary($result));
+        $this->assertSame(24, $result['facts']['usable']);
+    }
+
+    /**
+     * A failed run leaves no claimable work behind.
+     *
+     * @return void
+     */
+    public function test_a_failed_run_closes_its_queue(): void {
+        global $DB;
+        $this->resetAfterTest();
+        $this->setAdminUser();
+
+        $runid = $this->run_ids($this->experiment_with_runs())[0];
+        $DB->set_field('local_catquizlab_run', 'status', registry::STATUS_READY, ['id' => $runid]);
+        $this->add_attempt($runid, attempt_scheduler::STATUS_QUEUED);
+        $this->add_attempt($runid, attempt_scheduler::STATUS_QUEUED);
+
+        run_lifecycle::fail($runid, 'cat-not-ready: pool too small');
+
+        // Reported: 3 failed runs and 150 attempts still sitting in the queue.
+        // The workers would have played every one of them.
+        $this->assertSame(0, $DB->count_records('local_catquizlab_attempt', [
+            'runid' => $runid, 'status' => attempt_scheduler::STATUS_QUEUED,
+        ]));
+        $this->assertSame(2, $DB->count_records('local_catquizlab_attempt', [
+            'runid' => $runid, 'status' => attempt_scheduler::STATUS_FAILED,
+        ]));
+
+        // History kept, not deleted: what was planned is worth knowing.
+        $error = $DB->get_field_sql(
+            'SELECT lasterror FROM {local_catquizlab_attempt} WHERE runid = ? AND lasterror IS NOT NULL',
+            [$runid],
+            IGNORE_MULTIPLE
+        );
+        $this->assertStringContainsString('pool too small', (string) $error);
+    }
+
+    /**
+     * A worker cannot claim an attempt of a terminal run.
+     *
+     * @return void
+     */
+    public function test_a_terminal_run_hands_out_no_work(): void {
+        global $DB;
+        $this->resetAfterTest();
+        $this->setAdminUser();
+
+        $runid = $this->run_ids($this->experiment_with_runs())[0];
+        $DB->set_field('local_catquizlab_run', 'status', registry::STATUS_READY, ['id' => $runid]);
+        $this->add_attempt($runid, attempt_scheduler::STATUS_QUEUED);
+
+        $this->assertTrue(\local_catquizlab\external\job_claim::execute('w')['hasjob']);
+
+        // Second barrier, independent of how the attempts got into the queue:
+        // the claim checks the run's status server-side.
+        foreach ([registry::STATUS_FAILED, registry::STATUS_CANCELLED, registry::STATUS_FINISHED] as $status) {
+            $DB->set_field('local_catquizlab_attempt', 'status', attempt_scheduler::STATUS_QUEUED, ['runid' => $runid]);
+            $DB->set_field('local_catquizlab_attempt', 'nextruntime', 0, ['runid' => $runid]);
+            $DB->set_field('local_catquizlab_run', 'status', $status, ['id' => $runid]);
+
+            $this->assertFalse(
+                \local_catquizlab\external\job_claim::execute('w')['hasjob'],
+                'A run in status ' . $status . ' handed out work.'
+            );
+        }
+    }
+
+    /**
+     * A scheduled run is not runnable either.
+     *
+     * @return void
+     */
+    public function test_only_ready_and_running_runs_are_runnable(): void {
+        global $DB;
+        $this->resetAfterTest();
+        $this->setAdminUser();
+
+        $runid = $this->run_ids($this->experiment_with_runs())[0];
+
+        $expected = [
+            registry::STATUS_DRAFT       => false,
+            // Scheduled means provisioning has not finished: its attempts, if
+            // any exist, belong to a run that is not set up yet.
+            registry::STATUS_SCHEDULED   => false,
+            registry::STATUS_READY       => true,
+            registry::STATUS_RUNNING     => true,
+            registry::STATUS_AGGREGATING => false,
+            registry::STATUS_FINISHED    => false,
+            registry::STATUS_FAILED      => false,
+            registry::STATUS_CANCELLED   => false,
+        ];
+
+        foreach ($expected as $status => $runnable) {
+            $DB->set_field('local_catquizlab_run', 'status', $status, ['id' => $runid]);
+            $this->assertSame($runnable, run_lifecycle::is_runnable($runid), 'status ' . $status);
+        }
+    }
+
+    /**
+     * Subscale minima do not multiply under a strategy that does not enforce them.
+     *
+     * @return void
+     */
+    public function test_subscale_minima_are_strategy_dependent(): void {
+        global $DB;
+        $this->resetAfterTest();
+        $this->setAdminUser();
+
+        if (!\local_catquizlab\local\environment::catquiz_available()) {
+            $this->markTestSkipped('No CAT engine installed; readiness stands down.');
+        }
+
+        $runid = $this->run_ids($this->experiment_with_runs())[0];
+        $this->give_the_run_a_pool($runid, 25);
+
+        // The reported configuration: 100 subscales at 3 questions each against
+        // a global maximum of 25. Under `fastest` the engine's base
+        // implementation of filterbyquestionsperscale() leaves the candidates
+        // untouched, so it never demands 300 questions.
+        $run = $DB->get_record('local_catquizlab_run', ['id' => $runid]);
+        $manifest = json_decode((string) $run->manifestjson, true);
+        $manifest['config']['definition']['budgets'] = [
+            'global'   => ['minitems' => 20, 'maxitems' => 25],
+            'subscale' => ['minitems' => 3, 'maxitems' => 5],
+        ];
+
+        $manifest['config']['definition']['strategy'] = 'fastest';
+        $DB->set_field('local_catquizlab_run', 'manifestjson', json_encode($manifest), ['id' => $runid]);
+        $this->assertTrue(
+            \local_catquizlab\local\cat_readiness::check($runid)['ok'],
+            'A valid fastest run was refused: '
+                . \local_catquizlab\local\cat_readiness::summary(
+                    \local_catquizlab\local\cat_readiness::check($runid)
+                )
+        );
+
+        // The `allsubs` strategy does override it, so there the arithmetic holds.
+        $manifest['config']['definition']['strategy'] = 'allsubs';
+        $DB->set_field('local_catquizlab_run', 'manifestjson', json_encode($manifest), ['id' => $runid]);
+        $this->assertFalse(\local_catquizlab\local\cat_readiness::check($runid)['ok']);
+    }
+
+    /**
+     * Claiming an attempt moves its run, in the same breath.
+     *
+     * @return void
+     */
+    public function test_the_claim_moves_the_run_to_running(): void {
+        global $DB;
+        $this->resetAfterTest();
+        $this->setAdminUser();
+
+        $runid = $this->run_ids($this->experiment_with_runs())[0];
+        $DB->set_field('local_catquizlab_run', 'status', registry::STATUS_READY, ['id' => $runid]);
+        $this->add_attempt($runid, attempt_scheduler::STATUS_QUEUED);
+
+        // The documented lifecycle is READY → first attempt claimed → RUNNING,
+        // and the claim is where it happens. It was not happening at all: the
+        // run stayed READY while its attempts were being played.
+        $this->assertTrue(\local_catquizlab\external\job_claim::execute('w')['hasjob']);
+
+        $this->assertSame(
+            registry::STATUS_RUNNING,
+            (int) $DB->get_field('local_catquizlab_run', 'status', ['id' => $runid])
+        );
+    }
+
+    /**
+     * A second claim does not report a transition that already happened.
+     *
+     * @return void
+     */
+    public function test_only_the_first_claim_reports_the_transition(): void {
+        global $DB;
+        $this->resetAfterTest();
+        $this->setAdminUser();
+
+        $runid = $this->run_ids($this->experiment_with_runs())[0];
+        $DB->set_field('local_catquizlab_run', 'status', registry::STATUS_READY, ['id' => $runid]);
+
+        $this->assertTrue(run_lifecycle::attempt_claimed($runid));
+        // Otherwise the caller repeats whatever it does on a first claim.
+        $this->assertFalse(run_lifecycle::attempt_claimed($runid));
+    }
+
+    /**
+     * A scheduled run does not become running by being claimed.
+     *
+     * @return void
+     */
+    public function test_a_scheduled_run_is_not_promoted_by_a_claim(): void {
+        global $DB;
+        $this->resetAfterTest();
+        $this->setAdminUser();
+
+        $runid = $this->run_ids($this->experiment_with_runs())[0];
+        $DB->set_field('local_catquizlab_run', 'status', registry::STATUS_SCHEDULED, ['id' => $runid]);
+
+        // READY stands for provisioning that succeeded and a pool that was
+        // checked. A run reaching RUNNING without passing through it would be a
+        // run nobody verified.
+        $this->assertFalse(run_lifecycle::attempt_claimed($runid));
+        $this->assertSame(
+            registry::STATUS_SCHEDULED,
+            (int) $DB->get_field('local_catquizlab_run', 'status', ['id' => $runid])
+        );
+    }
+
+    /**
+     * A scheduled run offers a way out of waiting.
+     *
+     * @return void
+     */
+    public function test_a_scheduled_run_can_be_provisioned_by_hand(): void {
+        $this->resetAfterTest();
+        $this->setAdminUser();
+
+        // A run reading "scheduled, 0%, workers idle" with no action that moves it is
+        // indistinguishable from work in progress, and a run can wait for a
+        // task that was never queued or was queued while cron was down.
+        $actions = registry::allowed_actions(registry::STATUS_SCHEDULED);
+
+        $this->assertTrue($actions['provision']);
+        // Not on a run that already got past it: provisioning twice would
+        // create a second attempt queue.
+        $this->assertFalse(registry::allowed_actions(registry::STATUS_READY)['provision']);
+        $this->assertFalse(registry::allowed_actions(registry::STATUS_RUNNING)['provision']);
+    }
+
+    /**
+     * The queue is reported in categories an operator can act on.
+     *
+     * @return void
+     */
+    public function test_the_queue_distinguishes_what_can_be_claimed(): void {
+        global $DB;
+        $this->resetAfterTest();
+        $this->setAdminUser();
+
+        $runs = $this->run_ids($this->experiment_with_runs());
+
+        // Claimable now.
+        $DB->set_field('local_catquizlab_run', 'status', registry::STATUS_READY, ['id' => $runs[0]]);
+        $this->add_attempt($runs[0], attempt_scheduler::STATUS_QUEUED);
+
+        // Queued against a run that hands out nothing: real, and unreachable.
+        $DB->set_field('local_catquizlab_run', 'status', registry::STATUS_FAILED, ['id' => $runs[1]]);
+        $this->add_attempt($runs[1], attempt_scheduler::STATUS_QUEUED);
+
+        $breakdown = attempt_scheduler::queue_breakdown();
+
+        // One number for both invites waiting for attempts that will never be
+        // picked up.
+        $this->assertSame(1, $breakdown['claimable']);
+        $this->assertSame(1, $breakdown['blocked']);
+        $this->assertSame(2, $breakdown['queued']);
+    }
+
+    /**
+     * A retry delay is not the same as waiting for a worker.
+     *
+     * @return void
+     */
+    public function test_a_retry_delay_is_reported_separately(): void {
+        global $DB;
+        $this->resetAfterTest();
+        $this->setAdminUser();
+
+        $runid = $this->run_ids($this->experiment_with_runs())[0];
+        $DB->set_field('local_catquizlab_run', 'status', registry::STATUS_READY, ['id' => $runid]);
+        $attemptid = $this->add_attempt($runid, attempt_scheduler::STATUS_QUEUED);
+        $DB->set_field('local_catquizlab_attempt', 'nextruntime', time() + 3600, ['id' => $attemptid]);
+
+        $breakdown = attempt_scheduler::queue_breakdown();
+
+        // Starting a worker for it would produce a process that finds nothing.
+        $this->assertSame(0, $breakdown['claimable']);
+        $this->assertSame(1, $breakdown['notdue']);
+    }
+
+    /**
+     * Attempts of a paused run are counted as paused, not as waiting.
+     *
+     * @return void
+     */
+    public function test_paused_attempts_are_not_waiting(): void {
+        global $DB;
+        $this->resetAfterTest();
+        $this->setAdminUser();
+
+        $runid = $this->run_ids($this->experiment_with_runs())[0];
+        $DB->set_field('local_catquizlab_run', 'status', registry::STATUS_READY, ['id' => $runid]);
+        $this->add_attempt($runid, attempt_scheduler::STATUS_QUEUED);
+        run_lifecycle::set_paused($runid, true);
+
+        $breakdown = attempt_scheduler::queue_breakdown();
+
+        $this->assertSame(0, $breakdown['claimable']);
+        $this->assertSame(1, $breakdown['paused']);
+    }
+
+    /**
+     * The readiness stage runs through the orchestrator, not only on its own.
+     *
+     * @return void
+     */
+    public function test_the_readiness_stage_can_be_dispatched(): void {
+        $this->resetAfterTest();
+        $this->setAdminUser();
+
+        $runid = $this->run_ids($this->experiment_with_runs())[0];
+
+        // It reached for an undefined variable and threw on every provisioning.
+        // The tests missed it because they called cat_readiness directly rather
+        // than through the stage that uses it — so this goes through the stage.
+        $method = new \ReflectionMethod(\local_catquizlab\local\run_orchestrator::class, 'run_stage');
+        $method->setAccessible(true);
+
+        $result = $method->invoke(null, 'readiness', ['runid' => $runid]);
+
+        $this->assertIsArray($result);
+        $this->assertArrayHasKey('ok', $result);
+    }
+
+    /**
+     * A run with no usable definition is refused, not fatal.
+     *
+     * @return void
+     */
+    public function test_readiness_without_a_definition_is_a_verdict(): void {
+        global $DB;
+        $this->resetAfterTest();
+        $this->setAdminUser();
+
+        $runid = $this->run_ids($this->experiment_with_runs())[0];
+        $DB->set_field('local_catquizlab_run', 'manifestjson', '{}', ['id' => $runid]);
+        $DB->set_field(
+            'local_catquizlab_experiment',
+            'configjson',
+            'not json at all',
+            ['id' => $DB->get_field('local_catquizlab_run', 'experimentid', ['id' => $runid])]
+        );
+
+        // A readiness check that throws is worse than one that fails: the
+        // caller gets an exception where it expected a verdict.
+        $result = \local_catquizlab\local\cat_readiness::check($runid);
+
+        $this->assertFalse($result['ok']);
+        $this->assertNotEmpty($result['reasons']);
+    }
+
+    /**
+     * Provisioning the same run twice builds one scale tree.
+     *
+     * @return void
+     */
+    public function test_scale_provisioning_is_idempotent(): void {
+        global $DB;
+        $this->resetAfterTest();
+        $this->setAdminUser();
+
+        if (!\local_catquizlab\local\environment::engine_available()) {
+            $this->markTestSkipped('No CAT engine installed.');
+        }
+
+        $runid = $this->run_ids($this->experiment_with_runs())[0];
+        $blueprint = ['name' => 'Idempotent', 'categories' => 1, 'subcategories' => 2];
+
+        $first = \local_catquizlab\local\scale_provisioner::provision($runid, $blueprint);
+        $second = \local_catquizlab\local\scale_provisioner::provision($runid, $blueprint);
+
+        // A retried task, a "provision now" after one, a recovered run: each
+        // built another tree, and items then materialised into whichever map
+        // was named later.
+        $this->assertSame($first['rootscaleid'], $second['rootscaleid']);
+        $this->assertSame(1, $DB->count_records('local_catquizlab_scalemap', [
+            'runid' => $runid,
+            'level' => \local_catquizlab\local\scale_provisioner::LEVEL_ROOT,
+        ]));
+    }
+
+    /**
+     * Resetting a run clears what provisioning made and keeps what it is.
+     *
+     * @return void
+     */
+    public function test_resetting_a_run_returns_it_to_draft(): void {
+        global $DB;
+        $this->resetAfterTest();
+        $this->setAdminUser();
+
+        $runid = $this->run_ids($this->experiment_with_runs())[0];
+        $cellkey = $DB->get_field('local_catquizlab_run', 'cellkey', ['id' => $runid]);
+        $seed = $DB->get_field('local_catquizlab_run', 'seed', ['id' => $runid]);
+
+        $this->add_attempt($runid, attempt_scheduler::STATUS_FAILED);
+        $DB->set_field('local_catquizlab_run', 'status', registry::STATUS_FAILED, ['id' => $runid]);
+        run_lifecycle::fail($runid, 'something went wrong');
+
+        $result = run_lifecycle::reset($runid);
+
+        $this->assertTrue($result['ok']);
+        $this->assertSame(
+            registry::STATUS_DRAFT,
+            (int) $DB->get_field('local_catquizlab_run', 'status', ['id' => $runid])
+        );
+        $this->assertSame(0, $DB->count_records('local_catquizlab_attempt', ['runid' => $runid]));
+
+        // The cell and the seed are what make this run this run: reproducing it
+        // would make a second one and leave the first in the list for ever.
+        $this->assertSame($cellkey, $DB->get_field('local_catquizlab_run', 'cellkey', ['id' => $runid]));
+        $this->assertSame($seed, $DB->get_field('local_catquizlab_run', 'seed', ['id' => $runid]));
+        $this->assertSame('', run_lifecycle::failure_details($runid)['reason']);
+    }
+
+    /**
+     * A run being played is not reset underneath its worker.
+     *
+     * @return void
+     */
+    public function test_a_running_run_is_not_reset(): void {
+        global $DB;
+        $this->resetAfterTest();
+        $this->setAdminUser();
+
+        $runid = $this->run_ids($this->experiment_with_runs())[0];
+        $DB->set_field('local_catquizlab_run', 'status', registry::STATUS_RUNNING, ['id' => $runid]);
+        $this->add_attempt($runid, attempt_scheduler::STATUS_RUNNING);
+
+        $result = run_lifecycle::reset($runid);
+
+        // Resetting underneath a worker strands the claim it holds, which is
+        // the failure the lease mechanism exists to prevent.
+        $this->assertFalse($result['ok']);
+        $this->assertSame('run-is-being-played', $result['reason']);
+        $this->assertSame(1, $DB->count_records('local_catquizlab_attempt', ['runid' => $runid]));
+    }
+
+    /**
+     * The experiment course is visible, because its students have to use it.
+     *
+     * @return void
+     */
+    public function test_the_experiment_course_is_visible(): void {
+        global $DB;
+        $this->resetAfterTest();
+        $this->setAdminUser();
+
+        set_config('experimentcourseid', 0, 'local_catquizlab');
+        $courseid = \local_catquizlab\local\experiment_container::ensure_course();
+
+        // A hidden course tells enrolled students "this course is currently
+        // unavailable", and the simulated persons are enrolled students. The
+        // worker logged in correctly, reached the activity, and found that
+        // sentence where the start button should have been — every attempt
+        // failed as "no question was presented", three steps from the cause.
+        $this->assertSame(1, (int) $DB->get_field('course', 'visible', ['id' => $courseid]));
+    }
+}

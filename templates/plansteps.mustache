@@ -1,0 +1,51 @@
+{{!
+    @template local_catquizlab/plansteps
+
+    Defining an experiment, as the eight decisions it actually is.
+
+    The editor is one long form, which is honest about the data and unhelpful
+    about the work. This says which decisions have been made and which is next,
+    without hiding a field or moving one.
+
+    Classes required for JS: none.
+    Data attributes required for JS: none.
+
+    Context variables required for this template:
+    * steps - number, label, done, pending
+    * done, total - how far along
+    * nextlabel - the first thing still to do
+    * hasruns, progressurl - where to go once the runs exist
+
+    Example context (json):
+    {
+        "steps": [
+            {"id": "basics", "number": 1, "label": "1. Name and purpose", "done": true, "pending": false},
+            {"id": "model", "number": 2, "label": "2. Model and strategy", "done": false, "pending": true}
+        ],
+        "done": 1,
+        "total": 8,
+        "ready": false,
+        "hasruns": false,
+        "runs": 0,
+        "nextlabel": "Next: 2. Model and strategy",
+        "progressurl": "/local/catquizlab/runs.php?experimentid=1"
+    }
+}}
+<div class="card mb-3">
+    <div class="card-body">
+        <h3 class="h6">{{#str}}plan:heading, local_catquizlab{{/str}}</h3>
+        <ol class="list-unstyled mb-2 small">
+            {{#steps}}
+                <li class="{{#pending}}text-muted{{/pending}}">
+                    {{#done}}&check;{{/done}}{{#pending}}&nbsp;&nbsp;{{/pending}} {{label}}
+                </li>
+            {{/steps}}
+        </ol>
+        <p class="small mb-1"><strong>{{nextlabel}}</strong></p>
+        {{#hasruns}}
+            <a href="{{progressurl}}" class="btn btn-sm btn-primary">
+                {{#str}}plan:toprogress, local_catquizlab{{/str}}
+            </a>
+        {{/hasruns}}
+    </div>
+</div>

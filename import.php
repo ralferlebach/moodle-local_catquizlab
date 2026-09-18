@@ -79,6 +79,14 @@ if ($data = $form->get_data()) {
 }
 
 echo $OUTPUT->header();
+
+// The same frame as every other CatQuizLab page: opening a run used to drop
+// the reader out of the process they were in the middle of.
+echo \local_catquizlab\output\shell::render('plan', optional_param('experimentid', 0, PARAM_INT));
+
+// The same frame as every other CatQuizLab page: opening a run used to
+// drop the reader out of the process they were in the middle of.
+echo \local_catquizlab\output\shell::render('plan', 0);
 echo $OUTPUT->heading(get_string('heading:import', $component));
 
 if ($inspection !== null) {

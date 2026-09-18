@@ -64,6 +64,13 @@ class strategy_catalog {
             'description' => 'Trades information against an even spread across the content structure.',
         ],
         'allsubs'    => [
+            // The only strategy that overrides filterbyquestionsperscale() and
+            // therefore actually enforces a minimum on every subscale. For the
+            // others the base class returns the context unchanged, so a
+            // per-subscale minimum is a ceiling the selection may use, not a
+            // quota it must fill — and treating it as a quota refuses valid
+            // configurations before a worker ever runs.
+            'enforcespersubscaleminimum' => true,
             'constant'    => 'LOCAL_CATQUIZ_STRATEGY_ALLSUBS',
             'contractid'  => 3,
             'label'       => 'Cover all subscales',
@@ -222,6 +229,30 @@ class strategy_catalog {
      * @param string $key The strategy key.
      * @return string
      * @throws \coding_exception If the key is unknown.
+     */
+    /**
+     * Whether this strategy makes the per-subscale minimum binding.
+     *
+     * Only `allsubs` overrides `filterbyquestionsperscale()` in the engine; the
+     * base class returns the candidate set unchanged. For every other strategy
+     * the subscale minimum bounds what the selection *may* take from a scale it
+     * visits, not what it *must* take from all of them — so multiplying it
+     * across every subscale describes a test the engine would never administer.
+     *
+     * @param string $key The strategy key.
+     * @return bool
+     */
+    public static function enforces_per_subscale_minimum(string $key): bool {
+        // Read from the catalogue rather than through descriptor(), which
+        // assembles a fixed set of keys for display and would drop this one.
+        return self::has($key) && !empty(self::CATALOG[$key]['enforcespersubscaleminimum']);
+    }
+
+    /**
+     * The display label of a strategy.
+     *
+     * @param string $key The strategy key.
+     * @return string
      */
     public static function label(string $key): string {
         if (!self::has($key)) {

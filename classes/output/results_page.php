@@ -130,12 +130,15 @@ class results_page {
             'type' => 'hidden', 'name' => 'tab', 'value' => $this->tab,
         ]);
 
-        $experiments = $DB->get_records_menu('local_catquizlab_experiment', null, 'name ASC', 'id, name');
-        $out .= $this->select(
-            'experimentid',
-            [0 => get_string('filter:allexperiments', $component)] + $experiments,
-            get_string('run:experiment', $component)
-        );
+        // The experiment is chosen in the shell, on every step, and carried
+        // here in the URL. A second selector for the same thing invited the two
+        // to disagree — and made "which experiment am I looking at" a question
+        // with two answers on one page.
+        $out .= \html_writer::empty_tag('input', [
+            'type'  => 'hidden',
+            'name'  => 'experimentid',
+            'value' => (int) ($this->filter['experimentid'] ?? 0),
+        ]);
 
         // The remaining menus describe the experimental coordinates. Every one
         // of them is a factor the design varies, so all of them are filterable.
@@ -212,6 +215,70 @@ class results_page {
     }
 
     /**
+     * Why there is nothing to show: not started, still running, or filtered out.
+     *
+     * "Nothing matches this filter" and "nothing has been run" look the same
+     * from the results view and mean entirely different things. The second has
+     * an obvious remedy, and naming it turns a dead end into a next step.
+     *
+     * @return string
+     */
+    protected function explain_absence(): string {
+        global $DB;
+
+        $component = 'local_catquizlab';
+
+        // Scoped to the experiment when one is filtered for, otherwise across
+        // every run: the unfiltered view is exactly where a first-time user
+        // lands, and it should not be the one view that cannot say why it is
+        // empty.
+        $experimentid = (int) ($this->filter['experimentid'] ?? 0);
+        if ($experimentid > 0) {
+            $rows = $DB->get_records_sql(
+                'SELECT status, COUNT(*) AS n FROM {local_catquizlab_run} WHERE experimentid = :id GROUP BY status',
+                ['id' => $experimentid]
+            );
+        } else {
+            $rows = $DB->get_records_sql(
+                'SELECT status, COUNT(*) AS n FROM {local_catquizlab_run} GROUP BY status'
+            );
+        }
+        if (!$rows) {
+            return get_string('results:noobservations', $component);
+        }
+
+        $counts = ['total' => 0, 'draft' => 0, 'running' => 0, 'finished' => 0, 'failed' => 0];
+        foreach ($rows as $row) {
+            $n = (int) $row->n;
+            $counts['total'] += $n;
+            switch ((int) $row->status) {
+                case \local_catquizlab\local\registry::STATUS_DRAFT:
+                    $counts['draft'] += $n;
+                    break;
+                case \local_catquizlab\local\registry::STATUS_FINISHED:
+                    $counts['finished'] += $n;
+                    break;
+                case \local_catquizlab\local\registry::STATUS_FAILED:
+                case \local_catquizlab\local\registry::STATUS_CANCELLED:
+                    $counts['failed'] += $n;
+                    break;
+                default:
+                    $counts['running'] += $n;
+            }
+        }
+
+        $summary = get_string('results:runsummary', $component, (object) $counts);
+
+        // Every run still a draft was indistinguishable from an unlucky filter,
+        // and it is the case with something to do about it.
+        if ($counts['draft'] === $counts['total']) {
+            return get_string('results:nothingstarted', $component) . ' ' . $summary;
+        }
+
+        return get_string('results:noobservations', $component) . ' ' . $summary;
+    }
+
+    /**
      * A statement of what the figures on this page rest on.
      *
      * @return string
@@ -221,8 +288,11 @@ class results_page {
         $provenance = $this->query->provenance();
 
         if ($provenance['attempts'] === 0) {
+            // The two cases -- "nothing matches this filter" and "nothing has been run" -- look the
+            // same from here and mean entirely different things. Saying which
+            // one it is turns a dead end into a next step.
             return \html_writer::div(
-                get_string('results:noobservations', $component),
+                $this->explain_absence(),
                 'alert alert-info'
             );
         }
@@ -279,7 +349,10 @@ class results_page {
         $component = 'local_catquizlab';
         $rows = $this->query->observations();
         if ($rows === []) {
-            return '';
+            // An empty string here left the reader with filter controls above
+            // nothing, which reads as a broken page rather than as "there is
+            // nothing yet" — and those need different responses.
+            return $this->render_no_data();
         }
 
         $out = \html_writer::tag('h3', get_string('results:globalgroup', $component), ['class' => 'h5']);
@@ -326,6 +399,35 @@ class results_page {
 
         return $out;
     }
+
+    /**
+     * What to show when the selection has produced nothing.
+     *
+     * @return string
+     */
+    protected function render_no_data(): string {
+        global $OUTPUT;
+
+        $component = 'local_catquizlab';
+
+        $out = $OUTPUT->notification(
+            \html_writer::tag('strong', get_string('results:nodata', $component))
+                . \html_writer::tag('p', get_string('results:nodataexplain', $component), ['class' => 'mb-0']),
+            \core\output\notification::NOTIFY_INFO
+        );
+
+        // Where the answer to "why is there nothing" actually is.
+        $experimentid = (int) ($this->filter['experimentid'] ?? 0);
+        $out .= \html_writer::tag('p', \html_writer::link(
+            new \moodle_url('/local/catquizlab/runs.php', $experimentid > 0
+                ? ['experimentid' => $experimentid]
+                : []),
+            get_string('results:toprogress', $component)
+        ));
+
+        return $out;
+    }
+
 
     /**
      * The global metrics tab: the full global picture and its cost.
@@ -1604,7 +1706,11 @@ class results_page {
     }
 
     /**
-     * Format a runtime statistic in seconds.
+     * Format a runtime statistic as a span of time.
+     *
+     * An attempt that took four seconds reads as seconds; one that took an hour
+     * and a half reads as an hour and a half rather than as 5400 s. The reader
+     * is asking how long it took, not counting.
      *
      * @param array $stat A block from {@see results_query::describe_values()}.
      * @return string
@@ -1614,7 +1720,7 @@ class results_page {
             return '—';
         }
 
-        return format_float($stat['mean'] / 1000, 2) . '&nbsp;s';
+        return \local_catquizlab\local\duration::human($stat['mean'] / 1000);
     }
 
     /**

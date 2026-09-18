@@ -452,6 +452,8 @@ final class provisioning_test extends \advanced_testcase {
             'tries' => 0, 'timecreated' => time(), 'timemodified' => time(),
         ]);
 
+        $DB->set_field('local_catquizlab_run', 'status', \local_catquizlab\local\registry::STATUS_READY, []);
+
         $job = \local_catquizlab\external\job_claim::execute('unit-worker');
 
         // The provisioner makes usernames unique per run, so any convention the
@@ -669,6 +671,12 @@ final class provisioning_test extends \advanced_testcase {
                 'catscaleid'    => $scaleid,
                 'categoryindex' => $level >= 1 ? 1 : null,
                 'subscaleindex' => $level === 2 ? 1 : null,
+                // The logical position, which the unique index is on. Without
+                // it every row lands on the default and collides — which is the
+                // index doing its job.
+                // Distinct per row: several subscales in one fixture share a
+                // level, and the index is on the logical position, not on it.
+                'nodekey'       => $level === 0 ? 'root' : 'n' . $scaleid,
                 'timecreated'   => time(),
             ]);
         }

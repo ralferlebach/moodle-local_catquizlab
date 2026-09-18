@@ -1,0 +1,58 @@
+{{!
+    @template local_catquizlab/processmodel
+
+    What happens, in what order, and what makes it happen.
+
+    The interface shows a queue, a task, a worker and a run without saying how
+    they follow from one another. This is that chain, said once, folded away
+    until somebody wants it.
+
+    Classes required for JS: none.
+    Data attributes required for JS: none.
+
+    Context variables required for this template:
+    * stages - number, label, produces, automatic, manual, here
+    * step - which of the four process steps the reader is on
+
+    Example context (json):
+    {
+        "step": "plan",
+        "stages": [
+            {
+                "id": "define",
+                "number": 1,
+                "label": "Define the experiment",
+                "produces": "A stored definition. No test runs yet.",
+                "automatic": false,
+                "manual": true,
+                "here": true
+            }
+        ]
+    }
+}}
+<details class="mb-3">
+    <summary class="text-muted small">{{#str}}flow:show, local_catquizlab{{/str}}</summary>
+    <div class="card mt-2">
+        <div class="card-body">
+            <h3 class="h6">{{#str}}flow:heading, local_catquizlab{{/str}}</h3>
+            <p class="small text-muted">{{#str}}flow:intro, local_catquizlab{{/str}}</p>
+            <ol class="small mb-0">
+                {{#stages}}
+                    <li class="mb-2 {{#here}}font-weight-bold{{/here}}">
+                        {{label}}
+                        {{#automatic}}
+                            <span class="badge badge-light">{{#str}}flow:automatic, local_catquizlab{{/str}}</span>
+                        {{/automatic}}
+                        {{#manual}}
+                            <span class="badge badge-light">{{#str}}flow:manual, local_catquizlab{{/str}}</span>
+                        {{/manual}}
+                        {{#here}}
+                            <span class="badge badge-primary">{{#str}}flow:herenow, local_catquizlab{{/str}}</span>
+                        {{/here}}
+                        <div class="text-muted font-weight-normal">{{produces}}</div>
+                    </li>
+                {{/stages}}
+            </ol>
+        </div>
+    </div>
+</details>

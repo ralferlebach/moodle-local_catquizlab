@@ -53,6 +53,13 @@ class job_complete extends external_api {
             'status'    => new external_value(PARAM_ALPHA, 'Reported outcome: finished or failed.'),
             'runtimems' => new external_value(PARAM_INT, 'Wall-clock runtime of the attempt in milliseconds.', VALUE_DEFAULT, 0),
             'engineattemptid' => new external_value(PARAM_INT, 'The adaptivequiz_attempt id (0 when unknown).', VALUE_DEFAULT, 0),
+            'message'         => new external_value(
+                PARAM_TEXT,
+                'The worker\'s own reason when the attempt did not finish, kept so a retried '
+                    . 'attempt says why rather than only showing a rising try count.',
+                VALUE_DEFAULT,
+                ''
+            ),
         ]);
     }
 
@@ -63,9 +70,16 @@ class job_complete extends external_api {
      * @param string $status Reported outcome (finished or failed).
      * @param int $runtimems Wall-clock runtime in milliseconds.
      * @param int $engineattemptid The adaptivequiz_attempt id, when known.
+     * @param string $message The worker's reason, when the attempt did not finish.
      * @return array The acknowledgement.
      */
-    public static function execute(int $attemptid, string $status, int $runtimems = 0, int $engineattemptid = 0): array {
+    public static function execute(
+        int $attemptid,
+        string $status,
+        int $runtimems = 0,
+        int $engineattemptid = 0,
+        string $message = ''
+    ): array {
         global $DB;
 
         $params = self::validate_parameters(self::execute_parameters(), [
@@ -73,8 +87,8 @@ class job_complete extends external_api {
             'status'          => $status,
             'runtimems'       => $runtimems,
             'engineattemptid' => $engineattemptid,
+            'message'         => $message,
         ]);
-        unset($params);
 
         $context = \context_system::instance();
         self::validate_context($context);
@@ -131,6 +145,31 @@ class job_complete extends external_api {
             // Requeue with backoff while tries remain, otherwise fail for good.
             attempt_scheduler::retry_or_fail($attemptid);
         }
+
+        // Every terminal attempt asks the lifecycle whether the run is done.
+        // It answers at most once — a retried worker or a re-collected attempt
+        // must not queue the aggregation twice.
+        // The worker's own reason for a failure, kept where the interface can
+        // show it. Without this a retried attempt gives no clue why, and the
+        // person looking has only a rising try count.
+        if (!$finished && $params['status'] !== 'finished') {
+            \local_catquizlab\local\attempt_scheduler::record_error(
+                $attemptid,
+                (string) ($params['message'] ?? 'worker reported failure')
+            );
+        }
+
+        // The lease is over either way: the attempt is no longer being played.
+        $DB->set_field('local_catquizlab_attempt', 'leaseowner', null, ['id' => $attemptid]);
+        $DB->set_field('local_catquizlab_attempt', 'leaseexpires', 0, ['id' => $attemptid]);
+
+        // A run failing the same way over and over does not improve by being
+        // retried; pausing it keeps the queue free for work that can succeed.
+        if (!$finished) {
+            \local_catquizlab\local\run_lifecycle::check_failure_streak((int) $attempt->runid);
+        }
+
+        \local_catquizlab\local\run_lifecycle::attempt_finished((int) $attempt->runid);
 
         return [
             'acknowledged' => true,

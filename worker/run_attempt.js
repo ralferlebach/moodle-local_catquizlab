@@ -54,7 +54,11 @@ const NAV_TIMEOUT = 30000;
 
 const args = parseArgs(process.argv.slice(2));
 const BASE_URL = normaliseBaseUrl(args['base-url']);
-const TOKEN = args.token || '';
+// The token comes from the environment, not from argv: command-line arguments
+// are visible in process listings, and this one opens every web service
+// function the worker may call. The argument is still accepted for a manual
+// run, where the person typing it already has the token in their shell history.
+const TOKEN = process.env.CATQUIZLAB_WORKER_TOKEN || args.token || '';
 const WORKER_ID = args['worker-id'] || 'catquizlab-worker';
 const MAX_JOBS = parseInt(args['max-jobs'] || '0', 10); // 0 = until the queue is empty.
 const LOGIN_SUFFIX = args['login-suffix'] || '';
@@ -119,6 +123,7 @@ async function playAttempt(browser, job) {
     page.setDefaultNavigationTimeout(NAV_TIMEOUT);
     let engineAttemptId = 0;
     let status = 'failed';
+    let failure = '';
 
     try {
         await login(page, job.userid, job.username);
@@ -159,7 +164,15 @@ async function playAttempt(browser, job) {
         // completed experiment: the queue drains, every job reports success and
         // no trace is ever collected.
         if (answeredCount === 0) {
-            throw new Error('No question was presented; the attempt never started.');
+            // What the page actually said. "No question was presented" names
+            // the symptom and nothing else, and the cause is almost always on
+            // the screen the worker was looking at: a misconfigured pool, an
+            // engine error, a login that silently failed. Carrying that back
+            // saves the round trip through the browser by hand.
+            const diagnosis = await collectZeroQuestionDiagnosis(page, engineAttemptId);
+            throw new Error(
+                'No question was presented; the attempt never started. ' + diagnosis
+            );
         }
 
         // The absence of a question is not evidence that the attempt finished.
@@ -177,11 +190,16 @@ async function playAttempt(browser, job) {
         // answered, which the check above establishes.
         status = 'finished';
     } catch (error) {
+        failure = error.message;
         console.error(`Attempt ${job.attemptid} failed: ${error.message}`);
     } finally {
         await page.close();
         await context.close();
         await callWs('local_catquizlab_job_complete', {
+            // The reason travels with the report. Without it the server sees a
+            // failed attempt and no explanation, and the retry count is all
+            // anyone has to go on.
+            message: failure ? String(failure).slice(0, 500) : '',
             attemptid: job.attemptid,
             status,
             runtimems: Date.now() - started,
@@ -312,11 +330,84 @@ async function onFinishPage(page) {
  */
 async function describePage(page) {
     const title = await page.title().catch(() => '');
-    const text = await page
-        .evaluate(() => document.body.innerText.replace(/\s+/g, ' ').slice(0, 200))
-        .catch(() => '');
 
-    return `url=${page.url()} title="${title}" page="${text}"`;
+    const found = await page
+        .evaluate(() => {
+            const clean = (s) => (s || '').replace(/\s+/g, ' ').trim();
+
+            // Moodle puts its navigation, its site name and its user menu
+            // before the error, so the first 200 characters of the body were
+            // reliably the parts nobody needed. The error itself lives in one
+            // of these, and reporting "Zum Hauptinhalt Client01 Startseite…"
+            // instead of it is why a failure said nothing about itself.
+            const wheres = [
+                '.errormessage',
+                '.core-error-message',
+                '#region-main .alert-danger',
+                '#region-main .alert',
+                '.notifyproblem',
+                '.alert-danger',
+            ];
+
+            let message = '';
+            for (const sel of wheres) {
+                const el = document.querySelector(sel);
+                if (el && clean(el.innerText)) {
+                    message = clean(el.innerText);
+                    break;
+                }
+            }
+
+            // Moodle's debug block, where the site shows it: the exception
+            // class and the line that threw are the two things that turn "an
+            // error" into something anybody can act on.
+            let debug = '';
+            const debugel = document.querySelector('.notifytiny, [data-region="debug"], pre.notifytiny');
+            if (debugel) {
+                debug = clean(debugel.innerText).slice(0, 400);
+            }
+
+            let code = '';
+            const codeel = document.querySelector('[data-errorcode], .errorcode');
+            if (codeel) {
+                code = clean(codeel.getAttribute('data-errorcode') || codeel.innerText);
+            }
+
+            const main = document.querySelector('#region-main') || document.body;
+
+            return {
+                message: message,
+                debug: debug,
+                code: code,
+                // The main region rather than the whole body, so the fallback
+                // is at least the part of the page that is about this page.
+                body: clean(main.innerText).slice(0, 300),
+            };
+        })
+        .catch(() => ({message: '', debug: '', code: '', body: ''}));
+
+    // Anything that looks like a token goes, wherever it came from: an error
+    // report is a thing people paste into issues.
+    const redact = (s) => (s || '')
+        .replace(/([?&](?:wstoken|token|sesskey)=)[^&\s"']+/gi, '$1(hidden)')
+        .replace(/\b[a-f0-9]{32}\b/gi, '(hidden)');
+
+    const parts = [`url=${redact(page.url())}`, `title="${title}"`];
+
+    if (found.message) {
+        parts.push(`error="${redact(found.message)}"`);
+    }
+    if (found.code) {
+        parts.push(`errorcode="${redact(found.code)}"`);
+    }
+    if (found.debug) {
+        parts.push(`debug="${redact(found.debug)}"`);
+    }
+    if (!found.message) {
+        parts.push(`page="${redact(found.body)}"`);
+    }
+
+    return parts.join(' ');
 }
 
 async function currentQuestionRef(page) {
@@ -400,7 +491,34 @@ async function readEngineAttemptId(page) {
  * @returns {Promise<void>}
  */
 async function gotoSettle(page, url) {
-    await page.goto(url, {waitUntil: 'networkidle2'}).catch(() => page.goto(url, {waitUntil: 'domcontentloaded'}));
+    let firstError = null;
+
+    try {
+        await page.goto(url, {waitUntil: 'networkidle2'});
+    } catch (error) {
+        firstError = error;
+        try {
+            await page.goto(url, {waitUntil: 'domcontentloaded'});
+        } catch (second) {
+            // Both swallowed, the page stayed wherever it was, and the next
+            // step reported whatever it failed to find there. The symptom was
+            // "no question was presented" on the dashboard — true, and three
+            // steps away from the cause.
+            throw new Error(`Could not open ${url}: ${second.message}`);
+        }
+    }
+
+    // Arriving somewhere else is its own failure: a redirect to the login page
+    // or the dashboard means the session or the permission is wrong, and
+    // neither is visible from the page that comes next.
+    const landed = page.url();
+    const wanted = url.split('?')[0];
+    if (!landed.startsWith(wanted)) {
+        throw new Error(
+            `Expected ${url} but landed on ${landed}`
+            + (firstError ? ` (first attempt: ${firstError.message})` : '')
+        );
+    }
 }
 
 /**
@@ -598,6 +716,95 @@ function chooseOptionIndex(decision, count) {
  *
  * @returns {Promise<void>} Resolves when every check passed; rejects on the first failure.
  */
+/**
+ * What the page shows when no question appeared.
+ *
+ * Kept short on purpose: this ends up in a database column and in a list in the
+ * interface, where a stack trace would push out the part that matters.
+ *
+ * @param {object} page The Puppeteer page.
+ * @param {number} engineAttemptId The engine attempt, when one was read.
+ * @returns {Promise<string>} A one-line diagnosis.
+ */
+async function collectZeroQuestionDiagnosis(page, engineAttemptId) {
+    const parts = [];
+
+    try {
+        parts.push(`url=${page.url()}`);
+        parts.push(`title=${(await page.title()).slice(0, 80)}`);
+
+        // Moodle renders its own errors and notifications in known containers;
+        // the generic body text is the fallback when neither is present.
+        const message = await page.evaluate(() => {
+            const selectors = [
+                '.errormessage', '.alert-danger', '#region-main .alert',
+                '.notifyproblem', '.core-error-message',
+            ];
+            for (const selector of selectors) {
+                const node = document.querySelector(selector);
+                if (node && node.innerText.trim()) {
+                    return node.innerText.trim();
+                }
+            }
+            const main = document.querySelector('#region-main') || document.body;
+            return main.innerText.trim().slice(0, 400);
+        });
+        if (message) {
+            parts.push(`page=${message.replace(/\s+/g, ' ').slice(0, 240)}`);
+        }
+    } catch (error) {
+        parts.push(`diagnosis unavailable: ${error.message}`);
+    }
+
+    if (engineAttemptId) {
+        parts.push(`engineattempt=${engineAttemptId}`);
+    }
+
+    return parts.join(' | ');
+}
+
+/**
+ * Report in every few seconds while an attempt is being played.
+ *
+ * A claim and a completion are minutes apart, so without this a working worker
+ * is silent for exactly as long as the timeout that declares it dead — and the
+ * registry has to guess which it is. The returned stop flag is how a worker is
+ * asked to finish and exit: ending the process instead would leave the claim it
+ * holds with nobody to complete it.
+ *
+ * @param {number} attemptId The attempt being played, or 0 between jobs.
+ * @param {string} state What the worker is doing.
+ * @returns {object} A handle with stop() and shouldStop().
+ */
+function startHeartbeat(attemptId, state) {
+    let asked = false;
+
+    const beat = async() => {
+        try {
+            const reply = await callWs('local_catquizlab_worker_heartbeat', {
+                workerid: WORKER_ID,
+                attemptid: attemptId,
+                state: state,
+            });
+            if (reply && reply.stop) {
+                asked = true;
+            }
+        } catch (error) {
+            // A missed heartbeat is not worth abandoning an attempt that is
+            // halfway through: the next one is seconds away, and the lease is
+            // generous enough to survive a few.
+        }
+    };
+
+    beat();
+    const timer = setInterval(beat, 20000);
+
+    return {
+        stop: () => clearInterval(timer),
+        shouldStop: () => asked,
+    };
+}
+
 async function selfTest() {
     const failures = [];
     const check = (label, condition) => {
@@ -609,7 +816,30 @@ async function selfTest() {
         }
     };
 
+    // Which user, and with which paths. A self-test run by hand passes as the
+    // interactive user and the same worker fails from cron as the web server
+    // user, so the context has to be part of the output — otherwise the two
+    // runs are indistinguishable in a report.
+    console.log(`info user=${process.env.USER || process.env.LOGNAME || '(unset)'} uid=${typeof process.getuid === 'function' ? process.getuid() : '?'}`);
+    console.log(`info HOME=${process.env.HOME || '(unset)'}`);
+    console.log(`info PUPPETEER_CACHE_DIR=${process.env.PUPPETEER_CACHE_DIR || '(unset)'}`);
+    console.log(`info XDG_CONFIG_HOME=${process.env.XDG_CONFIG_HOME || '(unset)'}`);
+
     check('node >= 20', parseInt(process.versions.node.split('.')[0], 10) >= 20);
+    check('home is writable', (() => {
+        // The failure this catches reads as EACCES on mkdir deep inside
+        // Puppeteer, which looks like a plugin problem and is not.
+        try {
+            const fs = require('fs');
+            const home = process.env.HOME;
+            if (!home) { return false; }
+            fs.mkdirSync(home, {recursive: true});
+            fs.accessSync(home, fs.constants.W_OK);
+            return true;
+        } catch (e) {
+            return false;
+        }
+    })());
     check('fetch is available', typeof fetch === 'function');
 
     const parsed = parseArgs(['--base-url=http://example.test/moodle/', '--token=t', '--headless']);
@@ -659,23 +889,82 @@ async function selfTest() {
 async function main() {
     const puppeteer = require('puppeteer');
     const browser = await puppeteer.launch({headless: 'new', args: ['--no-sandbox']});
+
+    // Say so, before claiming anything. Everything above this line has now
+    // happened: Node ran, Puppeteer found a browser, and the web service
+    // answered. Moodle's launcher waits for exactly this, because a
+    // backgrounded shell command returning tells it none of those things — and
+    // reporting "1 worker started" on that basis is what put "workers: 1"
+    // beside "250 claimable, 0 in progress".
+    //
+    // A failure here is fatal on purpose: a worker that cannot reach Moodle has
+    // nothing to do, and one that stays up anyway holds a slot for nothing.
+    await callWs('local_catquizlab_worker_heartbeat', {
+        workerid: WORKER_ID,
+        attemptid: 0,
+        state: 'starting',
+    });
+
     let played = 0;
+
+    // Why this worker stopped. "finished; played 1 attempt(s)" with 250 waiting
+    // is alarming or entirely routine depending on the reason, and the log said
+    // nothing either way.
+    let reason = 'queue-empty';
+
     try {
         for (;;) {
             if (MAX_JOBS > 0 && played >= MAX_JOBS) {
+                reason = 'max-jobs';
                 break;
             }
             const job = await claimJob();
             if (!job) {
+                reason = 'queue-empty';
                 break;
             }
-            await playAttempt(browser, job);
+
+            // Reports every few seconds for as long as this attempt takes, and
+            // carries back whether somebody has asked this worker to stop.
+            const heart = startHeartbeat(job.attemptid, 'working');
+            try {
+                await playAttempt(browser, job);
+            } finally {
+                heart.stop();
+            }
             played++;
+
+            if (heart.shouldStop()) {
+                // Asked to stop while playing: the attempt was finished and
+                // reported first. Stopping any earlier would leave a claim
+                // behind, which is the state the whole lease mechanism exists
+                // to prevent.
+                console.log(`Worker ${WORKER_ID} was asked to stop; finishing after this attempt.`);
+                reason = 'stop-requested';
+                break;
+            }
         }
+    } catch (error) {
+        reason = 'fatal-error';
+        throw error;
     } finally {
         await browser.close();
     }
-    console.log(`Worker ${WORKER_ID} finished; played ${played} attempt(s).`);
+
+    // The slot goes back deliberately rather than by timing out: a worker that
+    // ended normally should not hold a place for the length of the heartbeat
+    // timeout, and a crashed one should not look like this.
+    try {
+        await callWs('local_catquizlab_worker_heartbeat', {
+            workerid: WORKER_ID,
+            attemptid: 0,
+            state: 'stopping',
+        });
+    } catch (error) {
+        // Nothing to do about it here; the reaper will notice in its own time.
+    }
+
+    console.log(`Worker ${WORKER_ID} finished; played ${played} attempt(s); reason=${reason}.`);
 }
 
 if (require.main === module) {

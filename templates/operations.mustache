@@ -1,0 +1,142 @@
+{{!
+    @template local_catquizlab/operations
+
+    Operations view: health, workers, queue and recovery actions.
+
+    Every action here replaces a shell command that used to be the only way to
+    do it. The health list leads each failed check to the page that fixes it,
+    because a check that only reports a problem leaves the work undone.
+
+    Context variables required for this template:
+    * health - status, checks with label/detail/status flags
+    * workers - hasany, rows
+    * queue - queued, running, collected, failed
+    * stuck - hasany, rows
+    * inflight - hasany, rows
+    * sesskey, actionurl, formurl — formurl is where the forms post; an empty
+      one renders an invalid form action and does nothing when pressed
+
+    Example context (json):
+    {
+        "health": {"status": "ok", "checks": [], "blockers": 0, "warnings": 0},
+        "workers": {"hasany": false, "rows": []},
+        "queue": {"queued": 0, "running": 0, "collected": 0, "failed": 0},
+        "stuck": {"hasany": false, "rows": []},
+        "inflight": {"hasany": false, "rows": []},
+        "sesskey": "abc123",
+        "actionurl": "/local/catquizlab/index.php?tab=setup",
+        "formurl": "/local/catquizlab/operations.php",
+        "tasks": {
+            "scheduled": [],
+            "adhoc": [],
+            "hasadhoc": false,
+            "cron": {"ok": true, "detail": "Cron last ran 30 secs ago."}
+        },
+        "container": {"configured": true, "coursename": "CATLab experiments", "courseurl": "/course/view.php?id=2", "settingsurl": "/admin/settings.php?section=local_catquizlab"},
+        "selftest": null,
+        "queuestatus": {"level": "good", "good": true, "watch": false, "bad": false, "state": "Nothing queued", "reason": "", "action": null},
+        "pipelinestatus": {"level": "good", "good": true, "watch": false, "bad": false, "state": "Pipeline active", "reason": "ran 20 secs ago", "action": null},
+        "taskadminurl": "/admin/tool/task/scheduledtasks.php",
+        "cantoken": false
+    }
+}}
+<div class="card mb-3">
+    <div class="card-body">
+        <h3 class="h5">{{#str}}wizard:heading, local_catquizlab{{/str}}</h3>
+        {{#wizard.stages}}
+            <div class="mb-2">
+                <strong>
+                    <span class="badge {{#ok}}badge-success{{/ok}}{{#incomplete}}badge-secondary{{/incomplete}}">
+                        {{#ok}}OK{{/ok}}{{#incomplete}}&hellip;{{/incomplete}}
+                    </span>
+                    {{label}}
+                </strong>
+                <ul class="list-unstyled ml-4 mb-0 small">
+                    {{#steps}}
+                        <li>
+                            {{#ok}}&check;{{/ok}}{{#missing}}&times;{{/missing}} {{label}}
+                            {{#detail}}<span class="text-muted">— {{detail}}</span>{{/detail}}
+                        </li>
+                    {{/steps}}
+                </ul>
+                {{#incomplete}}
+                    {{#hint}}<p class="small text-muted ml-4 mb-1">{{.}}</p>{{/hint}}
+                    {{#action}}
+                        <form method="post" action="{{url}}" class="ml-4">
+                            <input type="hidden" name="sesskey" value="{{sesskey}}">
+                            <input type="hidden" name="action" value="{{command}}">
+                            <button type="submit" class="btn btn-sm btn-primary">{{label}}</button>
+                        </form>
+                    {{/action}}
+                {{/incomplete}}
+            </div>
+        {{/wizard.stages}}
+
+        {{#wizard.ready}}
+            <div class="alert alert-success mb-2" role="status">
+                {{#str}}wizard:ready, local_catquizlab{{/str}}
+            </div>
+        {{/wizard.ready}}
+
+        <form method="post" action="{{formurl}}" class="d-inline">
+            <input type="hidden" name="sesskey" value="{{sesskey}}">
+            <input type="hidden" name="action" value="wizard">
+            <button type="submit" class="btn btn-secondary">{{#str}}wizard:run, local_catquizlab{{/str}}</button>
+        </form>
+        <form method="post" action="{{formurl}}" class="d-inline">
+            <input type="hidden" name="sesskey" value="{{sesskey}}">
+            <input type="hidden" name="action" value="wizardstart">
+            <button type="submit" class="btn btn-primary">{{#str}}wizard:runandenable, local_catquizlab{{/str}}</button>
+        </form>
+    </div>
+</div>
+
+
+<div class="card mb-3">
+    <div class="card-body">
+        {{#container}}
+            <div class="mb-3 small">
+                <span class="text-muted">{{#str}}container:label, local_catquizlab{{/str}}</span>
+                {{#configured}}
+                    <a href="{{courseurl}}">{{coursename}}</a>
+                    &middot;
+                    <a href="{{settingsurl}}">{{#str}}container:change, local_catquizlab{{/str}}</a>
+                {{/configured}}
+                {{^configured}}
+                    <a href="{{settingsurl}}">{{#str}}container:choose, local_catquizlab{{/str}}</a>
+                {{/configured}}
+            </div>
+        {{/container}}
+
+        <h3 class="h5">{{#str}}selftest:heading, local_catquizlab{{/str}}</h3>
+        <p class="small text-muted">{{#str}}selftest:explain, local_catquizlab{{/str}}</p>
+
+        {{#selftest}}
+            <div class="alert {{#ok}}alert-success{{/ok}}{{^ok}}alert-danger{{/ok}}" role="status">
+                {{summary}}
+            </div>
+            <table class="table table-sm">
+                <tbody>
+                    {{#checks}}
+                        <tr>
+                            <td style="width: 2rem;">{{#ok}}&check;{{/ok}}{{#failed}}&times;{{/failed}}</td>
+                            <td>{{label}}</td>
+                            <td class="small text-muted">{{detail}}</td>
+                        </tr>
+                    {{/checks}}
+                </tbody>
+            </table>
+        {{/selftest}}
+
+        <form method="post" action="{{formurl}}">
+            <input type="hidden" name="sesskey" value="{{sesskey}}">
+            <input type="hidden" name="action" value="selftest">
+            <button type="submit" class="btn btn-primary">
+                {{#str}}selftest:run, local_catquizlab{{/str}}
+            </button>
+        </form>
+    </div>
+</div>
+
+
+

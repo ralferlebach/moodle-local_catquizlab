@@ -173,10 +173,31 @@
                                 <input type="hidden" name="sesskey" value="{{sesskey}}">
                                 <input type="hidden" name="action" value="createsweep">
                                 <input type="hidden" name="id" value="{{experimentid}}">
-                                <button type="submit" class="btn btn-primary btn-block">
+                                <button type="submit" class="btn btn-secondary btn-block">
                                     {{#str}}action:createsweep, local_catquizlab{{/str}}
                                 </button>
                             </form>
+
+                            {{! Creating runs and running them are different
+                                things. Offering both makes the difference
+                                visible instead of leaving the user to guess
+                                which one the single button did. }}
+                            <form method="post" action="{{createurl}}" class="mt-2">
+                                <input type="hidden" name="sesskey" value="{{sesskey}}">
+                                <input type="hidden" name="action" value="createsweepandstart">
+                                <input type="hidden" name="id" value="{{experimentid}}">
+                                <button type="submit" class="btn btn-primary btn-block">
+                                    {{#str}}action:createsweepandstart, local_catquizlab{{/str}}
+                                </button>
+                            </form>
+                            {{#preflightblockers}}
+                                <div class="alert alert-warning mt-2 mb-0" role="status">
+                                    <strong>{{#str}}preflight:heading, local_catquizlab{{/str}}</strong>
+                                    <ul class="mb-0">
+                                        {{#items}}<li>{{.}}</li>{{/items}}
+                                    </ul>
+                                </div>
+                            {{/preflightblockers}}
                         {{/cansweep}}
                     </div>
                 </div>

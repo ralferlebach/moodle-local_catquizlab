@@ -46,13 +46,23 @@ tested is described in [`docs/dev/testen.md`](docs/dev/testen.md).
 
 ## Status
 
-**0.2.0** (`MATURITY_ALPHA`). The whole chain — definition, sweep expansion,
-provisioning, execution, evaluation and export — is implemented and covered by
-tests. Since 0.2.0 the **experiment definition is the sole source for what a
-run does**: strategy, item budgets, SE bounds, IRT model with its item
-parameters, and the pool variant with its recipe all come from the stored
-definition and are recorded in the run manifest. Nothing falls back on silent
-defaults.
+**0.6.0** (`MATURITY_BETA`). The whole chain — definition, sweep expansion,
+provisioning, engine materialisation, played attempt, trace collection,
+evaluation and export — has been exercised end to end **against a real CAT
+engine**, not only against guard paths: a simulated person sits an adaptive
+test through the `mod_adaptivequiz` interface, and the recovered ability is
+compared with the ground truth the person was generated from. A study of 90
+attempts across three pool variants has been run through it.
+
+The **experiment definition is the sole source for what a run does**: strategy,
+item budgets, SE bounds, IRT model with its item parameters, and the pool
+variant with its recipe all come from the stored definition and are recorded in
+the run manifest. Nothing falls back on silent defaults.
+
+What beta means here: the function is complete and measured, what is missing is
+field use. Replication counts in a real study need to be well above the five
+used so far — at 30 attempts per cell the confidence intervals of the pool
+variants still overlap almost completely.
 
 A **web interface** covers the workflow end to end: define an experiment,
 validate it, preview the sweep, expand it into runs, watch and filter them,

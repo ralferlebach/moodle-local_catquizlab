@@ -90,7 +90,8 @@ final class scale_provisioner_test extends \advanced_testcase {
         $DB->insert_record('local_catquizlab_scalemap', (object) [
             'runid' => $run->id, 'catscaleid' => 555, 'parentcatscaleid' => 500, 'contextid' => 10,
             'level' => scale_provisioner::LEVEL_SUBSCALE, 'categoryindex' => 2, 'subscaleindex' => 3,
-            'name' => 'K2.3', 'timecreated' => $now, 'timemodified' => $now,
+            'name' => 'K2.3', 'nodekey' => 'n1',
+            'timecreated' => $now, 'timemodified' => $now,
         ]);
 
         $mapping = scale_provisioner::mapping_for($run->id, 555);

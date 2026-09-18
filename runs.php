@@ -30,6 +30,19 @@ use local_catquizlab\local\run_registry;
 
 $runid = optional_param('runid', 0, PARAM_INT);
 $action = optional_param('action', '', PARAM_ALPHA);
+
+// Recorded where the action is known and before it is carried out, so a
+// defect reads as a sequence rather than as fragments in five logs.
+if ($action !== '') {
+    \local_catquizlab\local\debug_trace::record(
+        \local_catquizlab\local\debug_trace::UI,
+        $action,
+        array_diff_key($_REQUEST, array_flip(['sesskey'])),
+        'ok',
+        [],
+        (int) ($runid ?? 0)
+    );
+}
 $page = optional_param('page', 0, PARAM_INT);
 
 $filters = [];
@@ -67,6 +80,261 @@ if ($action !== '' && $runid > 0) {
 
     $run = $DB->get_record('local_catquizlab_run', ['id' => $runid], '*', MUST_EXIST);
     $returnurl = new moodle_url('/local/catquizlab/runs.php', ['runid' => $runid]);
+
+    if ($action === 'delete' || $action === 'deletedeep') {
+        require_sesskey();
+        require_capability('local/catquizlab:execute', $context);
+
+        $deep = $action === 'deletedeep';
+        $force = optional_param('force', 0, PARAM_BOOL);
+
+        if (!optional_param('confirm', 0, PARAM_BOOL)) {
+            // Irreversible, so it is confirmed against the run it names rather
+            // than with a general "are you sure".
+            echo $OUTPUT->header();
+            echo $OUTPUT->confirm(
+                get_string($deep ? 'purge:confirmrundeep' : 'purge:confirmrun', $component, $runid),
+                new moodle_url('/local/catquizlab/runs.php', [
+                    'runid' => $runid, 'action' => $action, 'sesskey' => sesskey(),
+                    'confirm' => 1, 'force' => $force,
+                ]),
+                $returnurl
+            );
+            echo $OUTPUT->footer();
+            exit;
+        }
+
+        $result = \local_catquizlab\local\purger::delete_run($runid, $deep, (bool) $force);
+        if (!$result['ok']) {
+            redirect(
+                $returnurl,
+                get_string('purge:refused', $component, $result['reason']),
+                null,
+                \core\output\notification::NOTIFY_WARNING
+            );
+        }
+
+        $parts = [];
+        foreach ($result['removed'] as $label => $count) {
+            $parts[] = $count . ' ' . $label;
+        }
+
+        redirect(
+            new moodle_url('/local/catquizlab/runs.php'),
+            $parts === []
+                ? get_string('purge:nothing', $component)
+                : get_string('purge:done', $component, implode(', ', $parts))
+        );
+    }
+
+    if ($action === 'prepareexperiment') {
+        require_sesskey();
+        require_capability('local/catquizlab:execute', $context);
+
+        $target = required_param('experimentid', PARAM_INT);
+        $result = \local_catquizlab\local\experiment_runner::prepare($target);
+
+        $back = new moodle_url('/local/catquizlab/runs.php', ['experimentid' => $target]);
+        $message = get_string(
+            $result['ok'] ? 'runner:prepared' : 'runner:blocked',
+            $component,
+            (object) ['prepared' => $result['prepared'], 'total' => $result['total']]
+        );
+
+        foreach (array_slice($result['blockers'], 0, 3) as $blocker) {
+            $message .= html_writer::empty_tag('br') . get_string('runner:blockerline', $component, (object) [
+                'runid'   => $blocker['runid'] ?? 0,
+                'cellkey' => $blocker['cellkey'] ?? '',
+                'stage'   => $blocker['stage'] ?? '',
+                'reason'  => $blocker['reason'] ?? '',
+            ]);
+        }
+
+        redirect($back, $message, null, $result['ok']
+            ? \core\output\notification::NOTIFY_SUCCESS
+            : \core\output\notification::NOTIFY_WARNING);
+    }
+
+    if ($action === 'startexperiment') {
+        require_sesskey();
+        require_capability('local/catquizlab:execute', $context);
+
+        $target = required_param('experimentid', PARAM_INT);
+        $queued = \local_catquizlab\local\execution_queue::enqueue($target);
+
+        $back = new moodle_url('/local/catquizlab/runs.php', ['experimentid' => $target]);
+
+        redirect(
+            $back,
+            $queued['ok']
+                ? get_string('runner:queuedat', $component, $queued['position'])
+                : get_string('runner:notready', $component),
+            null,
+            $queued['ok']
+                ? \core\output\notification::NOTIFY_SUCCESS
+                : \core\output\notification::NOTIFY_WARNING
+        );
+    }
+
+    if ($action === 'repairaccess') {
+        require_sesskey();
+        require_capability('local/catquizlab:execute', $context);
+
+        $result = \local_catquizlab\local\access_readiness::repair($runid);
+
+        redirect(
+            $returnurl,
+            $result['fixed'] === []
+                ? get_string('access:repairnothing', $component)
+                : get_string('access:repaired', $component, implode(', ', $result['fixed'])),
+            null,
+            $result['ok']
+                ? \core\output\notification::NOTIFY_SUCCESS
+                : \core\output\notification::NOTIFY_WARNING
+        );
+    }
+
+    if ($action === 'cleanscales') {
+        require_sesskey();
+        require_capability('local/catquizlab:execute', $context);
+
+        $result = \local_catquizlab\local\scale_inventory::cleanup($runid);
+        if (!$result['ok']) {
+            redirect(
+                $returnurl,
+                $result['reason'] === 'nothing-to-clean'
+                    ? get_string('scales:cleanupnothing', $component)
+                    : get_string('scales:cleanuprefused', $component, $result['reason']),
+                null,
+                \core\output\notification::NOTIFY_WARNING
+            );
+        }
+
+        $parts = [];
+        foreach ($result['removed'] as $label => $count) {
+            $parts[] = $count . ' ' . $label;
+        }
+
+        redirect($returnurl, get_string('scales:cleanupdone', $component, implode(', ', $parts)));
+    }
+
+    if ($action === 'resetrerun') {
+        require_sesskey();
+        require_capability('local/catquizlab:execute', $context);
+
+        if (!optional_param('confirm', 0, PARAM_BOOL)) {
+            echo $OUTPUT->header();
+            echo \local_catquizlab\output\shell::render('progress', 0);
+            echo $OUTPUT->confirm(
+                \local_catquizlab\local\run_lifecycle::reset_preview_message($runid, $component),
+                new moodle_url('/local/catquizlab/runs.php', [
+                    'runid' => $runid, 'action' => 'resetrerun', 'sesskey' => sesskey(), 'confirm' => 1,
+                ]),
+                $returnurl
+            );
+            echo $OUTPUT->footer();
+            exit;
+        }
+
+        $result = \local_catquizlab\local\run_lifecycle::reset_and_rerun($runid);
+
+        $parts = [];
+        foreach ($result['removed'] as $label => $count) {
+            $parts[] = $count . ' ' . $label;
+        }
+
+        redirect(
+            $returnurl,
+            $result['ok']
+                ? get_string('run:resetrerun', $component, implode(', ', $parts) ?: '-')
+                : get_string('run:resetrefused', $component, $result['reason'] ?: '-'),
+            null,
+            $result['ok']
+                ? \core\output\notification::NOTIFY_SUCCESS
+                : \core\output\notification::NOTIFY_WARNING
+        );
+    }
+
+    if ($action === 'reset') {
+        require_sesskey();
+        require_capability('local/catquizlab:execute', $context);
+
+        $result = \local_catquizlab\local\run_lifecycle::reset($runid);
+        if (!$result['ok']) {
+            redirect(
+                $returnurl,
+                get_string('run:resetrefused', $component, $result['reason']),
+                null,
+                \core\output\notification::NOTIFY_WARNING
+            );
+        }
+
+        $parts = [];
+        foreach ($result['removed'] as $label => $count) {
+            $parts[] = $count . ' ' . $label;
+        }
+
+        redirect($returnurl, get_string('run:reset', $component, implode(', ', $parts) ?: '-'));
+    }
+
+    if ($action === 'provision') {
+        require_sesskey();
+        require_capability('local/catquizlab:execute', $context);
+
+        // Runs the orchestrator in this request rather than queueing it again:
+        // the run is already waiting for a task, and queueing a second is how
+        // somebody ends up with two.
+        \core\session\manager::write_close();
+        $result = \local_catquizlab\local\run_lifecycle::provision_now($runid);
+
+        redirect(
+            $returnurl,
+            $result['ok']
+                ? get_string('run:provisioned', $component)
+                : get_string('run:provisionfailed', $component, $result['reason'] ?: '-'),
+            null,
+            $result['ok']
+                ? \core\output\notification::NOTIFY_SUCCESS
+                : \core\output\notification::NOTIFY_WARNING
+        );
+    }
+
+    if ($action === 'recheck') {
+        require_sesskey();
+        require_capability('local/catquizlab:execute', $context);
+
+        $result = \local_catquizlab\local\run_lifecycle::recheck($runid);
+        redirect(
+            $returnurl,
+            $result['ok']
+                ? get_string('run:rechecked', $component, $result['requeued'])
+                : get_string('run:recheckfailed', $component, $result['reason']),
+            null,
+            $result['ok']
+                ? \core\output\notification::NOTIFY_SUCCESS
+                : \core\output\notification::NOTIFY_WARNING
+        );
+    }
+
+    if ($action === 'start') {
+        require_sesskey();
+        require_capability('local/catquizlab:execute', $context);
+
+        // The interface asks the lifecycle to start the run; it does not
+        // orchestrate anything itself. A second copy of that decision here is a
+        // second thing to keep in step with the tasks.
+        $result = \local_catquizlab\local\run_lifecycle::start($runid, [], $context);
+        if (!$result['started']) {
+            redirect(
+                $returnurl,
+                get_string('run:startblocked', $component, $result['reason']),
+                null,
+                \core\output\notification::NOTIFY_WARNING
+            );
+        }
+
+        redirect($returnurl, get_string('run:started', $component, 1));
+    }
 
     if ($action === 'cancel') {
         if (!registry::allowed_actions((int) $run->status)['cancel']) {
@@ -134,6 +402,32 @@ if ($action !== '' && $runid > 0) {
 
 echo $OUTPUT->header();
 
+// The same frame as every other CatQuizLab page: opening a run used to drop
+// the reader out of the process they were in the middle of.
+echo \local_catquizlab\output\shell::render('progress', optional_param('experimentid', 0, PARAM_INT));
+
+// Without a run named, this is step 3 itself: what is happening, why, or why it
+// is not. The answer used to need four pages — runs here, tasks and workers on
+// the operations page, the queue on a third, recovery on a fourth — and holding
+// the pieces together was left to the reader.
+if ($runid === 0) {
+    // This is the page somebody watches while a run is playing, so it is the
+    // page that has to keep itself current. It was the one page without the
+    // updater.
+    $PAGE->requires->js_call_amd('local_catquizlab/livestatus', 'init', [
+        \local_catquizlab\external\live_status::current_shape(),
+    ]);
+
+    echo $OUTPUT->render_from_template(
+        'local_catquizlab/progress',
+        \local_catquizlab\local\progress_view::context(optional_param('experimentid', 0, PARAM_INT))
+    );
+
+    // And then the full, filterable list below it. The view above answers "what
+    // is happening"; the list answers "show me the ones matching this", and
+    // replacing the second with the first would have taken the filters away.
+}
+
 // A single run: its coordinates, manifest and metrics.
 if ($runid > 0) {
     $detail = run_registry::detail($runid);
@@ -164,6 +458,174 @@ if ($runid > 0) {
     ];
     echo html_writer::table($table);
 
+    // Whether the simulated person can reach the test at all. An access failure
+    // must never surface as a missing question: the two need completely
+    // different responses, and only one of them is about the test.
+    $access = \local_catquizlab\local\access_readiness::check($runid);
+    if ($access['checks'] !== []) {
+        echo $OUTPUT->heading(get_string('access:heading', $component), 4);
+        echo $OUTPUT->notification(
+            $access['summary'],
+            $access['ok']
+                ? \core\output\notification::NOTIFY_SUCCESS
+                : \core\output\notification::NOTIFY_ERROR
+        );
+
+        if (!$access['ok']) {
+            $accesstable = new html_table();
+            foreach ($access['checks'] as $check) {
+                $accesstable->data[] = [
+                    $check['ok'] ? '&check;' : '&times;',
+                    s($check['label']),
+                    s($check['detail']),
+                ];
+            }
+            echo html_writer::table($accesstable);
+
+            echo $OUTPUT->single_button(
+                new moodle_url('/local/catquizlab/runs.php', [
+                    'runid' => $runid, 'action' => 'repairaccess', 'sesskey' => sesskey(),
+                ]),
+                get_string('access:repair', $component),
+                'post'
+            );
+        }
+    }
+
+    // Whether the tree is sound, in the plugin's own terms. The old failure
+    // was a database warning about a call; this is a statement about the run.
+    $scalehealth = \local_catquizlab\local\scale_health::check($runid);
+    if (!$scalehealth['ok'] || count($scalehealth['checks']) > 1) {
+        echo $OUTPUT->heading(get_string('scalehealth:heading', $component), 4);
+        echo $OUTPUT->notification(
+            $scalehealth['summary'],
+            $scalehealth['ok']
+                ? \core\output\notification::NOTIFY_SUCCESS
+                : \core\output\notification::NOTIFY_ERROR
+        );
+
+        $healthtable = new html_table();
+        foreach ($scalehealth['checks'] as $check) {
+            $healthtable->data[] = [
+                $check['ok'] ? '&check;' : '&times;',
+                s($check['label']),
+                s($check['detail']),
+            ];
+        }
+        echo html_writer::table($healthtable);
+    }
+
+    // The scale generations this run owns. One is the normal case and says
+    // nothing; several is a data defect worth naming here, where somebody is
+    // looking at the run it affects.
+    $generations = \local_catquizlab\local\scale_inventory::generations($runid);
+    if (count($generations) > 1) {
+        echo $OUTPUT->heading(get_string('scales:heading', $component), 4);
+
+        $scaletable = new html_table();
+        $scaletable->head = ['Root', 'Context', get_string('scales:generations', $component), ''];
+        foreach ($generations as $generation) {
+            $scaletable->data[] = [
+                $generation['rootscaleid'],
+                $generation['contextid'],
+                $generation['nodes'] . ' / ' . $generation['items'],
+                $generation['current']
+                    ? html_writer::tag('strong', get_string('scales:keep', $component))
+                    : html_writer::tag(
+                        'span',
+                        get_string('scales:stale', $component),
+                        ['class' => 'text-muted']
+                    ),
+            ];
+        }
+        echo html_writer::table($scaletable);
+
+        echo $OUTPUT->single_button(
+            new moodle_url('/local/catquizlab/runs.php', [
+                'runid' => $runid, 'action' => 'cleanscales', 'sesskey' => sesskey(),
+            ]),
+            get_string('scales:cleanup', $component),
+            'post'
+        );
+    }
+
+    // What actually happened, kept across resets. A failed run's story used to
+    // be spread over five places and a reset destroyed most of it.
+    $log = \local_catquizlab\local\run_log::entries($runid);
+    if ($log !== []) {
+        echo $OUTPUT->heading(get_string('runlog:heading', $component), 4);
+
+        $logtable = new html_table();
+        $logtable->head = [
+            get_string('runlog:attempt', $component),
+            get_string('runlog:time', $component),
+            get_string('runlog:event', $component),
+            get_string('runlog:detail', $component),
+            get_string('runlog:cost', $component),
+        ];
+
+        foreach (array_reverse($log) as $entry) {
+            $cost = $entry['dbqueries'] > 0
+                ? get_string('runlog:costvalue', $component, (object) [
+                    'queries'  => $entry['dbqueries'],
+                    'duration' => $entry['durationtext'],
+                ])
+                : '';
+            if ($entry['expensive']) {
+                $cost = html_writer::tag('strong', $cost) . ' ' . html_writer::tag(
+                    'span',
+                    get_string('runlog:overbudget', $component),
+                    ['class' => 'text-danger small']
+                );
+            }
+
+            $logtable->data[] = [
+                '#' . $entry['attemptno'],
+                $entry['time'],
+                s($entry['event']) . ($entry['stage'] !== '' ? ' (' . s($entry['stage']) . ')' : ''),
+                s($entry['summary']),
+                $cost,
+            ];
+        }
+
+        echo html_writer::table($logtable);
+    }
+
+    // A run that says FAILED and nothing else sends the reader to the database.
+    // The reason was already recorded; it was simply never shown.
+    $failure = \local_catquizlab\local\run_lifecycle::failure_details($runid);
+    if ($failure['reason'] !== '') {
+        // Its own variable: $detail is the run's data from run_registry::detail()
+        // and is read further down for the manifest. Reusing the name replaced
+        // an array with a string, and every later access to it — the
+        // reproducibility manifest among them — then read a character out of
+        // that string instead.
+        $failurehtml = html_writer::tag('p', s($failure['reason']), ['class' => 'mb-1']);
+
+        if ($failure['facts'] !== []) {
+            $facts = $failure['facts'];
+            $failurehtml .= html_writer::tag('p', get_string('run:readinessfacts', $component, (object) [
+                'leaves' => (int) ($facts['leaves'] ?? 0),
+                'items'  => (int) ($facts['items'] ?? 0),
+                'usable' => (int) ($facts['usable'] ?? 0),
+            ]), ['class' => 'mb-1 small']);
+        }
+
+        if ($failure['time'] > 0) {
+            $failurehtml .= html_writer::tag(
+                'p',
+                userdate($failure['time'], get_string('strftimedatetimeshort')),
+                ['class' => 'mb-0 small text-muted']
+            );
+        }
+
+        echo $OUTPUT->notification(
+            html_writer::tag('strong', get_string('run:failedreason', $component)) . $failurehtml,
+            'notifyproblem',
+            false
+        );
+    }
+
     // Reproducibility is not hidden behind convenience: the manifest that
     // pins this run down is on the page, not somewhere in the database.
     echo $OUTPUT->heading(get_string('heading:manifest', $component), 3);
@@ -178,6 +640,65 @@ if ($runid > 0) {
     $allowed = $run['actions'];
     if (has_capability('local/catquizlab:execute', $context)) {
         $buttons = '';
+        $buttons .= $OUTPUT->single_button(
+            new moodle_url('/local/catquizlab/runs.php', [
+                'runid' => $runid, 'action' => 'delete', 'sesskey' => sesskey(),
+            ]),
+            get_string('purge:deleterun', $component),
+            'post'
+        );
+        $buttons .= $OUTPUT->single_button(
+            new moodle_url('/local/catquizlab/runs.php', [
+                'runid' => $runid, 'action' => 'deletedeep', 'sesskey' => sesskey(), 'force' => 1,
+            ]),
+            get_string('purge:deleterundeep', $component),
+            'post'
+        );
+        if (!empty($allowed['reset'])) {
+            $buttons .= $OUTPUT->single_button(
+                new moodle_url('/local/catquizlab/runs.php', [
+                    'runid' => $runid, 'action' => 'resetrerun', 'sesskey' => sesskey(),
+                ]),
+                get_string('action:resetrerun', $component),
+                'post'
+            );
+        }
+        if (!empty($allowed['reset'])) {
+            $buttons .= $OUTPUT->single_button(
+                new moodle_url('/local/catquizlab/runs.php', [
+                    'runid' => $runid, 'action' => 'reset', 'sesskey' => sesskey(),
+                ]),
+                get_string('action:reset', $component),
+                'post'
+            );
+        }
+        if (!empty($allowed['provision'])) {
+            $buttons .= $OUTPUT->single_button(
+                new moodle_url('/local/catquizlab/runs.php', [
+                    'runid' => $runid, 'action' => 'provision', 'sesskey' => sesskey(),
+                ]),
+                get_string('action:provision', $component),
+                'post'
+            );
+        }
+        if (!empty($allowed['recheck'])) {
+            $buttons .= $OUTPUT->single_button(
+                new moodle_url('/local/catquizlab/runs.php', [
+                    'runid' => $runid, 'action' => 'recheck', 'sesskey' => sesskey(),
+                ]),
+                get_string('action:recheck', $component),
+                'post'
+            );
+        }
+        if (!empty($allowed['start'])) {
+            $buttons .= $OUTPUT->single_button(
+                new moodle_url('/local/catquizlab/runs.php', [
+                    'runid' => $runid, 'action' => 'start', 'sesskey' => sesskey(),
+                ]),
+                get_string('action:startrun', $component),
+                'post'
+            );
+        }
         if ($allowed['reproduce']) {
             $buttons .= $OUTPUT->single_button(
                 new moodle_url('/local/catquizlab/runs.php', [

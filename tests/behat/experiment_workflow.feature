@@ -70,7 +70,9 @@ Feature: Defining and running CAT experiments from the web interface
       | replications | 2          |
     And the experiment "Behat runs" has been expanded into runs
     And I navigate to "Reports > CAT experiment suite" in site administration
-    When I follow "All runs"
+    # The runs live on step 3. The plan step no longer lists them, so there is
+    # no "All runs" link out of it — the tab is the way there.
+    When I follow "3. Progress"
     Then I should see "Runs"
     And I should see "Behat runs"
     And I should see "Any status"
@@ -144,14 +146,17 @@ Feature: Defining and running CAT experiments from the web interface
       | name | Behat results |
     And the experiment "Behat results" has been expanded into runs
     And I navigate to "Reports > CAT experiment suite" in site administration
-    When I follow "Results and evaluation"
-    Then I should see "Results and evaluation"
+    When I follow "4. Results"
+    Then I should see "Results"
     And I should see "Overview"
     And I should see "Global metrics"
     And I should see "Robustness"
     And I should see "Test flow"
     And I should see "Any strategy"
-    And I should see "No attempts match this filter yet."
+    # The runs of this experiment exist but are all drafts, so the page says
+    # that nothing has been started rather than blaming the filter.
+    And I should see "No run has been started yet"
+    And I should see "draft"
 
   Scenario: The local diagnostics tabs are reachable and name their subject
     Given the following "local_catquizlab > experiment" exists:
@@ -159,7 +164,7 @@ Feature: Defining and running CAT experiments from the web interface
       | strategy | lowestsub   |
     And the experiment "Behat local" has been expanded into runs
     And I navigate to "Reports > CAT experiment suite" in site administration
-    And I follow "Results and evaluation"
+    And I follow "4. Results"
     When I follow "Subscales"
     Then I should see "Local diagnostic performance"
     And I should see "No subscale-level data under this filter."
@@ -171,7 +176,7 @@ Feature: Defining and running CAT experiments from the web interface
       | name | Behat robustness |
     And the experiment "Behat robustness" has been expanded into runs
     And I navigate to "Reports > CAT experiment suite" in site administration
-    And I follow "Results and evaluation"
+    And I follow "4. Results"
     When I follow "Robustness"
     Then I should see "Robustness against pool disturbances"
     And I should see "measured against the ideal pool"
@@ -181,7 +186,7 @@ Feature: Defining and running CAT experiments from the web interface
       | name | Behat flow |
     And the experiment "Behat flow" has been expanded into runs
     And I navigate to "Reports > CAT experiment suite" in site administration
-    And I follow "Results and evaluation"
+    And I follow "4. Results"
     When I follow "Test flow"
     Then I should see "Test flow and feasibility"
     And I should see "I = 1 / SE"
@@ -191,7 +196,7 @@ Feature: Defining and running CAT experiments from the web interface
       | name | Behat export |
     And the experiment "Behat export" has been expanded into runs
     And I navigate to "Reports > CAT experiment suite" in site administration
-    And I follow "Results and evaluation"
+    And I follow "4. Results"
     When I follow "Raw data"
     Then I should see "Raw data"
     And I should see "Data level"
@@ -201,10 +206,10 @@ Feature: Defining and running CAT experiments from the web interface
     And I should see "Item level"
     And I should see "What the file will say about itself"
 
-  Scenario: The landing page says when no experiment course is configured
+  Scenario: Preparation says when no experiment course is configured
     When I navigate to "Reports > CAT experiment suite" in site administration
-    Then I should see "No experiment course is configured"
-    And I should see "Choose an experiment course"
+    And I follow "1. Preparation"
+    Then I should see "Choose an experiment course"
 
   Scenario: A configured experiment course is shown and linked
     Given the following "courses" exist:
@@ -212,6 +217,7 @@ Feature: Defining and running CAT experiments from the web interface
       | CATLab Studies  | catlab    |
     And the course "catlab" is the experiment course
     When I navigate to "Reports > CAT experiment suite" in site administration
+    And I follow "1. Preparation"
     Then I should see "Experiment course:"
     And I should see "CATLab Studies"
 
@@ -226,3 +232,45 @@ Feature: Defining and running CAT experiments from the web interface
     And I should see "Vary the subscale item budget"
     And I should see "Vary the SE window"
     And I should see "Vary the disturbance strength"
+
+  @javascript
+  Scenario: The settings link from preparation opens without a section error
+    # The experiment course moved to preparation, where it is created: on the
+    # plan step it was one of three things that made a plan unreadable as a plan.
+    Given I log in as "admin"
+    And I navigate to "Reports > CAT experiment suite" in site administration
+    And I follow "1. Preparation"
+    When I follow "Choose an experiment course"
+    Then I should not see "Section error"
+    And I should see "CAT experiment suite"
+
+  Scenario: A created sweep is not presented as an executed experiment
+    Given the following "local_catquizlab > experiment" exists:
+      | name | Lifecycle demo |
+    And I log in as "admin"
+    And I navigate to "Reports > CAT experiment suite" in site administration
+    When I follow "Lifecycle demo"
+    And I press "Create sweep"
+    Then I should not see "Executed"
+    And I should see "Runs created, not started"
+
+  Scenario: Draft runs can be started from the web interface
+    Given the following "local_catquizlab > experiment" exists:
+      | name | Startable |
+    And I log in as "admin"
+    And I navigate to "Reports > CAT experiment suite" in site administration
+    And I follow "Startable"
+    And I press "Create sweep"
+    When I navigate to "Reports > CAT experiment suite" in site administration
+    Then I should see "Startable"
+
+  Scenario: Results explain that nothing has been started yet
+    Given the following "local_catquizlab > experiment" exists:
+      | name | Nothing played |
+    And I log in as "admin"
+    And I navigate to "Reports > CAT experiment suite" in site administration
+    And I follow "Nothing played"
+    And I press "Create sweep"
+    When I navigate to "Reports > CAT experiment suite" in site administration
+    And I follow "4. Results"
+    Then I should see "No run has been started yet"

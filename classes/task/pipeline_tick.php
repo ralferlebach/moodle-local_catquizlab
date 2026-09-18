@@ -53,8 +53,41 @@ class pipeline_tick extends \core\task\scheduled_task {
      * @return void
      */
     public function execute(): void {
+        // Announce which task this is, and continue the id of the click that
+        // queued it: a failure inside a task otherwise reads as a failure from
+        // nowhere.
+        // A scheduled task starts its own sequence: nothing queued it, so
+        // there is no id to continue.
+        \local_catquizlab\local\debug_trace::enter_task('\\local_catquizlab\\task\\pipeline_tick');
+
+        // The execution queue moves here, because this is the thing that runs
+        // by itself. Somebody who queued five experiments before going home
+        // should find five results, not five experiments still waiting for a
+        // button.
+        $advanced = \local_catquizlab\local\execution_queue::advance();
+        if ($advanced['started'] > 0) {
+            mtrace('local_catquizlab: started queued experiment ' . $advanced['started'] . '.');
+        }
+
         if (!get_config('local_catquizlab', 'enabled')) {
             return;
+        }
+
+        // Dead workers first, then their claims, then the timeout fallback.
+        // The order matters: reaping a worker hands its attempts back with a
+        // known reason, while the timeout can only guess that something went
+        // wrong somewhere.
+        $reaped = \local_catquizlab\local\worker_registry::reap();
+        if ($reaped['workers'] > 0) {
+            mtrace("local_catquizlab: reaped {$reaped['workers']} worker(s), "
+                . "released {$reaped['attempts']} attempt(s).");
+        }
+
+        // Engine attempts that never got a first question. Every retry of a
+        // failing attempt makes another, so they accumulate rather than appear.
+        $purged = \local_catquizlab\local\engine_hygiene::purge_empty_attempts();
+        if ($purged > 0) {
+            mtrace("local_catquizlab: removed {$purged} engine attempt(s) that never started.");
         }
 
         $reclaimed = attempt_scheduler::reclaim_stale(null, self::STALE_SECONDS);

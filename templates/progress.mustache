@@ -1,0 +1,407 @@
+{{!
+    @template local_catquizlab/progress
+
+    Step 3: what is happening, why, or why it is not.
+
+    Five sections ordered by what blocks what — runs, tasks, workers, queue,
+    recovery — each row using the same state, reason and action contract, so a
+    run and a worker and the queue say their piece the same way.
+
+    Classes required for JS: none.
+    Data attributes required for JS:
+    * data-region="catquizlab-queued|running|collected|failed" - counters the
+      livestatus module keeps current.
+
+    Context variables required for this template:
+    * situation - the overall verdict
+    * runs - hasany and rows of id, cellkey, status, progress, url
+    * tasks - scheduled, adhoc, hasadhoc, cron
+    * workers - hasany and rows of workerid, status, log
+    * queuestatus - the queue as a status card
+    * queue - claimable, notdue, blocked, paused, running, collected, failed
+    * pipelinestatus - the pipeline as a status card
+    * formurl, sesskey - where recovery actions post
+    * canexecute - whether to offer them at all
+
+    Example context (json):
+{
+        "ambiguous": {
+                "hasany": false,
+                "rows": []
+        },
+        "debug": {
+                "enabled": false,
+                "hasany": false,
+                "rows": []
+        },
+        "situation": {
+                "level": "good",
+                "good": true,
+                "watch": false,
+                "bad": false,
+                "state": "Nothing queued",
+                "reason": "",
+                "action": null
+        },
+        "runs": {
+                "hasany": false,
+                "rows": []
+        },
+        "tasks": {
+                "scheduled": [],
+                "adhoc": [],
+                "hasadhoc": false,
+                "cron": {
+                        "ok": true,
+                        "detail": "Cron last ran 30 secs ago."
+                }
+        },
+        "workers": {
+                "hasany": false,
+                "rows": []
+        },
+        "queuestatus": {
+                "level": "good",
+                "good": true,
+                "watch": false,
+                "bad": false,
+                "state": "Nothing queued",
+                "reason": "",
+                "action": null
+        },
+        "queue": {
+                "claimable": 0,
+                "notdue": 0,
+                "blocked": 0,
+                "paused": 0,
+                "running": 0,
+                "collected": 0,
+                "failed": 0,
+                "hasblocked": false,
+                "hasnotdue": false,
+                "haspaused": false
+        },
+        "pipelinestatus": {
+                "level": "good",
+                "good": true,
+                "watch": false,
+                "bad": false,
+                "state": "Pipeline active",
+                "reason": "ran 20 secs ago",
+                "action": null
+        },
+        "formurl": "/local/catquizlab/operations.php",
+        "sesskey": "abc123",
+        "experimentid": 0,
+        "canexecute": true
+}
+
+}}
+{{#ambiguous.hasany}}
+    <div class="alert alert-danger" role="status">
+        <strong>{{#str}}scales:ambiguous, local_catquizlab{{/str}}</strong>
+        <p class="small mb-1">{{#str}}scales:ambiguouswhy, local_catquizlab{{/str}}</p>
+        <ul class="small mb-0">
+            {{#ambiguous.rows}}
+                <li>
+                    <a href="{{url}}">#{{runid}}</a> {{cellkey}} — {{generations}}
+                    {{#str}}scales:generations, local_catquizlab{{/str}}
+                </li>
+            {{/ambiguous.rows}}
+        </ul>
+    </div>
+{{/ambiguous.hasany}}
+
+{{!
+    The one action that matters, above everything the plugin does to carry it
+    out. The per-run buttons below are still there and are still needed when
+    something goes wrong — but they are recovery, and offering them as peers of
+    this one is what made operating an experiment feel like operating machinery.
+}}
+{{#runner}}
+    <div class="card mb-3">
+        <div class="card-body d-flex align-items-center justify-content-between">
+            <div>
+                <strong>{{label}}</strong>
+                <div class="small text-muted">
+                    {{runs.finished}} / {{runs.total}} &middot;
+                    {{attempts.collected}} / {{attempts.planned}}
+                </div>
+            </div>
+            <div>
+                {{#canprepare}}
+                    <form method="post" action="{{formurl}}" class="d-inline">
+                        <input type="hidden" name="sesskey" value="{{sesskey}}">
+                        <input type="hidden" name="action" value="prepareexperiment">
+                        <input type="hidden" name="experimentid" value="{{experimentid}}">
+                        <button type="submit" class="btn btn-primary">
+                            {{#str}}runner:prepare, local_catquizlab{{/str}}
+                        </button>
+                    </form>
+                {{/canprepare}}
+                {{#canstart}}
+                    <form method="post" action="{{formurl}}" class="d-inline">
+                        <input type="hidden" name="sesskey" value="{{sesskey}}">
+                        <input type="hidden" name="action" value="startexperiment">
+                        <input type="hidden" name="experimentid" value="{{experimentid}}">
+                        <button type="submit" class="btn btn-primary">
+                            {{#str}}runner:start, local_catquizlab{{/str}}
+                        </button>
+                    </form>
+                {{/canstart}}
+                {{#queued}}
+                    <span class="badge badge-info">{{#str}}runner:queued, local_catquizlab{{/str}}</span>
+                {{/queued}}
+            </div>
+        </div>
+    </div>
+{{/runner}}
+
+{{#execqueue.hasany}}
+    <div class="card mb-3">
+        <div class="card-body">
+            <h3 class="h6">{{#str}}runner:queueheading, local_catquizlab{{/str}}</h3>
+            <ol class="small mb-0">
+                {{#execqueue.rows}}
+                    <li>
+                        {{name}}
+                        {{#running}}<span class="badge badge-success">{{#str}}runner:staterunning, local_catquizlab{{/str}}</span>{{/running}}
+                        {{#waiting}}<span class="text-muted">{{queuedago}}</span>{{/waiting}}
+                    </li>
+                {{/execqueue.rows}}
+            </ol>
+        </div>
+    </div>
+{{/execqueue.hasany}}
+
+<div class="card mb-3">
+    <div class="card-body">
+        <h3 class="h5">{{#str}}progress:runs, local_catquizlab{{/str}}</h3>
+        {{#runs.hasany}}
+            <table class="table table-sm">
+                <tbody>
+                    {{#runs.rows}}
+                        <tr>
+                            <td style="width: 9rem;">
+                                <a href="{{url}}">#{{id}}</a>
+                                <div class="small text-muted">{{cellkey}}</div>
+                            </td>
+                            <td>{{#status}}{{> local_catquizlab/statuscard }}{{/status}}</td>
+                        </tr>
+                    {{/runs.rows}}
+                </tbody>
+            </table>
+        {{/runs.hasany}}
+        {{^runs.hasany}}
+            <p class="text-muted">{{#str}}progress:noruns, local_catquizlab{{/str}}</p>
+        {{/runs.hasany}}
+    </div>
+</div>
+
+<div class="card mb-3">
+    <div class="card-body">
+        <h3 class="h5">{{#str}}task:heading, local_catquizlab{{/str}}</h3>
+        {{#pipelinestatus}}
+            <div class="mb-3" data-card="pipeline">{{> local_catquizlab/statuscard }}</div>
+        {{/pipelinestatus}}
+
+        <table class="table table-sm mb-2">
+            {{!
+                Two times side by side with no headings: a reader had to guess
+                which was the last run and which the next, and the two say
+                opposite things about whether anything is wrong.
+            }}
+            <thead>
+                <tr>
+                    <th>{{#str}}task:name, local_catquizlab{{/str}}</th>
+                    <th>{{#str}}task:lastrun, local_catquizlab{{/str}}</th>
+                    <th>{{#str}}task:nextrun, local_catquizlab{{/str}}</th>
+                    <th></th>
+                </tr>
+            </thead>
+            <tbody>
+                {{#tasks.scheduled}}
+                    <tr>
+                        <td>{{name}}</td>
+                        <td class="small text-muted">{{lastrun}}</td>
+                        <td class="small {{#overdue}}text-danger{{/overdue}}">{{nextrun}}</td>
+                        <td>
+                            <form method="post" action="{{runurl}}" class="d-inline">
+                                <input type="hidden" name="sesskey" value="{{sesskey}}">
+                                <input type="hidden" name="action" value="runscheduled">
+                                <input type="hidden" name="classname" value="{{classname}}">
+                                <button type="submit" class="btn btn-sm btn-outline-secondary">
+                                    {{#str}}task:runnow, local_catquizlab{{/str}}
+                                </button>
+                            </form>
+                        </td>
+                    </tr>
+                {{/tasks.scheduled}}
+                {{#tasks.adhoc}}
+                    <tr>
+                        <td>{{name}}</td>
+                        <td>{{subject}}</td>
+                        <td class="small text-muted">
+                            {{#running}}{{#str}}task:isrunning, local_catquizlab{{/str}}{{/running}}
+                            {{^running}}{{due}}{{/running}}
+                        </td>
+                        <td class="small text-muted">{{failures}}</td>
+                    </tr>
+                {{/tasks.adhoc}}
+            </tbody>
+        </table>
+        {{^tasks.hasadhoc}}
+            <p class="text-muted small mb-0">{{#str}}task:noadhoc, local_catquizlab{{/str}}</p>
+        {{/tasks.hasadhoc}}
+    </div>
+</div>
+
+<div class="card mb-3">
+    <div class="card-body">
+        <h3 class="h5">{{#str}}worker:heading, local_catquizlab{{/str}}</h3>
+        {{#workers.hasany}}
+            {{#workers.rows}}
+                <div class="mb-2">
+                    <div class="small text-muted">{{workerid}}</div>
+                    {{#status}}{{> local_catquizlab/statuscard }}{{/status}}
+                    {{#log}}
+                        <details class="ml-4">
+                            <summary class="small">{{#str}}ops:workerlog, local_catquizlab{{/str}}</summary>
+                            <pre class="small mb-0">{{.}}</pre>
+                        </details>
+                    {{/log}}
+                </div>
+            {{/workers.rows}}
+        {{/workers.hasany}}
+        {{^workers.hasany}}
+            <p class="text-muted mb-0">{{#str}}progress:noworkers, local_catquizlab{{/str}}</p>
+        {{/workers.hasany}}
+    </div>
+</div>
+
+<div class="card mb-3">
+    <div class="card-body">
+        <h3 class="h5">{{#str}}ops:queue, local_catquizlab{{/str}}</h3>
+        {{#queuestatus}}
+            <div class="mb-2" data-card="queue">{{> local_catquizlab/statuscard }}</div>
+        {{/queuestatus}}
+        <ul class="list-unstyled small mb-0">
+            <li>{{#str}}queue:claimable, local_catquizlab{{/str}}
+                <span data-region="catquizlab-queued">{{queue.claimable}}</span></li>
+            <li>{{#str}}queue:inprogress, local_catquizlab{{/str}}
+                <span data-region="catquizlab-running">{{queue.running}}</span></li>
+            <li>{{#str}}queue:collected, local_catquizlab{{/str}}
+                <span data-region="catquizlab-collected">{{queue.collected}}</span></li>
+            <li>{{#str}}queue:failedlabel, local_catquizlab{{/str}}
+                <span data-region="catquizlab-failed">{{queue.failed}}</span></li>
+            {{#queue.hasblocked}}
+                <li class="text-danger">{{#str}}queue:blocked, local_catquizlab{{/str}} {{queue.blocked}}</li>
+            {{/queue.hasblocked}}
+            {{#queue.hasnotdue}}
+                <li>{{#str}}queue:notdue, local_catquizlab{{/str}} {{queue.notdue}}</li>
+            {{/queue.hasnotdue}}
+            {{#queue.haspaused}}
+                <li>{{#str}}queue:paused, local_catquizlab{{/str}} {{queue.paused}}</li>
+            {{/queue.haspaused}}
+        </ul>
+    </div>
+</div>
+
+{{#debug.enabled}}
+    <div class="card mb-3">
+        <div class="card-body">
+            <h3 class="h5">{{#str}}debug:heading, local_catquizlab{{/str}}</h3>
+            {{#debug.hasany}}
+                <div style="max-height: 24rem; overflow-y: auto;">
+                    <table class="table table-sm small">
+                        <thead>
+                            <tr>
+                                <th>{{#str}}runlog:time, local_catquizlab{{/str}}</th>
+                                <th>{{#str}}debug:channel, local_catquizlab{{/str}}</th>
+                                <th>{{#str}}debug:action, local_catquizlab{{/str}}</th>
+                                <th>{{#str}}debug:params, local_catquizlab{{/str}}</th>
+                                <th>{{#str}}debug:outcome, local_catquizlab{{/str}}</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {{#debug.rows}}
+                                <tr class="{{#failed}}table-danger{{/failed}}{{#refused}}table-warning{{/refused}}">
+                                    <td>{{time}}</td>
+                                    <td>{{channel}}</td>
+                                    <td>{{action}}{{#runid}} <span class="text-muted">#{{.}}</span>{{/runid}}</td>
+                                    <td><code>{{params}}</code></td>
+                                    <td>{{outcome}} {{#detail}}<code>{{.}}</code>{{/detail}}</td>
+                                </tr>
+                            {{/debug.rows}}
+                        </tbody>
+                    </table>
+                </div>
+                <p class="small text-muted mb-2">{{debug.retention}}</p>
+                <form method="post" action="{{formurl}}" class="d-inline">
+                    <input type="hidden" name="sesskey" value="{{sesskey}}">
+                    <input type="hidden" name="action" value="exportdebug">
+                    <button type="submit" class="btn btn-sm btn-outline-secondary">
+                        {{#str}}debug:export, local_catquizlab{{/str}}
+                    </button>
+                </form>
+                <form method="post" action="{{formurl}}" class="d-inline">
+                    <input type="hidden" name="sesskey" value="{{sesskey}}">
+                    <input type="hidden" name="action" value="cleardebug">
+                    <button type="submit" class="btn btn-sm btn-outline-secondary">
+                        {{#str}}debug:clear, local_catquizlab{{/str}}
+                    </button>
+                </form>
+            {{/debug.hasany}}
+            {{^debug.hasany}}
+                <p class="text-muted mb-0">{{#str}}debug:empty, local_catquizlab{{/str}}</p>
+            {{/debug.hasany}}
+        </div>
+    </div>
+{{/debug.enabled}}
+
+{{#canexecute}}
+    <div class="card mb-3">
+        <div class="card-body">
+            <h3 class="h5">{{#str}}progress:recovery, local_catquizlab{{/str}}</h3>
+            <p class="small text-muted">{{#str}}progress:recoveryhint, local_catquizlab{{/str}}</p>
+            {{#str}}purge:explain, local_catquizlab{{/str}}
+            <div class="mt-2">
+                <form method="post" action="{{formurl}}" class="d-inline">
+                    <input type="hidden" name="sesskey" value="{{sesskey}}">
+                    <input type="hidden" name="action" value="startworkers">
+                    <button type="submit" class="btn btn-sm btn-primary">
+                        {{#str}}ops:startworkers, local_catquizlab{{/str}}
+                    </button>
+                </form>
+                <form method="post" action="{{formurl}}" class="d-inline">
+                    <input type="hidden" name="sesskey" value="{{sesskey}}">
+                    <input type="hidden" name="action" value="reap">
+                    <button type="submit" class="btn btn-sm btn-outline-secondary">
+                        {{#str}}ops:reap, local_catquizlab{{/str}}
+                    </button>
+                </form>
+                <form method="post" action="{{formurl}}" class="d-inline">
+                    <input type="hidden" name="sesskey" value="{{sesskey}}">
+                    <input type="hidden" name="action" value="releaseorphans">
+                    <button type="submit" class="btn btn-sm btn-outline-secondary">
+                        {{#str}}ops:releaseorphans, local_catquizlab{{/str}}
+                    </button>
+                </form>
+                <form method="post" action="{{formurl}}" class="d-inline">
+                    <input type="hidden" name="sesskey" value="{{sesskey}}">
+                    <input type="hidden" name="action" value="killtasks">
+                    <button type="submit" class="btn btn-sm btn-outline-danger">
+                        {{#str}}purge:killtasks, local_catquizlab{{/str}}
+                    </button>
+                </form>
+                <form method="post" action="{{formurl}}" class="d-inline">
+                    <input type="hidden" name="sesskey" value="{{sesskey}}">
+                    <input type="hidden" name="action" value="killpipeline">
+                    <button type="submit" class="btn btn-sm btn-danger">
+                        {{#str}}purge:killpipeline, local_catquizlab{{/str}}
+                    </button>
+                </form>
+            </div>
+        </div>
+    </div>
+{{/canexecute}}

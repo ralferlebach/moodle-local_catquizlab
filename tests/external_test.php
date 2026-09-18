@@ -87,6 +87,10 @@ final class external_test extends \advanced_testcase {
         ]);
 
         // Oldest first.
+        // A run only hands out work while it is ready or running: a failed run
+        // with claimable attempts is the defect this guards against.
+        $DB->set_field('local_catquizlab_run', 'status', \local_catquizlab\local\registry::STATUS_READY, []);
+
         $claim = job_claim::execute('worker-a');
         $this->assertTrue($claim['hasjob']);
         $this->assertSame((int) $first, $claim['attemptid']);

@@ -107,6 +107,16 @@ class scale_provisioner {
             return null;
         }
 
+        // Provisioning runs more than once for the same run: an ad-hoc task
+        // that is retried, a "provision now" pressed after one, a run being
+        // recovered. Without this each of those built a second scale tree —
+        // two roots, two sets of subscales, and items materialised into
+        // whichever the later map happened to name.
+        $existing = self::existing_scales($runid);
+        if ($existing !== null) {
+            return $existing;
+        }
+
         $plan = self::plan_scales($blueprint);
         $now = time();
         $contextid = self::create_context($plan[0]['name'], $now, (int) ($USER->id ?? 0));
@@ -129,6 +139,11 @@ class scale_provisioner {
                 'level'            => $node['level'],
                 'categoryindex'    => $node['categoryindex'],
                 'subscaleindex'    => $node['subscaleindex'],
+                // The logical position, which is what the unique index is on.
+                // A physical scale id cannot express "one root per run": two
+                // different ids are both valid roots as far as it can tell.
+                'nodekey'          => self::node_key($node),
+                'generation'       => 1,
                 'name'             => $node['name'],
                 'timecreated'      => $now,
                 'timemodified'     => $now,
@@ -238,7 +253,7 @@ class scale_provisioner {
      * @param array $node The plan node.
      * @return string
      */
-    protected static function node_key(array $node): string {
+    public static function node_key(array $node): string {
         if ($node['level'] === self::LEVEL_ROOT) {
             return 'root';
         }
@@ -246,5 +261,78 @@ class scale_provisioner {
             return 'c' . $node['categoryindex'];
         }
         return 'c' . $node['categoryindex'] . 's' . $node['subscaleindex'];
+    }
+
+
+    /**
+     * The scales this run already has, if the engine still knows them.
+     *
+     * The lab's own map is checked against the engine rather than trusted: a
+     * map row pointing at a scale that was deleted is worse than no map at all,
+     * because everything downstream would materialise into a scale nobody can
+     * select from.
+     *
+     * @param int $runid The run.
+     * @return array|null contextid, rootscaleid and count, or null when there is no usable tree.
+     */
+    protected static function existing_scales(int $runid): ?array {
+        global $DB;
+
+        $rows = $DB->get_records('local_catquizlab_scalemap', ['runid' => $runid], 'level ASC, id ASC');
+        if ($rows === []) {
+            return null;
+        }
+
+        // Several generations is not something to pick the newest from. Picking
+        // silently is how an installation carried a dozen of them without
+        // anybody being told: whatever the choice, the run is in a state that
+        // needs deciding about, not guessing at.
+        $generations = scale_inventory::generations($runid);
+        if (count($generations) > 1) {
+            throw new \moodle_exception('scales:recoveryrequired', 'local_catquizlab', '', count($generations));
+        }
+
+        $root = $generations === [] ? 0 : (int) $generations[0]['rootscaleid'];
+        $contextid = $generations === [] ? 0 : (int) $generations[0]['contextid'];
+
+        if (
+            $root === 0
+                || !$DB->get_manager()->table_exists('local_catquiz_catscales')
+                || !$DB->record_exists('local_catquiz_catscales', ['id' => $root])
+        ) {
+            // The map is stale. Clearing it lets this run build a tree it can
+            // actually use, rather than adding a second one beside a broken
+            // first.
+            $DB->delete_records('local_catquizlab_scalemap', ['runid' => $runid]);
+
+            return null;
+        }
+
+        // The root existing is not the tree being sound. A run whose subscales
+        // were half deleted has a root, and reusing it means materialising into
+        // a shape the engine cannot serve — which surfaces much later as items
+        // it will not hand out.
+        //
+        // Structure only, not the blueprint comparisons: scale_health reads the
+        // shape from the run's manifest while provisioning is given a blueprint
+        // as an argument, and the two can legitimately differ — a caller
+        // provisioning a shape the manifest does not describe is not a run with
+        // a broken tree.
+        $structural = ['oneroot', 'onecontext', 'enginescales', 'uniquekeys', 'parents', 'acyclic'];
+        $health = scale_health::check($runid);
+        $broken = array_intersect($health['codes'], $structural);
+
+        if ($broken !== []) {
+            $DB->delete_records('local_catquizlab_scalemap', ['runid' => $runid]);
+
+            run_log::record($runid, run_log::STAGE_FAILED, [
+                'reason' => 'stale-scale-tree-rebuilt',
+                'codes'  => implode(',', $broken),
+            ], 'scales');
+
+            return null;
+        }
+
+        return ['contextid' => $contextid, 'rootscaleid' => $root, 'count' => count($rows)];
     }
 }

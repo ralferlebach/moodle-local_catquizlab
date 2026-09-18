@@ -53,7 +53,11 @@ final class worker_launcher_test extends \advanced_testcase {
         $this->assertSame('/usr/bin/node', $argv[0]);
         $this->assertSame('/path/run_attempt.js', $argv[1]);
         $this->assertContains('--base-url=https://moodle.example', $argv);
-        $this->assertContains('--token=abc123', $argv);
+        // The token is deliberately absent: command-line arguments are visible
+        // in process listings, and this one opens every web service function
+        // the worker may call. It travels in the environment instead.
+        $this->assertNotContains('--token=abc123', $argv);
+        $this->assertStringNotContainsString('abc123', implode(' ', $argv));
         $this->assertContains('--worker-id=w1', $argv);
         $this->assertContains('--max-jobs=5', $argv);
         $this->assertContains('--login-mode=urltemplate', $argv);

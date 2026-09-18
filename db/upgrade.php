@@ -133,6 +133,276 @@ function xmldb_local_catquizlab_upgrade($oldversion): bool {
         upgrade_plugin_savepoint(true, 2026083109, 'local', 'catquizlab');
     }
 
+    if ($oldversion < 2026091301) {
+        // A claim needs an owner and an expiry. Recovery used to key on
+        // timemodified, which a worker refreshes while it works, so a genuinely
+        // stuck attempt and a slow one looked alike.
+        $table = new xmldb_table('local_catquizlab_attempt');
+
+        $field = new xmldb_field('leaseowner', XMLDB_TYPE_CHAR, '100', null, null, null, null, 'tries');
+        if (!$dbman->field_exists($table, $field)) {
+            $dbman->add_field($table, $field);
+        }
+
+        $field = new xmldb_field('leaseexpires', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, '0', 'leaseowner');
+        if (!$dbman->field_exists($table, $field)) {
+            $dbman->add_field($table, $field);
+        }
+
+        $field = new xmldb_field('lasterror', XMLDB_TYPE_TEXT, null, null, null, null, null, 'leaseexpires');
+        if (!$dbman->field_exists($table, $field)) {
+            $dbman->add_field($table, $field);
+        }
+
+        // The worker registry. Without it a worker exists only as a process,
+        // and nothing can say whether a slot is already taken.
+        $table = new xmldb_table('local_catquizlab_worker');
+        if (!$dbman->table_exists($table)) {
+            $table->add_field('id', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, XMLDB_SEQUENCE, null);
+            $table->add_field('workerid', XMLDB_TYPE_CHAR, '100', null, XMLDB_NOTNULL, null, null);
+            $table->add_field('slot', XMLDB_TYPE_INTEGER, '4', null, XMLDB_NOTNULL, null, '0');
+            $table->add_field('status', XMLDB_TYPE_INTEGER, '2', null, XMLDB_NOTNULL, null, '0');
+            $table->add_field('pid', XMLDB_TYPE_INTEGER, '10', null, null, null, null);
+            $table->add_field('hostname', XMLDB_TYPE_CHAR, '255', null, null, null, null);
+            $table->add_field('jobsdone', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, '0');
+            $table->add_field('lasterror', XMLDB_TYPE_TEXT, null, null, null, null, null);
+            $table->add_field('heartbeat', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, '0');
+            $table->add_field('timecreated', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, '0');
+            $table->add_field('timemodified', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, '0');
+            $table->add_key('primary', XMLDB_KEY_PRIMARY, ['id']);
+            $table->add_index('workerid', XMLDB_INDEX_UNIQUE, ['workerid']);
+            $table->add_index('slotstatus', XMLDB_INDEX_NOTUNIQUE, ['slot', 'status']);
+            $table->add_index('heartbeat', XMLDB_INDEX_NOTUNIQUE, ['heartbeat']);
+            $dbman->create_table($table);
+        }
+
+        upgrade_plugin_savepoint(true, 2026091301, 'local', 'catquizlab');
+    }
+
+    if ($oldversion < 2026091401) {
+        // A worker only spoke when it claimed and when it finished, and an
+        // attempt takes minutes: a working worker went quiet for as long as the
+        // timeout that declares it dead.
+        $table = new xmldb_table('local_catquizlab_worker');
+
+        foreach (
+            [
+            ['currentattempt', XMLDB_TYPE_INTEGER, '10', XMLDB_NOTNULL, '0', 'lasterror'],
+            ['workerstate', XMLDB_TYPE_CHAR, '20', null, null, 'currentattempt'],
+            ['stoprequested', XMLDB_TYPE_INTEGER, '10', XMLDB_NOTNULL, '0', 'workerstate'],
+            ] as [$name, $type, $precision, $notnull, $default, $previous]
+        ) {
+            $field = new xmldb_field($name, $type, $precision, null, $notnull, null, $default, $previous);
+            if (!$dbman->field_exists($table, $field)) {
+                $dbman->add_field($table, $field);
+            }
+        }
+
+        upgrade_plugin_savepoint(true, 2026091401, 'local', 'catquizlab');
+    }
+
+    if ($oldversion < 2026091411) {
+        // A failed run's story was spread across the Moodle task log, the run
+        // manifest, the worker log, the interface and the database — and a
+        // reset destroyed most of it. This keeps it, per execution attempt.
+        $table = new xmldb_table('local_catquizlab_runlog');
+        $table->add_field('id', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, XMLDB_SEQUENCE);
+        $table->add_field('runid', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, '0');
+        $table->add_field('attemptno', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, '1');
+        $table->add_field('event', XMLDB_TYPE_CHAR, '40', null, XMLDB_NOTNULL, null, null);
+        $table->add_field('stage', XMLDB_TYPE_CHAR, '40', null, null, null, null);
+        $table->add_field('detail', XMLDB_TYPE_TEXT, null, null, null, null, null);
+        $table->add_field('dbqueries', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, '0');
+        $table->add_field('duration', XMLDB_TYPE_NUMBER, '10, 3', null, XMLDB_NOTNULL, null, '0');
+        $table->add_field('userid', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, '0');
+        $table->add_field('timecreated', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, '0');
+        $table->add_key('primary', XMLDB_KEY_PRIMARY, ['id']);
+        $table->add_index('runattempt', XMLDB_INDEX_NOTUNIQUE, ['runid', 'attemptno']);
+
+        if (!$dbman->table_exists($table)) {
+            $dbman->create_table($table);
+        }
+
+        upgrade_plugin_savepoint(true, 2026091411, 'local', 'catquizlab');
+    }
+
+    if ($oldversion < 2026091414) {
+        // Diagnosis was spread over Moodle notifications, task logs, worker
+        // logs, the run manifest, the operations page and the database, so a
+        // defect could not be reconstructed as a sequence: what was clicked,
+        // what ran, with what parameters, and what came back.
+        $table = new xmldb_table('local_catquizlab_debug');
+        $table->add_field('id', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, XMLDB_SEQUENCE);
+        $table->add_field('channel', XMLDB_TYPE_CHAR, '20', null, XMLDB_NOTNULL, null, null);
+        $table->add_field('action', XMLDB_TYPE_CHAR, '80', null, XMLDB_NOTNULL, null, null);
+        $table->add_field('page', XMLDB_TYPE_CHAR, '120', null, null, null, null);
+        $table->add_field('params', XMLDB_TYPE_TEXT, null, null, null, null, null);
+        $table->add_field('outcome', XMLDB_TYPE_CHAR, '20', null, null, null, null);
+        $table->add_field('detail', XMLDB_TYPE_TEXT, null, null, null, null, null);
+        $table->add_field('runid', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, '0');
+        $table->add_field('userid', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, '0');
+        $table->add_field('timecreated', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, '0');
+        $table->add_key('primary', XMLDB_KEY_PRIMARY, ['id']);
+        $table->add_index('timecreated', XMLDB_INDEX_NOTUNIQUE, ['timecreated']);
+
+        if (!$dbman->table_exists($table)) {
+            $dbman->create_table($table);
+        }
+
+        upgrade_plugin_savepoint(true, 2026091414, 'local', 'catquizlab');
+    }
+
+    if ($oldversion < 2026091604) {
+        // UNIQUE(runid, catscaleid) stopped the same physical scale appearing
+        // twice and said nothing about a run owning two different roots, which
+        // is the shape the defect actually took. A logical key can say it.
+        $table = new xmldb_table('local_catquizlab_scalemap');
+
+        $nodekey = new xmldb_field(
+            'nodekey',
+            XMLDB_TYPE_CHAR,
+            '40',
+            null,
+            XMLDB_NOTNULL,
+            null,
+            'root',
+            'subscaleindex'
+        );
+        if (!$dbman->field_exists($table, $nodekey)) {
+            $dbman->add_field($table, $nodekey);
+        }
+
+        $generation = new xmldb_field(
+            'generation',
+            XMLDB_TYPE_INTEGER,
+            '10',
+            null,
+            XMLDB_NOTNULL,
+            null,
+            '1',
+            'nodekey'
+        );
+        if (!$dbman->field_exists($table, $generation)) {
+            $dbman->add_field($table, $generation);
+        }
+
+        // Existing rows get their logical key from the indices they already
+        // carry, and their generation from the order the roots were created —
+        // so an installation with duplicates can take the index rather than
+        // being refused by it.
+        foreach ($DB->get_fieldset_sql('SELECT DISTINCT runid FROM {local_catquizlab_scalemap}') as $runid) {
+            $generationno = 0;
+            $context = [];
+
+            foreach ($DB->get_records('local_catquizlab_scalemap', ['runid' => $runid], 'id ASC') as $row) {
+                $contextid = (int) $row->contextid;
+                if (!array_key_exists($contextid, $context)) {
+                    $context[$contextid] = ++$generationno;
+                }
+
+                $level = (int) $row->level;
+                if ($level === 0) {
+                    $key = 'root';
+                } else if ($level === 1) {
+                    $key = 'c' . (int) $row->categoryindex;
+                } else {
+                    $key = 'c' . (int) $row->categoryindex . 's' . (int) $row->subscaleindex;
+                }
+
+                $DB->update_record('local_catquizlab_scalemap', (object) [
+                    'id'         => $row->id,
+                    'nodekey'    => $key,
+                    'generation' => $context[$contextid],
+                ]);
+            }
+        }
+
+        // Now that every row has one, the column can say so.
+        $notnull = new xmldb_field(
+            'nodekey',
+            XMLDB_TYPE_CHAR,
+            '40',
+            null,
+            XMLDB_NOTNULL,
+            null,
+            null,
+            'subscaleindex'
+        );
+        $dbman->change_field_notnull($table, $notnull);
+
+        $index = new xmldb_index('runnodekey', XMLDB_INDEX_UNIQUE, ['runid', 'generation', 'nodekey']);
+        if (!$dbman->index_exists($table, $index)) {
+            $dbman->add_index($table, $index);
+        }
+
+        upgrade_plugin_savepoint(true, 2026091604, 'local', 'catquizlab');
+    }
+
+    if ($oldversion < 2026091609) {
+        // One click produces entries in the debug trace, the run log, a task
+        // and a worker. Without a shared id they are a list of things that
+        // happened near each other, and reading a defect means guessing which
+        // belong together.
+        $additions = [
+            'local_catquizlab_debug' => [
+                ['correlationid', XMLDB_TYPE_CHAR, '32', null, null, 'runid'],
+                ['taskclassname', XMLDB_TYPE_CHAR, '120', null, null, 'correlationid'],
+            ],
+            'local_catquizlab_runlog' => [
+                ['correlationid', XMLDB_TYPE_CHAR, '32', null, null, 'duration'],
+                ['taskid', XMLDB_TYPE_INTEGER, '10', XMLDB_NOTNULL, '0', 'correlationid'],
+                ['taskclassname', XMLDB_TYPE_CHAR, '120', null, null, 'taskid'],
+            ],
+        ];
+
+        foreach ($additions as $tablename => $fields) {
+            $table = new xmldb_table($tablename);
+            if (!$dbman->table_exists($table)) {
+                continue;
+            }
+
+            foreach ($fields as [$name, $type, $precision, $notnull, $default, $previous]) {
+                $field = new xmldb_field($name, $type, $precision, null, $notnull, null, $default, $previous);
+                if (!$dbman->field_exists($table, $field)) {
+                    $dbman->add_field($table, $field);
+                }
+            }
+        }
+
+        $table = new xmldb_table('local_catquizlab_debug');
+        $index = new xmldb_index('correlationid', XMLDB_INDEX_NOTUNIQUE, ['correlationid']);
+        if ($dbman->table_exists($table) && !$dbman->index_exists($table, $index)) {
+            $dbman->add_index($table, $index);
+        }
+
+        upgrade_plugin_savepoint(true, 2026091609, 'local', 'catquizlab');
+    }
+
+    if ($oldversion < 2026091710) {
+        // Experiments waiting their turn. A queue held in a task's memory
+        // forgets everything the moment cron restarts, and somebody who queued
+        // five experiments before going home would find none of them had run.
+        $table = new xmldb_table('local_catquizlab_execqueue');
+        $table->add_field('id', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, XMLDB_SEQUENCE);
+        $table->add_field('experimentid', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, '0');
+        $table->add_field('state', XMLDB_TYPE_CHAR, '20', null, XMLDB_NOTNULL, null, 'waiting');
+        $table->add_field('position', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, '0');
+        $table->add_field('reason', XMLDB_TYPE_TEXT, null, null, null, null, null);
+        $table->add_field('userid', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, '0');
+        $table->add_field('timecreated', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, '0');
+        $table->add_field('timestarted', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, '0');
+        $table->add_field('timefinished', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, '0');
+        $table->add_key('primary', XMLDB_KEY_PRIMARY, ['id']);
+        $table->add_index('statepos', XMLDB_INDEX_NOTUNIQUE, ['state', 'position']);
+        $table->add_index('experimentid', XMLDB_INDEX_NOTUNIQUE, ['experimentid']);
+
+        if (!$dbman->table_exists($table)) {
+            $dbman->create_table($table);
+        }
+
+        upgrade_plugin_savepoint(true, 2026091710, 'local', 'catquizlab');
+    }
+
     return true;
 }
 

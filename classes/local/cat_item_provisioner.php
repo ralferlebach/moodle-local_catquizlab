@@ -143,6 +143,12 @@ class cat_item_provisioner {
         // "planned 6, visible 2": each scale kept the list from its first item.
         self::purge_engine_cache();
 
+        // And our own list with it. Holding the engine's answer for the request
+        // is what makes checking a large pool affordable; holding it across the
+        // write that changes the answer is what made "planned 6, visible 2"
+        // come back as "planned 120, visible 6".
+        self::forget_visible_items();
+
         // Step 4: the proof. Counting rows in local_catquiz_items would miss
         // exactly the inconsistencies this check exists to catch.
         if (($options['verify'] ?? true) && !self::is_visible($questionid, $catscaleid, $contextid)) {
@@ -294,6 +300,30 @@ class cat_item_provisioner {
      * @param int $contextid The CAT context.
      * @return bool
      */
+    /** @var array<string, array> Engine item lists already fetched in this request. */
+    protected static $visiblecache = [];
+
+    /**
+     * Forget the cached engine item lists.
+     *
+     * A provisioning that creates items and then checks them must not be shown
+     * the list from before it wrote — and tests run several scenarios in one
+     * process.
+     *
+     * @return void
+     */
+    public static function forget_visible_items(): void {
+        self::$visiblecache = [];
+    }
+
+    /**
+     * Whether the engine reports this question on this scale.
+     *
+     * @param int $questionid The question.
+     * @param int $catscaleid The scale it should sit on.
+     * @param int $contextid The CAT context.
+     * @return bool
+     */
     public static function is_visible(int $questionid, int $catscaleid, int $contextid): bool {
         foreach (self::visible_items($catscaleid, $contextid) as $item) {
             $componentid = $item->componentid ?? $item->id ?? null;
@@ -318,14 +348,27 @@ class cat_item_provisioner {
             return [];
         }
 
+        // Held for the request. Checking a pool of items asks this once per
+        // item, and the items of a run sit on a handful of scales: at about
+        // thirty-nine queries per item, a pool of fourteen thousand cost half a
+        // million. The answer does not change while a single request runs, and
+        // the scales it varies over are counted in tens.
+        $key = $catscaleid . ':' . $contextid . ':' . (int) $includesubscales;
+        if (array_key_exists($key, self::$visiblecache)) {
+            return self::$visiblecache[$key];
+        }
+
         try {
             $scale = new \local_catquiz\catscale($catscaleid);
             $items = $scale->get_testitems($contextid, $includesubscales);
         } catch (\Throwable $e) {
-            return [];
+            // Cached too: an engine that refuses this scale will refuse it
+            // again in the same request, and asking once per item turns one
+            // failure into thousands.
+            return self::$visiblecache[$key] = [];
         }
 
-        return is_array($items) ? $items : [];
+        return self::$visiblecache[$key] = (is_array($items) ? $items : []);
     }
 
     /**

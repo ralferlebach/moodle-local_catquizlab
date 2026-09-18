@@ -35,6 +35,45 @@ namespace local_catquizlab\local;
  * questions are created here (that is provisioning, E2).
  */
 class registry {
+    /**
+     * The admin section id of the plugin's settings page.
+     *
+     * Declared once. The landing page linked to 'local_catquizlab' while
+     * settings.php registered 'local_catquizlab_settings', so the one link a
+     * new installation needs — to choose an experiment course — led to
+     * Moodle's sectionerror instead. Two literals that must agree and no
+     * reason for them to be separate.
+     *
+     * @var string
+     */
+    public const SETTINGS_SECTION = 'local_catquizlab_settings';
+
+    /**
+     * The admin page id the plugin's own pages hang from.
+     *
+     * Declared here for the same reason as the settings section: every page
+     * passes it to admin_externalpage_setup(), and a literal repeated across
+     * eight files is a literal that will disagree with itself eventually.
+     *
+     * @var string
+     */
+    public const ADMIN_PAGE = 'local_catquizlab_manage';
+
+    /**
+     * The URL of the plugin's settings page.
+     *
+     * @param string|null $anchor Optional setting to jump to.
+     * @return \moodle_url
+     */
+    public static function settings_url(?string $anchor = null): \moodle_url {
+        $url = new \moodle_url('/admin/settings.php', ['section' => self::SETTINGS_SECTION]);
+        if ($anchor !== null) {
+            $url->set_anchor($anchor);
+        }
+
+        return $url;
+    }
+
     /** @var int Run/experiment status: defined but not yet scheduled. */
     public const STATUS_DRAFT = 0;
 
@@ -108,11 +147,32 @@ class registry {
      */
     public static function allowed_actions(int $status): array {
         return [
+            // A draft run is the only one that can be started: starting a
+            // running one would give it a second attempt queue.
+            'start'     => $status === self::STATUS_DRAFT,
             'cancel'    => in_array(
                 $status,
                 [self::STATUS_SCHEDULED, self::STATUS_READY, self::STATUS_RUNNING, self::STATUS_AGGREGATING],
                 true
             ),
+            // Re-checking is for a failed run whose cause may have been fixed:
+            // a pool enlarged, a budget corrected, an engine installed. It
+            // keeps the run's identity, where reproducing makes a new one.
+            'recheck'   => $status === self::STATUS_FAILED,
+            // A scheduled run is waiting for an orchestrator task that may
+            // never have been queued, or was queued before cron stopped
+            // running. Without this the run sits at "Scheduled, 0%" with
+            // workers idling beside it and no action that moves it — and READY
+            // must not be settable by hand, because it stands for a check that
+            // passed.
+            'provision' => $status === self::STATUS_SCHEDULED,
+            // Available wherever a run is not actively being played: a run can
+            // be wrong in ways re-checking will never fix, and reproducing it
+            // leaves the broken one in the list for ever.
+            'reset'     => in_array($status, [
+                self::STATUS_SCHEDULED, self::STATUS_READY, self::STATUS_FAILED,
+                self::STATUS_CANCELLED, self::STATUS_FINISHED,
+            ], true),
             'reproduce' => self::is_terminal($status),
             'results'   => in_array($status, [self::STATUS_FINISHED, self::STATUS_AGGREGATING], true),
         ];

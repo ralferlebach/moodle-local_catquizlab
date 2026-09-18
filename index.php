@@ -29,6 +29,7 @@
 require(__DIR__ . '/../../config.php');
 require_once($CFG->libdir . '/adminlib.php');
 
+use local_catquizlab\local\attempt_scheduler;
 use local_catquizlab\local\environment;
 use local_catquizlab\local\experiment_container;
 use local_catquizlab\local\experiment_definition;
@@ -123,7 +124,14 @@ foreach (experiment_service::overview() as $row) {
             : $row['tier'],
         'cells'        => $row['cells'] ?? '—',
         'modified'     => userdate($row['timemodified'], get_string('strftimedatetimeshort')),
+        'candelete'    => has_capability('local/catquizlab:execute', $context),
         'editurl'      => $editurl->out(false),
+        // Deleting outright, distinct from anything that keeps the experiment:
+        // for test, development and mistaken experiments, which the archive is
+        // the wrong home for.
+        'deleteurl'    => (new moodle_url('/local/catquizlab/experiment.php', [
+            'id' => $row['id'], 'action' => 'delete', 'sesskey' => sesskey(),
+        ]))->out(false),
         'actions'      => implode('', $actions),
     ]);
 }
@@ -157,6 +165,45 @@ $counts = [
     'finished'    => $DB->count_records('local_catquizlab_run', ['status' => registry::STATUS_FINISHED]),
     'failed'      => $DB->count_records('local_catquizlab_run', ['status' => registry::STATUS_FAILED]),
 ];
+// The worker fleet and the attempt queue, beside the experiments. A pipeline
+// that has stalled looks exactly like one that is merely slow unless the page
+// says how many workers are alive and how long the queue is.
+$workers = \local_catquizlab\local\worker_registry::summary();
+// Split into what an operator can act on: claimable now, not due yet after a
+// failure, blocked by the run's state, or paused. One number for all four
+// answered a question nobody asked.
+$queue = attempt_scheduler::queue_breakdown();
+
+// Work waiting with nobody to do it is the one combination that never resolves
+// itself, so it is named rather than left to be inferred from two numbers.
+$queue['stalled'] = $queue['queued'] > 0 && $workers['live'] === 0;
+
+// The most recent failure reasons, because a rising retry count without a
+// reason tells an operator nothing they can act on.
+$recenterrors = array_values($DB->get_records_select(
+    'local_catquizlab_attempt',
+    'lasterror IS NOT NULL',
+    [],
+    'timemodified DESC',
+    'id, runid, tries, lasterror',
+    0,
+    5
+));
+
+// The one thing a fresh installation needs to know: is it ready, and if not,
+// where does it go. Leaving that on a page an administrator has to already know
+// about is how the setup ends up being done by hand instead.
+// The one line that says whether this is working, above the numbers it is
+// drawn from. Four correct figures that contradict each other at a glance are
+// worse than one sentence.
+$situation = \local_catquizlab\local\situation::assess();
+
+$setupstate = \local_catquizlab\local\setup_wizard::state();
+$setupnotice = $setupstate['ready'] ? null : [
+    'blockers' => implode(', ', array_slice($setupstate['blockers'], 0, 4)),
+    'opsurl'   => (new moodle_url('/local/catquizlab/operations.php'))->out(false),
+];
+
 $overview = [
     [
         'count' => $counts['experiments'],
@@ -194,7 +241,7 @@ $containercontext = [
         ? (new moodle_url('/course/view.php', ['id' => $course->id]))->out(false)
         : '',
     'settingsurl' => (new moodle_url('/admin/settings.php', [
-        'section' => 'local_catquizlab',
+        'section' => \local_catquizlab\local\registry::SETTINGS_SECTION,
     ]))->out(false),
 ];
 
@@ -211,6 +258,22 @@ $templatecontext = [
     'environment' => ['items' => $envitems],
     'disabled'    => !get_config($component, 'enabled'),
     'experiments' => ['hasany' => $experimentrows !== [], 'rows' => $experimentrows],
+    'situation'   => $situation,
+    // Superseded by the verdict above when it already says the installation is
+    // not ready: two warnings about one thing is one too many.
+    'setupnotice' => $situation['state'] === \local_catquizlab\local\situation::NOTREADY
+        ? null
+        : $setupnotice,
+    'workers'     => $workers + ['queue' => $queue, 'hasslot' => $workers['live'] > 0],
+    'queue'       => $queue,
+    'recenterrors' => $recenterrors === [] ? null : ['rows' => array_map(static function ($row): array {
+        return [
+            'attemptid' => (int) $row->id,
+            'runid'     => (int) $row->runid,
+            'tries'     => (int) $row->tries,
+            'lasterror' => (string) $row->lasterror,
+        ];
+    }, $recenterrors)],
     'runs'        => [
         'hasany'     => $runrows !== [],
         'hassummary' => $recent['total'] > count($runrows),
@@ -223,7 +286,98 @@ $templatecontext = [
     ],
 ];
 
+// One page. Everything an operator does — look at experiments, set the
+// installation up, watch it run, change what it runs with — is reachable from
+// here without leaving the plugin. Splitting these across three pages meant
+// knowing which page held which half.
+// Named and ordered by the work, not by the objects behind them: set the
+// installation up, define what to run, watch it run, look at what came out.
+// Somebody doing this for the first time should be able to follow the numbers.
+$tab = optional_param('tab', 'experiments', PARAM_ALPHA);
+if (!in_array($tab, ['experiments', 'setup', 'results', 'settings'], true)) {
+    $tab = 'experiments';
+}
+
+// Deliberately no redirect to the setup tab for an unready installation. It
+// was tempting — there is one thing worth doing and this is not the tab for it
+// — but somebody who opens the plugin to look at their experiments should find
+// their experiments. The banner at the top of this tab says what is missing and
+// links to where it is fixed, which is the same information without moving the
+// page out from under the reader.
+
+$settingsform = null;
+if ($tab === 'settings') {
+    $settingsform = new \local_catquizlab\form\settings_form(
+        new moodle_url('/local/catquizlab/index.php', ['tab' => 'settings'])
+    );
+
+    if ($data = $settingsform->get_data()) {
+        require_capability('local/catquizlab:execute', $context);
+        foreach (
+            ['experimentcourseid', 'enabled', 'worker_base_url', 'worker_node_path',
+            'worker_concurrency', 'worker_max_jobs'] as $name
+        ) {
+            if (isset($data->$name)) {
+                set_config($name, $data->$name, $component);
+            }
+        }
+        redirect(
+            new moodle_url('/local/catquizlab/index.php', ['tab' => 'settings']),
+            get_string('settingsform:saved', $component)
+        );
+    }
+
+    $settingsform->set_data((object) [
+        'experimentcourseid' => (int) get_config($component, 'experimentcourseid'),
+        'enabled'            => (int) get_config($component, 'enabled'),
+        'worker_base_url'    => (string) get_config($component, 'worker_base_url'),
+        'worker_node_path'   => (string) get_config($component, 'worker_node_path'),
+        'worker_concurrency' => (int) (get_config($component, 'worker_concurrency') ?: 1),
+        'worker_max_jobs'    => (int) get_config($component, 'worker_max_jobs'),
+        'debuglevel'         => (string) get_config($component, 'debuglevel') ?: 'off',
+    ]);
+}
+
+$tabs = [];
+foreach (['setup', 'experiments', 'results', 'settings'] as $name) {
+    $tabs[] = new tabobject(
+        $name,
+        $name === 'results'
+            ? new moodle_url('/local/catquizlab/results.php')
+            : new moodle_url('/local/catquizlab/index.php', ['tab' => $name]),
+        get_string('tab:' . $name, $component)
+    );
+}
+
 echo $OUTPUT->header();
-echo $OUTPUT->heading(get_string('pluginname', $component));
-echo $OUTPUT->render_from_template('local_catquizlab/manage', $templatecontext);
+
+// The same frame as every other page. The old tabtree was cut by object —
+// "experiments and runs", "settings" — so there was no place that meant "what is
+// happening right now", and settings sat beside the work as if it were a step.
+echo \local_catquizlab\output\shell::render(
+    $tab === 'setup' ? \local_catquizlab\output\shell::STEP_PREPARE
+        : \local_catquizlab\output\shell::STEP_PLAN,
+    optional_param('experimentid', 0, PARAM_INT)
+);
+
+if ($tab === 'experiments') {
+    // Keeps the counters current while workers run, so watching a queue drain
+    // does not mean reloading the page during exactly the minutes somebody is
+    // watching it.
+    $PAGE->requires->js_call_amd('local_catquizlab/livestatus', 'init', [
+        \local_catquizlab\external\live_status::current_shape(),
+    ]);
+}
+
+if ($tab === 'experiments') {
+    echo $OUTPUT->render_from_template('local_catquizlab/manage', $templatecontext);
+} else if ($tab === 'setup') {
+    echo $OUTPUT->render_from_template(
+        'local_catquizlab/operations',
+        \local_catquizlab\local\operations_view::context()
+    );
+} else {
+    $settingsform->display();
+}
+
 echo $OUTPUT->footer();

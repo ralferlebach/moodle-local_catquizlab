@@ -37,17 +37,27 @@ use local_catquizlab\local\environment;
 // the Reports list even without full site-config rights; the capability on the
 // page controls access. The same URL backs the navbar button (see lib.php).
 $ADMIN->add('reports', new admin_externalpage(
-    'local_catquizlab_manage',
+    \local_catquizlab\local\registry::ADMIN_PAGE,
     get_string('manage:pagetitle', 'local_catquizlab'),
     new moodle_url('/local/catquizlab/index.php'),
     'local/catquizlab:manage'
 ));
 
 if ($hassiteconfig) {
+    global $OUTPUT;
     $component = 'local_catquizlab';
 
+    // The operations view sits beside the management page: running and
+    // diagnosing an experiment belongs in the plugin, not in a shell.
+    $ADMIN->add('reports', new admin_externalpage(
+        'local_catquizlab_operations',
+        get_string('ops:heading', 'local_catquizlab'),
+        new moodle_url('/local/catquizlab/operations.php'),
+        'local/catquizlab:view'
+    ));
+
     $settings = new admin_settingpage(
-        'local_catquizlab_settings',
+        \local_catquizlab\local\registry::SETTINGS_SECTION,
         get_string('pluginname', $component)
     );
     $ADMIN->add('localplugins', $settings);
@@ -114,10 +124,28 @@ if ($hassiteconfig) {
         $CFG->wwwroot,
         PARAM_URL
     ));
+    // The state of the worker access, and the way to fix it, next to the field
+    // it fills in. Without this an administrator stands in front of an empty
+    // token box with no indication that the plugin can fill it — which is
+    // exactly where the manual ten-step sequence used to begin.
+    $access = \local_catquizlab\local\worker_access::verify();
+    $opsurl = (new moodle_url('/local/catquizlab/operations.php'))->out(false);
+    $settings->add(new admin_setting_description(
+        $component . '/workeraccessnotice',
+        get_string('access:heading', $component),
+        $access['ok']
+            ? $OUTPUT->notification(get_string('access:settingsok', $component), 'notifysuccess', false)
+            : $OUTPUT->notification(
+                get_string('access:settingsmissing', $component, $opsurl),
+                'notifywarning',
+                false
+            )
+    ));
     $settings->add(new admin_setting_configpasswordunmask(
         $component . '/worker_token',
         get_string('setting:worker_token', $component),
-        get_string('setting:worker_token_desc', $component),
+        get_string('setting:worker_token_desc', $component)
+            . ' ' . get_string('setting:worker_token_hint', $component, $opsurl),
         ''
     ));
     $settings->add(new admin_setting_configtext(

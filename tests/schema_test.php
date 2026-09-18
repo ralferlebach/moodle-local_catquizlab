@@ -168,6 +168,21 @@ final class schema_test extends \advanced_testcase {
         $this->resetAfterTest();
 
         $upgrade = file_get_contents($CFG->dirroot . '/local/catquizlab/db/upgrade.php');
+
+        // Only fields that are added. A field declared NOT NULL for
+        // change_field_notnull() is the correct end of the nullable-fill-tighten
+        // sequence, and flagging it would push the next person back towards the
+        // default this test exists to prevent.
+        $tightened = [];
+        if (preg_match_all("/change_field_notnull\(\s*\\$\w+,\s*\\$(\w+)/", $upgrade, $calls)) {
+            foreach ($calls[1] as $variable) {
+                $pattern = "/\\$" . preg_quote($variable, '/') . "\s*=\s*new xmldb_field\(\s*'([^']+)'/";
+                if (preg_match($pattern, $upgrade, $named)) {
+                    $tightened[] = $named[1];
+                }
+            }
+        }
+
         preg_match_all(
             "/new xmldb_field\\(\s*'([^']+)',\s*(XMLDB_TYPE_\w+),\s*[^,]*,\s*[^,]*,\s*([^,]*),\s*[^,]*,\s*([^,]*),/",
             $upgrade,
@@ -178,6 +193,9 @@ final class schema_test extends \advanced_testcase {
         foreach ($matches as $match) {
             [, $name, $type, $notnull, $default] = $match;
             if (trim($notnull) !== 'XMLDB_NOTNULL') {
+                continue;
+            }
+            if (in_array($name, $tightened, true)) {
                 continue;
             }
             $default = trim($default);
@@ -272,6 +290,21 @@ final class schema_test extends \advanced_testcase {
         $version = (int) $plugin->version;
 
         $upgrade = file_get_contents($CFG->dirroot . '/local/catquizlab/db/upgrade.php');
+
+        // Only fields that are added. A field declared NOT NULL for
+        // change_field_notnull() is the correct end of the nullable-fill-tighten
+        // sequence, and flagging it would push the next person back towards the
+        // default this test exists to prevent.
+        $tightened = [];
+        if (preg_match_all("/change_field_notnull\(\s*\\$\w+,\s*\\$(\w+)/", $upgrade, $calls)) {
+            foreach ($calls[1] as $variable) {
+                $pattern = "/\\$" . preg_quote($variable, '/') . "\s*=\s*new xmldb_field\(\s*'([^']+)'/";
+                if (preg_match($pattern, $upgrade, $named)) {
+                    $tightened[] = $named[1];
+                }
+            }
+        }
+
         preg_match_all('/upgrade_plugin_savepoint\(true,\s*(\d+)/', $upgrade, $matches);
 
         $this->assertNotEmpty($matches[1], 'The upgrade path has no savepoints.');
@@ -282,5 +315,111 @@ final class schema_test extends \advanced_testcase {
                 'Savepoint ' . $savepoint . ' is above the plugin version ' . $version . '.'
             );
         }
+    }
+
+    /**
+     * The plugin contains only its own directories, and no empty ones.
+     *
+     * @return void
+     */
+    public function test_the_tree_holds_nothing_foreign_or_empty(): void {
+        global $CFG;
+        $this->resetAfterTest();
+
+        $root = $CFG->dirroot . '/local/catquizlab';
+
+        // The catmodel and catquizcentralhub trees are subplugin directories of
+        // local_catquiz. Copies of them arrived here empty through a source
+        // archive and rode along in 123 zip entries of every release, and a
+        // directory named after a subplugin type sitting in a plugin root is an
+        // invitation to be scanned as one.
+        foreach (['catmodel', 'catquizcentralhub'] as $foreign) {
+            $this->assertDirectoryDoesNotExist(
+                $root . '/' . $foreign,
+                $foreign . ' belongs to local_catquiz, not to this plugin.'
+            );
+        }
+
+        // Empty directories are all leftovers of something: a module that was
+        // removed, an archive that carried the shape of a tree without its
+        // contents. Git does not track them, so they exist only where somebody
+        // unpacked a zip — and then travel into the next one.
+        $empty = [];
+        $iterator = new \RecursiveIteratorIterator(
+            new \RecursiveDirectoryIterator($root, \FilesystemIterator::SKIP_DOTS),
+            \RecursiveIteratorIterator::CHILD_FIRST
+        );
+
+        foreach ($iterator as $entry) {
+            if (!$entry->isDir()) {
+                continue;
+            }
+            $path = $entry->getPathname();
+
+            // Directories the tooling creates inside the plugin while it runs.
+            // `.phpunit.cache` in particular is made by the very run that
+            // executes this test, so checking for it means the test fails
+            // because it was run — which it did, on Moodle 5.x where PHPUnit
+            // places the cache differently than on 4.5.
+            $generated = ['/node_modules/', '/.git/', '/vendor/', '.phpunit.cache', '/.phpunit.result.cache'];
+            $skip = false;
+            foreach ($generated as $fragment) {
+                if (str_contains($path, $fragment)) {
+                    $skip = true;
+                    break;
+                }
+            }
+            if ($skip) {
+                continue;
+            }
+            if (!(new \FilesystemIterator($path, \FilesystemIterator::SKIP_DOTS))->valid()) {
+                $empty[] = str_replace($root . '/', '', $path);
+            }
+        }
+
+        $this->assertSame([], $empty, 'Empty directories in the plugin tree: ' . implode(', ', $empty));
+    }
+
+    /**
+     * Each upgrade step has exactly one savepoint, at its own version.
+     *
+     * @return void
+     */
+    public function test_upgrade_savepoints_are_unique_and_ordered(): void {
+        global $CFG;
+        $this->resetAfterTest();
+
+        $source = file_get_contents($CFG->dirroot . '/local/catquizlab/db/upgrade.php');
+
+        preg_match_all('/if \(\$oldversion < (\d+)\)/', $source, $blocks);
+        preg_match_all('/upgrade_plugin_savepoint\(true, (\d+)/', $source, $savepoints);
+
+        $blockversions = array_map('intval', $blocks[1]);
+        $saveversions = array_map('intval', $savepoints[1]);
+
+        // Two savepoints for one version means an upgrade step was duplicated,
+        // and a site that runs it twice does whatever the step does twice.
+        // `moodle-plugin-ci savepoints` fails the build on this, and it did:
+        // a whole block had been pasted in a second time.
+        $this->assertSame(
+            count(array_unique($saveversions)),
+            count($saveversions),
+            'Duplicate savepoint versions: ' . implode(', ', array_diff_assoc(
+                $saveversions,
+                array_unique($saveversions)
+            ))
+        );
+
+        // One savepoint per block, each matching its own condition.
+        $this->assertSame($blockversions, $saveversions);
+
+        $sorted = $blockversions;
+        sort($sorted);
+        $this->assertSame($sorted, $blockversions, 'Upgrade blocks are not in ascending order.');
+
+        // And none of them claims a version the plugin has not reached.
+        $plugin = new \stdClass();
+        require($CFG->dirroot . '/local/catquizlab/version.php');
+        $this->assertLessThanOrEqual((int) $plugin->version, max($saveversions));
     }
 }

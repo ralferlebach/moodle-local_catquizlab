@@ -6,6 +6,3090 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.6.59] — 2026-09-18
+
+Issue #89: an experiment played from definition to results, as a gate.
+
+### Why this and not another unit test
+Every part of this plugin was tested and the whole did not work. A worker that
+played exactly one attempt, a heartbeat refused since 0.6.14, a status card
+claiming a simulation that was not running: none of those were visible to a unit
+test, and all of them were obvious the moment anybody watched an experiment try
+to run.
+
+`cli/smoke.php` watches. It defines an experiment, prepares it, starts a worker,
+waits for real attempts against Moodle's own question engine, aggregates, and
+checks the numbers — failing at the first step that does not hold.
+
+### Measured, on this instance
+    == CatQuizLab smoke test: classic ==
+      Setup complete.
+      Prepared 1/1 runs.
+      2 attempts queued.
+      Worker started and reported.
+      2 collected, 0 failed. (65.0s)
+      Every collected attempt answered at least 13 questions.
+      28 result rows.
+      bias 0.0545 · mae 0.4220 · correlation 1.0000 · meanlength 12.0000
+
+    PASS: 2 attempts played, 2 with estimates, 28 result rows.
+
+**Thirteen questions per attempt**, not one: the second question is the first
+that depended on how the first was answered, which is the mechanism under test.
+Answering one and stopping would pass a naive check and prove nothing about an
+adaptive test.
+
+All five strategies, run one after another:
+
+    classic  PASS    allsubs  PASS    balanced PASS
+    fastest  PASS    relsubs  PASS
+
+### A failure that was mine, not the plugin's
+`allsubs` failed the first time I ran it — because I had started two smoke tests
+at once. They defer each other's queues and compete for worker slots, so each
+waited out its timeout on the other's work. A strategy got an undeserved FAIL
+and I nearly went looking for a defect that was in the test.
+
+The script takes an exclusive lock now and refuses to run beside itself, and
+`cli/smoke_all.sh` runs the strategies sequentially for the same reason.
+
+### In CI
+Added to `worker-e2e.yml` after the existing single-attempt check, with the
+smoke logs and the worker logs collected on failure — the Moodle exception, the
+attempt and the stage, which is what the issue asked to keep.
+
+### Verification
+PHPUnit 677 tests / 3595 assertions, Behat 32 scenarios / 235 steps, phpcs with
+the Moodle standard clean, PHPDoc clean. The readings above are from real runs
+against this instance, not from the test suite.
+
+---
+
+## [0.6.58] — 2026-09-17
+
+Issues #86, #87 and #88. #89 is not done — see below.
+
+### #88 — the one that was mine
+0.6.36 added `request_stop()` so that deleting an experiment asks a worker to
+finish and leave. It never cleared the flag. Reusing a worker id reset the
+status, the pid and the heartbeat and left `stoprequested` standing, so the new
+worker was granted a stop it had never been asked for, at its first heartbeat —
+and finished after one attempt with hundreds waiting.
+
+`acquire_slot()` now clears everything belonging to the process that held the
+identity before: the stop flag, the current attempt, the worker state. Measured:
+stop requested, released, restarted, flag gone.
+
+The worker also says why it stopped — `queue-empty`, `max-jobs`,
+`stop-requested`, `fatal-error`. "Finished; played 1 attempt(s)" beside 250
+waiting is alarming or routine depending on the reason, and the log said nothing
+either way.
+
+### #87 — a stopping worker was recorded as running
+`report()` wrote `STATUS_RUNNING` whatever the worker said about itself, so a
+process that had reported `stopping` and exited showed as idle and live with its
+slot apparently taken — and the next start could be refused by a worker that no
+longer existed. A worker reporting that it is stopping is now recorded as
+stopped, holding no attempt. Measured: `live=1` while working, `live=0` after.
+
+### #86 — the error message, not the navigation
+`describePage()` took the first 200 characters of the body, which on a Moodle
+error page is the skip link, the site name and the breadcrumb. The failure
+reported `page="Zum Hauptinhalt Client01 Startseite…"` and said nothing about
+what went wrong.
+
+It now reads `.errormessage`, `.core-error-message`, `#region-main .alert-danger`
+and the rest before falling back, and reports the error, the error code and the
+debug block separately. Tokens, session keys and anything that looks like one
+are redacted, because an error report is a thing people paste into issues.
+
+### #89 — not done
+The end-to-end gate over a multi-question attempt across every strategy is not
+built. A worker run against this instance did play attempts through to
+collection, and the `played 1 attempt` pattern is gone — it played three — but
+that is an observation, not the gate the issue asks for. It stays open.
+
+### Verification
+PHPUnit 677 tests / 3595 assertions, Behat 32 scenarios / 235 steps, phpcs with
+the Moodle standard clean, PHPDoc clean, worker JS syntax clean.
+
+---
+
+## [0.6.57] — 2026-09-17
+
+Issues #80 and #81 — and the reason both were possible.
+
+### #80 — "started" meant a shell command returned
+`launch_pool()` counted a launch the moment `exec($command . ' &')` returned.
+That means the shell was asked to start something. It does not mean Node ran,
+that Puppeteer found a browser, or that the worker reached Moodle — and counting
+it anyway is why **"1 worker started"** appeared beside **"250 claimable, 0 in
+progress"**.
+
+The worker says so itself now: it registers as soon as Node, Puppeteer and the
+web service have all worked, and the launcher waits up to eight seconds for that
+before counting anything. A worker that never reports has its slot released and
+its last output kept, because a worker that dies on startup has already said
+why.
+
+Measured: a deliberately broken worker returns `launched=0, no-handshake` and
+leaves no registry row. A working one returns `launched=1` in 0.8 seconds.
+
+### The heartbeat had never worked
+Making the handshake explicit exposed why this was possible at all.
+`local_catquizlab_worker_heartbeat` was declared as an external function in
+0.6.14 and **never added to the worker's service**, so every heartbeat a worker
+ever sent came back `Access control exception`. The worker's own error handling
+swallowed it — a missed heartbeat is not worth abandoning an attempt over — so
+nothing ever looked wrong.
+
+The consequence: workers never reported, and their liveness was read from the
+registry row the launcher itself had written. Every "worker is alive" this
+plugin has displayed was the launcher agreeing with itself.
+
+### #81 — "Simulation running" now means simulation is running
+The run card showed *running* whenever any worker was live, so a run could read
+`running, 0%` beside `250 claimable, 0 in progress` — which cannot both be true,
+and the one a person acts on is the second.
+
+It asks whether **this run's** attempts are being held by a worker right now.
+When none are, it says `Prepared, waiting for a worker`, which is true whether
+the workers are busy elsewhere, still starting, or about to pick this up.
+Measured both ways.
+
+### Verification
+PHPUnit 677 tests / 3595 assertions, Behat 32 scenarios / 235 steps, phpcs with
+the Moodle standard clean, PHPDoc clean, worker JS syntax clean.
+
+### Still open
+#78 — live progress at experiment, run and sitting level.
+
+---
+
+## [0.6.56] — 2026-09-17
+
+Issues #76, #77 and #83: the two actions, in the interface.
+
+### #83 — one start, and the machinery below it
+Step 3 leads with a single card: the experiment's state, its progress, and
+whichever of the two buttons applies — **Prepare experiment** or **Run
+experiment**. The per-run and per-worker controls are all still there, below it.
+They are recovery, and offering them as peers of the one action anybody normally
+wants is what made operating an experiment feel like operating machinery.
+
+### #76 — preparation as one process
+The button runs `experiment_runner::prepare()` over every run of the experiment
+and reports one verdict. Blockers name the run, the cell and the stage — the
+first three, because a wall of thirty is not more informative than three and a
+count.
+
+### #77 — a queue that survives cron
+`local_catquizlab_execqueue`: experiments waiting their turn, in the order they
+were asked for, advanced by the pipeline tick.
+
+Measured:
+
+    queue 36 → position 1
+    queue 69 → position 2
+    queue 36 again → already-queued
+    advance → started 36
+    advance → started 0 (busy)
+
+**A table, not a list in memory**, because a queue a task holds forgets
+everything the moment cron restarts, and somebody who lines up five experiments
+before going home would find none of them had run.
+
+**Strictly one at a time**, because two experiments running together share the
+worker pool: each takes twice as long and neither had the machine to itself,
+which for a timing-sensitive simulation is a measurement error rather than a
+scheduling preference.
+
+Readiness is checked again when an entry reaches the front, not only when it was
+queued — an experiment can be reset or fail while it waits, and one that has is
+skipped with a reason rather than stalling the line behind it.
+
+### Verification
+PHPUnit 677 tests / 3595 assertions, Behat 32 scenarios / 235 steps, phpcs with
+the Moodle standard clean, PHPDoc clean, 1098 strings per language.
+
+### Still open
+#78, #80 and #81 — live progress at three levels, and the status-truth pair.
+
+---
+
+## [0.6.55] — 2026-09-17
+
+Issue #75: two actions, and the state model they need.
+
+### The premise
+Everything this plugin does for a person reduces to *prepare this experiment*
+and *run it*. Which background task advances which run, which worker claims
+which sitting, what state a queue is in — all of that the plugin has to know and
+nobody should have to decide. The interface asked anyway, one button per
+internal step, so operating an experiment meant understanding its machinery.
+
+### `experiment_runner::prepare()`
+One call takes an experiment from a definition to queued sittings: validate,
+create the runs, provision each one, enrol the people, check access, queue the
+attempts. Measured on a two-run experiment: **2 of 2 ready, 4 attempts queued,
+5.4 seconds** — and a second press changes nothing, because pressing a button
+twice is what people do when the first press seemed not to work.
+
+**Validation happens before any mutation.** A definition that cannot be read
+leaves nothing half-built: tested with broken JSON, zero runs created.
+
+**Blockers name the run and the stage.** A bare "provisioning failed" for an
+experiment of thirty runs is not something anybody can act on.
+
+### Three states instead of thirty
+`draft`, `preparing`, `ready`, `running`, `finished`, `blocked` — for the
+experiment, derived from its runs. The per-run statuses stay exactly as they
+are; they are the plugin's bookkeeping, and reporting them as the experiment's
+state is how somebody ends up reading a table of thirty rows to answer one
+question.
+
+A failure anywhere blocks the whole experiment, deliberately: a result over the
+runs that happened to work is a different quantity from the one that was
+designed.
+
+### What this is not
+The internals are untouched — same services, same tasks, same stages. This is a
+façade over them. It is also not yet wired into the interface: that is #76, #77
+and #83, which come next.
+
+### Verification
+PHPUnit 674 tests / 3579 assertions, Behat 32 scenarios / 235 steps, phpcs with
+the Moodle standard clean, PHPDoc clean.
+
+---
+
+## [0.6.54] — 2026-09-17
+
+Issues #79, #82 and #84.
+
+### #79 — the self-test that had never run
+`operations.php` had **two** handlers for `action=selftest`. The first, older
+one ran the browser launcher and returned; the end-to-end self-test added in
+0.6.35 sat thirty lines below it and was never reached. PHP does not warn about
+this and a reader does not notice it.
+
+Removing the first exposed a second fault in the second: it called
+`\core\session\manager::restart()`, which does not exist. The handler threw on
+its first real use — 0.6.35 said the self-test was measured, and it was, from
+the CLI. Through the button it had never worked.
+
+Both fixed. Measured through the browser: the button now runs the six real
+checks and reports what it finds.
+
+A third thing fell out of it: installing a browser and running the self-test
+shared one session slot and produce different shapes, so whichever ran last was
+read as the other. Separate slots now.
+
+### #82 — two times, now labelled
+The task table showed the last run and the next run side by side with no
+headings. They say opposite things about whether something is wrong, and a
+reader had to guess which was which. `Task | Last run | Next automatic run`.
+
+### #84 — nothing is a state, not an empty page
+With no results the overview returned an empty string, leaving filter controls
+above nothing — which reads as a broken page rather than as "there is nothing
+yet", and those need different responses. It now says so, explains what produces
+results, and links to step 3 where the answer to "why is there nothing" actually
+is.
+
+### Verification
+PHPUnit 669 tests / 3565 assertions, Behat 32 scenarios / 235 steps, phpcs with
+the Moodle standard clean, PHPDoc clean, 1083 strings per language.
+
+### Still open
+#75, #76, #77, #78, #80, #81 and #83 — the two-step execution architecture and
+the status-truth issues. Those are a redesign of how a run is started and
+watched, not corrections, and they are not started here.
+
+---
+
+## [0.6.53] — 2026-09-17
+
+Issues #63, #64 and #65 — the last three from the audit.
+
+### #63 — the recording is governed, not just switched on
+**Its own capability.** `local/catquizlab:debug`, `RISK_PERSONAL`, managers only.
+The recording holds what every operator did, with parameters; running
+experiments is not a reason to read that. An operator with `:execute` and
+without `:debug` sees no console — tested.
+
+**Bounded by age as well as count.** Seven days, beside the 2000 entries. A quiet
+installation kept two thousand entries for months, and a record of what somebody
+did in June is not diagnosis, it is a log of colleagues nobody asked for.
+
+**A download.** The console answers "what just happened" on screen; the export
+answers "here is what happened" to somebody who is not at the screen — with the
+site, the versions, the level and the retention policy beside the entries. Same
+redaction, because the secrets were removed on the way in.
+
+### #64 — the PHP path, chosen or typed
+Several PHP versions on one server is the normal case after an upgrade.
+`php_cli_candidates()` finds them all and reports what each says it is:
+
+    /usr/bin/php      PHP 8.3.6 (cli)
+    /usr/bin/php8.3   PHP 8.3.6 (cli)
+
+Non-CLI binaries are left out rather than offered, because an FPM binary runs
+and then behaves differently enough that a task using it fails in ways nobody
+traces back here.
+
+A typed path is validated before it is stored — absolute, present, executable,
+answering, and actually CLI — each with its own message. An unvalidated path
+becomes a scheduled task that quietly does nothing, which is the failure the
+whole check exists to prevent.
+
+### #65 — deep deletion takes its own accounts
+A hundred simulated students left in the user list is something, and deep
+deletion promises to leave nothing. Enrolments and accounts now go with it.
+
+**Only its own.** Ownership is read from the run number this plugin stamps into
+the usernames it creates. Tested in both directions: `catlab_r82_p1` goes,
+`a_real_person` enrolled in the same course stays. Deleting a real user because
+they happened to be in an experiment course would be unforgivable.
+
+### Verification
+PHPUnit 669 tests / 3565 assertions, Behat 32 scenarios / 235 steps, phpcs with
+the Moodle standard clean, PHPDoc clean, 1077 strings per language.
+
+Every issue from the 2026091703 audit is now addressed.
+
+---
+
+## [0.6.52] — 2026-09-17
+
+Issues #66, #67 and #61.
+
+### #66 — a root existing is not a tree being sound
+`existing_scales()` checked that the root scale still existed and reused the
+tree on that alone. A run whose subscales were half deleted has a root, and
+reusing it means materialising into a shape the engine cannot serve — which
+surfaces much later as items it will not hand out.
+
+It runs the same consistency check the interface does, and rebuilds when the
+tree fails it. Measured: a healthy tree is reused; deleting one subscale from
+the engine makes the next call refuse and rebuild.
+
+**Structure only, not the blueprint comparisons.** `scale_health` reads the
+expected shape from the run's manifest while provisioning is handed a blueprint
+as an argument, and the two can legitimately differ. The first version compared
+everything and broke idempotency for exactly that reason — the existing test
+caught it, and the fix is to check what is actually broken (one root, one
+context, engine scales present, unique nodes, valid parents, no cycles) rather
+than what merely differs.
+
+### #67 — the contexts went with the generations
+`scale_inventory::cleanup()` deleted the abandoned scales and left their CAT
+contexts standing. A context with no scales is invisible in every list and still
+counts as a context — the engine's own selection walks them.
+
+They are removed now, and **only when empty**: another run may share one, and a
+shared context deleted from under it is a worse failure than a leftover.
+Measured: two generations cleaned, one context removed, the shared one left.
+
+### #61 — what the log says about a task
+Every ad-hoc task now reports its task row id, its retry delay and its remaining
+attempts. A failure on a third attempt waiting out an eight-hour delay is a
+different situation from a first attempt, and the log said the same thing about
+both. The id is stored on the run log row; the delay and attempt count travel
+with the trace.
+
+### Verification
+PHPUnit 666 tests / 3544 assertions, Behat 32 scenarios / 235 steps, phpcs with
+the Moodle standard clean, PHPDoc clean.
+
+---
+
+## [0.6.51] — 2026-09-17
+
+Issues #52, #54 and #55: each step shows its own step.
+
+### The plan step showed three other steps
+`manage.mustache` carried the experiment course, an environment listing and the
+run table. All three describe a different part of the process, and a reader on
+the plan could not tell which step they were on because the plan answered
+questions belonging to two others. Removed — the plan is now experiments, and
+the actions that create them.
+
+### Preparation had six cards, four of them second copies
+Workers, tasks, the queue and the active runs were on the preparation tab **and**
+on step 3. Not misplaced: duplicated, and competing with the originals. Whoever
+changed one would have had to remember the other.
+
+Preparation is two cards now — the wizard and the self-test — which is what
+"can this installation run anything" needs, and nothing else.
+
+### The experiment course moved rather than vanished
+Taking the container block out of the plan removed the only way to set the
+experiment course, which is not a tidy-up but a loss. It lives in preparation
+now, beside the wizard that creates it: `Experiment course: … Change` when one
+is set, `Choose an experiment course` when none is.
+
+The Behat suite caught this, not me.
+
+### The scenarios moved with the content
+Six scenarios asserted the old layout. They assert the new one — following the
+tab to where the thing now lives — rather than asserting what the interface used
+to look like. The one that looked for an "All runs" link out of the plan now
+uses the tab, because the plan no longer lists runs and has nothing to link out
+of.
+
+### Verification
+PHPUnit 666 tests / 3544 assertions, Behat 32 scenarios / 232 steps, phpcs with
+the Moodle standard clean, PHPDoc clean, 1069 strings per language.
+
+---
+
+## [0.6.50] — 2026-09-17
+
+The 2026091703 audit: #71, #58, #74, #73, and #53/#72.
+
+### #71 — the last broken action path
+`status_report::pipeline()` still handed the bare `tasks.php` URL to a card that
+renders an action with no `command` as a link — so the one button on the card
+that says "nothing is running" led to a request `tasks.php` rejects for want of
+an action. It carries the full posted contract now, and the card passes
+`classname` through for task actions.
+
+### #58 — a table that never existed
+The audit found `local_catquizlab_subscale` missing from the reset, and it was
+right that it was missing. It is also not in `install.xml`, not in any upgrade
+step and not in the database: four places named it, each behind a
+`table_exists()` guard, so they had always been dead.
+
+Dead code that makes an audit believe a reset leaves results behind is worse
+than no code. All four references removed.
+
+### #74 — one layer fewer, and the declensions
+`Auftrag zur Testbearbeitung` was still a second name for a Testbearbeitung, so
+the layer is gone. `geclaimt` became `übernommen`. And the declensions the blunt
+pass left: `Anteil der simulierte Testbearbeitungen`, `Für diesen simulierten
+Testbearbeitungen`, `einen simulierte Testbearbeitung`.
+
+### #73 — the CLI hint is gone from the interface
+    Noch keine Versuchsdurchläufe definiert. Mit dem CLI (cli/sweep.php) …
+
+Sending somebody to a shell, from a GUI whose whole point is not needing one,
+contradicts the process model printed three inches above it. It now says where
+in the interface runs are made.
+
+### #53/#72 — order, fallback, and dead calls
+The shell reads **title → tabs → selector → status**: the status describes the
+experiment the selector chose, so it follows it.
+
+An `experimentid` for an experiment that no longer exists falls back to all
+experiments, rather than scoping the reader to nothing and looking like a broken
+query instead of a stale bookmark.
+
+And the second `shell::render()` calls in `experiment.php` and `compare.php` are
+gone. The render guard made them harmless, which is exactly why they were worth
+removing: a call that only works because something else suppresses it is a trap
+for whoever removes that something.
+
+### Verification
+PHPUnit 666 tests / 3568 assertions, Behat 32 scenarios / 232 steps, phpcs with
+the Moodle standard clean, PHPDoc clean, every template example context
+parseable.
+
+---
+
+## [0.6.49] — 2026-09-17
+
+The 2026091701 audit: #71's three remaining faults, and #74's.
+
+### #71 — the method was fixed, the targets were not
+Three faults, all mine, all from converting links to forms without following
+each one to its handler:
+
+**Pause and resume posted to the wrong controller.** The form's action was
+`index.php?tab=setup` while `pauserun` is handled in `operations.php`. Correcting
+the verb and leaving the target is half a fix.
+
+**"Run now" was still a link in `operations.mustache`.** I converted the copy in
+`progress.mustache` and not this one — and since the URL had deliberately lost
+its `action` parameter, the link now led to `tasks.php` demanding a parameter it
+was no longer given. The visible button was broken in a way it had not been
+before the fix.
+
+**The status card's data contract was one-sided.** The template expected `url`,
+`command`, `runid` and `sesskey`; `status_report` still supplied only `label`
+and `url`, so the forms posted no action at all. It supplies the full set now
+for the two actions that change state, and the card renders a plain link for the
+two that only navigate — a form for a navigation would post nothing and mean
+nothing.
+
+Measured in a browser: pressing "Run now" returns **"The task ran."**
+
+### #74 — one object, one name
+`Arbeitsauftrag` was my own coinage for what the glossary calls a
+Testbearbeitung, and two names for one object is the defect a glossary exists to
+prevent. Gone, along with the last `Sweep`.
+
+**And one bad translation worth naming: `Node` had become `Knoten`.** Node.js is
+a proper noun; `Knoten` is what a scale tree has. Somebody reading "Knoten muss
+vorhanden und ausführbar sein" would look for the wrong thing entirely. Three
+strings fixed.
+
+Plus the grammar the blunt pass left: "eine Teilversuch", "alle eingereihten
+simulierte Testbearbeitungen", "die Simulationsprozess-Registry".
+
+### Verification
+PHPUnit 666 tests / 3568 assertions, Behat 32 scenarios / 232 steps, phpcs with
+the Moodle standard clean, PHPDoc clean, 1069 strings per language. Every form
+on the operations and progress views posts to the file that handles it —
+checked by rendering them and reading the targets.
+
+---
+
+## [0.6.48] — 2026-09-17
+
+Issue #62: the queries, taken apart and reduced where they are mine.
+
+### Where they actually go
+Measured per item, separately:
+
+    Moodle's save_question():   27 queries
+    question category lookup:    1
+    setting the ID number:       4
+    registering with the engine: 4
+    the rest of materialising:  ~3
+
+Twenty-seven of about thirty-nine are Moodle's own question API. That is the
+half of this that is not a defect here, and knowing it stops the effort going
+into the wrong place.
+
+### What was reducible, reduced
+The **category lookup** fetched the same row once per item; it is the same
+category for every item on a scale. Held for the request.
+
+The **ID numbers** cost four queries each — two lookups and a uniqueness check
+per item — to write a label. They are now written together once every question
+exists: one join for all the entries, one read of the labels already taken, then
+the writes.
+
+The **engine verification** moved from once per item to once per scale, and the
+answer names the items the engine cannot see, so nothing about locating a
+failure was traded away.
+
+    before: 38.9 queries per item
+    after:  35.3 queries per item
+
+A ninth, not a tenth of what was reported. Against fourteen thousand items that
+is roughly 545,000 → 494,000 — an improvement, and not a solution.
+
+### A regression, caught by measuring the right thing
+The first version of the batching wrote no ID numbers at all: 0 of 120. The
+query count looked better precisely because the work was not being done. The
+flush had been inserted at an anchor that no longer existed and silently did
+nothing. Measured again after fixing it: 120 of 120, at 35.3 per item.
+
+Worth stating plainly, because "faster" and "not doing it" produce the same
+number.
+
+### The budget
+Now 40 per item, just above the measured 35.3. The previous rate of 38.9 would
+fail it, which is the point: this plugin's share is caught growing rather than
+absorbed into core's.
+
+### What is not done
+The 27 queries inside `save_question()` are untouched. Reducing them means
+writing question rows without Moodle's question API — plausible for synthetic
+items, and a decision about coupling to core's schema rather than an
+optimisation. It is not made here.
+
+So #62 is better and not finished. If it is closed, it should be closed on the
+measurement and the reduced share, not on the total.
+
+### Verification
+PHPUnit 666 tests / 3568 assertions, Behat 32 scenarios / 232 steps, phpcs with
+the Moodle standard clean, PHPDoc clean. Both rates above are readings from this
+instance on a 120-item pool.
+
+---
+
+## [0.6.47] — 2026-09-17
+
+The 2026091617 audit, worked through. #58, #71, #53/#72, #73, #74, and an honest
+answer on #62.
+
+### #58 — reset and rerun never reported success
+`start()` returns `started`; `reset_and_rerun()` read `ok`. Every successful
+restart came back as a failure — while the run had in fact restarted, so the
+message and the database disagreed. Measured after the fix: `ok=true`, status
+SCHEDULED.
+
+### #71 — six state changes sat behind links
+Pause and resume, run-a-task, and the action on every status card were `<a
+href>` with `action=` in the URL. A state change behind a GET is one a
+prefetcher, a crawler or a back button can make on somebody's behalf, and
+pausing a run somebody is watching then looks like a bug in the plugin.
+
+All posted now, the handler refuses `pauserun`/`resumerun` over GET, and a test
+renders every template and fails on any `<a href>` carrying an action. Measured:
+6 such links before, 0 after.
+
+### #53/#72 — one place to start an experiment
+`+ New experiment` now appears on the plan step and nowhere else — measured
+across all four steps — and the separate primary button in `manage.mustache` is
+gone. Two places to start one is two places to check when somebody cannot find
+it.
+
+### #73 — the real position, not the open tab
+`here` was set by tab, so the progress step marked five stages at once as "you
+are here" — which tells somebody nothing they did not know from the tab they
+clicked. `reached_stage()` derives it from the runs: scheduled means preparing,
+ready with nothing collected means queued, running means simulating, all
+finished means evaluating. Measured: exactly one stage marked, and the right
+one.
+
+### #74 — the rest of the glossary
+36 more strings: Versuchszelle → Teilversuch, provisionieren → technisch
+vorbereiten, and Draft, Stage, Blueprint, Root-Scale, CAT-Context, Queue,
+Preflight, Readiness and Recovery out of the German interface.
+
+### #62 — what the queries actually are
+Moving verification from per item to per scale changed the rate by almost
+nothing, so the parts were measured separately:
+
+    registering one item with the CAT engine:  4 queries
+    purging the engine cache:                  0 queries
+    asking the engine for a scale's items:     3 queries
+
+Of about 39 queries per item, **4 are this plugin**. The rest is Moodle's own
+question creation. The reported 549,727 against fourteen thousand items is
+therefore very largely core's cost and not a defect here — worth knowing before
+anybody optimises the wrong thing.
+
+The budget is now 45 per item rather than 60: just above the measured rate, so a
+change in this plugin's share is caught instead of being absorbed. That is not a
+reduction of the number, and the issue should not be closed as one. Reducing it
+further means going around Moodle's question API, which is a decision, not a
+tidy-up.
+
+### Found by the tests, not by me
+Restricting `+ New experiment` to the plan step put it inside the
+`hasexperiments` block, so an installation with no experiments had no way to
+make one. The Behat scenario that caught it is called "The empty registry offers
+a way forward instead of a dead end", which is exactly what I had broken.
+
+### Verification
+PHPUnit 666 tests / 3568 assertions, Behat 32 scenarios / 232 steps, phpcs with
+the Moodle standard clean, PHPDoc clean, 1069 strings per language.
+
+---
+
+## [0.6.46] — 2026-09-17
+
+Issue #70: the audit, re-run against what is there now.
+
+The audit judged 0.6.29 and found one issue closeable. It set the right
+standard — "practical functionality and usable operation, not the mere presence
+of classes or strings or changelog claims" — so this does not answer it with a
+changelog. Every claim was measured against the running code.
+
+Fifteen of sixteen held. Two did not, and both are fixed here.
+
+### `+ Neues Experiment` was never in the selector
+#53 asked for it beside the experiment dropdown and it was never added. Looking
+for it on another tab is how somebody ends up making their second experiment by
+editing their first.
+
+### A verdict without its codes
+`scale_health::check()` returns machine-readable failure codes — except on the
+early path for a run with no scale tree, which returned no `codes` key at all.
+A caller branching on them would have to know which return path produced the
+verdict, and "no codes key" is not the same as "no failures". Every path carries
+them now.
+
+That one is worth noting: it was added in 0.6.37, the focused tests passed, and
+it took a check written from the outside to find it. Which is the argument for
+writing checks from the outside.
+
+### The audit is a test now
+`tests/audit_test.php` checks the promises at the seam where each would break:
+one shell per request, the selector under the tabs, six preparation stages, the
+PHP path gating the pipeline and not the engine, the database refusing a second
+root, health verdicts carrying codes, one correlation id across both logs, and
+deleting having its own `RISK_DATALOSS` capability.
+
+Deliberately shallow — one check per claim — because its job is to notice a
+promise regressing, not to re-test what the focused suites cover.
+
+### Verification
+PHPUnit 658 tests / 3561 assertions, Behat 32 scenarios / 232 steps, phpcs with
+the Moodle standard clean, PHPDoc clean, every template example context
+parseable.
+
+---
+
+## [0.6.45] — 2026-09-17
+
+Issue #73: the process, explained where somebody is standing in it.
+
+### The gap
+The interface shows a queue, a task, a worker and a run without saying how they
+follow from one another. Somebody can read every panel on every tab and still
+not know what happens first, what produces what, what runs by itself, or when
+results appear.
+
+### Eight stages, folded away
+On every tab, behind "How does this work?":
+
+    1. Define the experiment              waits for you
+    2. Create the variants                waits for you
+    3. Prepare each run technically       runs by itself   ← you are here
+    4. Queue the test sittings            runs by itself   ← you are here
+    5. Simulate the test sittings         waits for you    ← you are here
+    6. Collect the data                   runs by itself   ← you are here
+    7. Combine the results per run        runs by itself   ← you are here
+    8. Evaluate the experiment            waits for you
+
+Each says what it produces — "two strategies by three pool variants is six
+sub-experiments; at five replications that is thirty runs" — and whether it is
+waiting for a person. Those two are what somebody needs from a status they do
+not recognise, and neither was anywhere in the interface.
+
+It is closed by default: a reader who knows the process should not scroll past
+it, and one who does not should not have to go looking.
+
+### Verification
+PHPUnit 652 tests / 3548 assertions, Behat 32 scenarios / 232 steps, phpcs with
+the Moodle standard clean, PHPDoc clean.
+
+### A note on testing this one
+Checking it in a browser produced `Section error!` on every page. That is what
+Moodle says when a plugin's `settings.php` has not been loaded — which happens
+when the version in version.php is ahead of the version in the database. The
+plugin was fine; the upgrade had not been run. Worth writing down, because the
+message names a section and the cause is a pending upgrade.
+
+### Still open
+#70 — the code and issue audit.
+
+---
+
+## [0.6.44] — 2026-09-17
+
+CI fixes for 0.6.43.
+
+### A duplicated upgrade block
+`moodle-plugin-ci savepoints` failed:
+
+    ERROR: Detected multiple 'savepoint' calls for version 2026091604
+
+A whole upgrade block had been pasted in a second time. It is idempotent, so it
+did no harm on a site that ran it — but two savepoints for one version means a
+step that can run twice, and the check exists because that is usually not
+harmless.
+
+Removed, and a test pins it: one savepoint per block, each matching its own
+condition, ascending, none claiming a version the plugin has not reached. Run
+against a deliberately duplicated block it reports
+`Duplicate savepoint versions: 2026091604` and fails.
+
+### PHPUnit on Moodle 5.x
+Six access-readiness tests failed on every 5.x job and passed here:
+
+    null value in column "questioncategory" violates not-null constraint
+
+The adaptive-quiz generator builds its own question pool when none is given, and
+what that produces is null on 5.x. The tests pass an explicit category now.
+
+This is the second finding this month that a one-version local environment
+cannot see, and both surfaced only in CI. Worth remembering when a change looks
+green locally.
+
+### Verification
+PHPUnit 648 tests / 3514 assertions, Behat 32 scenarios / 232 steps, phpcs with
+the Moodle standard clean, PHPDoc clean, all templates pass the Mustache linter,
+upgrade savepoints unique and ordered.
+
+### Still open
+#70 (code and issue audit), #73 (explaining the process), #74 (German
+terminology).
+
+---
+
+## [0.6.44] — 2026-09-17
+
+CI fixes, and #74: the agreed German terminology.
+
+### CI — two real defects, not flaky runs
+**PHPUnit on every matrix leg but the local one.** The access-readiness tests
+let the activity generator build its own question pool. On 4.5 that works; on
+5.x `questioncategory` is NOT NULL and the insert fails. The tests now create
+the category and pass it in — the kind of difference a one-version local
+environment cannot see.
+
+**`moodle-plugin-ci savepoints`.** A whole upgrade block had been pasted in
+twice, so two savepoints claimed version 2026091604. A site running that step
+twice does whatever the step does twice. The duplicate is gone, and a test now
+checks that every block has exactly one savepoint, at its own version, in
+ascending order — verified in the failing direction by re-inserting the
+duplicate and watching it go red.
+
+### #74 — The glossary, applied
+310 German strings rewritten to the agreed terms:
+
+    Worker            → Simulationsprozess
+    Worker runtime    → Ausführungsumgebung des Simulationsprozesses
+    Worker access     → Moodle-Zugang des Simulationsprozesses
+    Pipeline          → automatische Ausführungssteuerung
+    Task              → Hintergrundaufgabe
+    Run               → Versuchsdurchlauf
+    Attempt           → simulierte Testbearbeitung
+    Job / Claim       → Arbeitsauftrag / Reservierung
+    Heartbeat         → Lebenszeichen
+    Sweep / Cell      → Versuchsplan / Teilversuch
+    Provisioning      → technische Vorbereitung
+
+and the run statuses as the glossary words them: `Technische Vorbereitung
+eingeplant`, `Bereit zur Simulation`, `Simulation läuft`, `Ergebnisse werden
+zusammengeführt`.
+
+Three passes, because a blunt substitution is not a translation. English
+pluralises with a bracketed s and German does not, so `Versuchsdurchlauf(s)`
+became `Versuchsdurchläufe`. English compounds two nouns freely, so
+`simulierte Testbearbeitung-Arbeitsaufträge` became `Arbeitsaufträge für
+Testbearbeitungen`. And an adjective is capitalised at the start of a sentence
+and nowhere else, so `Versuchsdurchläufe und Technische Vorbereitung` became
+`… und technische Vorbereitung`.
+
+The English strings are untouched: the technical terms are the right ones there,
+and the glossary is about what the German interface says.
+
+### Verification
+PHPUnit 648 tests / 3514 assertions, Behat 32 scenarios / 232 steps, phpcs with
+the Moodle standard clean, PHPDoc clean, 1047 strings per language with
+identical keys.
+
+### Still open
+#70 (code and issue audit) and #73 (explaining the process to a newcomer).
+
+---
+
+## [0.6.43] — 2026-09-16
+
+Issues #71, #72 and #69.
+
+### #71 — "Your session has most likely timed out" (P0)
+Two buttons on the preparation tab posted an empty `sesskey`, so Moodle answered
+with its session-timeout message — and the reader concluded their login was the
+problem, or that experiments are tied to a browser session. Neither is true:
+experiments are rows, and only the CSRF check is session-bound.
+
+The cause was `{{../../sesskey}}`, one template level short of where the key
+sits. Counting levels is right until somebody adds a wrapper, so the key now
+travels inside the action it belongs to and no template reaches for it across
+levels.
+
+Measured before and after: 13 sesskey fields, 2 of them empty → 0 empty. A test
+now renders every template from its example context and fails on any empty one.
+
+### #72 — The experiment selector belongs under the tabs
+Above them it read as a filter on the whole plugin. It scopes what the current
+step shows, so it sits under the step it scopes.
+
+### #69 — The last raw seconds
+Attempt runtimes in the results were printed as `5400 s`. They read as spans of
+time now, like every other duration since 0.6.30: four seconds stays four
+seconds, and an hour and a half reads as an hour and a half. The reader is
+asking how long it took, not counting.
+
+### Verification
+PHPUnit 647 tests / 3513 assertions, Behat 32 scenarios / 232 steps, phpcs with
+the Moodle standard clean, PHPDoc clean.
+
+### Still open
+#70 (code and issue audit), #73 (explaining the process to a newcomer) and #74
+(consistent German terminology) — all three about what the plugin says rather
+than what it does.
+
+---
+
+## [0.6.42] — 2026-09-16
+
+Release gate, RG-002 — the last one.
+
+### A form that asks for everything answers nothing
+The editor is one long form. That is honest about the data and unhelpful about
+the work: somebody defining their first experiment cannot tell which fields
+belong together, which are still empty, or whether what they have is enough to
+run.
+
+The same fields, described as the eight decisions they are, above the form:
+
+    ✓ 1. Name and purpose
+    ✓ 2. Model and strategy
+      3. Item pool
+      4. Simulated people
+      5. CAT budgets
+      6. Design and replications
+      7. Validate
+      8. Create runs
+
+    Next: 3. Item pool
+
+Nothing is hidden and no field moves. The form stays what it is; this says where
+in it somebody stands.
+
+Validating is not a seventh ceremony — it follows from the six decisions above
+it, and a spinner that checks what is already known would be theatre. Creating
+the runs is the eighth, because it is the thing the whole form is for, and
+leaving it off the list made the form feel like it ended before the work did.
+Once the runs exist, the plan points at step 3, where they can be watched.
+
+### The release gate is complete
+RG-001 through RG-015, over seven releases:
+
+    001 one shell per page          002 the plan as a process
+    003 a self-test that tests      004 PHP CLI gates one path of three
+    005 reset without leftovers     006 purge with its own authority
+    007 the invariant in the DB     008 nine consistency checks
+    009 access as the user sees it  010 one id through every layer
+    011 task metadata in the log    012 regions patched, not reloaded
+    013 completeness and a package  014 rate measured, reduced, gated
+    015 durations read as time
+
+### Verification
+PHPUnit 640 tests / 3497 assertions, Behat 32 scenarios / 232 steps, phpcs with
+the Moodle standard clean, PHPDoc clean, 1042 language strings per language.
+
+---
+
+## [0.6.41] — 2026-09-16
+
+Release gate, the rest of RG-014: the query budget is a gate, not a reading.
+
+### Measuring did not stop it getting worse
+0.6.34 found where 549,727 queries went and reduced the pool check from 39 to
+1.17 per item. Nothing stopped the next change from putting them back.
+
+Four budgets now fail the build:
+
+    twenty engine lookups of one scale        ≤ 5 queries
+    breaking down a queue of 60 attempts      ≤ 15 queries
+    reading 50 debug entries                  ≤ 3 queries
+    the per-stage rates this codebase has
+
+They gate the **rate**, which is the only part of the number that is
+actionable. A large pool costing many queries is arithmetic; a small pool
+suddenly costing twice as many per item is a defect. So the budget passes the
+reported 549,727 against fourteen thousand items and fails 1,900 against
+twenty-four.
+
+The thresholds are generous on purpose: a gate that fires on noise gets raised
+until it fires on nothing.
+
+### Verified in the failing direction
+The engine-lookup cache was disabled and the test run:
+
+    Twenty lookups of one scale cost 21 queries
+    Tests: 1, Failures: 1
+
+restored, and green again. A gate nobody has seen fail is a gate nobody knows
+works.
+
+They run inside `moodle-plugin-ci phpunit`, so they are in every CI run already.
+
+### Verification
+PHPUnit 634 tests / 3479 assertions, Behat 32 scenarios / 232 steps, phpcs with
+the Moodle standard clean, PHPDoc clean.
+
+### Still open from the release gate
+RG-002 — the experiment plan as a guided eight-step process. It is the last one,
+and the largest.
+
+---
+
+## [0.6.40] — 2026-09-16
+
+Release gate, RG-013: what a result is worth, stated with it.
+
+### Completeness, above the analyses
+A number from a simulation is worth what the reader can check about it, and the
+first thing to check is how much of the design actually ran. That was below the
+charts, or nowhere.
+
+    Incomplete: 0 of 3 attempt(s) collected, 1 run(s) not finished.
+    The analyses below cover what was collected, which is a different
+    quantity from what was designed.
+
+A mean over 40 of 120 planned attempts is not a worse version of the same
+number; it is a different number, and the reader has to know before reading it.
+The unfinished runs link to step 3, where they can be dealt with.
+
+### A reproducibility package
+One JSON file: the definition as typed, the definition as the plugin understood
+it, every run with its seeds and manifest and execution log, the versions of all
+four plugins and of Moodle, and the completeness statement.
+
+The seeds are the whole claim: without them the design is a description and not
+an instruction. The versions matter for the same reason — a result from a
+version nobody can name is a result nobody can reproduce.
+
+### Found while testing
+The package normalised the *decoded* definition, so a definition that does not
+decode arrived as an empty array and normalised to defaults — a package that
+looked complete and described something that never ran. It reads the stored text
+now, and says plainly when that text can no longer be understood.
+
+### Verification
+PHPUnit 630 tests / 3468 assertions, Behat 32 scenarios / 232 steps, phpcs with
+the Moodle standard clean, PHPDoc clean. The completeness reading above is from
+this instance.
+
+### Still open from the release gate
+RG-002, and the CI query budget from RG-014.
+
+---
+
+## [0.6.39] — 2026-09-16
+
+Release gate, RG-012: the page updates instead of reloading.
+
+### What a reload costs
+The first live updater reloaded the whole page whenever the overall verdict
+changed — and that is the thing somebody watching a run notices most. The scroll
+position goes, an open detail closes, and a form half filled in is gone. Two
+minutes of watching a queue drain meant two or three of those.
+
+### Patched in place
+The service returns the text of each region, and the module writes it:
+
+    running: 1 → 0, navigations: 0
+
+Text rather than markup: the page already has the elements, and sending HTML
+for them would put two places in charge of what a status card looks like.
+
+A reload is kept for the one change that cannot be patched honestly — the page
+gaining or losing rows. Adding a run row from JavaScript would mean a second
+renderer deciding what a run row looks like, and two renderers disagree
+eventually. A fingerprint of the row counts decides which case it is.
+
+The interval is two seconds on a visible tab, and polling stops on a hidden one
+and after a long idle.
+
+### Found while measuring
+The page this exists for did not have it. The updater was wired into the
+overview and never into step 3 — the page somebody actually watches while a run
+plays. The first two measurements showed no change at all for that reason, which
+is a better outcome than shipping it and being told.
+
+### Verification
+PHPUnit 626 tests / 3447 assertions, Behat 32 scenarios / 232 steps, phpcs with
+the Moodle standard clean, PHPDoc clean, all six template example contexts
+parseable. The reading above is from this instance, with an attempt completed
+from outside the page.
+
+### Still open from the release gate
+RG-002, RG-013, and the CI query budget from RG-014.
+
+---
+
+## [0.6.38] — 2026-09-16
+
+Release gate, RG-010 and RG-011: one click, one id, one sequence.
+
+### The problem with a list
+The debug trace recorded actions, state changes, tasks and worker reports, in
+order — and nothing said which of them belonged together. On an installation
+where two people work, or where a task runs while somebody presses a button, the
+entries are a list of things that happened near each other, and reading a defect
+means guessing.
+
+### A correlation id, carried
+Every entry now carries one id, and a task adopts the id of the click that
+queued it:
+
+    ui         resetrerun             —                c3627cf2
+    lifecycle  run_failed             —                c3627cf2
+    lifecycle  orchestration_started  orchestrate_run  c3627cf2
+    task       orchestrate            orchestrate_run  c3627cf2
+
+Filtering on it turns the list into the sequence of one action. The run log
+carries the same id, so the two logs read as one.
+
+Tasks announce themselves rather than being guessed at: asking Moodle from
+inside a run answers "something is running", not "this is". A failure inside a
+task otherwise reads as a failure from nowhere.
+
+### Four levels instead of a switch
+`off`, `action`, `verbose`, `trace`. `action` keeps what a person did and what
+changed because of it — the rest is volume that makes those two harder to find.
+`verbose` adds services, tasks and workers; `trace` adds the exception detail.
+
+### Fixed while testing
+The task context is static and survived between tests, so one scenario's task
+was recorded against another's entries. A web request ends and takes it with it;
+a test process does not. There is a reset for that now.
+
+### Verification
+PHPUnit 626 tests / 3447 assertions, Behat 32 scenarios / 232 steps, phpcs with
+the Moodle standard clean, PHPDoc clean. The sequence above is a real recording
+from this instance.
+
+### Still open from the release gate
+RG-002, RG-012, RG-013, and the CI query budget from RG-014.
+
+---
+
+## [0.6.37] — 2026-09-16
+
+Release gate, RG-008: the scale tree check, completed.
+
+### Four more questions
+The check asked five things and stopped where the reported failure had been. It
+asks nine now:
+
+    ✓ Exactly one root scale
+    ✓ Exactly one CAT context
+    ✓ Every mapped scale exists in the engine
+    ✓ No duplicate nodes
+    ✓ Every parent reference points into this run      ← new
+    ✓ No cycles in the tree                            ← new
+    ✓ Every node the blueprint calls for is present    ← new
+    ✓ No nodes beyond the blueprint                    ← new
+    ✓ Node count matches the blueprint
+
+A node whose parent is not in this run's map belongs to a tree the run does not
+own, and the engine will walk it anyway. A cycle makes every walk of the tree a
+hang rather than an error. And a missing subscale and a stray extra one are
+separate defects with separate repairs, so they are separate checks — the node
+count alone reports both as "the wrong number".
+
+### Machine-readable, and naming the objects
+The verdict carries the failing check ids for anything that has to branch on it,
+and the root and context ids rather than only their counts. A report that names
+the objects beats one that counts them.
+
+Measured against a deliberately broken tree — one subscale removed, one node
+given a parent outside the run:
+
+    × Every mapped scale exists in the engine      8 of 9 present.
+    × Every parent reference points into this run  Nodes with a parent outside: c9s9
+    × Every node the blueprint calls for is present  Missing: c1s1
+    × No nodes beyond the blueprint                Unexpected: c9s9
+
+    codes: enginescales, parents, expectedkeys, nounexpectedkeys
+
+### Verification
+PHPUnit 623 tests / 3437 assertions, Behat 32 scenarios / 232 steps, phpcs with
+the Moodle standard clean, PHPDoc clean. Both readings above are from this
+instance.
+
+### Still open from the release gate
+RG-002, RG-010 to RG-013, and the CI query budget from RG-014.
+
+---
+
+## [0.6.36] — 2026-09-16
+
+Release gate, RG-006: deleting, made production-safe.
+
+### Its own authority
+`local/catquizlab:purge`, carrying `RISK_DATALOSS` and granted to managers. It
+was `:execute` before — the same capability as starting a run and stopping a
+worker. Someone who may operate the lab can now do their whole job without ever
+being able to destroy a measurement, and whoever may destroy one was given that
+deliberately. Tested: an operator with `:execute` and without `:purge` is
+refused.
+
+### The name, typed
+A button that only needs a click is a button that gets clicked, and this one
+removes runs, attempts, people, generated questions and adaptive quizzes. The
+confirmation names what goes and asks for the experiment's name in a field; a
+mismatch deletes nothing.
+
+### A worker is asked, not overruled
+`force` used to mean "delete anyway". Forcing past a worker mid-attempt strands
+the claim it holds and leaves a browser playing a quiz whose questions are being
+deleted underneath it.
+
+The delete now asks every worker holding a live claim on the experiment to
+finish its attempt and stop, and refuses:
+
+    Löschen: ok=false, Grund=workers-stopping, gebeten=1
+    Stopp angefordert nachher: ja
+    Experiment existiert noch: ja
+
+The stop request is the mechanism already built for graceful shutdown: the
+worker reads it at its next heartbeat, finishes the attempt it is playing,
+reports it and exits.
+
+### Verification
+PHPUnit 620 tests / 3428 assertions, Behat 32 scenarios / 232 steps, phpcs with
+the Moodle standard clean, PHPDoc clean. The refusal above is a reading from
+this instance.
+
+### Still open from the release gate
+RG-002, RG-008, RG-010 to RG-013, and the CI query budget from RG-014.
+
+---
+
+## [0.6.35] — 2026-09-16
+
+Release gate, RG-003: a self-test that tests.
+
+### The readiness step added up flags
+Every check on the preparation tab reads configuration: a token exists, a path is
+executable, a plugin is installed. All six can be green on an installation where
+nothing runs, because "the browser is installed in the cache the worker reads"
+and "the browser starts" are different claims and only the second matters.
+
+### Six things done rather than read
+    ✓ Worker access is configured
+    ✓ Web service answers the stored token      — called, with the stored token
+    ✓ Node and the worker dependencies
+    ✓ Browser starts                            — started and closed cleanly
+    ✓ Experiment course is usable
+    ✓ Pipeline task executes                    — run, in this request
+
+It is slow — seconds, because it starts a browser and runs a task — which is why
+it is a button, and why the result is kept for the page rather than recomputed
+on every load.
+
+### What it found immediately
+Run against an installation whose six configuration checks were green, it
+reported two blockers: the scheduled task was disabled, and the web service did
+not answer.
+
+The second was the more interesting one. Moodle's own `curl` blocks local
+addresses, which is right for a URL a user supplied and wrong here — this is the
+site calling itself at the address the worker is configured to use. Without the
+exemption the check reports "The URL is blocked" as a service failure, which
+sends somebody looking at the token. The response text is now included in the
+failure, because "The URL is blocked" and an HTML login page are different
+problems and the text is what tells them apart.
+
+### Verification
+PHPUnit 618 tests / 3419 assertions, Behat 32 scenarios / 232 steps, phpcs with
+the Moodle standard clean, PHPDoc clean. The six-green reading above is from
+this instance, after fixing the two the test found.
+
+### Still open from the release gate
+RG-002, RG-006, RG-008, RG-010 to RG-013, and the CI query budget from RG-014.
+
+---
+
+## [0.6.34] — 2026-09-16
+
+Release gate, RG-014: where the queries go, and where they stopped going.
+
+### Found
+`is_visible()` asks the engine for a scale's item list, and the pool check calls
+it once per item — while the items of a run sit on a handful of scales. That is
+the thirty-nine queries per item, and the half million against a pool of
+fourteen thousand.
+
+The engine's answer is held for the request now. Measured on a pool of 120
+items:
+
+    checking an existing pool:  4680 queries  →  140 queries
+                                39 per item   →  1.17 per item
+
+### Not fixed, and why
+Creating items is unchanged, at about 41 queries each. The verification there
+deliberately runs per item and against a freshly purged cache — it exists to
+catch an engine snapshot taken while a scale held one item fewer, which is a
+real defect this codebase has had. Holding an answer across the write that
+changes it is exactly what that check is for.
+
+Reducing that path means batching the verification to the end of the stage,
+which trades a per-item error location for speed. That is a decision about
+diagnostics, not an optimisation, and it is not made here.
+
+### A regression I introduced and measured
+The first version of this cache did hold the answer across the write. The run
+failed with `engine-item-not-visible`: 120 items planned, 6 visible — each scale
+answering from the list it had when its first item was written. The invalidation
+now sits beside the engine's own cache purge, where it belongs, and a test pins
+both halves.
+
+### Verification
+PHPUnit 618 tests / 3418 assertions, Behat 32 scenarios / 232 steps, phpcs with
+the Moodle standard clean, PHPDoc clean. Both numbers above are readings from
+this instance, before and after.
+
+### Still open from the release gate
+RG-002, RG-003, RG-006, RG-008, RG-010 to RG-013, and the CI query budget from
+RG-014.
+
+---
+
+## [0.6.33] — 2026-09-16
+
+Release gate, RG-007: the database refuses a second root.
+
+### Why the old key could not
+`UNIQUE(runid, catscaleid)` prevented the same physical scale appearing twice
+under one run, and that was never the problem. Two generations have two
+different scale ids, so as far as that key is concerned both are perfectly valid
+roots — which is exactly how run #4 came to own roots 334 through 1444.
+
+A logical key expresses what was meant: `nodekey` — `root`, `c1`, `c1s2` — with
+`UNIQUE(runid, generation, nodekey)`. Measured: the second root insert is
+refused by the database rather than by any code that has to remember to check.
+
+### Ambiguity blocks, it does not get resolved by guessing
+`current_root()` returns nothing when a run owns several generations, rather
+than picking the newest. Picking the newest looks reasonable and is a guess: the
+run's items were materialised into one of them, and which one is not knowable
+from the map alone. An attempt played on the wrong tree produces a wrong answer
+nobody can detect, which is worse than no answer.
+
+So such a run hands out no work at all — `is_runnable()` refuses it, the test
+stage refuses it, and the interface says what to do about it.
+
+### A dead end, removed
+A run in that state hands out no work, so any attempt already claimed on it can
+never finish. The cleanup refused to run while attempts were open — which made
+repair impossible for exactly the runs that needed it.
+
+It now asks the right question: is a worker *alive and holding* one. Stranded
+claims are handed back, and the repair proceeds. A live worker still blocks it,
+because which of the trees it is reading from is not worth guessing.
+
+### Verification
+PHPUnit 616 tests / 3414 assertions, Behat 32 scenarios / 232 steps, phpcs with
+the Moodle standard clean, PHPDoc clean. Measured end to end: two generations →
+not runnable → cleanup → one generation → runnable.
+
+### Still open from the release gate
+RG-002, RG-003, RG-006, RG-008, RG-010 to RG-014.
+
+---
+
+## [0.6.32] — 2026-09-16
+
+Release gate, RG-005: a reset that leaves nothing behind.
+
+### The problem
+`reset()` cleared the lab rows — attempts, people, items, the scale map — and
+left the engine objects standing. That is worse than leaving both: clearing the
+scale map while leaving the scales behind loses the record of which scales
+belonged to which run, and an engine object nobody owns is not a leftover. It is
+a scale a later selection can still find.
+
+### The reset now takes what provisioning made
+Measured on a freshly provisioned run:
+
+    removed: activity 1, questions 24, engine scales 4, tasks 1,
+             attempts 2, people 2, items 24, scale map 4
+
+    engine scales afterwards: 0 of 4
+    questions afterwards:     0 of 24
+
+Its queued tasks go too — one that wakes up to provision a run that has been
+reset would provision it a second time.
+
+**Kept, on purpose:** the execution log, the cell key and the seed. The first is
+what went wrong last time, which is what somebody needs while looking at the next
+attempt; the other two are what make this run this run.
+
+### A preview, and one action instead of two
+The confirmation names what would go and what would stay, rather than warning
+that it cannot be undone.
+
+**Reset and run again** is one action. The two halves were always done together
+and never as one thing, so a reset that succeeded and a start that was forgotten
+looked exactly like a run nobody had touched.
+
+### Fixed while testing
+The preview refused what the reset itself would have allowed — it checked for
+open attempts where the reset checks for open attempts *on a running run*. A
+preview that refuses what the action permits teaches people to ignore the
+preview.
+
+### Verification
+PHPUnit 611 tests / 3391 assertions, Behat 32 scenarios / 232 steps, phpcs with
+the Moodle standard clean, PHPDoc clean.
+
+### Still open from the release gate
+RG-002, RG-003, RG-006 to RG-008, RG-010 to RG-014.
+
+---
+
+## [0.6.31] — 2026-09-16
+
+Release gate, RG-009: access asked as the simulated person would ask it.
+
+### The failure this ends
+Provisioning enrolled people, created an activity and checked that the objects
+existed. They did. The course was hidden, so every enrolled student was told the
+course was unavailable — and the worker logged in correctly, reached the
+activity and found that sentence where the start button belonged.
+
+What came back, ninety seconds later, was:
+
+    No question was presented; the attempt never started.
+
+True, and three steps from the cause. An access failure and a missing question
+need completely different responses, and only one of them is about the test.
+
+### Added
+`access_readiness` asks Moodle the questions the user's own browser will ask,
+before the run is called READY, through one of its simulated people — one, not
+all of them, since they are provisioned identically and asking the same six
+questions two hundred times answers nothing the first did not:
+
+    ✓ Simulated user account is active
+    ✓ Experiment course is visible to students
+    ✓ Simulated user is enrolled and active
+    ✓ Course is accessible to the simulated user
+    ✓ Adaptive quiz is visible to the simulated user
+    ✓ Simulated user may attempt the quiz
+
+Eight codes rather than one failure, because each has its own repair:
+`course-hidden`, `course-not-accessible`, `user-not-enrolled`,
+`enrolment-suspended`, `user-inactive`, `activity-not-visible`,
+`availability-restricted`, `missing-attempt-capability`.
+
+On the reported shape:
+
+    course-hidden — The experiment course is hidden. Its enrolled students are
+    told it is unavailable, and the worker finds that sentence where the start
+    button belongs.
+
+It runs as a provisioning stage between readiness and the attempts: a run whose
+people cannot open the activity should not have attempts made for them.
+
+**Repair** undoes what this plugin caused — a course it made and hid, an
+activity it hid — and reports the rest. A removed capability or an availability
+restriction is a decision somebody made, and undoing a decision quietly is worse
+than reporting it. Tested in both directions.
+
+### Verification
+PHPUnit 608 tests / 3382 assertions, Behat 32 scenarios / 232 steps, phpcs with
+the Moodle standard clean, PHPDoc clean. Measured on this instance: hidden
+course → `course-hidden` → repaired → reachable.
+
+### Still open from the release gate
+RG-002, RG-003, RG-005 to RG-008, RG-010 to RG-014.
+
+---
+
+## [0.6.30] — 2026-09-16
+
+Release gate, first three: RG-001, RG-004, RG-015.
+
+### RG-001 — One shell per page, structurally
+`experiment.php` rendered the frame three times, `compare.php`, `import.php` and
+`report.php` twice: several pages call it from more than one branch — a
+confirmation dialogue and the main output — and a branch that falls through to
+another produced two tab rows and two experiment selectors, giving the reader
+two places to answer the same question.
+
+Fixed in the frame rather than per page, because per page is a fix that comes
+undone the next time somebody adds a branch: it renders once per request and
+returns nothing after that.
+
+The experiment editor now takes the experiment it is editing as its context,
+rather than whatever the URL happened to carry. Opening an editor is choosing an
+experiment.
+
+### RG-004 — The PHP CLI path gates one path of three
+Treating it as a hard engine prerequisite was too strict. A task can be made to
+run three ways, and they do not fail together: Moodle cron runs everything it
+needs without it, this plugin's own "run now" executes the task in-process, and
+only Moodle core's run-now shells out.
+
+So it sits beside the pipeline now, reported for what it actually gates, and
+readiness no longer refuses over it. It is also validated rather than merely
+found: the binary is asked for its SAPI and version, because a path to the FPM
+or CGI binary runs and then behaves differently enough that a task using it
+fails in ways nobody traces back to here.
+
+    /usr/bin/php (PHP 8.3.6, CLI)
+    /usr/bin/php-fpm runs, but reports itself as "fpm-fcgi" rather than CLI
+
+### RG-015 — Durations read as time
+    failed before, retrying in 30720 s      →  ... in 8 hours 32 mins
+
+`format_time()` is gone from every call site, replaced by a `duration` helper
+that wraps it for the two cases it handles badly: a measured step below one
+second, where "0 secs" loses the measurement, and zero, where the reader wants
+words rather than a count. Applied to retry delays, task due times, cron age,
+heartbeats, claim ages and stage durations.
+
+### Verification
+PHPUnit 602 tests / 3369 assertions, Behat 32 scenarios / 232 steps, phpcs with
+the Moodle standard clean, PHPDoc clean. The retry delay above is a real reading
+from this instance with `faildelay` set to the reported value.
+
+### Still open from the release gate
+RG-002, RG-003, RG-005 to RG-014. The three closed here were chosen for being
+defects with a definite shape; the rest are substantial pieces of work — a
+guided plan process, a real end-to-end selftest, ownership-complete reset,
+production-safe purge, a database-level scale invariant, access readiness from
+the simulated user's view, debug correlation, region-level live updates, the
+results package, and the query-rate reduction with a CI budget.
+
+---
+
+## [0.6.29] — 2026-09-14
+
+Issue #68: the scale tree answers for itself.
+
+### The old message was about a database call
+    mdb->get_record() found more than one record!
+
+That is a DML warning, arriving at the test stage, about a query. What it meant
+was: run #4 owns several root scales and several CAT contexts — a statement
+about the run, true since the moment the second tree was created, and available
+long before anything tried to build a test on top of it.
+
+### Added
+`scale_health` asks the whole question rather than the part that happened to
+throw, per run, and reports it in the plugin's own terms:
+
+    Scale tree consistent: 1 context, 1 root, 4 nodes
+      ✓ Exactly one root scale
+      ✓ Exactly one CAT context
+      ✓ Every mapped scale exists in the engine
+      ✓ No duplicate nodes
+      ✓ Node count matches the blueprint
+
+and on the reported shape:
+
+      × Exactly one root scale                  2 root scale(s) found.
+      × Exactly one CAT context                 2 context(s) found.
+      × Every mapped scale exists in the engine  0 of 2 present.
+      × No duplicate nodes                      1 duplicate node(s).
+      × Node count matches the blueprint        2 nodes, blueprint calls for 4.
+
+Each check is separate because each has a different answer: a missing subscale
+and a stray extra one are not the same problem, and a map row pointing at a
+deleted scale is worse than a missing row — everything downstream then
+materialises into a scale nobody can select from.
+
+It runs **before** the test stage, where the fact was already true, rather than
+being discovered while building on top of it. The run view shows it beside the
+scale generations.
+
+### Verification
+PHPUnit 599 tests / 3362 assertions, Behat 32 scenarios / 232 steps, phpcs with
+the Moodle standard clean, PHPDoc clean. Both outputs above are real: the
+inconsistent one from the reported shape staged here, the consistent one from a
+fresh provisioning.
+
+---
+
+## [0.6.28] — 2026-09-14
+
+Issue #63: one recording instead of seven logs.
+
+### The problem
+Diagnosis was spread over Moodle notifications, ad-hoc task logs, worker logs,
+the run manifest, the operations page, database state and Moodle's own
+debugging. Each holds a fragment; none holds the order. So a defect could not be
+read as what it is — somebody pressed a button, a handler ran with certain
+parameters, something changed, an error came back.
+
+### Added
+`debug_trace`, a switch on the settings tab and a console on step 3. Five
+channels — `ui`, `service`, `task`, `worker`, `lifecycle` — in one sequence:
+
+    ui         provision        ok      {"runid":39,"sesskey":"(hidden)"}
+    lifecycle  start_requested  ok
+    lifecycle  run_failed       ok      {"reason":"pool zu klein"}
+    task       orchestrate      error   moodle_exception at run_orchestrator.php:214
+
+Every run state change already went through `run_log`; it now appears on the
+debug channel too, so the console shows a run's transitions interleaved with the
+actions that caused them. That interleaving is the point: it is the order
+somebody reads a defect in.
+
+Three things keep the recording from becoming its own problem:
+
+- **Off by default.** An installation that records every action all the time is
+  one where nobody reads the recording.
+- **A ring buffer of 2000.** The question is "what just happened", and a table
+  that grows without limit answers it worse the longer it runs.
+- **Secrets recorded as present, not as their value.** Knowing a token was sent
+  is diagnostic; knowing which token is a liability. Tested.
+
+Recording can never be why something fails — a plugin that breaks while writing
+about itself is worse than a defect nobody can reconstruct. Verified with an
+action name far longer than its column and a non-scalar parameter.
+
+### Verification
+PHPUnit 596 tests / 3353 assertions, Behat 32 scenarios / 232 steps, phpcs with
+the Moodle standard clean, PHPDoc clean. The sequence above is a real recording
+from this instance, including the redaction.
+
+---
+
+## [0.6.27] — 2026-09-14
+
+Issues #66 and #67: one run, one scale tree — and the installations that already
+have more.
+
+### #66 — The ambiguity is reported where it is
+`root_scale()` used `get_field()`, which throws when a run owns more than one
+root. The failure arrived at the test stage, long after the second tree was
+created, with a message about a database call rather than about the run:
+
+    mdb->get_record() found more than one record!
+
+`scale_inventory` answers the question instead of assuming it away. It names the
+generations a run owns, picks the newest as current — chosen the same way
+everywhere, because picking by iteration order would make "the root" mean
+whatever came back first — and records the ambiguity in the run log where it is
+found rather than where it happens to be noticed.
+
+### #67 — Cleaning up what is already there
+0.6.19 stopped new duplicates appearing and did nothing for installations that
+already had them. Your run #4 owned generations from root 334 to root 1444.
+
+Reproduced here and cleaned:
+
+    root 556  context 7  2 nodes   <- current
+    root 445  context 6  2 nodes      abandoned
+    root 334  context 5  2 nodes      abandoned
+
+    cleaned: 2 generations, 4 nodes, 4 engine scales
+    afterwards: one tree, root 556
+
+The engine rows go with the abandoned generations: a scale nobody points at is
+worse than no scale, because a selection that finds it draws items from a tree
+the run left behind. A run being played is refused — which tree its worker is
+reading from is not worth guessing.
+
+Step 3 lists affected runs across the installation; the run view inventories its
+generations and offers the cleanup, with the preview naming what would go.
+
+### Verification
+PHPUnit 590 tests / 3334 assertions, Behat 32 scenarios / 232 steps, phpcs with
+the Moodle standard clean, PHPDoc clean. The reported shape — three generations,
+roots 334/445/556 — was reproduced, cleaned, and checked back to one.
+
+---
+
+## [0.6.26] — 2026-09-14
+
+Issues #64 and #65.
+
+### #64 — The PHP CLI path, checked where it matters
+Moodle's scheduled task administration needs `$CFG->pathtophp`, and when it is
+empty a task that shells out simply does nothing — indistinguishable, from the
+outside, from a task that is disabled.
+
+Step 1 checks it now, using Moodle's own canonical setting rather than a second
+one of ours: two fields for one path is how they come to disagree. The three
+cases get three answers, because they need three different responses:
+
+    not configured, and a usable PHP found at /usr/bin/php
+    configured as /opt/php, which does not exist
+    configured as /opt/php, which the web server user cannot run
+
+Where it is unset and a binary was found, the step carries a button that sets
+it — guarded by `moodle/site:config`, because it is that person's setting.
+
+### #65 — Deleting an experiment, with a preview
+`purger::delete_experiment` existed since 0.6.19 and had no way into it from the
+interface. It has one now, and it says what it will do first:
+
+    Delete experiment "Smoke Test 2" with all of its runs and results?
+    1 run(s), 3 attempt(s), 2 simulated person(s), 24 item(s), 1 adaptive quiz
+
+An irreversible action should be able to name the things it takes rather than
+only warn that it cannot be undone. A run being played is named in the preview
+too — before the button, not after it.
+
+Deleting a run now takes its execution log with it. That is the opposite of the
+reset case deliberately: a reset must keep the log, because the run survives to
+be looked at again; a delete must not, because keeping a history of something
+nobody can open is not keeping anything.
+
+### Verification
+PHPUnit 585 tests / 3315 assertions, Behat 32 scenarios / 232 steps, phpcs with
+the Moodle standard clean, PHPDoc clean. The PHP path was measured through its
+own action: empty, detected, set, and green on the next check.
+
+---
+
+## [0.6.25] — 2026-09-14
+
+Issues #61 and #62: what happened to a run, kept — and where the queries go.
+
+### #61 — A persistent execution and recovery log
+A failed run's story was spread across the Moodle task log, the run manifest,
+the worker log, the interface and the database. A reset destroyed most of it,
+which is the wrong moment to lose it: what went wrong on the last attempt is
+exactly what somebody needs while looking at this one.
+
+`local_catquizlab_runlog` is append-only and numbered by execution attempt.
+Resetting a run starts attempt 2 rather than erasing attempt 1 — measured: 17
+entries before, all 17 still readable after, and the new attempt beginning
+beside them.
+
+Sixteen events are recorded across a normal provisioning, from
+`start_requested` through each stage to `provisioning_ready`. Logging can never
+be why something fails: a missing table or a bad write returns quietly, because
+a run that completes without its story is worse than one with it and far better
+than one that dies trying to write it.
+
+### #62 — The 549,727 queries have an address
+Every provisioning stage is now measured. On this instance:
+
+    scales              13 queries    0.01 s
+    materialise        937 queries    0.70 s
+    container           18 queries    0.01 s
+    people              89 queries    0.15 s
+    test               163 queries    1.12 s
+    readiness            6 queries    0.00 s
+    attempts             7 queries    0.00 s
+
+`materialise` is the whole story: about 39 queries per item. The reported
+549,727 is that same rate against a pool of some fourteen thousand — a big
+number, and not a different problem.
+
+So the budget is per stage and per unit where the stage scales, and it exists to
+notice a change in the rate rather than to police a total: 937 queries for 24
+items passes, 5,000 for the same 24 does not, and 900 queries to create one
+course is flagged where the same number materialising a pool is not.
+
+The run view shows the log with its costs, over-budget steps marked.
+
+### Verification
+PHPUnit 582 tests / 3305 assertions, Behat 32 scenarios / 232 steps, phpcs with
+the Moodle standard clean, PHPDoc clean.
+
+---
+
+## [0.6.24] — 2026-09-14
+
+A CI failure of my own making, and issue #57.
+
+### CI — the emptiness test failed because it ran
+`schema_test` refuses empty directories in the plugin tree, added in 0.6.18
+after 123 foreign ones shipped in every release. On Moodle 5.x, PHPUnit places
+`.phpunit.cache` inside the plugin — so the test failed because the run that
+executed it had created a directory for itself.
+
+The check now skips what the tooling makes while it works: `node_modules`,
+`vendor`, `.git`, and the PHPUnit caches. Verified in the failing direction by
+creating `.phpunit.cache` first.
+
+Moodle 4.5 does not put it there, which is why nothing here caught it. That is
+the cost of a one-version local environment, and the reason your CI runs matter.
+
+### #57 — One experiment selector, not two
+The results page carried its own experiment dropdown while the shell carried
+another, on every step. Two selectors for one thing invite each other to
+disagree, and make "which experiment am I looking at" a question with two
+answers on one page.
+
+The shell's selector is the only one now; the results page receives the choice
+through the URL and keeps it in a hidden field so its own filters — tier, model,
+strategy, variant, stratum, severity — submit against the current experiment
+rather than resetting it. Those filters stay: they are the experimental
+coordinates, which is a different question from which experiment.
+
+### Verification
+PHPUnit 577 tests / 3287 assertions, Behat 32 scenarios / 232 steps, phpcs with
+the Moodle standard clean, PHPDoc clean. Confirmed in the browser: the results
+page has exactly one `experimentid` selector, and it is the shell's.
+
+---
+
+## [0.6.23] — 2026-09-14
+
+Issue #56: step 3 becomes the operations view it was supposed to be.
+
+### The problem
+A tab for "what is happening" did not exist. The parts of an answer were spread
+across four pages — runs on one, tasks and workers on another, the queue on a
+third, recovery actions on a fourth — so answering "why is nothing moving"
+meant visiting all of them and holding the pieces together yourself.
+
+### Added
+`progress_view` and its template, on step 3, in the order things block each
+other:
+
+    1. Runs and provisioning   what should be happening
+    2. Tasks and pipeline      what carries it
+    3. Workers                 who does it
+    4. Queue                   what is waiting
+    5. Recovery                what to do when it is stuck
+
+Every row uses the same state–reason–action contract, so a run, a worker and the
+queue say their piece the same way. The run section shows only what is not
+finished — this section answers "what is happening", and a finished run is not —
+while the filterable list below it still covers everything.
+
+What it reads like on this instance, with cron off and no worker:
+
+    Run #6                     ✓ Run finished
+    Tasks and pipeline         × Pipeline not running — cron has never run
+    Workers                      No worker is registered
+    Attempt queue              × 2 attempt(s) cannot be claimed
+                                 Their runs are failed, cancelled or not ready
+
+### Caught while building it
+- The new template's example context contained `}}` inside a nested object,
+  which is exactly the trap described in 0.6.21 — the linter cuts the docblock
+  there. My own test caught it before the CI did, which is what it was for.
+- A recovery button posted `release`, an action nothing handles; the real name
+  is `releaseorphans`. Every action in the template is now checked against what
+  `operations.php` answers.
+- Replacing the run list with the new view would have taken the status filters
+  with it. Behat noticed. The view sits above the list rather than instead of
+  it.
+
+### Verification
+PHPUnit 577 tests / 3287 assertions, Behat 32 scenarios / 232 steps, phpcs with
+the Moodle standard clean, PHPDoc clean, 888 language strings per language, all
+six template example contexts parseable by the linter's own extraction.
+
+---
+
+## [0.6.22] — 2026-09-14
+
+Issues #54 and #55: the first two steps become processes.
+
+### #54 — One process, six steps, each thing said once
+Tab 1 showed the wizard and then six diagnostic cards that repeated it. Node,
+dependencies, browser and base URL appeared in the wizard and again below —
+technically more complete, and harder to read for it.
+
+It is one process now:
+
+    1. Systemvoraussetzungen   2. Experimentumgebung   3. Worker-Zugang
+    4. Worker-Runtime          5. Pipeline             6. Startbereit
+
+The eleven access checks and the four runtime checks are steps of it rather than
+summaries with cards restating them. Step 6 is not a check: it answers the
+question somebody came to the tab with, because five green rows are an argument
+for readiness and not a statement of it.
+
+**The action belongs to the step it fixes.** Removing the cards nearly removed
+the only way to set up worker access with them — the button lived in the card,
+not in the step it was about. Each incomplete step now carries its own action,
+which is where it belonged.
+
+Verified in the browser: Node.js, Worker access and Base URL appear exactly
+once each.
+
+### #55 — Tab 2 asks one question
+The quick-action bar offered five buttons, two of which — "All runs" and
+"Results" — led into steps 3 and 4 that the tabs above already reach. A row of
+buttons leading out of a step is not process guidance; it is a second navigation
+disagreeing with the first.
+
+One primary action remains: define an experiment. Presets and import stay as
+secondary offers, because they are ways of *starting* a definition rather than
+peers of it.
+
+The worker fleet and attempt queue panels moved out: this step answers "what
+shall be run", and a panel about what is running now answers something else. The
+setup warning and the state line went too — the shell says both on every page,
+and two identical banners one above the other is how a reader learns to skip
+both.
+
+### Verification
+PHPUnit 575 tests / 3277 assertions, Behat 32 scenarios / 232 steps, phpcs with
+the Moodle standard clean, PHPDoc clean. Nine Behat scenarios navigated through
+the removed buttons and now go through the shell tabs, which is the navigation
+they should have been using.
+
+---
+
+## [0.6.21] — 2026-09-14
+
+CI made green locally, and the navigation rebuilt around the work: #52, #53.
+
+### The CI tooling now runs here
+Two things I had been unable to reproduce locally are reproducible now:
+PHP_CodeSniffer 3.13.2 with the real Moodle standard, and the mustache linter
+from moodle-local_ci.
+
+**phpcs reports nothing.** The violations the CI found were in 0.6.17; the ones
+still left in the working tree are fixed, including three that came from a stray
+frame render my own edit script had dropped into a confirmation branch.
+
+**The mustache failure is explained.** `moodle-plugin-ci mustache` reads the
+docblock non-greedily — everything between `{{!` and the *first* `}}`. An
+example context that parses perfectly here can be cut short there, which is a CI
+failure with no local symptom. `templates_test` now reproduces that extraction
+exactly, so the next one fails here instead.
+
+### #52, #53 — one frame, four steps, everywhere
+The navigation existed on `index.php` and nowhere else, so opening a run dropped
+the reader out of the process they were in the middle of. And it was cut by
+object — "experiments and runs", "settings" — so no place meant "what is
+happening right now".
+
+`output\shell` renders on every page:
+
+    1. Vorbereitung   2. Experimentenplan   3. Verlauf   4. Ergebnisse
+
+Settings is not a step; it is a link in the header, reached from preparation
+where somebody setting an installation up is already looking. The chosen
+experiment travels with the reader through a selector on every step, so moving
+between them does not mean choosing it again. The state line sits above the tabs
+on every page, with the same state–reason–action contract as everything else.
+
+Verified in the browser on index, setup, runs, results and presets: four steps
+each, the right one active.
+
+### Verification
+PHPUnit 575 tests / 3284 assertions, Behat 32 scenarios / 232 steps, phpcs with
+the Moodle standard clean, PHPDoc clean.
+
+The end-to-end run was not repeated after this change — the built-in web server
+this container uses for it did not survive the test sequence. Provisioning was
+confirmed after the rebuild (4 scales, 24 items, 2 persons, 2 attempts); the
+worker leg was not.
+
+---
+
+## [0.6.20] — 2026-09-14
+
+The chain runs end to end.
+
+### The last blocker: the experiment course was hidden
+0.6.9 created it with `visible = 0`, which looked tidy and was the reason no
+attempt could ever be played. A hidden course tells its enrolled students *"this
+course is currently unavailable"* — and the simulated persons are enrolled
+students. The worker logged in correctly, reached the activity, and found that
+sentence where the start button should have been.
+
+Every symptom above it was a consequence: "no question was presented", the page
+reported as the dashboard, attempts cycling back into the queue. The course is
+visible now and kept out of the way by its category and its name instead, which
+costs nothing.
+
+### Measured, not asserted
+A full run on this instance, from an empty installation:
+
+    Setup            all four stages green in one action
+    Experiment       1 experiment, 1 run
+    Provisioning     4 scales, 24 items, 2 persons, 2 attempts
+    Worker           1 started (1 claimable attempt, concurrency 1)
+    Attempts         2 played, 12 items each
+    Traces           theta -0.003 (SE 0.603) and -2.146 (SE 1.054)
+    Aggregation      28 result rows
+    Evaluation       true -0.479 → -0.003 (error +0.476)
+                     true -1.778 → -2.146 (error -0.368)
+    Run status       FINISHED
+    Status card      [good] Run finished — 2 of 2 attempt(s) collected
+
+### Also fixed on the way
+`gotoSettle()` swallowed both navigation attempts, so a failed navigation left
+the page where it was and the next step reported what it failed to find there.
+It now names the URL it wanted and the one it landed on.
+
+### Verification
+PHPUnit 563 tests / 3236 assertions, Behat 32 scenarios / 232 steps, PHPDoc
+clean. One existing test asserted the course was hidden; that expectation was
+the defect, and it now asserts the opposite with the reason.
+
+---
+
+## [0.6.19] — 2026-09-14
+
+Three P0 defects that stopped provisioning working at all: issues #60, #59, #58.
+
+### #60 — Readiness threw on every provisioning
+`run_stage()` reached for an undefined `$runid` in the readiness stage, so the
+stage I added in 0.6.15 raised a fatal error every time a run was provisioned.
+It uses the shared context now, like every other stage.
+
+The tests did not catch it because they call `cat_readiness` directly rather
+than through the stage that uses it. There is now a test that dispatches the
+stage.
+
+Behind it, a second one: `cat_readiness` threw when a run had no usable
+definition. A readiness check that throws is worse than one that fails — the
+caller gets an exception where it expected a verdict. It returns a stated
+verdict now.
+
+### #59 — Provisioning built a second scale tree each time
+`scale_provisioner::provision()` created scales unconditionally. A retried
+ad-hoc task, a "provision now" after one, a recovered run — each produced
+another root and another set of subscales, and items materialised into whichever
+map was named later. It reuses what the run already has, and checks that against
+the engine rather than trusting its own map: a map row pointing at a deleted
+scale is worse than no map, because everything downstream then materialises into
+a scale nobody can select from.
+
+### #58 — No way back from a stuck run
+Re-checking suits a run whose cause was fixed outside it. **Reset to draft** is
+for the other case: a run that is wrong in itself. It removes what provisioning
+made — attempts, people, scale map, items, results — and keeps what the run *is*:
+its cell and its seed. A run being played is refused, because resetting
+underneath a worker strands the claim it holds.
+
+### Also
+`gotoSettle()` in the worker swallowed both of its navigation attempts, so a
+failed navigation left the page wherever it was and the next step reported what
+it failed to find there. The symptom was "no question was presented" on the
+dashboard — true, and three steps from the cause. It now reports the URL it
+wanted and the one it landed on.
+
+### Verification
+PHPUnit 562 tests / 3235 assertions, 11 worker tests. Each defect measured
+against the running instance: the readiness stage dispatches, provisioning twice
+yields one root scale, and a failed run resets to draft with its cell and seed
+intact.
+
+---
+
+## [0.6.18] — 2026-09-14
+
+Directories that were never ours, shipped in every release.
+
+### The finding
+`catmodel/` and `catquizcentralhub/` are subplugin directories of
+`local_catquiz`. Empty copies of their whole tree — model folders, `classes`,
+`tests`, `lang`, `host`, `client` — sat in this plugin's root and rode along as
+**123 empty entries in every zip I delivered**.
+
+They arrived through a source archive and came back after a restore, because I
+removed them once by hand and nothing stopped them returning. A directory named
+after a subplugin type, sitting in a plugin root, is also an invitation to be
+scanned as one.
+
+Twelve further empty directories went with them: leftovers of a removed AMD
+module, of template folders, of a `doc/` beside the real `docs/`, and a
+`downloads/` holding nothing. Git does not track empty directories, so these
+existed only where somebody unpacked a zip — and then travelled into the next
+one.
+
+### Added
+`schema_test` now refuses both: the two foreign names explicitly, and any empty
+directory anywhere in the tree. Verified in both directions — recreating
+`catmodel/rasch/classes` fails the test with "belongs to local_catquiz, not to
+this plugin".
+
+Removing them by hand is what I did the first time, and it lasted until the next
+archive.
+
+### Verification
+PHPUnit 557 tests / 3219 assertions.
+
+---
+
+## [0.6.17] — 2026-09-14
+
+Issue #51: one shape for every stateful thing.
+
+### The problem this fixes is one I made
+Ten issues of point repairs left each component saying its piece its own way: a
+run showed a status word, the queue a number, a worker a count, a task a class
+name. Every one more accurate than before, and the reader still had to hold four
+vocabularies at once to answer "is anything wrong". "Scheduled", "1 worker",
+"150 waiting", "0%" — all true, none actionable.
+
+### Added
+- **`status_report`**, one contract for runs, workers, the queue and the
+  pipeline:
+
+      state   — what it is, in words that mean something on their own
+      reason  — the evidence: which task, which attempt, since when, how many
+      action  — the one thing to do, or nothing
+
+  The contract is deliberately narrow, because one that allows exceptions is a
+  style guide. A healthy component has no action, and that is a statement rather
+  than a gap: buttons on healthy things teach people to press buttons.
+
+- **`statuscard.mustache`** renders it, so the shape is the same everywhere by
+  construction rather than by discipline.
+
+### What it reads like now
+A scheduled run was "Scheduled". It is:
+
+    Provisioning pending
+    Waiting for Run provisioning, due now. Cron has never run on this site.
+    [ Provision now ]
+
+A ready run with work and no worker was "Running, 0%". It is:
+
+    Waiting for a worker
+    3 attempt(s) claimed by nobody.
+    [ Start workers ]
+
+A worker was "1 worker". It is `Attempt #57 of run #4, heartbeat 2 secs ago`, or
+`Worker idle — no claimable attempts`, which answers the question the first
+version invited.
+
+A queue of attempts belonging to failed runs was "150 waiting", which reads as
+"a worker will get to it". It is `5 attempt(s) cannot be claimed — their runs
+are failed, cancelled or not ready`.
+
+### Verification
+PHPUnit 556 tests / 3216 assertions, Behat 32 scenarios / 232 steps, PHPDoc
+clean. Seven of the new tests check the contract itself: every card carries all
+three parts, lands in exactly one level, and a healthy one offers nothing to
+press.
+
+---
+
+## [0.6.16] — 2026-09-14
+
+Issue #46: the tasks everything waits on, in the plugin's own terms.
+
+### The problem
+Six Moodle tasks carry this plugin, and all of them are visible in Moodle's task
+administration — which is the problem. An ad-hoc task there is a class name
+beside a blob of JSON, so answering "is run 4 waiting for something, and for
+what" meant reading `{"runid":4,"options":[]}` out of a list of identical rows.
+
+### Added
+- **A tasks and pipeline section** on the setup tab: the scheduled task with
+  when it last ran and when it is next due, and the queued ad-hoc work named
+  after its subject — `Run #2 (strategy=classic)` rather than its custom data.
+
+- **Cron is reported beside them.** A task that is enabled and never runs looks
+  exactly like a disabled one from every angle except its last-run time, and
+  cron not running is the most common reason a pipeline sits still. A scheduled
+  task more than fifteen minutes overdue is called out: that is not slow cron.
+
+- **Run now**, for this plugin's own scheduled tasks only — a general "run any
+  task" button on a plugin page is a way to run somebody else's task by
+  accident. The task's `mtrace()` output comes back with the result, since that
+  is how these tasks say what they did.
+
+- A link to Moodle's task administration, as the supplement it should be rather
+  than the normal route.
+
+### Fixed
+The tasks panel first rendered with its headings and no rows: the view supplied
+no `tasks` key, so every section was skipped and the page looked correct. A
+missing key in Mustache renders as nothing at all, which is a failure mode that
+shows up as a page that seems fine.
+
+`templates_test` now checks that the operations context provides every top-level
+name its template uses, following the section nesting so a name belonging to a
+section's own data is not demanded of the context.
+
+### Verification
+PHPUnit 548 tests / 3181 assertions, Behat 32 scenarios / 232 steps, PHPDoc
+clean. Measured against the running instance: two queued ad-hoc tasks rendered
+as `Run #2` with their due times, and the scheduled task with its run button.
+
+---
+
+## [0.6.15] — 2026-09-14
+
+The run lifecycle, from three directions: issues #50, #45, #47, #49 and #48.
+
+### #50 — The claim did not move the run (P0)
+The documented lifecycle is READY → first attempt claimed → RUNNING, and the
+call that performs it was missing from `job_claim` entirely: a run stayed READY
+while its attempts were being played. It happens inside the claim's transaction
+now — a run whose attempt is being played must not look READY to anything
+reading in between, and a rolled-back claim must not leave a run marked running.
+
+The transition is conditional on READY, so a scheduled run cannot skip the state
+that says its pool was checked, and it reports whether *this* call moved the run
+rather than whether the run is running — a later claim repeating a first claim's
+side effects was the failure waiting behind the old shape.
+
+### #45 — A scheduled run was a dead end (P0)
+"Scheduled, 0%, workers idle beside it" with no action that moves it is
+indistinguishable from work in progress, and a run can wait for an orchestrator
+task that was never queued or was queued while cron was down. **Provision now**
+runs the same orchestrator the task would have run and lets it reach its own
+conclusion — READY is not settable by hand, because it stands for a check that
+passed.
+
+### #47 — Workers started with nothing to do (P0)
+Dispatch knew nothing about whether work was claimable. Starting a worker
+without any costs a Node and a Chrome process, shows "workers running" beside 0%
+progress, and ends as an apparent crash when the process exits having found
+nothing — three misleading signals, multiplied by the configured concurrency.
+
+The pool now starts no workers when nothing is claimable, and no more workers
+than there is work for. Measured: one claimable attempt with concurrency 4
+starts one worker; none starts none.
+
+### #49 — `QUEUED` was read as "waiting for a worker" (P0)
+It is a storage state, and an attempt in it can be claimable now, not due yet
+after a failure, blocked because its run hands out no work, or held by a paused
+run. Four things needing four responses, reported as one number — which invited
+waiting for attempts that would never be picked up. `queue_breakdown()` splits
+them, grouped by run so a queue of 1600 is not 1600 lookups.
+
+### #48 — A working worker was indistinguishable from a dead one (P0)
+It spoke only when claiming and when finishing, and an attempt takes minutes: a
+working worker went quiet for exactly as long as the timeout that declares it
+dead. It reports every twenty seconds now, with the attempt it is playing, and
+the reply carries a stop flag.
+
+Stopping is a request, not a kill: the worker is mid-attempt in a browser, and
+ending the process there leaves a claim with nobody to finish it — the state the
+leases exist to prevent. It finishes the attempt, reports it, and exits. A
+worker the registry no longer knows is told to stop, because its slot may
+already have been given away.
+
+### Verification
+PHPUnit 545 tests / 3162 assertions, Behat 32 scenarios / 232 steps, PHPDoc
+clean. Each change measured against the running instance: READY 15 → RUNNING 20
+on first claim, one worker for one claimable attempt, `no-claimable-work` when
+there is none, and the heartbeat's stop flag answering true after a stop request
+and for an unknown worker.
+
+---
+
+## [0.6.14] — 2026-09-14
+
+Live updating, a four-stage front end, and the test environment rebuilt.
+
+### The environment
+The container was reset between releases and 0.6.13 had to ship on inspection
+alone. Moodle 4.5.14, PostgreSQL, the engine on `ALiSe-v-1.2.0-legacy`, PHPUnit,
+Behat with ChromeDriver and Puppeteer are all back, and everything below was
+exercised against them.
+
+**What that immediately caught:** the `situation` ranking added in 0.6.13 could
+only be tested by building a whole installation into each state, which is a
+ranking nobody tests. Gathering the facts (`assess()`) and judging them
+(`rank()`) are separate now, and two cases are pinned that were only assumptions
+before: an unready installation outranks a failed run, while work already in the
+queue outranks an unfinished setup — attempts in the queue mean the installation
+ran at some point, so the setup warning is the stale one.
+
+### #42 — The overview keeps itself current
+`local_catquizlab_live_status` returns counts and the one-line verdict, and the
+`livestatus` module updates them in place. Measured in the browser: the queue
+figure went from 7 to 5 with zero navigations while attempts were completed from
+outside the page.
+
+The page reloads itself only when the *verdict* changes, because that is where
+the run rows, their progress and the buttons stop matching the counters —
+patching all of that from JavaScript would be a second renderer.
+
+**A defect only the browser test could show:** the service was declared in
+`db/services.php` and never registered, because Moodle re-reads that file only
+when the plugin version changes. The page polled, Moodle answered `Can't find
+data record in database table external_functions`, and nothing on the page said
+so. A test now checks the registration, not just the declaration.
+
+Polling stops when the tab is hidden and after a long idle period: a tab left
+open overnight should not keep a server busy.
+
+### #44 — Tabs follow the work
+`1. Set up`, `2. Experiments and runs`, `3. Results`, `Settings`.
+
+Not included deliberately: sending an unready installation straight to the setup
+tab. It was written, and Behat showed what it costs — 28 scenarios went red
+because the page moved out from under them. Somebody who opens the plugin to
+look at their experiments should find their experiments; the banner at the top
+already says what is missing and links to where it is fixed.
+
+### Verification
+PHPUnit 534 tests / 3132 assertions, Behat 32 scenarios / 232 steps, PHPDoc
+clean, 790 language strings per language, the AMD module built with Moodle's own
+grunt. phpcs could not run here: the Moodle standard needs a PHP_CodeSniffer
+version this container cannot resolve without Composer — 3.7 is too old for its
+dependencies and 4.0 too new for the standard itself. Style was checked by hand
+across the changed files (line length, docblocks, trailing whitespace, comment
+form); CI will have the final word.
+
+---
+
+## [0.6.13] — 2026-09-14
+
+Two defects introduced in 0.6.12, and the overview's one-line verdict.
+
+### #40 — An empty worker log broke the operations page
+`log_tail()` computed a read window from the file size and called `fread()` with
+it. A worker that has just started has a log file and nothing in it — the normal
+state for the first seconds of every run, not an edge case — and reading zero
+bytes threw, taking the whole page with it. That page is the one somebody opens
+when a worker is not behaving.
+
+Fixed, and a second defect found while testing it: `filesize()` reads PHP's
+cached stat data, and this file is written by a different process. Without
+`clearstatcache()` the log of a worker that had just written its first lines
+still looked empty. Both are covered by tests now.
+
+### #41 — The run view overwrote its own data
+`$detail` holds the run's data from `run_registry::detail()` and is read further
+down for the reproducibility manifest. The failure-reason block added in 0.6.12
+assigned an HTML string to the same name, so every later access read a character
+out of that string instead of an array.
+
+Renamed. `page_scripts_test` now checks every page script for the general shape
+of this mistake — a variable used as an array that is also assigned a plain
+string — because these files are long, procedural and share one scope, which
+makes exactly this easy.
+
+### #43 — The overview said four correct things that disagreed
+It could show, at once: 150 attempts queued, no worker running, one crashed, the
+experiment "running", its run "scheduled" at 0%. Every figure right; together no
+picture. The reader had to work out that nothing was progressing, that the
+crashed worker was why, and that starting one was the thing to do.
+
+`situation` assesses the installation as a whole and says one sentence with one
+action. The states are ranked by how much they need doing about them and the
+first that applies wins — an overview that reports three problems makes the
+reader rank them, which is the work this class exists to do. Waiting work with
+nobody on it outranks a failed run, because somebody is waiting on the first.
+
+A healthy state gets no button: an action on a healthy state trains people to
+press buttons that do not need pressing.
+
+### Not included: #42
+Live updating needs a web service and an AMD module, and this container no
+longer has the Moodle installation to exercise them in. Shipping an untested
+AJAX layer into the page somebody watches during a run is the wrong trade, so it
+waits for an environment where it can be verified.
+
+### Verification
+Reduced: the working tree was lost with the container, and the plugin was
+restored from the 2026091311 release archive. PHP syntax is clean across all
+files, language files match at 789 strings each, template example contexts parse
+and carry every key the new block uses, and both defects were reproduced and
+fixed against isolated runs of the affected logic. PHPUnit and Behat could not
+be run.
+
+---
+
+## [0.6.12] — 2026-09-14
+
+Five findings from real operation: issues #35 to #39.
+
+### #35 — Readiness was strategy-blind (P0)
+A valid run was refused before a worker ever started: 100 subscales at 3
+questions each against a global maximum of 25, under `fastest`.
+
+The multiplication is only correct where a strategy makes the per-subscale
+minimum binding on every subscale, and in the engine exactly one does —
+`inferallsubscales` overrides `filterbyquestionsperscale()`, the base class
+returns the candidates unchanged. For every other strategy the minimum bounds
+what may be taken from a scale the selection visits, not what must be taken from
+all of them. The same correction applies to per-subscale caps and to empty
+subscales: an empty scale among ninety-nine full ones is a scale `fastest` will
+not pick.
+
+The refusal now names the strategy it applies to, because a number that is wrong
+under one strategy and right under another should say which.
+
+### #37 — Failed runs left claimable work (P0)
+Readiness ran after provisioning, so a run that could not start had already had
+its queue built: 3 failed runs and 150 attempts still claimable. Three changes,
+each sufficient on its own and all three kept:
+
+- Readiness is a provisioning stage between the test and the attempts, so the
+  queue is not built for a run that cannot use it.
+- `fail()` closes the run's queued attempts with the run's reason. Closed, not
+  deleted: what was planned is worth knowing.
+- `job_claim` checks the run's status server-side. Only `READY` and `RUNNING`
+  hand out work — however attempts got into the queue.
+
+### #38 — The failure reason was recorded and never shown
+`lifecycle.failedreason` had been written since 0.6.1 and read by nothing, so a
+run said FAILED and the reason sat in its manifest where only database access
+found it. The run view shows it now, with the readiness counts beside it: "2
+usable items against a minimum of 4" is actionable, "not ready" is not.
+
+### #39 — Worker output went to /dev/null
+A worker that died on startup wrote its reason to stderr and it went nowhere;
+the registry then showed a slot held by a process that no longer existed, with
+nothing to say why. Output goes to a per-worker log now, and the last lines are
+on the operations view next to the worker they belong to.
+
+### #36 — Recovery without reproducing
+A run that failed readiness because a pool was too small is not broken for ever.
+"Re-check and resume" re-runs the check, and on success puts back the attempts
+that were closed when the run failed — only those: an attempt that failed while
+a worker played it keeps its history, because reopening it would discard a real
+result.
+
+### Verification
+PHPUnit 498 tests / 3013 assertions, Behat 32 scenarios / 232 steps, phpcs and
+PHPDoc clean, 780 language strings per language, all templates rendering from
+their example context. The reported configuration measured directly: `fastest`
+passes, `allsubs` is still refused with the arithmetic.
+
+---
+
+## [0.6.11] — 2026-09-13
+
+One page, and the CI failures that followed it.
+
+Everything an operator does was spread over three: experiments on the landing
+page, setup and diagnosis on an operations page, settings in the Moodle
+administration tree. Each one was reachable, and using the plugin meant knowing
+which of the three held which half. Adding a link between them, as 0.6.10 did,
+treats the symptom.
+
+
+### CI fixes on top of the one-page change
+
+- **The Mustache lint failed on seven empty form actions.**
+  `moodle-plugin-ci mustache` renders every template against the example context
+  in its docblock, and `formurl` was not in it — so the rendered HTML had
+  `action=""`. The same omission in the real context is what made the setup
+  buttons inert: an empty action posts to the current page, where no handler
+  lives, so the button looks right and does nothing.
+
+  `manage.mustache` had the same gap for `resultsurl` and `settingsurl`.
+
+  `templates_test` now renders every template from its own documented example
+  and fails on any empty href or action, so this is caught before CI rather than
+  by it.
+
+- **One PHPUnit failure, only on Moodle 4.5.** `make_writable_directory()`
+  reports a failure through `debugging()`, which PHPUnit counts as an unexpected
+  call. The directory is created directly with `0700` now — which it wanted to
+  be anyway, since that helper uses `$CFG->directorypermissions`, defaulting to
+  `0777` across a dataroot. The warning is suppressed and immediately replaced
+  by an exception carrying the path: nothing is swallowed, and the diagnostic
+  channel is not used to report something the caller is told about properly.
+
+### Changed
+- **The plugin's own page carries three tabs**: Experiments, Setup and
+  operations, Settings. The setup view renders inside it rather than on a page
+  of its own, and `operations.php` remains only as the handler its forms post
+  to, redirecting anyone who arrives there.
+
+- **The settings that an operator turns are on the Settings tab**: experiment
+  course as a chooser rather than an id, master switch, base URL, Node path,
+  concurrency, maximum jobs. They stay in the Moodle settings tree as well —
+  that is the right place for a site administrator configuring a plugin once,
+  and the wrong place for somebody running an experiment.
+
+  The node path is checked on save rather than discovered later by a worker
+  that cannot start: the error is the same, but here it arrives while somebody
+  is looking at the field. The token is shown read-only with its state, because
+  an operator who can see it is empty understands why nothing runs — and typing
+  one in by hand is what this page exists to make unnecessary.
+
+### Fixed
+- The setup forms posted to an empty action, so the buttons did nothing. Found
+  by pressing them through the browser and then checking the database rather
+  than reading the page: the page's own text said `token, storedtoken`, which
+  was the list of what was *missing*, and could be read as a report of success.
+
+### Verified along the path a person takes
+Token cleared, then only the plugin's page: landing page → Setup tab → "Set up
+worker access" → "Worker access is complete. Changed: token, storedtoken", 32
+characters in the database, and that token calls `local_catquizlab_job_claim`
+successfully. No detour through the Moodle administration at any point.
+
+### Verification
+PHPUnit 490 tests / 2981 assertions, Behat 32 scenarios / 232 steps, phpcs and
+PHPDoc clean, every template rendered from its example context.
+
+---
+
+## [0.6.10] — 2026-09-13
+
+The setup was built and not signposted.
+
+0.6.8 made the worker access creatable in one click, and left the button on a
+page an administrator has to already know about. Somebody standing in the plugin
+settings in front of an empty token field saw nothing suggesting the plugin
+could fill it — which is exactly where the ten-step manual sequence used to
+begin. A capability nobody can find is not a capability.
+
+### Added
+- **The settings page states the access status above the token field**, and
+  when it is incomplete says plainly not to create a token by hand, with a link
+  to the page that creates it.
+- **The token field's own description** names where it comes from.
+- **The landing page warns when the installation is not ready**, lists what is
+  missing and links to the setup. That is the first page anyone opens, and it
+  was silent about an installation that could not run anything.
+
+### Verified along the path a person actually takes
+Token cleared to reproduce a fresh installation, then: the settings page shows
+the notice and a link, the operations page's button runs the setup, the field
+holds a 32-character token, and that token calls `local_catquizlab_job_claim`
+successfully.
+
+### Verification
+PHPUnit 487 tests / 2960 assertions, Behat 32 scenarios / 229 steps, phpcs and
+PHPDoc clean, 757 language strings per language.
+
+---
+
+## [0.6.9] — 2026-09-13
+
+Issues #32, #33 and #34 — a fresh installation made ready from its own pages.
+
+### #34 — A setup and readiness view
+The pieces existed but were spread across the settings page, the operations
+page and Moodle's own administration, so a fresh installation needed somebody
+who knew the internal dependencies and the order to satisfy them in. That is
+knowledge about this plugin's implementation, not about experiments.
+
+`setup_wizard` answers one question in one place, in four stages ordered by what
+depends on what: engine, experiment environment, worker, pipeline. Each step
+says whether it holds and what would fix it; `run()` performs the fixes it can
+and stops at the first stage it cannot complete — setting up a worker against a
+missing engine produces a second failure that hides the first.
+
+The pipeline stage is last on purpose. `pipeline_tick` ships disabled, which is
+right: a task that hands out work should not start the moment a plugin is
+installed. That is an argument for enabling it knowingly, not for making
+somebody find it in the scheduled task administration — so it is offered here,
+and only once the three stages it depends on are green. Cron itself is checked
+beside it, because a task that exists and never runs looks exactly like a task
+that is disabled.
+
+### #33 — The experiment course creates itself
+It is not a course in the ordinary sense: one section per experiment, one
+adaptive quiz per run, everything generated, nobody teaching in it. Its
+shortname, format and visibility follow from that role, which made asking an
+administrator to create it first a question with one right answer.
+
+`ensure_course()` adopts before it creates — an installation that already has
+the course, from an earlier setup or a restore, must not end up with two, and
+the second would silently hold half the experiments. A hidden category is
+created alongside it, falling back to any category rather than failing the whole
+setup over where a technical course sits.
+
+### #32 — The worker runtime sets itself up
+`worker_runtime` finds a usable Node, installs the npm dependencies (`npm ci`
+where a lockfile exists, so the worker is the one that was tested), fetches the
+browser into the cache the worker actually reads, and defaults the base URL to
+`wwwroot`. Each through the same runtime environment as the worker, or they
+install something nobody will find.
+
+What is left for a shell is the operating system itself: Node has to exist and
+be runnable by the web server user. The wizard says so in those words rather
+than appearing to work on it.
+
+An empty `chrome/` directory is not a browser — an interrupted download leaves
+one behind, and the worker then fails as if nothing were installed — so the
+check looks for an executable.
+
+### Tests
+Eight more: the four stages in dependency order, the wizard stopping without an
+engine, the pipeline refusing to start over a broken setup, the course created
+once and adopted when present, Node discovered without configuration, a wrong
+Node path repairing itself, and a half-downloaded browser not counting as
+installed.
+
+### Verification
+PHPUnit 487 tests / 2960 assertions, Behat 32 scenarios / 229 steps, phpcs and
+PHPDoc clean, 752 language strings per language. Exercised on this instance from
+an unset course and an empty browser cache: both were created, and the wizard
+went from four blockers to one — cron, which does not run in this container.
+
+---
+
+## [0.6.8] — 2026-09-13
+
+Issue #31: the worker's access to Moodle, set up by the plugin that needs it.
+
+### The problem
+Getting a worker running took ten steps across four areas of the Moodle
+administration: enable web services, enable REST, enable the external service,
+create a technical user, create a system role, grant two capabilities, assign
+the role, authorise the user for the restricted service, mint a token for
+exactly that pair, and paste it back into the plugin setting.
+
+Any one of those missing produces the same symptom — a worker that claims
+nothing — and there were thirteen listed ways to get it wrong. None of it is a
+configuration decision: the service exists for this worker, its three functions
+are this plugin's, and `local/catquizlab:worker` is granted to no role by
+default precisely because it is not meant to be handed around.
+
+### Added
+- **`worker_access`** with two entry points, and the distinction matters:
+  `verify()` only looks, so it runs on every page load, and `ensure()` changes
+  the site when somebody asks. Idempotent by construction — every step checks
+  before it acts, so running it after a partial manual setup completes that
+  setup rather than duplicating it.
+
+- **The access panel on the operations page** lists all eleven checks with an
+  individual verdict, and offers one button when anything is missing.
+
+### Notes on two decisions
+- **A dedicated account, not the administrator's.** The token carries exactly
+  the three functions the worker calls; if it leaks it is worth exactly that.
+  An administrator's token is worth the administrator.
+- **`auth = 'webservice'`, not `'nologin'`.** The first version used `nologin`,
+  which looks equivalent and is not: the call came back
+  `wsaccessusernologin`, which reads as a permission problem and is an
+  account-type problem. Found by calling the web service with the token rather
+  than by inspecting the rows — the setup verified as complete either way. The
+  authentication plugin is enabled as part of the setup, since an account whose
+  type is disabled is refused however correct everything else is.
+
+### Tests
+Five more: the whole access created in one operation, a second run changing
+nothing, the token belonging to the technical account rather than to whoever
+pressed the button, a partial setup completed without a second account or role,
+and the role carrying both capabilities in the system context only.
+
+### Verification
+PHPUnit 479 tests / 2946 assertions, Behat 32 scenarios / 229 steps, phpcs and
+PHPDoc clean, 716 language strings per language. End to end on this instance:
+the setup ran from nothing to complete, and the resulting token then called
+`local_catquizlab_job_claim` successfully.
+
+---
+
+## [0.6.7] — 2026-09-13
+
+Issues #26, #27, #28, #29 and #30 — two of them defects in code written earlier
+the same day.
+
+### Security
+- **The web service token no longer reaches the command line (#29).** It was
+  passed as `--token=…`, where a process listing shows it to anyone who can run
+  `ps`, and it opens every web service function the worker is allowed to call.
+
+  The first fix was incomplete and the test caught it: moving the secret into an
+  `env NAME=value` prefix only moves it from the worker's argv into env's own,
+  which is just as visible. It is exported into the PHP process now and
+  inherited by the child — `/proc/<pid>/environ` is readable by the owner and
+  root, argv by anyone. The worker reads `CATQUIZLAB_WORKER_TOKEN` and still
+  accepts `--token` for a manual run, where the person typing it already has the
+  token in their shell history.
+
+- **Runtime directories are no longer created world-writable (#30).** They were
+  made with `@mkdir(…, 0777)`. They are now created through Moodle's own helper
+  and then tightened to `0700` explicitly, rather than left to
+  `$CFG->directorypermissions` — which defaults to `0777` across a dataroot.
+  That default is reasonable for files a site serves and is not reasonable for
+  a browser profile, its cookies and its cache.
+
+  The error suppression is gone with it: a directory that cannot be created or
+  written now fails where it happens, naming the path. Suppressed, it surfaced
+  later as an EACCES from inside Puppeteer, and the reader debugged the browser
+  instead of the file system.
+
+### Changed
+- **The engine is a declared dependency (#26, #27).** The note in `version.php`
+  promised this — *"promote local_catquiz and mod_adaptivequiz to declared
+  dependencies once the attempt runner exists"* — and the runner exists. The
+  suite creates `mod_adaptivequiz` instances, writes `local_catquiz` test
+  environments, materialises items into engine scales and plays attempts
+  through the real activity; an installation without those plugins cannot do
+  any of it. Versions are the ALiSe-v-1.2.0-legacy set, which is also the
+  newest line that still supports Moodle 4.5.
+
+### Added
+- **The zero-question failure says what the page said (#28)**: url, title, the
+  Moodle error or notification if there is one, otherwise the main region's
+  text, plus the engine attempt id. "No question was presented" names the
+  symptom and nothing else, and the cause is almost always on the screen the
+  worker was looking at.
+
+### Tests
+Three more: the token absent from both argv and the assembled command while
+present in the environment, the runtime directory not world-writable, and an
+unusable runtime directory reported where it happens (skipped as root, which
+ignores permission bits — saying so beats passing on a false premise). One
+existing expectation was inverted: `worker_launcher_test` asserted the token
+*was* in argv.
+
+### Verification
+PHPUnit 474 tests / 2918 assertions, Behat 32 scenarios / 229 steps, 11 worker
+tests, phpcs and PHPDoc clean. Runtime directories verified at `0700` on disk.
+
+---
+
+## [0.6.6] — 2026-09-13
+
+Issue #25: engine attempts that were created but never started.
+
+### The defect
+When the CAT selection fails before item one, `mod_adaptivequiz` throws and the
+attempt row it had already written stays behind — `inprogress` with
+`uniqueid = 0`, no stop reason, no finish time. It is neither a running attempt
+nor a finished one; it is a record of a start that did not happen.
+
+One is a curiosity. This instance had **20 of them among 167 attempts**, because
+every retry of a failing attempt makes another: they accumulate rather than
+appear. They distort attempt counts, resume paths can find them again, and where
+an activity limits attempts they consume the allowance.
+
+### Added
+- **`engine_hygiene`** removes them, on the operations page and automatically in
+  `pipeline_tick`. Scope is deliberately narrow: only attempts belonging to this
+  lab's simulated persons, and only those with no question usage at all. A row
+  with a `uniqueid` has answers attached and is somebody's data whatever state
+  it is in — a plugin that deletes rows it did not create is worse than the
+  defect it cleans up after.
+
+  Deleted rather than closed: a closed empty attempt still counts as an attempt
+  wherever attempts are counted, and it carries nothing worth keeping. The
+  reason the start failed is on the lab attempt, where the worker put it.
+
+- **`docs/design/issue-adaptivequiz-empty-attempt.md`** — the fix belongs
+  upstream, and this is a workaround. The draft offers both designs: roll the
+  attempt back before the exception, or close it explicitly with a stop reason
+  and `resultvalid = 0`. Where the attempt count is limited, the rollback is the
+  better of the two. The existing comment at that line already names the problem
+  correctly — a leftover empty attempt should not be completed — but the branch
+  then does nothing at all, while the branch beside it handles the normal case
+  in full.
+
+### Verified on this instance
+20 empty attempts found and removed, the 147 real ones untouched.
+
+### Verification
+PHPUnit 471 tests / 2916 assertions, Behat 32 scenarios / 229 steps, 11 worker
+tests, phpcs and PHPDoc clean, 694 language strings per language.
+
+---
+
+## [0.6.5] — 2026-09-13
+
+Two P0 defects from real operation: issues #23 and #24.
+
+### #24 — Runs are queued only once the CAT test can actually start
+
+A structurally complete preflight passed — scales present, person parameters
+present, enrolments present — and 1600 attempts were queued against a test that
+could never select item one. Every job was going to fail identically before the
+first question.
+
+`cat_readiness` checks the arithmetic that decides this, before attempts are
+queued:
+
+- a test cannot ask more questions than its pool can answer;
+- per-subscale minima multiply — twenty subscales at three questions each is
+  sixty questions, whatever the global maximum says;
+- per-subscale maxima cap the total the same way, so a global minimum above
+  that sum is unreachable;
+- an item the engine still treats as a pilot contributes nothing to the
+  estimate, so a pool of pilots is an empty pool as far as selection goes.
+
+Item counts come from the engine's own tables rather than from the lab's record
+of what it created: the question is what the selection will see, not what was
+intended. A run that fails the check goes to FAILED with the arithmetic in its
+manifest — "2 usable items against a minimum of 4" is actionable where "not
+ready" is not.
+
+### #23 — The browser runtime is pinned, and fixable from the interface
+
+A self-test passed as the interactive user while the worker failed as the web
+server user with `Could not find Chrome`. Puppeteer resolves its cache from the
+runtime of whoever runs it, so the two were never looking in the same place.
+
+- `worker_launcher::runtime_environment()` pins `HOME`, `PUPPETEER_CACHE_DIR`
+  and the three XDG paths, and creates the directories rather than assuming
+  them — the failure they cause otherwise is an `EACCES` deep inside Puppeteer
+  that reads as a plugin problem. Both launch paths and the self-test use it,
+  which is what makes a green self-test mean something about the worker.
+- **Run worker self-test** and **Install browser for the worker** on the
+  operations page. The self-test now prints the user, uid and paths it ran
+  with, so a run by hand and a run from cron are distinguishable in a report.
+
+Verified end to end on this instance: the self-test first reproduced
+`FAIL browser starts (Could not find Chrome …)`, the install action placed
+Chrome in the worker's own cache, and the same self-test then reported
+`ok browser starts (Chrome/148.0.7778.97)`.
+
+### Tests
+Eight more: a run whose pool cannot serve its minimum never reaching ready, the
+refusal naming the arithmetic, a pool of pilot questions counted as empty,
+subscale caps checked against the global minimum and floors against the global
+maximum, a sound configuration passing, and the runtime being explicit rather
+than inherited.
+
+### Verification
+PHPUnit 469 tests / 2910 assertions, Behat 32 scenarios / 229 steps, phpcs and
+PHPDoc clean, 689 language strings per language, upgrade path replayed from the
+previous version.
+
+---
+
+## [0.6.4] — 2026-09-13
+
+Operating the suite from the plugin. Completes issues #14, #15 and the
+circuit-breaker half of #17.
+
+### The rule this release is about
+Running, diagnosing and recovering an experiment has to be possible from the
+plugin's own pages. A shell and a database client are how one investigates a
+defect, not how one operates a plugin — and the reported installation needed
+both to find out why 1600 queued attempts were not moving.
+
+### Added
+- **An operations view** (Reports → Operations) with four sections: system
+  health, workers, the attempt queue and the runs in flight. Every question
+  that previously needed SSH is answered there: is the worker ready, is one
+  running, how many attempts wait, which one is stuck and since when, which run
+  it belongs to, how many tries it has had, what the last error was, and
+  whether the pipeline is blocked or merely slow.
+
+- **`system_health`** — eight checks, each reporting three things: whether it
+  passes, what it found, and where to go to fix it. A check that only says
+  "failed" moves the work to the reader rather than doing it. Among them the
+  Node major version, because a worker that starts on Node 18 and dies on its
+  first dependency is worse than one that refuses to start: the queue looks
+  served.
+
+- **`worker_setup::ensure_token()`** — the worker token was the one piece that
+  forced an operator out of the workflow entirely. It now enables web services
+  and REST, authorises the account in the restricted service, mints the token
+  and writes it into the plugin setting, so the worker command the interface
+  shows is complete as it stands.
+
+- **Recovery actions in the interface**: start workers, check for dead workers,
+  release orphaned claims without waiting out a timeout, and pause or resume an
+  individual run.
+
+- **A circuit breaker.** Ten consecutive failures pause a run by themselves. A
+  run whose attempts all fail the same way does not improve by being retried
+  1600 times — it exhausts the queue and leaves nothing to diagnose. The streak
+  is counted over the most recent attempts, so a run that failed early and
+  recovered is not punished for its history, and a paused run hands out
+  nothing: a pause that still gives work away is not a pause.
+
+### Tests
+Six more in `worker_registry_test`: a paused run handing out no work, a failing
+run pausing itself at the limit and not one attempt earlier, a recent success
+breaking the streak, every operational question having a health check, the
+stalled pipeline named as a blocker rather than left to inference, and the
+token created from the plugin without minting a second one.
+
+### Verification
+PHPUnit 461 tests / 2884 assertions, Behat 32 scenarios / 229 steps, phpcs and
+PHPDoc clean, 675 language strings per language. The operations view rendered
+against the live instance with real figures.
+
+---
+
+## [0.6.3] — 2026-09-13 (part 2)
+
+Worker operation: slots, leases, heartbeats and visible failure reasons.
+Addresses the reported issues #13, #16, #17 and #18, and the observable half of
+#15.
+
+### The reported failure
+A site limited to `worker_concurrency = 1` ended up with two attempts claimed
+at once, and nothing in the installation could say that a worker had gone.
+Concurrency that only holds while nobody interrupts anything is not a limit.
+
+### Added
+- **`local_catquizlab_worker`, a worker registry.** Without it a worker exists
+  only as an operating-system process: nothing can say how many are running,
+  whether a slot is already taken, or when one last reported in.
+
+  A **slot** is a concurrency place, so `worker_concurrency = 1` now means one
+  live worker installation-wide rather than one job per process that happens to
+  be started. Claiming a slot is an insert against a unique index, so two
+  simultaneous dispatches cannot both win — the database decides, not a
+  read-then-write in PHP that two processes can interleave. A worker restarting
+  into its own slot is not treated as a collision.
+
+  A **heartbeat** is the difference between slow and gone. A busy worker keeps
+  reporting; a dead one stops. Declaring a live worker crashed is the expensive
+  mistake — its attempt would be played twice — so the timeout is generous.
+
+- **Leases on attempts.** A claim now names its holder and says when it lapses.
+  Recovery reads the lease instead of `timemodified`, which a worker refreshes
+  while it works: a genuinely stuck attempt and a slow one used to look
+  identical. Attempts claimed before leases existed keep the timeout fallback,
+  so none of them is stranded.
+
+- **Failure reasons are kept.** The worker sends its own reason with the
+  completion report, and it is stored on the attempt. A retried attempt used to
+  offer nothing but a rising try count.
+
+- **A worker and queue panel on the landing page**: live workers, crashed
+  workers, the queue split by state, the five most recent failure reasons, and
+  a named warning for the one combination that never resolves itself — attempts
+  waiting with no worker running.
+
+### Fixed
+- **`launch_pool()` started the configured number of workers on every call.** It
+  now starts only workers for slots nobody holds, and takes the slot before
+  starting the process rather than after — starting first leaves a window in
+  which a second dispatch sees the slot free. Workers are launched detached:
+  the blocking `exec()` is why interrupting the caller used to leave a claimed
+  attempt with nobody to finish it.
+- **`pipeline_tick` reaps dead workers before falling back to the timeout.**
+  Reaping hands attempts back with a known reason; the timeout can only guess
+  that something went wrong somewhere.
+
+### Tests
+`worker_registry_test`, 13 tests: one worker per slot, a restart into its own
+slot, free-slot accounting, a silent worker reaped while a reporting one is
+left alone, the attempts of a dead worker released, release scoped to its
+owner, recovery following the lease rather than the clock, the leaseless
+fallback, the recorded failure reason, and a crash told apart from a clean stop.
+
+### Verification
+PHPUnit 455 tests / 2853 assertions, Behat 31 scenarios / 219 steps, 11 worker
+tests, phpcs and PHPDoc clean. The reported case measured directly: with
+`concurrency = 1`, the first dispatch takes slot 1 and a second attempt on the
+same slot returns nothing.
+
+---
+
+## [0.6.3] — 2026-09-13 (part 1)
+
+The engine comes from one coordinated branch again.
+
+### Changed
+- **`fetch-engine.sh` uses `ALiSe-v-1.2.0-legacy` for all three CAT plugins.**
+  Checked rather than assumed: the branch exists in all three repositories, the
+  highest Moodle requirement across them is 2024100700 (so Moodle 4.5 upwards),
+  `local_catquiz`'s declared dependencies on the other two are satisfied within
+  the set, `mod_adaptivequiz` carries its `subplugins.json`, and the branch
+  contains the fixes for catquiz#59, #62 and the #64 stage counts. Verified by
+  installing it and running the suite: all five engine pins pass.
+
+  The `v-3.0` line is unusable here — `mod_adaptivequiz` requires 2025100600
+  there, which only Moodle 5.2 meets, and Moodle aborts the whole installation
+  rather than skipping the one plugin.
+
+### Fixed
+- **Nine tests failed with the engine installed, on a missing `version.php`.**
+  `catquizcentralhub/client` and `/host` are Git submodules; a plain clone
+  leaves them as empty directories, and because `local_catquiz` declares
+  `catquizcentralhub` as a subplugin type, Moodle scans them and fails. Not with
+  a warning — it aborts whatever asked for the plugin list, which is why
+  ordinary tasks and tests died with it.
+
+  `fetch-engine.sh` removes unpopulated submodule directories. They are not
+  needed to drive the engine, and a half-materialised subplugin shell is worse
+  than none. This is also the warning that appeared in the earlier CI logs.
+
+### Verification
+Installed locally on Moodle 4.5 with this branch: upgrade clean, PHPUnit 442
+tests / 2811 assertions, Behat 31 scenarios / 219 steps, phpcs and PHPDoc
+clean, all five engine pins passing, and an end-to-end run provisioning
+`planned=24 questions=24 items=24 params=24 visible=24 failed=0` with a played
+attempt whose trace carries scale abilities, standard errors and the ability
+path.
+
+---
+
+## [0.6.2] — 2026-09-13
+
+CI fix: the engine outgrew the Moodle releases this suite supports.
+
+### Fixed
+- **Every PHPUnit and Behat job failed before a single test ran.**
+  `mod_adaptivequiz` on the `v-3.0` branch now declares
+  `requires = 2025100600`, which only Moodle 5.2 meets. Moodle aborts the whole
+  installation with `pluginrequirementsnotmet`, so the 4.5 and 5.0 jobs died
+  during setup — not on anything this plugin does.
+
+  `fetch-engine.sh` now reads the requirement out of the engine's own
+  `version.php` files and compares it with the release the job is installing.
+  Where the release cannot carry the engine, the directory is left empty and the
+  job proceeds without it: the suite installs stand-alone by design, and its
+  engine-facing tests skip when none is present. The check is made across all
+  the engine's plugins at once, because they depend on each other — installing
+  some of them is not a smaller engine, it is a broken one.
+
+- **Three lifecycle tests assumed an engine.** They called
+  `run_lifecycle::start()`, which the preflight correctly refuses without one —
+  a run queued without an engine would look started and never move. Those three
+  now skip where no engine is installed; the transition tests were rewritten to
+  set up the post-start state directly, so the lifecycle itself stays covered on
+  a site without an engine. Verified both ways by removing the engine and
+  running the suite: 442 tests green with it and without it.
+
+- `phpcs.xml` excludes `.github/`. CI helpers run before Moodle exists and
+  cannot satisfy the `MOODLE_INTERNAL` check the Moodle standard requires of
+  plugin code.
+
+### Verification
+PHPUnit 442 tests with the engine (12 skipped) and without it (11 skipped),
+Behat 31 scenarios / 219 steps, phpcs and PHPDoc clean. `fetch-engine.sh`
+exercised for both `MOODLE_405_STABLE` (engine skipped, with the reason stated)
+and `MOODLE_502_STABLE` (engine placed).
+
+---
+
+## [0.6.1] — 2026-09-13
+
+The web workflow closed end to end, from the reported lifecycle report.
+
+### Fixed
+- **"Choose an experiment course" led to `sectionerror`.** `settings.php`
+  registered `local_catquizlab_settings` while the landing page linked
+  `local_catquizlab` — two literals that had to agree, in two files. Both read
+  `registry::SETTINGS_SECTION` now. It was the one link a fresh installation
+  needs, and it was broken.
+- **An experiment read "Executed" while every run was a draft at 0%.**
+  `create_sweep()` set the status directly. Creating runs is not running them.
+  There are now `EXPANDED`, `RUNNING` and `FAILED` states, and the experiment
+  status is **derived** from its runs rather than stored, so the two can no
+  longer tell different stories.
+- **The web interface had no way to start a run.** Backend and task existed;
+  nothing called them. There are now start actions per run, per experiment
+  ("start all draft runs") and combined ("create sweep and start"). The
+  interface implements no orchestration of its own — it calls
+  `run_lifecycle::start()`, which queues the existing `orchestrate_run` task.
+- **The handover from the last attempt to the result was never closed.** No
+  status moved a run to aggregation, and nothing set it to finished afterwards.
+
+### Added
+- **`run_lifecycle`** — the one place that decides what state a run is in.
+  Before this the same decision was made in the interface, in the worker's claim
+  and complete calls and in the tasks, and they could disagree. The path is
+  `DRAFT → SCHEDULED → READY → RUNNING → AGGREGATING → FINISHED`, with failure
+  reasons recorded in the run manifest rather than only in a log.
+- **`preflight`** — engine, host activity, experiment course, capability and
+  worker are checked before a start, and what is missing is named. A missing
+  worker warns rather than blocks: the run provisions and its attempts wait. A
+  missing course or engine blocks, because a run queued without them looks
+  started and never moves.
+- The results view now says **why** it is empty: "No run has been started yet"
+  plus the run tally, instead of blaming the filter for a run that never ran.
+- `docs/design/issue-status-2026-09-13.md` — every one of the ten open issues
+  checked against the code and the tests, with the places to verify each claim.
+
+### Tests
+- `run_lifecycle_test`, 18 tests: the full path as a status sequence, the
+  aggregation queued exactly once across repeated completion callbacks, a run
+  whose attempts all failed never reaching aggregation, the deleted experiment
+  course, and a regression test that makes the reported state unreachable.
+- Behat: four scenarios covering the settings link without `sectionerror`,
+  "created is not executed", starting drafts from the web, and the results view
+  explaining itself.
+- `phpcs.xml` excludes `.github/`: CI helpers run before Moodle exists and
+  cannot satisfy a `MOODLE_INTERNAL` check meant for plugin code.
+
+### Verification
+PHPUnit 442 tests / 2811 assertions, Behat 31 scenarios / 219 steps, phpcs and
+PHPDoc clean, 618 language strings per language.
+
+---
+
+## [0.6.0] — 2026-09-03
+
+**Beta.** `MATURITY_ALPHA` → `MATURITY_BETA`.
+
+The whole chain has been exercised end to end against a real CAT engine, not
+only against guard paths: a simulated person sits an adaptive test through the
+`mod_adaptivequiz` interface, the trace is collected, and the recovered ability
+is compared with the ground truth that person was generated from. A study of 90
+attempts across three pool variants has been run through it, and all eight tabs
+of the results interface render on it.
+
+What beta means here, stated so nobody has to guess: the function is complete
+and measured; what is missing is field use. Replication counts in a real study
+need to be well above the five used so far — at 30 attempts per cell the
+confidence intervals of the pool variants still overlap almost completely.
+
+### Note on the engine
+Checked at release time: `local_catquiz` `main` is at 2026083025 and does not
+yet carry the fixes for catquiz#59, #62 and the #64 stage counts — the last
+commit there is `fc76efb`. The version-gated pins in
+`tests/engine_defects_test.php` therefore skip against `main` and take effect
+by themselves once the merge lands, without a change here.
+
+### Verification
+PHPUnit 424 tests / 2753 assertions, Behat 27 scenarios / 187 steps, worker
+check and 11 worker tests, phpcs and PHPDoc clean, 600 language strings per
+language, all test classes loading under PHPUnit 11.5, savepoint below the
+version ceiling.
+
+---
+
 ## [0.5.1] — 2026-09-03
 
 CI fix for the engine pins added in 0.5.0.

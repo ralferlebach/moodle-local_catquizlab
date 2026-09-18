@@ -31,12 +31,25 @@
 defined('MOODLE_INTERNAL') || die();
 
 $functions = [
+    'local_catquizlab_live_status' => [
+        'classname'   => 'local_catquizlab\\external\\live_status',
+        'description' => 'Counts and the overall verdict for the overview, small enough to poll.',
+        'type'        => 'read',
+        'ajax'        => true,
+        'capabilities' => 'local/catquizlab:view',
+    ],
     'local_catquizlab_oracle_answer' => [
         'classname'   => 'local_catquizlab\\external\\oracle_answer',
         'methodname'  => 'execute',
         'description' => 'Return the answer a simulated person gives to a presented item.',
         'type'        => 'read',
         'ajax'        => false,
+        'capabilities' => 'local/catquizlab:worker',
+    ],
+    'local_catquizlab_worker_heartbeat' => [
+        'classname'    => 'local_catquizlab\\external\\worker_heartbeat',
+        'description'  => 'A worker reporting that it is alive and what it is playing.',
+        'type'         => 'write',
         'capabilities' => 'local/catquizlab:worker',
     ],
     'local_catquizlab_job_claim' => [
@@ -80,6 +93,12 @@ $services = [
             'local_catquizlab_oracle_answer',
             'local_catquizlab_job_claim',
             'local_catquizlab_job_complete',
+            // Declared as a function since 0.6.14 and never added to the
+            // service, so every heartbeat a worker sent was refused. The
+            // worker's own error handling swallowed it, so nothing looked
+            // wrong: workers simply never reported, and their runtime and
+            // liveness were read from the registry row the launcher wrote.
+            'local_catquizlab_worker_heartbeat',
         ],
         'restrictedusers' => 1,
         'enabled'         => 0,

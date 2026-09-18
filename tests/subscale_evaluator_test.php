@@ -94,7 +94,8 @@ final class subscale_evaluator_test extends \advanced_testcase {
             $DB->insert_record('local_catquizlab_scalemap', (object) [
                 'runid' => $run->id, 'catscaleid' => $catscaleid, 'parentcatscaleid' => 0, 'contextid' => 10,
                 'level' => scale_provisioner::LEVEL_SUBSCALE, 'categoryindex' => (int) $c, 'subscaleindex' => (int) $s,
-                'name' => $key, 'timecreated' => $now, 'timemodified' => $now,
+                'name' => $key, 'nodekey' => 'c' . (int) $c . 's' . (int) $s,
+            'timecreated' => $now, 'timemodified' => $now,
             ]);
         }
 

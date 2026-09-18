@@ -45,6 +45,20 @@ class orchestrate_run extends \core\task\adhoc_task {
      * @return void
      */
     public function execute(): void {
+        // Announce which task this is, and continue the id of the click that
+        // queued it: a failure inside a task otherwise reads as a failure from
+        // nowhere.
+        // Which task row this is, and what it has been through: a failure on a
+        // third attempt waiting out an eight-hour delay is a different
+        // situation from a first, and the log said the same about both.
+        \local_catquizlab\local\debug_trace::enter_task(
+            '\\local_catquizlab\\task\\orchestrate_run',
+            (string) ($this->get_custom_data()->correlationid ?? ''),
+            (int) $this->get_id(),
+            (int) $this->get_fail_delay(),
+            (int) $this->get_attempts_available()
+        );
+
         $data = $this->get_custom_data();
         $runid = (int) ($data->runid ?? 0);
         if ($runid <= 0) {
@@ -53,6 +67,14 @@ class orchestrate_run extends \core\task\adhoc_task {
         $options = isset($data->options) ? (array) $data->options : [];
 
         $result = run_orchestrator::setup($runid, $options);
+
+        // One place decides what the run's state is now; the task only reports
+        // what happened.
+        \local_catquizlab\local\run_lifecycle::provisioned(
+            $runid,
+            !empty($result['ok']),
+            (string) ($result['reason'] ?? '')
+        );
         $status = $result['ok'] ? 'ok' : ('skipped: ' . ($result['reason'] ?? 'unknown'));
         mtrace("local_catquizlab: run {$runid} setup {$status}.");
     }

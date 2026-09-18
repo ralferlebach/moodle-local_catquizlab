@@ -43,7 +43,17 @@ final class run_orchestrator_test extends \advanced_testcase {
             // The container comes before the test: an adaptivequiz needs a
             // course and a section to be created in, and the old order asked
             // for the test while the run still had neither.
-            ['scales', 'materialise', 'container', 'people', 'test', 'attempts'],
+            //
+            // Readiness comes before the attempts, not after the whole run:
+            // checked afterwards, a run that cannot start has already had its
+            // queue built, and a failed run with 150 claimable attempts is
+            // worse than no check at all.
+            //
+            // Access comes between readiness and the attempts: a run whose
+            // people cannot open the activity should not have attempts made for
+            // them, and the failure must not arrive later disguised as a
+            // missing question.
+            ['scales', 'materialise', 'container', 'people', 'test', 'readiness', 'access', 'attempts'],
             run_orchestrator::plan_stages()
         );
     }

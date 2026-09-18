@@ -38,6 +38,19 @@ use local_catquizlab\local\preset_library;
 $id = optional_param('id', 0, PARAM_INT);
 $action = optional_param('action', '', PARAM_ALPHA);
 
+// Recorded where the action is known and before it is carried out, so a
+// defect reads as a sequence rather than as fragments in five logs.
+if ($action !== '') {
+    \local_catquizlab\local\debug_trace::record(
+        \local_catquizlab\local\debug_trace::UI,
+        $action,
+        array_diff_key($_REQUEST, array_flip(['sesskey'])),
+        'ok',
+        [],
+        (int) ($id ?? 0)
+    );
+}
+
 admin_externalpage_setup('local_catquizlab_manage');
 
 $context = context_system::instance();
@@ -45,6 +58,100 @@ $component = 'local_catquizlab';
 $pageurl = new moodle_url('/local/catquizlab/experiment.php', $id ? ['id' => $id] : []);
 $manageurl = new moodle_url('/local/catquizlab/index.php');
 $PAGE->set_url($pageurl);
+
+// Deleting an experiment outright, with a preview of what goes. Irreversible
+// actions should be able to say what they will do in terms of the things they
+// take — "4 runs, 150 attempts, 96 questions" rather than "this cannot be
+// undone".
+if ($action === 'delete' && $id > 0) {
+    require_sesskey();
+    // Its own capability: someone who may start runs and stop workers can do
+    // their whole job without ever being able to destroy a measurement.
+    require_capability('local/catquizlab:purge', $context);
+
+    $deep = optional_param('deep', 1, PARAM_BOOL);
+    $preview = \local_catquizlab\local\purger::preview_experiment($id, (bool) $deep);
+    $typed = optional_param('confirmname', '', PARAM_TEXT);
+
+    // Typing the name is the confirmation. A button that only needs a click is
+    // a button that gets clicked, and this one destroys measurements.
+    if ($typed !== '' && trim($typed) !== trim($preview['name'])) {
+        redirect(
+            $manageurl,
+            get_string('purge:namemismatch', $component),
+            null,
+            \core\output\notification::NOTIFY_WARNING
+        );
+    }
+
+    if (trim($typed) !== trim($preview['name'])) {
+        $lines = [];
+        foreach ($preview['counts'] as $label => $count) {
+            $lines[] = $count . ' ' . get_string('purge:count' . $label, $component);
+        }
+
+        $message = html_writer::tag('p', get_string('purge:typename', $component, (object) [
+            'counts' => implode(', ', $lines) ?: '-',
+            'name'   => s($preview['name']),
+        ]));
+
+        foreach ($preview['blockers'] as $blocker) {
+            $message .= html_writer::tag('p', $blocker, ['class' => 'text-danger']);
+        }
+
+        echo $OUTPUT->header();
+        echo \local_catquizlab\output\shell::render('plan', $id);
+        echo $OUTPUT->notification($message, \core\output\notification::NOTIFY_WARNING);
+
+        echo html_writer::start_tag('form', [
+            'method' => 'post',
+            'action' => (new moodle_url('/local/catquizlab/experiment.php'))->out(false),
+        ]);
+        echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'id', 'value' => $id]);
+        echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'action', 'value' => 'delete']);
+        echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'sesskey', 'value' => sesskey()]);
+        echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'deep', 'value' => (int) $deep]);
+        echo html_writer::tag('label', get_string('purge:confirmname', $component), [
+            'for' => 'catquizlab-confirmname',
+        ]);
+        echo html_writer::empty_tag('input', [
+            'type' => 'text', 'name' => 'confirmname', 'id' => 'catquizlab-confirmname',
+            'class' => 'form-control mb-2', 'autocomplete' => 'off',
+        ]);
+        echo html_writer::empty_tag('input', [
+            'type' => 'submit', 'class' => 'btn btn-danger',
+            'value' => get_string('purge:deleteexperiment', $component),
+        ]);
+        echo html_writer::link($manageurl, get_string('cancel'), ['class' => 'btn btn-secondary ml-2']);
+        echo html_writer::end_tag('form');
+        echo $OUTPUT->footer();
+        exit;
+    }
+
+    $result = \local_catquizlab\local\purger::delete_experiment(
+        $id,
+        (bool) $deep,
+        (bool) optional_param('force', 0, PARAM_BOOL)
+    );
+
+    if (!$result['ok']) {
+        redirect(
+            $manageurl,
+            $result['reason'] === 'workers-stopping'
+                ? get_string('purge:workerstopping', $component)
+                : get_string('purge:refused', $component, $result['reason']),
+            null,
+            \core\output\notification::NOTIFY_WARNING
+        );
+    }
+
+    $parts = [];
+    foreach ($result['removed'] as $label => $count) {
+        $parts[] = $count . ' ' . $label;
+    }
+
+    redirect($manageurl, get_string('purge:done', $component, implode(', ', $parts) ?: '-'));
+}
 
 // Reading the editor needs only view rights; every state change below asks for
 // the capability that belongs to that specific action.
@@ -92,6 +199,23 @@ if ($action === 'duplicate' && $id > 0) {
     );
 }
 
+if ($action === 'startdrafts' && $id > 0) {
+    require_sesskey();
+    require_capability('local/catquizlab:execute', $context);
+
+    $started = \local_catquizlab\local\run_lifecycle::start_drafts($id, [], $context);
+    if ($started['started'] === 0) {
+        redirect(
+            $manageurl,
+            get_string('run:startblocked', $component, $started['reason']),
+            null,
+            \core\output\notification::NOTIFY_WARNING
+        );
+    }
+
+    redirect($manageurl, get_string('run:started', $component, $started['started']));
+}
+
 if ($action === 'archive' && $id > 0) {
     require_sesskey();
     require_capability('local/catquizlab:edit', $context);
@@ -120,11 +244,35 @@ if ($action === 'delete' && $id > 0) {
     }
 }
 
-if ($action === 'createsweep' && $id > 0) {
+if (($action === 'createsweep' || $action === 'createsweepandstart') && $id > 0) {
     require_sesskey();
     require_capability('local/catquizlab:execute', $context);
     try {
         $result = experiment_service::create_sweep($id);
+
+        // Creating runs and running them are different things, and the
+        // interface now lets the user say which one they meant instead of
+        // labelling the first as though it were the second.
+        if ($action === 'createsweepandstart') {
+            $started = \local_catquizlab\local\run_lifecycle::start_drafts($id, [], $context);
+            if ($started['started'] === 0) {
+                redirect(
+                    $manageurl,
+                    get_string('run:startblocked', $component, $started['reason']),
+                    null,
+                    \core\output\notification::NOTIFY_WARNING
+                );
+            }
+
+            redirect(
+                $manageurl,
+                get_string('notice:sweepcreated', $component, $result['created'])
+                    . ' ' . get_string('run:started', $component, $started['started']),
+                null,
+                \core\output\notification::NOTIFY_SUCCESS
+            );
+        }
+
         redirect(
             $manageurl,
             get_string('notice:sweepcreated', $component, $result['created']),
@@ -187,6 +335,21 @@ if ($data = $form->get_data()) {
 }
 
 echo $OUTPUT->header();
+
+// The same frame as every other CatQuizLab page: opening a run used to drop
+// the reader out of the process they were in the middle of.
+// The experiment being edited is the context, not whatever the URL carried:
+// opening an editor is choosing an experiment.
+echo \local_catquizlab\output\shell::render('plan', $id > 0 ? $id : optional_param('experimentid', 0, PARAM_INT));
+
+// Which of the eight decisions have been made, beside the form that asks for
+// them. The form asks for everything at once and answers nothing about where
+// somebody stands in it.
+echo $OUTPUT->render_from_template(
+    'local_catquizlab/plansteps',
+    \local_catquizlab\local\plan_steps::state($id)
+);
+
 echo $OUTPUT->heading($id > 0
     ? get_string('heading:editexperiment', $component)
     : get_string('heading:newexperiment', $component));
@@ -237,6 +400,17 @@ if ($preview !== null && $preview['runs'] > 0) {
         'attempts'     => $preview['attempts'],
         'large'        => $preview['large'],
         'cansweep'     => has_capability('local/catquizlab:execute', $context),
+        // What would stop a start, shown next to the button rather than after
+        // pressing it. A run queued without an engine or a course looks started
+        // and never moves.
+        'preflightblockers' => (static function () use ($context): ?array {
+            $check = \local_catquizlab\local\preflight::check($context);
+            if ($check['blockers'] === []) {
+                return null;
+            }
+
+            return ['items' => array_values($check['blockers'])];
+        })(),
         'sesskey'      => sesskey(),
         'experimentid' => $id,
         'createurl'    => (new moodle_url('/local/catquizlab/experiment.php'))->out(false),

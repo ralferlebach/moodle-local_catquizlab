@@ -65,7 +65,6 @@ class job_claim extends external_api {
         $params = self::validate_parameters(self::execute_parameters(), [
             'workerid' => $workerid,
         ]);
-        unset($params);
 
         $context = \context_system::instance();
         self::validate_context($context);
@@ -85,6 +84,10 @@ class job_claim extends external_api {
         // cannot pick up the same one.
         $transaction = $DB->start_delegated_transaction();
 
+        // Attempts of paused runs are skipped rather than filtered out
+        // afterwards: a pause that still hands work out is not a pause, and
+        // checking here is what makes it one. The candidate window is small
+        // because runs are paused rarely.
         $queued = $DB->get_records_select(
             'local_catquizlab_attempt',
             'status = :status AND nextruntime <= :now',
@@ -92,20 +95,55 @@ class job_claim extends external_api {
             'nextruntime ASC, timecreated ASC, id ASC',
             '*',
             0,
-            1
+            50
         );
-        $attempt = reset($queued);
+
+        $attempt = null;
+        foreach ($queued as $candidate) {
+            $runid = (int) $candidate->runid;
+
+            // Two conditions, and the run status is the one that matters most:
+            // a failed or cancelled run must never hand out work again, however
+            // its attempts got into the queue.
+            if (\local_catquizlab\local\run_lifecycle::is_paused($runid)) {
+                continue;
+            }
+            if (!\local_catquizlab\local\run_lifecycle::is_runnable($runid)) {
+                continue;
+            }
+
+            $attempt = $candidate;
+            break;
+        }
         if (!$attempt) {
             $transaction->allow_commit();
+
             return $none;
         }
 
         $DB->update_record('local_catquizlab_attempt', (object) [
             'id'           => $attempt->id,
             'status'       => attempt_scheduler::STATUS_RUNNING,
+            // The claim names its holder and says when it lapses. An
+            // unattributed claim can only be recovered by a timeout that
+            // guesses whether the worker is slow or gone.
+            'leaseowner'   => $params['workerid'],
+            'leaseexpires' => time() + \local_catquizlab\local\worker_registry::HEARTBEAT_TIMEOUT,
             'tries'        => (int) $attempt->tries + 1,
             'timemodified' => time(),
         ]);
+
+        // The documented lifecycle is READY → first attempt claimed → RUNNING,
+        // and this is the moment it happens. Inside the transaction with the
+        // claim: a run whose attempt is being played must not be able to look
+        // READY to anything that reads it in between, and a claim that is
+        // rolled back must not leave the run marked as running.
+        \local_catquizlab\local\run_lifecycle::attempt_claimed((int) $attempt->runid);
+
+        // Claiming work is a sign of life, so the registry hears about it at
+        // the same time rather than waiting for the worker's own heartbeat.
+        \local_catquizlab\local\worker_registry::heartbeat($params['workerid']);
+
         $run = $DB->get_record('local_catquizlab_run', ['id' => $attempt->runid]);
         $userid = (int) $DB->get_field('local_catquizlab_person', 'moodleuserid', ['id' => $attempt->personid]);
         // The username travels with the job. The worker used to derive it as
