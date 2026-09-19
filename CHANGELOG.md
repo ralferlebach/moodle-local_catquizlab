@@ -6,6 +6,49 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.6.65] — 2026-09-18
+
+Issue #85: everyday operation and technical recovery, kept apart.
+
+### Five equal buttons asked the reader to diagnose
+The progress step offered *start workers*, *reap*, *release orphans*, *kill
+tasks* and *kill pipeline* side by side, all the time. That asks somebody to
+know that a lease is not a claim, that reaping is not releasing, and which of
+the five applies today — before they can act at all. Running an experiment
+should not require learning the plumbing.
+
+### One problem, one action
+`recovery_advisor::advise()` looks at the installation and names the first thing
+standing in the way, in the words of the thing that is not working:
+
+    Run #195 was stopped after repeated failures. Nothing else will run
+    for this experiment until it is dealt with.
+    [ Show the error and the log ]
+
+Others it recognises: sittings stuck because a process took them and stopped
+reporting; sittings waiting with no process running; Moodle's task runner not
+having run — that one recommends setting up cron rather than starting a worker
+by hand, because starting one fixes this minute and not the next.
+
+Ordered deliberately: a held run comes before a worker problem, since
+everything else is downstream of it and restarting a worker would not help.
+
+Nothing here is new capability. Every action it recommends already existed; what
+it adds is the judgement about which one applies, which was being left to the
+reader.
+
+### Folded
+The recovery section is a `<details>`, closed on an ordinary day and opened by
+the page when the advisor has something to say. The five technical actions live
+behind a second fold inside it, for whoever actually wants them. Measured: four
+technical actions present, all behind the folds, one recommended action visible.
+
+### Verification
+PHPUnit 679 tests / 3599 assertions, Behat 32 scenarios / 235 steps, phpcs with
+the Moodle standard clean, PHPDoc clean.
+
+---
+
 ## [0.6.64] — 2026-09-18
 
 Issue #78: live progress at experiment, run and sitting level.

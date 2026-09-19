@@ -438,11 +438,47 @@
 {{/debug.enabled}}
 
 {{#canexecute}}
-    <div class="card mb-3">
+    {{!
+        Folded by default, and opened by the page only when something is
+        actually wrong. Five recovery buttons side by side ask a person to
+        diagnose the problem before they can act on it — to know that a lease is
+        not a claim and which of the five applies today. Running an experiment
+        should not require learning the plumbing.
+    }}
+    <details class="card mb-3" {{#recovery}}open{{/recovery}}>
+        <summary class="card-body pb-0" style="cursor: pointer;">
+            <span class="h5">{{#str}}recovery:heading, local_catquizlab{{/str}}</span>
+        </summary>
         <div class="card-body">
-            <h3 class="h5">{{#str}}progress:recovery, local_catquizlab{{/str}}</h3>
-            <p class="small text-muted">{{#str}}progress:recoveryhint, local_catquizlab{{/str}}</p>
-            {{#str}}purge:explain, local_catquizlab{{/str}}
+            {{#recovery}}
+                {{!
+                    One problem, in the words of the thing that is not working,
+                    and one thing to do about it.
+                }}
+                <div class="alert alert-warning" role="status">
+                    <p class="mb-2">{{problem}}</p>
+                    {{#command}}
+                        <form method="post" action="{{url}}" class="d-inline">
+                            <input type="hidden" name="sesskey" value="{{sesskey}}">
+                            <input type="hidden" name="action" value="{{command}}">
+                            <button type="submit" class="btn btn-sm btn-primary">{{label}}</button>
+                        </form>
+                    {{/command}}
+                    {{^command}}
+                        <a href="{{url}}" class="btn btn-sm btn-primary">{{label}}</a>
+                    {{/command}}
+                </div>
+            {{/recovery}}
+            {{^recovery}}
+                <p class="small text-muted">{{#str}}recovery:allwell, local_catquizlab{{/str}}</p>
+            {{/recovery}}
+
+            <details class="mt-2">
+                <summary class="small text-muted" style="cursor: pointer;">
+                    {{#str}}recovery:moreoptions, local_catquizlab{{/str}}
+                </summary>
+                <p class="small text-muted mt-2">{{#str}}progress:recoveryhint, local_catquizlab{{/str}}</p>
+                {{#str}}purge:explain, local_catquizlab{{/str}}
             <div class="mt-2">
                 <form method="post" action="{{formurl}}" class="d-inline">
                     <input type="hidden" name="sesskey" value="{{sesskey}}">
@@ -480,6 +516,8 @@
                     </button>
                 </form>
             </div>
+                </div>
+            </details>
         </div>
-    </div>
+    </details>
 {{/canexecute}}

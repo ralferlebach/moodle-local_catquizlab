@@ -120,6 +120,9 @@ class progress_view {
             // The same snapshot the poll serves, so the first paint and every
             // update after it come from one place.
             'progress'    => $experimentid > 0 ? live_progress::snapshot($experimentid) : null,
+            // Null when nothing is wrong, which is what keeps the recovery
+            // section folded and out of a normal day's way.
+            'recovery'    => recovery_advisor::advise($experimentid),
             'execqueue'   => ['hasany' => execution_queue::entries() !== [], 'rows' => execution_queue::entries()],
             'debug'       => [
                 'enabled' => $candebug && debug_trace::enabled(),
