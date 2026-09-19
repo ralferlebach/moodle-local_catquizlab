@@ -14,10 +14,10 @@ on:
         description: 'Simulated people'
         required: false
         default: '5'
-      keepvideo:
-        description: 'Keep video and trace for passing runs too'
-        required: false
-        default: 'true'
+        # There is deliberately no switch for keeping the video: it is kept for
+        # every run. A recording that only exists after a failure cannot answer
+        # "does the interface still work", which is the question somebody starts
+        # this job to ask.
 
 permissions:
   contents: read
@@ -26,7 +26,6 @@ jobs:
   ui-e2e:
     name: "Interface end-to-end (Playwright)"
     runs-on: ubuntu-24.04
-    if: github.event_name == 'workflow_dispatch' && inputs.run_e2e
     services:
       postgres:
         image: postgres:16

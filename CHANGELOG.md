@@ -6,6 +6,32 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.6.66] — 2026-09-18
+
+The interface end-to-end job skipped itself.
+
+### A condition for an input that does not exist
+    if: github.event_name == 'workflow_dispatch' && inputs.run_e2e
+
+I built this workflow from the worker job's scaffolding, which is how the
+installation steps stay identical between the two — and the condition came with
+it. The worker workflow has a `run_e2e` input; this one does not, so
+`inputs.run_e2e` was always empty and the job skipped every time it was started.
+
+It runs only on `workflow_dispatch`, so starting it is the consent the condition
+was there to check. Removed rather than reproduced.
+
+### Two inputs that did nothing
+`persons` was offered on the form and never read by the test, which filled in
+five whatever the person had chosen. It reaches the form now.
+
+`keepvideo` controlled nothing and is gone. Video and trace are kept for every
+run, with a comment saying why there is no switch: a recording that only exists
+after a failure cannot answer "does the interface still work", which is the
+question somebody starts this job to ask.
+
+---
+
 ## [0.6.65] — 2026-09-18
 
 Issue #85: everyday operation and technical recovery, kept apart.

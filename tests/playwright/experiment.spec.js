@@ -31,6 +31,11 @@ const PASSWORD = process.env.MOODLE_ADMIN_PASSWORD || 'Admin#12345';
 // real browser against a real Moodle.
 const RUN_TIMEOUT = 20 * 60 * 1000;
 
+// How many simulated people. The workflow offers this as an input and it was
+// never read here, so the number on the form was always five whatever the
+// person running the job had chosen.
+const PERSONS = process.env.PERSONS || '5';
+
 /**
  * Sign in as the administrator.
  *
@@ -162,8 +167,8 @@ test.describe('CatQuizLab, through the interface', () => {
         await page.fill('#id_name', name);
         await page.fill('#id_replications', '1');
 
-        // Five people, so the profiles actually differ between sittings.
-        await page.fill('#id_personcount', '5');
+        // Several people, so the profiles actually differ between sittings.
+        await page.fill('#id_personcount', PERSONS);
 
         // A pool with room: the selection takes the item that suits the current
         // estimate, so a pool sized to the answer count runs out of suitable
