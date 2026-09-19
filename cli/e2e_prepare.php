@@ -208,6 +208,14 @@ function local_catquizlab_e2e_prepare(string $name, int $persons): int {
         return 1;
     }
 
+    // Ready, or the queue holds everything back. Sittings of a run that is only
+    // scheduled are counted as blocked, not claimable, so the worker connected,
+    // authenticated, asked for work and was correctly told there was none —
+    // which reads as an empty queue rather than as a run that was never let go.
+    if ((int) $DB->get_field('local_catquizlab_run', 'status', ['id' => $runid]) !== registry::STATUS_READY) {
+        $DB->set_field('local_catquizlab_run', 'status', registry::STATUS_READY, ['id' => $runid]);
+    }
+
     $token = local_catquizlab_e2e_token();
     if ($token === null) {
         cli_writeln('setup_error=no-worker-token');
@@ -275,6 +283,29 @@ function local_catquizlab_e2e_token(): ?string {
         $user = create_user_record($username, 'Wrk-' . bin2hex(random_bytes(8)) . '!aA1', 'manual');
     }
 
+    // A name and an address, or Moodle calls the account "not fully set up" and
+    // refuses every web service call it makes — which the service layer reports
+    // as an access control exception, so it reads as a missing permission and
+    // sends anybody debugging it to the capabilities and the service list.
+    //
+    // It never showed before because the worker's only heartbeat was inside an
+    // attempt, wrapped in error handling that swallowed it.
+    $incomplete = trim((string) $user->firstname) === ''
+        || trim((string) $user->lastname) === ''
+        || trim((string) $user->email) === '';
+
+    if ($incomplete) {
+        $DB->update_record('user', (object) [
+            'id'        => $user->id,
+            'firstname' => 'CATLab',
+            'lastname'  => 'Worker',
+            'email'     => $username . '@invalid.example',
+            'confirmed' => 1,
+            'policyagreed' => 1,
+        ]);
+        $user = $DB->get_record('user', ['id' => $user->id]);
+    }
+
     // The worker capability is the only privilege this account needs.
     $context = context_system::instance();
     $shortname = 'catlabworker' . $user->id;
@@ -292,6 +323,13 @@ function local_catquizlab_e2e_token(): ?string {
     set_role_contextlevels($roleid, [CONTEXT_SYSTEM]);
     assign_capability('local/catquizlab:worker', CAP_ALLOW, $roleid, $context->id, true);
     assign_capability('moodle/webservice:createtoken', CAP_ALLOW, $roleid, $context->id, true);
+
+    // Permission to speak the protocol at all. Without it every call is
+    // refused before the function is even looked at — which Moodle reports as
+    // "Access control exception", the same words it uses for a missing function
+    // capability, so the search goes to the service list and the capabilities
+    // of the plugin and finds nothing wrong with either.
+    assign_capability('webservice/rest:use', CAP_ALLOW, $roleid, $context->id, true);
     role_assign($roleid, $user->id, $context->id);
 
     // Same for the service membership: a second row is a duplicate, not a

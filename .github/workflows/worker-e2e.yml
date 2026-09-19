@@ -33,7 +33,10 @@ on:
       run_e2e:
         description: 'Also run the end-to-end job (needs the CAT engine)'
         type: boolean
-        default: false
+        # Ticked by default: somebody starting this by hand almost always wants
+        # the end-to-end run, and having to remember the box means the run that
+        # would have caught something is the one that skipped it.
+        default: true
         required: false
 
 jobs:

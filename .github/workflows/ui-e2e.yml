@@ -19,6 +19,11 @@ on:
         # "does the interface still work", which is the question somebody starts
         # this job to ask.
 
+env:
+  # Used by the installer and by the test. Written once so they cannot drift.
+  CATLAB_ADMIN_USER: admin
+  CATLAB_ADMIN_PASSWORD: 'Admin123!'
+
 permissions:
   contents: read
 
@@ -98,7 +103,8 @@ jobs:
         working-directory: moodle
         run: |
           php admin/cli/install_database.php --agree-license \
-              --adminpass='Admin123!' --adminemail=admin@example.com \
+              --adminuser="$CATLAB_ADMIN_USER" \
+              --adminpass="$CATLAB_ADMIN_PASSWORD" --adminemail=admin@example.com \
               --fullname="CATLab E2E" --shortname="CATLabE2E"
 
       # Everything the worker needs is prepared by the plugin's own CLI rather
@@ -145,8 +151,8 @@ jobs:
         working-directory: moodle/local/catquizlab/tests/playwright
         env:
           MOODLE_URL: http://127.0.0.1:8000
-          MOODLE_ADMIN: admin
-          MOODLE_ADMIN_PASSWORD: 'Admin#12345'
+          MOODLE_ADMIN: ${{ env.CATLAB_ADMIN_USER }}
+          MOODLE_ADMIN_PASSWORD: ${{ env.CATLAB_ADMIN_PASSWORD }}
           PERSONS: ${{ github.event.inputs.persons || '5' }}
         run: npx playwright test --reporter=list,html,json
 

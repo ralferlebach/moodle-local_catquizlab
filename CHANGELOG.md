@@ -6,6 +6,67 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.6.67] — 2026-09-19
+
+Both end-to-end jobs, run locally until they passed.
+
+### The interface run: two passwords in one file
+    Sign-in failed for admin: Invalid login, please try again
+
+The workflow installed Moodle with `Admin123!` and told the test to sign in with
+`Admin#12345`. Two literals in one file drift apart the moment either is
+touched, and these already had. There is one now, named in `env:` and used by
+both the installer and the test.
+
+Worth noting that the failure said what it was. The sign-in check added in
+0.6.61 turned this from "the plugin's page does not contain the words it should"
+— which sends somebody looking at the plugin — into "the sign-in failed", which
+is where the problem actually was.
+
+Run locally afterwards: **1 passed (2.6m)**.
+
+### The worker run: four faults, one behind the other
+Reproduced locally by running the workflow's own steps in order, which is the
+only way each of these became visible — every one of them was hidden behind the
+one before it.
+
+**The service account was incomplete.** `create_user_record()` makes an account
+with no name and no address, which Moodle calls "not fully set up" and for which
+it refuses every web service call — reported as `Access control exception`, the
+same words it uses for a missing capability. So the search went to the service
+list and the plugin's capabilities and found nothing wrong with either. It never
+showed before because the worker's only heartbeat was inside an attempt, wrapped
+in error handling that swallowed it.
+
+**`webservice/rest:use` was never granted.** Without it the account may not speak
+the protocol at all, and every call is refused before the function is looked at.
+Proved by calling `job_claim` — a function nobody had touched — over HTTP and
+getting the identical message.
+
+**The run stayed SCHEDULED.** Attempts of a run that is only scheduled count as
+blocked rather than claimable, so the worker connected, authenticated, asked for
+work and was correctly told there was none. That reads as an empty queue rather
+than as a run nobody released.
+
+**And a real one, found on the way:** `job_claim` fetched fifty candidate
+attempts and then skipped the unusable ones. That works while unusable ones are
+rare; on an installation with a few failed runs behind it, their attempts fill
+the window and a perfectly good new run is never reached. The worker reports an
+empty queue — true of what it was shown, false of the installation. Runs that
+cannot hand out work are excluded in the query now.
+
+### The end-to-end box is ticked by default
+Somebody starting the worker workflow by hand almost always wants the end-to-end
+job. Having to remember the box means the run that would have caught something
+is the one that skipped it.
+
+### Verification
+PHPUnit 679 tests / 3599 assertions, Behat 32 scenarios / 235 steps, phpcs with
+the Moodle standard clean, PHPDoc clean, both workflows parse, and the interface
+run passes locally.
+
+---
+
 ## [0.6.66] — 2026-09-18
 
 The interface end-to-end job skipped itself.

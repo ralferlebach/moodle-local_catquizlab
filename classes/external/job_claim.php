@@ -84,14 +84,26 @@ class job_claim extends external_api {
         // cannot pick up the same one.
         $transaction = $DB->start_delegated_transaction();
 
-        // Attempts of paused runs are skipped rather than filtered out
-        // afterwards: a pause that still hands work out is not a pause, and
-        // checking here is what makes it one. The candidate window is small
-        // because runs are paused rarely.
+        // Runs that cannot hand out work are excluded in the query, not after
+        // it. Fetching fifty candidates and then skipping the unusable ones
+        // works only while the unusable ones are rare: on an installation with
+        // a few failed runs behind it, fifty attempts of dead runs fill the
+        // window and a perfectly good new run is never reached. The worker then
+        // reports an empty queue, which is true of what it was shown and false
+        // of the installation.
+        //
+        // A pause is still checked below, because it can change between this
+        // query and the claim.
         $queued = $DB->get_records_select(
             'local_catquizlab_attempt',
-            'status = :status AND nextruntime <= :now',
-            ['status' => attempt_scheduler::STATUS_QUEUED, 'now' => time()],
+            'status = :status AND nextruntime <= :now
+               AND runid IN (SELECT id FROM {local_catquizlab_run} WHERE status IN (:ready, :running))',
+            [
+                'status'  => attempt_scheduler::STATUS_QUEUED,
+                'now'     => time(),
+                'ready'   => \local_catquizlab\local\registry::STATUS_READY,
+                'running' => \local_catquizlab\local\registry::STATUS_RUNNING,
+            ],
             'nextruntime ASC, timecreated ASC, id ASC',
             '*',
             0,
