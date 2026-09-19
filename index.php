@@ -366,6 +366,7 @@ if ($tab === 'experiments') {
     // watching it.
     $PAGE->requires->js_call_amd('local_catquizlab/livestatus', 'init', [
         \local_catquizlab\external\live_status::current_shape(),
+        optional_param('experimentid', 0, PARAM_INT),
     ]);
 }
 

@@ -116,6 +116,41 @@ class status_report {
         }
 
         if ($status === registry::STATUS_FAILED) {
+            // Held by the breaker rather than simply broken: the difference
+            // matters, because one of them has sittings waiting behind it and a
+            // specific thing to fix.
+            $streak = circuit_breaker::failure_streak((int) $run->id);
+
+            if ($streak['count'] >= circuit_breaker::THRESHOLD) {
+                $causes = circuit_breaker::causes((int) $run->id);
+                $top = $causes[0] ?? ['reason' => '', 'count' => 0];
+
+                return self::card(
+                    self::BAD,
+                    get_string('circuit:autopaused', $component),
+                    get_string('circuit:cause', $component, (object) [
+                        'reason' => $top['reason'],
+                        'count'  => $top['count'],
+                    ]),
+                    [
+                        // Read first. "Clear the errors and continue" beside it
+                        // would be the easier button, and pressing it without
+                        // looking produces the same ten failures again.
+                        'label'     => get_string('circuit:showdetail', $component),
+                        'url'       => (new \moodle_url('/local/catquizlab/logs.php', [
+                            'runid' => (int) $run->id,
+                        ]))->out(false),
+                        'secondary' => [
+                            'label'   => get_string('circuit:resetcontinue', $component),
+                            'url'     => (new \moodle_url('/local/catquizlab/runs.php'))->out(false),
+                            'command' => 'resetcircuit',
+                            'runid'   => (int) $run->id,
+                            'sesskey' => sesskey(),
+                        ],
+                    ]
+                );
+            }
+
             $failure = run_lifecycle::failure_details($runid);
 
             return self::card(
@@ -161,6 +196,24 @@ class status_report {
                 return self::card(
                     self::GOOD,
                     get_string('report:runrunning', $component),
+                    get_string('report:progress', $component, (object) [
+                        'done'  => $counts['collected'],
+                        'total' => $counts['total'],
+                    ]),
+                    null
+                );
+            }
+
+            // A worker that has just rotated out leaves a moment with nothing
+            // in flight. That is planned replacement, not a stall, and calling
+            // it "waiting for a worker" would have somebody investigating a
+            // resource setting working exactly as configured.
+            $rotating = worker_registry::summary()['starting'] > 0;
+
+            if ($rotating) {
+                return self::card(
+                    self::GOOD,
+                    get_string('report:runrotating', $component),
                     get_string('report:progress', $component, (object) [
                         'done'  => $counts['collected'],
                         'total' => $counts['total'],

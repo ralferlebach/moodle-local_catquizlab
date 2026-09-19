@@ -6,6 +6,330 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.6.65] — 2026-09-18
+
+Issue #85: everyday operation and technical recovery, kept apart.
+
+### Five equal buttons asked the reader to diagnose
+The progress step offered *start workers*, *reap*, *release orphans*, *kill
+tasks* and *kill pipeline* side by side, all the time. That asks somebody to
+know that a lease is not a claim, that reaping is not releasing, and which of
+the five applies today — before they can act at all. Running an experiment
+should not require learning the plumbing.
+
+### One problem, one action
+`recovery_advisor::advise()` looks at the installation and names the first thing
+standing in the way, in the words of the thing that is not working:
+
+    Run #195 was stopped after repeated failures. Nothing else will run
+    for this experiment until it is dealt with.
+    [ Show the error and the log ]
+
+Others it recognises: sittings stuck because a process took them and stopped
+reporting; sittings waiting with no process running; Moodle's task runner not
+having run — that one recommends setting up cron rather than starting a worker
+by hand, because starting one fixes this minute and not the next.
+
+Ordered deliberately: a held run comes before a worker problem, since
+everything else is downstream of it and restarting a worker would not help.
+
+Nothing here is new capability. Every action it recommends already existed; what
+it adds is the judgement about which one applies, which was being left to the
+reader.
+
+### Folded
+The recovery section is a `<details>`, closed on an ordinary day and opened by
+the page when the advisor has something to say. The five technical actions live
+behind a second fold inside it, for whoever actually wants them. Measured: four
+technical actions present, all behind the folds, one recommended action visible.
+
+### Verification
+PHPUnit 679 tests / 3599 assertions, Behat 32 scenarios / 235 steps, phpcs with
+the Moodle standard clean, PHPDoc clean.
+
+---
+
+## [0.6.64] — 2026-09-18
+
+Issue #78: live progress at experiment, run and sitting level.
+
+### One source, so nothing can disagree
+`live_progress::snapshot()` computes the lot: the operational state, the overall
+figures, a row per run, and what is happening this second. The page renders from
+it and the poll serves it, so the first paint and every update after it come
+from one place. The header saying one thing while the table said another was two
+correct answers to two different questions, asked seconds apart.
+
+There is no arithmetic on the JavaScript side any more. It sets text and widths.
+
+### The states are narrower than "running"
+`draft`, `starting`, `running`, `waiting`, `paused`, `blocked`, `aggregating`,
+`finished` — and the ones that need a reason carry one:
+
+    BLOCKED — Run #195 was stopped after repeated failures.
+    Overall: 0 / 25 (0%)
+    #195  0 / 25  0% (held)
+    Right now: 0 workers, 0 in progress, 15 waiting, 0 done, 10 failed
+
+**RUNNING requires sittings actually in flight**, not a worker existing
+somewhere. A worker that has been launched and has not reported is STARTING. A
+run with work queued and nobody playing it is WAITING, with the reason named —
+no worker running, or workers busy elsewhere. "Simulation running" beside "0 in
+progress" is the contradiction all of this exists to prevent.
+
+**And 99% is the ceiling until it is really done.** Rounding 249 of 250 up to
+100% tells somebody the run is over while a sitting is still playing.
+
+### Polling
+Two seconds while the tab is being looked at, thirty when it is not, and an
+immediate poll on coming back — so returning to a tab shows the current state
+rather than one up to thirty seconds old. A hidden tab polled at full rate costs
+the server requests nobody reads and, on a laptop, battery.
+
+### Verification
+PHPUnit 679 tests / 3599 assertions, Behat 32 scenarios / 235 steps, phpcs with
+the Moodle standard clean, PHPDoc clean, AMD built, 1141 strings per language.
+
+---
+
+## [0.6.63] — 2026-09-18
+
+Issue #92, and the CI failure my last fix caused.
+
+### The CI job, again — and this one was mine
+The reported log:
+
+    Invalid format '# experiment course: 2'
+
+That line is mine. I added it last release as a diagnostic, and the step
+redirects the script's entire output into `$GITHUB_OUTPUT`, where anything that
+is not `key=value` is a parse error. I fixed a job and broke it with the fix.
+
+Diagnostics go to stderr now. But the real correction is in the workflow: it
+filters with `grep -E '^[a-z_]+='` instead of trusting the script, because
+Moodle's own fatal errors also go to stdout and no amount of care inside the
+script makes that safe. The full output is logged in a separate step, so
+nothing is lost.
+
+**And the failure hiding behind it:** `local_catquizlab_e2e_token()` called
+`create_role()` unconditionally. It worked exactly once per installation; the
+second run hit the unique shortname and died with "Error writing to database" —
+a message that says nothing about a role, and which then went into the output
+parser too. The role and the service membership are reused when they exist.
+Verified by running it twice in a row.
+
+### #92 — a run that fails ten times the same way now stops
+A run whose sittings all fail for one reason keeps failing for that reason.
+Retrying the eleventh produces an eleventh identical failure and some more
+minutes of a browser's time, while the experiment goes on reporting itself as
+running — so somebody watching sees progress that is only the failure counter
+moving.
+
+After ten consecutive failures the run is held, the experiment goes to
+**BLOCKED**, and the remaining sittings stay queued and out of reach rather than
+being spent on a known failure. Measured: ten failures, run held, five sittings
+held back, experiment blocked.
+
+**The cause, once:** errors are normalised — attempt ids, paths, hashes and
+timestamps stripped — and grouped, so ten reports of one fault read as
+
+    Division by zero (×10)
+
+rather than as ten separate problems burying the one line somebody needs.
+
+**Reading comes before retrying.** The card's action is *Show the error and the
+log*, which links into step 5 filtered to that run. *Clear the errors and
+continue* sits after it, because pressing it without looking produces the same
+ten failures. Measured: 10 sittings requeued, run back to READY.
+
+The trip and the reset are both recorded as `run_autopaused` and `run_resumed`,
+with the failure count and the last error.
+
+### Verification
+PHPUnit 679 tests / 3599 assertions, Behat 32 scenarios / 235 steps, phpcs with
+the Moodle standard clean, PHPDoc clean, 1120 strings per language.
+
+---
+
+## [0.6.62] — 2026-09-18
+
+Issues #93 and #94 — both consequences of my own earlier changes.
+
+### #93 — a rotation limit was stopping experiments
+A worker plays a set number of sittings and exits. That is a resource setting:
+how long one browser process lives. It says nothing about the experiment, and
+until now it stopped one — the next worker came with the five-minute scheduler
+tick, so an experiment with hundreds of sittings queued sat idle because a
+browser reached its configured limit.
+
+A worker reporting that it is stopping now triggers an immediate replacement,
+but only when one is actually needed: work still claimable and nobody left to
+claim it. Two workers started because one rotated would be a different bug.
+
+**And rotation no longer reads as a stall.** `summary()` counts `starting`
+separately from `live`, so the run card can say *Simulation running, worker being
+replaced* rather than *waiting for a worker* — which would have somebody
+investigating a setting that is working exactly as configured.
+
+### #94 — the header and the table disagreed by construction
+The live poll asked about the whole installation (`args: {}`) while the table
+beside it showed one experiment. They were answering different questions a few
+seconds apart, and the difference looked like a bug in the numbers.
+
+The poll takes the experiment in view and returns one snapshot: the experiment's
+own figures, and a row per run carrying `state`, `done`, `total`, `percent`,
+`open` and `failed`. Every verdict comes from `status_report::run()` — the same
+service that renders the page — so a row updated by a poll and a row drawn by a
+page load say the same thing because they came from the same place. There is no
+second opinion about a run's state on the JavaScript side.
+
+    Experiment: finished 10/10 (100%)
+    Run 186: Run finished  10/10 (100%)
+
+**A failed poll is now said rather than swallowed.** It used to stop silently
+after one error, leaving somebody watching a page that had quietly stopped being
+live — reading stale numbers as current ones. After three consecutive failures
+it says so and stops.
+
+### Verification
+PHPUnit 679 tests / 3598 assertions, Behat 32 scenarios / 235 steps, phpcs with
+the Moodle standard clean, PHPDoc clean, AMD built, 1113 strings per language.
+
+---
+
+## [0.6.61] — 2026-09-18
+
+An interface end-to-end run, and the defect it found on its first honest pass.
+
+### Two buttons that did nothing
+`runs.php` guards its action handling with:
+
+    if ($action !== '' && $runid > 0) {
+
+The experiment-level actions added in 0.6.56 — **Prepare experiment** and **Run
+experiment** — sit inside that block and carry an experiment id and no run id.
+They were never reachable. The buttons rendered, the forms posted, the page came
+back without a word, and the experiment stayed a draft with no runs.
+
+Called through the façade the same preparation worked perfectly:
+
+    prepare: ok=true state=ready 1/1
+
+Code correct, interface dead. No unit test and no CLI smoke test could see
+that — which is the entire argument for this run existing.
+
+Moved ahead of the run-scoped block. Measured through a real POST:
+
+    Experiment prepared: 1 of 1 runs ready.
+    Runs afterwards: 1
+
+### The run
+`.github/workflows/ui-e2e.yml`, **manual only**: it installs Moodle, provisions
+an experiment and plays five people's sittings through a real browser, which is
+minutes of runner time for a question nobody asks on every push.
+
+Everything happens through the interface. No CLI script sets anything up, no SQL
+seeds the queue. The parameters are entered in the form: 15–20 questions per
+test, 3–5 per scale, standard error 0.3–2.5, no time limits, five simulated
+people.
+
+    1 passed (7.2m)
+    UI smoke: finished | attempts: {"planned":10,"collected":10}
+
+Video, trace and screenshots are kept for **every** run, not only failures: a
+passing run is what somebody wants to watch when they are asking whether the
+interface still works, and a recording that only exists after a failure cannot
+answer that. All of it, plus the HTML report and the Moodle, cron and worker
+logs, is uploaded as one artifact.
+
+### Eleven runs to get there
+Each failure was a real obstacle: collapsed form sections, CAT-engine links
+matching the same words, two `.nav-tabs` on one page, a navigation button caught
+by `.first()` when submitting, a swallowed sign-in error, the experiment never
+selected in the shell, and finally no cron — without which a queued experiment
+correctly waits forever and the test times out on a system that is working.
+
+Two were fixed in the plugin rather than in the test: the step tabs now carry
+`data-region="catquizlab-steps"`, because matching on a class name is matching
+on a coincidence.
+
+### The worker end-to-end job
+Both failures from the reported logs are fixed. `e2e_prepare.php` creates the
+experiment course when none is configured — on a fresh CI installation the
+setting points nowhere, and the job died at `stage:container`. And its errors
+are emitted as a single-line `setup_error=…`; the previous message contained
+colons and broke `$GITHUB_OUTPUT`, so the job reported a parse error instead of
+the cause.
+
+### Verification
+PHPUnit 679 tests / 3598 assertions, Behat 32 scenarios / 235 steps, phpcs with
+the Moodle standard clean, PHPDoc clean, both workflows parse, and the interface
+run passes against this instance.
+
+---
+
+## [0.6.60] — 2026-09-18
+
+Issue #90, and a counting mistake in the smoke test that was mine.
+
+### The thirteen questions were never thirteen
+Raising the smoke test's bar from 2 answers to 15 made every strategy fail at
+exactly 13, against every budget, every standard-error floor and every pool
+size. That stability is what a real constraint looks like, so I went looking for
+one: through `maximumquestionscheck`, through `filterbystandarderror`, through
+the per-subscale minimums, through the engine's test configuration.
+
+All of it was configured correctly. The attempt had answered **twenty**
+questions:
+
+    adaptivequiz_attempt: questionsattempted = 20
+    QUBA slots:                                20
+    catquizlab trace:                          13 "steps"
+
+Thirteen is the number of fields the trace records about an attempt —
+`finaltheta`, `finalse`, `items`, `responses`, `nitems`, `stopreason`, and so
+on. I had counted the keys of the trace object instead of reading its `steps`
+field. The engine was right, the plugin was right, and the test was wrong in a
+way that looked exactly like a defect in both.
+
+Worth the detour: the investigation confirmed that the per-subscale floor
+protects only the main scale from being dropped, which is real and worth knowing
+even though it was not the cause here.
+
+### The gate, with 15 answers required
+    classic   20 questions   Reached maximum number of questions   PASS
+    allsubs   20 questions   Reached maximum number of questions   PASS
+    balanced  20 questions   Reached maximum number of questions   PASS
+    fastest   15 questions   You ran out of questions              PASS
+    relsubs   20 questions   Reached maximum number of questions   PASS
+
+`--minanswers` is a parameter now, defaulting to 15, and each run reports **why**
+the attempt stopped. `fastest` stopping at exactly the minimum because it ran
+out of suitable items is the kind of thing that is worth seeing rather than
+inferring.
+
+### #90 — the fifth tab
+**Logs.** One chronological list from the four places this plugin records: the
+debug trace, the per-run execution log, Moodle's ad-hoc task table and the
+worker reports. Each was correct and none was complete, so answering "what
+happened" meant reading all four and merging them by hand.
+
+    2026-09-18 10:54:56  lifecycle  run=108 attempt#1 stage_started stage=attempts
+    2026-09-18 10:54:56  lifecycle  run=108 attempt#1 stage_completed queries=4
+    2026-09-18 10:55:48  task       queued aggregate_results run=108 due=due now
+
+Filterable by time window, channel, run and free text. The filtered selection is
+rendered as a single `<pre>` block so that selecting it gives the text rather
+than the markup — a log somebody has to reformat before sending is a log that
+arrives incomplete — with a download for selections too long to select by hand.
+
+### Verification
+PHPUnit 679 tests / 3598 assertions, Behat 32 scenarios / 235 steps, phpcs with
+the Moodle standard clean, PHPDoc clean, 1111 strings per language. All five
+strategies pass the 15-answer gate against this instance.
+
+---
+
 ## [0.6.59] — 2026-09-18
 
 Issue #89: an experiment played from definition to results, as a gate.

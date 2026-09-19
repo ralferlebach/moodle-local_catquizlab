@@ -218,6 +218,27 @@ class worker_registry {
     }
 
     /**
+     * Whether a worker's departure leaves work with nobody to do it.
+     *
+     * A rotation limit is a resource setting — how many sittings one browser
+     * process plays before it is replaced. It says nothing about the
+     * experiment, and letting it stop one is letting an implementation detail
+     * decide a scientific run.
+     *
+     * @return array{needed: bool, claimable: int, live: int}
+     */
+    public static function replacement_needed(): array {
+        $breakdown = attempt_scheduler::queue_breakdown();
+        $live = self::summary()['live'];
+
+        return [
+            'needed'    => $breakdown['claimable'] > 0 && $live === 0,
+            'claimable' => (int) $breakdown['claimable'],
+            'live'      => (int) $live,
+        ];
+    }
+
+    /**
      * Record a worker's own report: alive, and what it is doing.
      *
      * @param string $workerid The instance.
@@ -417,7 +438,17 @@ class worker_registry {
         $rows = $DB->get_records('local_catquizlab_worker');
         $cutoff = time() - self::HEARTBEAT_TIMEOUT;
 
-        $summary = ['live' => 0, 'crashed' => 0, 'stopped' => 0, 'jobsdone' => 0, 'lasterror' => null];
+        // Starting is counted separately from live so a caller can tell a
+        // worker coming up from one already playing — the difference between a
+        // planned rotation and a stall.
+        $summary = [
+            'live'      => 0,
+            'starting'  => 0,
+            'crashed'   => 0,
+            'stopped'   => 0,
+            'jobsdone'  => 0,
+            'lasterror' => null,
+        ];
         foreach ($rows as $row) {
             $summary['jobsdone'] += (int) $row->jobsdone;
             $alive = in_array((int) $row->status, [self::STATUS_STARTING, self::STATUS_RUNNING], true)
@@ -425,6 +456,10 @@ class worker_registry {
 
             if ($alive) {
                 $summary['live']++;
+
+                if ((int) $row->status === self::STATUS_STARTING) {
+                    $summary['starting']++;
+                }
             } else if ((int) $row->status === self::STATUS_STOPPED) {
                 $summary['stopped']++;
             } else {

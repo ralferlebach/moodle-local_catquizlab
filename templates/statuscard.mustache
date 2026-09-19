@@ -59,5 +59,17 @@
         {{^command}}
             <a href="{{url}}" class="btn btn-sm btn-outline-primary ml-2 flex-shrink-0">{{label}}</a>
         {{/command}}
+        {{!
+            The second action, where there is one: reading comes first, and this
+            sits after it rather than beside it.
+        }}
+        {{#secondary}}
+            <form method="post" action="{{url}}" class="d-inline ml-2 flex-shrink-0">
+                <input type="hidden" name="sesskey" value="{{sesskey}}">
+                <input type="hidden" name="action" value="{{command}}">
+                <input type="hidden" name="runid" value="{{runid}}">
+                <button type="submit" class="btn btn-sm btn-outline-secondary">{{label}}</button>
+            </form>
+        {{/secondary}}
     {{/action}}
 </div>

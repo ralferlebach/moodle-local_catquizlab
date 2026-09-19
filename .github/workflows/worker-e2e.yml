@@ -152,7 +152,21 @@ jobs:
       - name: Provision an experiment, a run and a worker token
         id: prepare
         working-directory: moodle
-        run: php local/catquizlab/cli/e2e_prepare.php --persons=1 >> "$GITHUB_OUTPUT"
+        # Filtered, not trusted. Everything this script writes lands in
+        # $GITHUB_OUTPUT, and one line that is not key=value fails the whole
+        # step with a parse error instead of the real problem — which has now
+        # happened twice: once with a colon in an error message, once with a
+        # diagnostic line of mine. Moodle's own fatal errors go to stdout too,
+        # so no amount of care inside the script makes this safe.
+        run: |
+          set -o pipefail
+          php local/catquizlab/cli/e2e_prepare.php --persons=1 \
+            | tee /tmp/prepare.log \
+            | grep -E '^[a-z_]+=' >> "$GITHUB_OUTPUT"
+
+      - name: Show what preparation reported
+        if: always()
+        run: cat /tmp/prepare.log || true
 
       - name: Start the web server
         working-directory: moodle

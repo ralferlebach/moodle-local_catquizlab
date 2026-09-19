@@ -74,6 +74,76 @@ require_capability('local/catquizlab:view', $context);
 
 // State-changing actions. Each is a POST guarded by sesskey and the execute
 // capability, so a link in a mail cannot cancel somebody's sweep.
+// Experiment-level actions, before the run-scoped block below. They carry an
+// experiment id and no run id, so inside that block they were unreachable:
+// the button rendered, the form posted, the page came back without a word,
+// and the experiment stayed a draft with no runs.
+if ($action === 'prepareexperiment') {
+    require_sesskey();
+    require_capability('local/catquizlab:execute', $context);
+
+    $target = required_param('experimentid', PARAM_INT);
+    $result = \local_catquizlab\local\experiment_runner::prepare($target);
+
+    $back = new moodle_url('/local/catquizlab/runs.php', ['experimentid' => $target]);
+    $message = get_string(
+        $result['ok'] ? 'runner:prepared' : 'runner:blocked',
+        $component,
+        (object) ['prepared' => $result['prepared'], 'total' => $result['total']]
+    );
+
+    foreach (array_slice($result['blockers'], 0, 3) as $blocker) {
+        $message .= html_writer::empty_tag('br') . get_string('runner:blockerline', $component, (object) [
+            'runid'   => $blocker['runid'] ?? 0,
+            'cellkey' => $blocker['cellkey'] ?? '',
+            'stage'   => $blocker['stage'] ?? '',
+            'reason'  => $blocker['reason'] ?? '',
+        ]);
+    }
+
+    redirect($back, $message, null, $result['ok']
+        ? \core\output\notification::NOTIFY_SUCCESS
+        : \core\output\notification::NOTIFY_WARNING);
+}
+
+if ($action === 'startexperiment') {
+    require_sesskey();
+    require_capability('local/catquizlab:execute', $context);
+
+    $target = required_param('experimentid', PARAM_INT);
+    $queued = \local_catquizlab\local\execution_queue::enqueue($target);
+
+    $back = new moodle_url('/local/catquizlab/runs.php', ['experimentid' => $target]);
+
+    redirect(
+        $back,
+        $queued['ok']
+            ? get_string('runner:queuedat', $component, $queued['position'])
+            : get_string('runner:notready', $component),
+        null,
+        $queued['ok']
+            ? \core\output\notification::NOTIFY_SUCCESS
+            : \core\output\notification::NOTIFY_WARNING
+    );
+}
+
+// Letting a held run try again, after somebody has dealt with the cause. Not
+// offered automatically and not retried in a loop: the whole point of holding a
+// run is that repeating it without a change repeats the failure.
+if ($action === 'resetcircuit' && $runid > 0) {
+    require_sesskey();
+    require_capability('local/catquizlab:execute', $context);
+
+    $reset = \local_catquizlab\local\circuit_breaker::reset_and_continue($runid);
+
+    redirect(
+        new moodle_url('/local/catquizlab/runs.php', ['runid' => $runid]),
+        get_string('circuit:reset', $component, $reset['released']),
+        null,
+        \core\output\notification::NOTIFY_SUCCESS
+    );
+}
+
 if ($action !== '' && $runid > 0) {
     require_sesskey();
     require_capability('local/catquizlab:execute', $context);
@@ -127,54 +197,6 @@ if ($action !== '' && $runid > 0) {
         );
     }
 
-    if ($action === 'prepareexperiment') {
-        require_sesskey();
-        require_capability('local/catquizlab:execute', $context);
-
-        $target = required_param('experimentid', PARAM_INT);
-        $result = \local_catquizlab\local\experiment_runner::prepare($target);
-
-        $back = new moodle_url('/local/catquizlab/runs.php', ['experimentid' => $target]);
-        $message = get_string(
-            $result['ok'] ? 'runner:prepared' : 'runner:blocked',
-            $component,
-            (object) ['prepared' => $result['prepared'], 'total' => $result['total']]
-        );
-
-        foreach (array_slice($result['blockers'], 0, 3) as $blocker) {
-            $message .= html_writer::empty_tag('br') . get_string('runner:blockerline', $component, (object) [
-                'runid'   => $blocker['runid'] ?? 0,
-                'cellkey' => $blocker['cellkey'] ?? '',
-                'stage'   => $blocker['stage'] ?? '',
-                'reason'  => $blocker['reason'] ?? '',
-            ]);
-        }
-
-        redirect($back, $message, null, $result['ok']
-            ? \core\output\notification::NOTIFY_SUCCESS
-            : \core\output\notification::NOTIFY_WARNING);
-    }
-
-    if ($action === 'startexperiment') {
-        require_sesskey();
-        require_capability('local/catquizlab:execute', $context);
-
-        $target = required_param('experimentid', PARAM_INT);
-        $queued = \local_catquizlab\local\execution_queue::enqueue($target);
-
-        $back = new moodle_url('/local/catquizlab/runs.php', ['experimentid' => $target]);
-
-        redirect(
-            $back,
-            $queued['ok']
-                ? get_string('runner:queuedat', $component, $queued['position'])
-                : get_string('runner:notready', $component),
-            null,
-            $queued['ok']
-                ? \core\output\notification::NOTIFY_SUCCESS
-                : \core\output\notification::NOTIFY_WARNING
-        );
-    }
 
     if ($action === 'repairaccess') {
         require_sesskey();
@@ -414,8 +436,12 @@ if ($runid === 0) {
     // This is the page somebody watches while a run is playing, so it is the
     // page that has to keep itself current. It was the one page without the
     // updater.
+    // The interrupted-updating message, so the module can show it without a
+    // second round trip at the moment the round trips are failing.
+    $PAGE->requires->string_for_js('live:interrupted', $component);
     $PAGE->requires->js_call_amd('local_catquizlab/livestatus', 'init', [
         \local_catquizlab\external\live_status::current_shape(),
+        optional_param('experimentid', 0, PARAM_INT),
     ]);
 
     echo $OUTPUT->render_from_template(

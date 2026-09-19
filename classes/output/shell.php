@@ -61,6 +61,18 @@ class shell {
     public const STEP_RESULTS = 'results';
 
     /**
+     * Step 5: what happened, in order, in one place.
+     *
+     * Not a debug detail tucked away behind a setting. When something goes
+     * wrong the first question is always what happened and in what order, and
+     * answering it meant reading four panels on three tabs and a task log — so
+     * people asked here instead, which is slower for everybody.
+     *
+     * @var string
+     */
+    public const STEP_LOGS = 'logs';
+
+    /**
      * The four steps, in order, with where each one lives.
      *
      * @return array<string, string>
@@ -71,6 +83,7 @@ class shell {
             self::STEP_PLAN     => '/local/catquizlab/index.php',
             self::STEP_PROGRESS => '/local/catquizlab/runs.php',
             self::STEP_RESULTS  => '/local/catquizlab/results.php',
+            self::STEP_LOGS     => '/local/catquizlab/logs.php',
         ];
     }
 

@@ -1,0 +1,6 @@
+# Run output, not source: videos, traces and reports belong to a run and are
+# collected as a CI artifact rather than kept in the repository.
+node_modules/
+artifacts/
+report/
+test-results/
