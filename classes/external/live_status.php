@@ -22,6 +22,7 @@ use core_external\external_single_structure;
 use core_external\external_value;
 use local_catquizlab\local\attempt_scheduler;
 use local_catquizlab\local\situation;
+use local_catquizlab\local\live_progress;
 use local_catquizlab\local\worker_registry;
 
 /**
@@ -108,6 +109,7 @@ class live_status extends external_api {
             // questions a few seconds apart.
             'runs'           => self::run_rows($experimentid),
             'experiment'     => self::experiment_summary($experimentid),
+            'progress'       => live_progress::snapshot($experimentid),
         ];
     }
 
@@ -272,6 +274,37 @@ class live_status extends external_api {
                 ]),
                 'The runs of the experiment in view.'
             ),
+            'progress'       => new external_single_structure([
+                'experimentid' => new external_value(PARAM_INT, 'The experiment.'),
+                'state'        => new external_value(PARAM_ALPHA, 'The operational state.'),
+                'label'        => new external_value(PARAM_TEXT, 'That state, in words.'),
+                'reason'       => new external_value(PARAM_TEXT, 'Why, where a state needs one.'),
+                'done'         => new external_value(PARAM_INT, 'Sittings collected.'),
+                'total'        => new external_value(PARAM_INT, 'Sittings planned.'),
+                'percent'      => new external_value(PARAM_INT, 'How far along.'),
+                'runs'         => new \core_external\external_multiple_structure(
+                    new external_single_structure([
+                        'runid'    => new external_value(PARAM_INT, 'The run.'),
+                        'cellkey'  => new external_value(PARAM_TEXT, 'Its design cell.'),
+                        'done'     => new external_value(PARAM_INT, 'Collected.'),
+                        'total'    => new external_value(PARAM_INT, 'Planned.'),
+                        'percent'  => new external_value(PARAM_INT, 'How far along.'),
+                        'inflight' => new external_value(PARAM_INT, 'Being played now.'),
+                        'failed'   => new external_value(PARAM_INT, 'Failed for good.'),
+                        'complete' => new external_value(PARAM_BOOL, 'Whether it is done.'),
+                        'held'     => new external_value(PARAM_BOOL, 'Whether it was stopped.'),
+                    ]),
+                    'Per run.'
+                ),
+                'now'          => new external_single_structure([
+                    'workers'   => new external_value(PARAM_INT, 'Live workers.'),
+                    'starting'  => new external_value(PARAM_INT, 'Workers not yet reporting.'),
+                    'inflight'  => new external_value(PARAM_INT, 'Sittings being played.'),
+                    'queued'    => new external_value(PARAM_INT, 'Sittings waiting.'),
+                    'collected' => new external_value(PARAM_INT, 'Sittings done.'),
+                    'failed'    => new external_value(PARAM_INT, 'Sittings failed for good.'),
+                ], 'What is happening this second.'),
+            ], 'The progress snapshot the page renders from.'),
             'experiment'     => new external_single_structure([
                 'state'   => new external_value(PARAM_TEXT, 'The experiment state.'),
                 'label'   => new external_value(PARAM_TEXT, 'That state, in words.'),

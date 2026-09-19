@@ -32,6 +32,9 @@ import Ajax from 'core/ajax';
 /** @var {number} How often to ask while the tab is visible. */
 const INTERVAL = 2000;
 
+/** @var {number} How often to poll when the tab is not being looked at. */
+const BACKGROUND_INTERVAL = 30000;
+
 /** @var {number} Stop asking after this long without the page being looked at. */
 const MAX_IDLE = 30 * 60 * 1000;
 
@@ -125,6 +128,32 @@ const poll = async() => {
             }
         });
 
+        // The progress snapshot: the same numbers the page was rendered with,
+        // recomputed server-side. There is no arithmetic on this side, so the
+        // header and the rows cannot drift apart.
+        if (status.progress) {
+            setRegion('catquizlab-progress-label', status.progress.label);
+            setRegion('catquizlab-progress-count', `${status.progress.done} / ${status.progress.total}`);
+            setRegion('catquizlab-progress-reason', status.progress.reason || '');
+
+            const overall = document.querySelector('[data-region="catquizlab-progress-bar"]');
+            if (overall) {
+                overall.style.width = `${status.progress.percent}%`;
+                overall.setAttribute('aria-valuenow', String(status.progress.percent));
+            }
+
+            (status.progress.runs || []).forEach((run) => {
+                setRegion(`catquizlab-run-${run.runid}-progress`, `${run.done} / ${run.total}`);
+
+                const bar = document.querySelector(`[data-region="catquizlab-run-${run.runid}-bar"]`);
+                if (bar) {
+                    bar.style.width = `${run.percent}%`;
+                    bar.setAttribute('aria-valuenow', String(run.percent));
+                    bar.classList.toggle('bg-danger', Boolean(run.held));
+                }
+            });
+        }
+
         if (status.experiment) {
             setRegion('catquizlab-experiment-state', status.experiment.label);
             setRegion(
@@ -177,6 +206,24 @@ export const init = (shape, experimentid) => {
 
     stop();
     timer = window.setInterval(poll, INTERVAL);
+
+    // A tab nobody is looking at does not need a request every two seconds.
+    // Polling a hidden tab at full rate is a cost paid by the server for
+    // nothing, and on a laptop it is paid by the battery.
+    document.addEventListener('visibilitychange', () => {
+        if (timer === null) {
+            return;
+        }
+
+        window.clearInterval(timer);
+        timer = window.setInterval(poll, document.hidden ? BACKGROUND_INTERVAL : INTERVAL);
+
+        // Coming back to the tab should show the current state, not a state up
+        // to thirty seconds old.
+        if (!document.hidden) {
+            poll();
+        }
+    });
 
     // Ask as soon as the tab is looked at again, rather than waiting out the
     // interval on a page that may be minutes stale.

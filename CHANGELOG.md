@@ -6,6 +6,49 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.6.64] — 2026-09-18
+
+Issue #78: live progress at experiment, run and sitting level.
+
+### One source, so nothing can disagree
+`live_progress::snapshot()` computes the lot: the operational state, the overall
+figures, a row per run, and what is happening this second. The page renders from
+it and the poll serves it, so the first paint and every update after it come
+from one place. The header saying one thing while the table said another was two
+correct answers to two different questions, asked seconds apart.
+
+There is no arithmetic on the JavaScript side any more. It sets text and widths.
+
+### The states are narrower than "running"
+`draft`, `starting`, `running`, `waiting`, `paused`, `blocked`, `aggregating`,
+`finished` — and the ones that need a reason carry one:
+
+    BLOCKED — Run #195 was stopped after repeated failures.
+    Overall: 0 / 25 (0%)
+    #195  0 / 25  0% (held)
+    Right now: 0 workers, 0 in progress, 15 waiting, 0 done, 10 failed
+
+**RUNNING requires sittings actually in flight**, not a worker existing
+somewhere. A worker that has been launched and has not reported is STARTING. A
+run with work queued and nobody playing it is WAITING, with the reason named —
+no worker running, or workers busy elsewhere. "Simulation running" beside "0 in
+progress" is the contradiction all of this exists to prevent.
+
+**And 99% is the ceiling until it is really done.** Rounding 249 of 250 up to
+100% tells somebody the run is over while a sitting is still playing.
+
+### Polling
+Two seconds while the tab is being looked at, thirty when it is not, and an
+immediate poll on coming back — so returning to a tab shows the current state
+rather than one up to thirty seconds old. A hidden tab polled at full rate costs
+the server requests nobody reads and, on a laptop, battery.
+
+### Verification
+PHPUnit 679 tests / 3599 assertions, Behat 32 scenarios / 235 steps, phpcs with
+the Moodle standard clean, PHPDoc clean, AMD built, 1141 strings per language.
+
+---
+
 ## [0.6.63] — 2026-09-18
 
 Issue #92, and the CI failure my last fix caused.
