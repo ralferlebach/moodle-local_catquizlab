@@ -88,6 +88,13 @@ final class situation_test extends \advanced_testcase {
         $this->resetAfterTest();
         $this->setAdminUser();
 
+        // An installation that could start a worker if one were alive: the
+        // switches are on, so the detail is about the crashed worker.
+        set_config('worker_exec_enabled', 1, 'local_catquizlab');
+        set_config('worker_token', 'abc', 'local_catquizlab');
+        set_config('worker_base_url', 'http://example.test', 'local_catquizlab');
+        set_config('worker_node_path', '/usr/bin/node', 'local_catquizlab');
+
         // Reported: 150 queued, 0 live workers, 1 crashed, experiment
         // "running", run "scheduled", progress 0%. Every figure correct, and
         // together no picture at all.
@@ -102,6 +109,19 @@ final class situation_test extends \advanced_testcase {
         $this->assertNotNull($verdict['action']);
         $this->assertStringContainsString('3', $verdict['headline']);
         $this->assertStringContainsString('1', $verdict['detail']);
+
+        // An installation that could not start one at all says which switch
+        // is off and points at the button that flips it — rather than offering
+        // "start workers" for a start that cannot happen. This was the state
+        // the reported installation was in, and the page said only "stalled".
+        set_config('worker_exec_enabled', 0, 'local_catquizlab');
+        $verdict = situation::rank($this->facts([
+            'queued'  => 3,
+            'workers' => ['live' => 0, 'crashed' => 0, 'stopped' => 0, 'jobsdone' => 0, 'lasterror' => null],
+        ]));
+        $this->assertSame(situation::STALLED, $verdict['state']);
+        $this->assertStringContainsString('worker_exec_enabled', $verdict['detail']);
+        $this->assertSame(get_string('wizard:runandenable', 'local_catquizlab'), $verdict['action']['label']);
     }
 
     /**

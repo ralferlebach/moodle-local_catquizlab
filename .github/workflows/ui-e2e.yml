@@ -118,7 +118,13 @@ jobs:
       - name: Start the web server
         working-directory: moodle
         run: |
-          nohup php -S 127.0.0.1:8000 -t . > /tmp/webserver.log 2>&1 &
+          # More than one worker. PHP's development server answers one request
+          # at a time by default, and the self-test makes an HTTP call to this
+          # very server from inside a request — which then waits for itself
+          # until it times out and reports the token as not answering. On a
+          # real web server this never happens, which is why the same self-test
+          # is green on a production site and red here.
+          PHP_CLI_SERVER_WORKERS=4 nohup php -S 127.0.0.1:8000 -t . > /tmp/webserver.log 2>&1 &
           for i in $(seq 1 20); do
             if curl -sf -o /dev/null http://127.0.0.1:8000/; then exit 0; fi
             sleep 1

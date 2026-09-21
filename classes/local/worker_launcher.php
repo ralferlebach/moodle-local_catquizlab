@@ -444,8 +444,20 @@ class worker_launcher {
      * @return array|null ['launched' => int, 'exitcode' => int, 'output' => string]
      */
     public static function launch_pool(array $config): ?array {
-        if (empty($config['enabled']) || !self::is_configured($config)) {
-            return null;
+        // Never a silent null. The tick called this every five minutes for
+        // fifteen minutes on an installation whose worker switch was off, got
+        // null back, printed nothing, and the page said "stalled" with no word
+        // about what was missing.
+        $missing = self::missing($config);
+        if ($missing !== []) {
+            return [
+                'launched' => 0,
+                'skipped'  => 0,
+                'reason'   => 'not-configured: ' . implode(', ', $missing),
+                'failures' => [],
+                'exitcode' => 0,
+                'output'   => '',
+            ];
         }
 
         $concurrency = max(1, (int) ($config['concurrency'] ?? 1));
@@ -592,10 +604,33 @@ class worker_launcher {
      * @return bool
      */
     protected static function is_configured(array $config): bool {
-        return !empty($config['node'])
-            && !empty($config['script'])
-            && !empty($config['baseurl'])
-            && !empty($config['token'])
-            && is_readable((string) $config['script']);
+        return self::missing($config) === [];
+    }
+
+    /**
+     * What a launch would need and does not have, by name.
+     *
+     * @param array $config The launch configuration.
+     * @return string[]
+     */
+    public static function missing(array $config): array {
+        $missing = [];
+        if (empty($config['enabled'])) {
+            $missing[] = 'worker_exec_enabled';
+        }
+        if (empty($config['node'])) {
+            $missing[] = 'worker_node_path';
+        }
+        if (empty($config['baseurl'])) {
+            $missing[] = 'worker_base_url';
+        }
+        if (empty($config['token'])) {
+            $missing[] = 'worker_token';
+        }
+        if (empty($config['script']) || !is_readable((string) $config['script'])) {
+            $missing[] = 'worker script';
+        }
+
+        return $missing;
     }
 }

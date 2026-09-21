@@ -272,4 +272,77 @@ final class audit_test extends \advanced_testcase {
         $this->assertFalse($DB->record_exists('user', ['id' => $ours->id, 'deleted' => 0]));
         $this->assertTrue($DB->record_exists('user', ['id' => $theirs->id, 'deleted' => 0]));
     }
+
+    /**
+     * One press on a fresh installation flips every switch the pipeline needs.
+     *
+     * @return void
+     */
+    public function test_one_press_switches_everything_the_pipeline_needs(): void {
+        global $CFG, $DB;
+        $this->resetAfterTest();
+        $this->setAdminUser();
+
+        // Factory state: this is what every fresh installation and every CI
+        // job starts from, and what the reported installation sat in.
+        set_config('worker_exec_enabled', 0, 'local_catquizlab');
+        set_config('enabled', 0, 'local_catquizlab');
+        set_config('pathtophp', '');
+        $CFG->pathtophp = '';
+
+        $before = \local_catquizlab\local\worker_launcher::missing(
+            \local_catquizlab\local\worker_launcher::config_from_settings()
+        );
+        $this->assertContains('worker_exec_enabled', $before);
+
+        \local_catquizlab\local\setup_wizard::run(true);
+
+        // The switch nothing used to flip: an installation could pass every
+        // other check and still never play a sitting, and the page said
+        // "stalled" with no word about why.
+        $this->assertSame(1, (int) get_config('local_catquizlab', 'worker_exec_enabled'));
+        $this->assertSame(1, (int) get_config('local_catquizlab', 'enabled'));
+
+        // The PHP binary, detected rather than left as an amber line with a
+        // settings page behind it.
+        $this->assertNotSame('', (string) get_config('core', 'pathtophp'));
+
+        $after = \local_catquizlab\local\worker_launcher::missing(
+            \local_catquizlab\local\worker_launcher::config_from_settings()
+        );
+        $this->assertNotContains('worker_exec_enabled', $after);
+        $this->assertNotContains('worker_token', $after);
+        $this->assertNotContains('worker_base_url', $after);
+
+        // And the wizard now lists the switch, so an installation where it is
+        // off cannot report itself ready.
+        set_config('worker_exec_enabled', 0, 'local_catquizlab');
+        $state = \local_catquizlab\local\setup_wizard::state();
+        $this->assertFalse($state['ready']);
+        $this->assertContains(get_string('wizard:workerexec', 'local_catquizlab'), $state['blockers']);
+    }
+
+    /**
+     * A launch that cannot happen says what is missing, never nothing.
+     *
+     * @return void
+     */
+    public function test_a_launch_that_cannot_happen_names_what_is_missing(): void {
+        $this->resetAfterTest();
+
+        set_config('worker_exec_enabled', 0, 'local_catquizlab');
+        set_config('worker_token', '', 'local_catquizlab');
+
+        $result = \local_catquizlab\local\worker_launcher::launch_pool(
+            \local_catquizlab\local\worker_launcher::config_from_settings()
+        );
+
+        // Null here was what the tick printed nothing about, every five
+        // minutes, for as long as anybody watched.
+        $this->assertNotNull($result);
+        $this->assertSame(0, $result['launched']);
+        $this->assertStringStartsWith('not-configured', $result['reason']);
+        $this->assertStringContainsString('worker_exec_enabled', $result['reason']);
+        $this->assertStringContainsString('worker_token', $result['reason']);
+    }
 }

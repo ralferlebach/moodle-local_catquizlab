@@ -120,6 +120,21 @@ class situation {
         // Work waiting with nobody to do it: the one combination that never
         // resolves itself, and the one the reported installation sat in.
         if ($queue['queued'] > 0 && $workers['live'] === 0) {
+            // Why nobody is doing it. "Stalled" with a start button, on an
+            // installation whose worker switch was off, sent people pressing a
+            // button that could not work and never said so.
+            $missing = worker_launcher::missing(worker_launcher::config_from_settings());
+
+            if ($missing !== []) {
+                return self::verdict(
+                    self::STALLED,
+                    get_string('situation:stalled', $component, $queue['queued']),
+                    get_string('situation:stallednotconfigured', $component, implode(', ', $missing)),
+                    get_string('wizard:runandenable', $component),
+                    $setupurl
+                );
+            }
+
             return self::verdict(
                 self::STALLED,
                 get_string('situation:stalled', $component, $queue['queued']),

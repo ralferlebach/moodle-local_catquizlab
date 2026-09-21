@@ -6,6 +6,74 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.6.70] — 2026-09-21
+
+Why no run ever started on any installation but mine.
+
+### The switch nothing flipped
+`worker_exec_enabled` ships as 0. Nothing in the setup checked it and nothing
+set it — not the wizard, not the self-test, not "Start workers". The pipeline
+tick called `launch_pool()`, got `null`, and printed nothing. That is the whole
+of "stalled": every fresh installation, and every CI job, prepared experiments
+that could never be played, and no line anywhere said which switch was off.
+
+On my installation the switch was on. I had set it by hand at some point and
+forgotten. Every smoke test and every interface run I reported passed on a
+machine in a state the product cannot reach by itself. Those reports were true
+of that machine and worthless for yours.
+
+### One press, now
+`enable_pipeline()` sets `worker_exec_enabled` and detects `pathtophp` along with
+the plugin switch and the scheduled task. Measured from factory state — every
+switch off, no token, no PHP path, task disabled, six blockers:
+
+    run(true): changed [course, storedtoken, pipeline]   0.3 s
+    after:     ready, nothing open
+    worker_exec_enabled=1   pathtophp=/usr/bin/php
+
+The wizard lists the switch as a step, so an installation with it off cannot
+report itself ready. A regression test starts from factory state and asserts
+all of it.
+
+### Nothing is silent any more
+`launch_pool()` never returns `null`: a launch that cannot happen names what it
+is missing — `not-configured: worker_exec_enabled, worker_token` — the tick
+prints it, and the "stalled" card says which switch is off and points at the
+button that flips it, instead of offering "Start workers" for a start that
+cannot happen.
+
+### The interface run, from factory state
+The Playwright test used to press whatever setup buttons it found, up to six
+times, and never checked whether any of it had worked — which is how it walked
+past an installation that could not run and blamed the plugin. It presses the
+one setup button once now and then asserts readiness: not "closer", ready.
+And it waits until every sitting is collected rather than moving on at the
+first.
+
+Run with every switch off first: **1 passed (2.6 min)** — setup, self-test,
+definition, preparation, start, sittings collected, results shown. That is the
+run that was missing.
+
+### `php -S` answered one request at a time
+The self-test makes an HTTP call to the site it runs on, from inside a request.
+PHP's development server serves one request at a time, so the call waited for
+itself and reported the token as not answering — red in CI, green on a real
+web server, for the same code. `PHP_CLI_SERVER_WORKERS=4` in both workflows.
+
+### Carried from 0.6.69, now with 685 tests green
+Readiness refusals block provisioning; typed floats are localised and validated;
+`run.lasterror` exists; the circuit breaker is wired where the worker reports;
+rotation carries its reason and a stop is never replaced; the runtime survives
+upgrades; the live page swaps the visible card; `engine_dryrun` replays a failed
+selection server-side and returns the exception with file, line and trace.
+
+### Verification
+PHPUnit 685 tests / 3654 assertions, Behat 32 scenarios / 235 steps, phpcs with
+the Moodle standard clean, PHPDoc clean, both workflows parse, interface run from
+factory state passes.
+
+---
+
 ## [0.6.69] — 2026-09-21
 
 The four audit findings, four defects found on the way, and a diagnostic for

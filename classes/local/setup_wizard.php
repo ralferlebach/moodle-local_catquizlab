@@ -191,11 +191,36 @@ class setup_wizard {
      * @return bool Whether anything changed.
      */
     public static function enable_pipeline(): bool {
+        global $CFG;
+
         $changed = false;
 
         if ((int) get_config('local_catquizlab', 'enabled') !== 1) {
             set_config('enabled', 1, 'local_catquizlab');
             $changed = true;
+        }
+
+        // The switch that lets the pipeline start a worker at all. It shipped
+        // off, nothing in the setup turned it on, and nothing reported that it
+        // was off — so every fresh installation prepared experiments that then
+        // sat at "stalled" for as long as anybody watched. The one installation
+        // where they ran was the one where I had flipped it by hand.
+        if ((int) get_config('local_catquizlab', 'worker_exec_enabled') !== 1) {
+            set_config('worker_exec_enabled', 1, 'local_catquizlab');
+            $changed = true;
+        }
+
+        // The PHP binary the scheduler uses to spawn tasks. Detected and
+        // stored here, so the setup does it rather than leaving it as the one
+        // amber line a person has to go and find a settings page for.
+        $php = trim((string) ($CFG->pathtophp ?? ''));
+        if ($php === '' || !is_executable($php)) {
+            $found = self::find_php_cli();
+            if ($found !== null) {
+                set_config('pathtophp', $found);
+                $CFG->pathtophp = $found;
+                $changed = true;
+            }
         }
 
         $task = \core\task\manager::get_scheduled_task(self::TASK);
@@ -533,6 +558,14 @@ class setup_wizard {
                 'task',
                 get_string('wizard:task', $component),
                 $task !== false && !$task->get_disabled()
+            ),
+            // The switch the pipeline needs to start a worker. It was checked
+            // nowhere, so an installation could pass every step here and still
+            // never play a sitting — "stalled", with nothing saying why.
+            self::step(
+                'workerexec',
+                get_string('wizard:workerexec', $component),
+                (int) get_config($component, 'worker_exec_enabled') === 1
             ),
             // Without cron the task exists and never runs, which looks exactly
             // like a task that is disabled.

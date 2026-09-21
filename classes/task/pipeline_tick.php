@@ -99,8 +99,12 @@ class pipeline_tick extends \core\task\scheduled_task {
         }
 
         $result = worker_launcher::launch_pool(worker_launcher::config_from_settings());
-        if ($result !== null) {
+        if ($result === null) {
+            mtrace('local_catquizlab: worker pool not dispatched.');
+        } else if ((int) $result['launched'] > 0) {
             mtrace("local_catquizlab: dispatched worker pool ({$result['launched']}).");
+        } else if ((string) $result['reason'] !== '') {
+            mtrace("local_catquizlab: no worker started: {$result['reason']}.");
         }
     }
 }
