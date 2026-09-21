@@ -52,6 +52,13 @@ $functions = [
         'type'         => 'write',
         'capabilities' => 'local/catquizlab:worker',
     ],
+    'local_catquizlab_diagnose_attempt' => [
+        'classname'    => 'local_catquizlab\\external\\diagnose_attempt',
+        'description'  => 'Replay a failed sitting\'s question selection server-side; '
+            . 'return the exception with file, line and trace.',
+        'type'         => 'read',
+        'capabilities' => 'local/catquizlab:worker',
+    ],
     'local_catquizlab_job_claim' => [
         'classname'   => 'local_catquizlab\\external\\job_claim',
         'methodname'  => 'execute',
@@ -99,6 +106,7 @@ $services = [
             // wrong: workers simply never reported, and their runtime and
             // liveness were read from the registry row the launcher wrote.
             'local_catquizlab_worker_heartbeat',
+            'local_catquizlab_diagnose_attempt',
         ],
         'restrictedusers' => 1,
         'enabled'         => 0,

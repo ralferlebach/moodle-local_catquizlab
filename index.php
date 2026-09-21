@@ -364,6 +364,7 @@ if ($tab === 'experiments') {
     // Keeps the counters current while workers run, so watching a queue drain
     // does not mean reloading the page during exactly the minutes somebody is
     // watching it.
+    $PAGE->requires->strings_for_js(['live:interrupted', 'live:reconnect'], 'local_catquizlab');
     $PAGE->requires->js_call_amd('local_catquizlab/livestatus', 'init', [
         \local_catquizlab\external\live_status::current_shape(),
         optional_param('experimentid', 0, PARAM_INT),

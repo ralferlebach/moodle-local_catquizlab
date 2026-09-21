@@ -47,6 +47,24 @@ class setup_wizard {
     /** @var string The scheduled task that moves the pipeline along. */
     public const TASK = '\local_catquizlab\task\pipeline_tick';
 
+    /** @var bool|null Readiness as a test declares it, or null to compute it. */
+    protected static $assumed = null;
+
+    /**
+     * Declare readiness, for tests that cannot install a browser.
+     *
+     * Honoured only under PHPUnit or Behat. Production never reaches this.
+     *
+     * @param bool|null $ready What to answer, or null to compute again.
+     * @return void
+     */
+    public static function assume_ready_for_testing(?bool $ready): void {
+        if (!defined('PHPUNIT_TEST') && !defined('BEHAT_SITE_RUNNING')) {
+            return;
+        }
+        self::$assumed = $ready;
+    }
+
     /**
      * The state of every stage, without changing anything.
      *
@@ -54,6 +72,10 @@ class setup_wizard {
      */
     public static function state(): array {
         $component = 'local_catquizlab';
+
+        if (self::$assumed !== null) {
+            return ['ready' => self::$assumed, 'stages' => [], 'blockers' => self::$assumed ? [] : ['assumed']];
+        }
 
         // Six steps, each answering one thing once. They used to be four
         // stages beside six separate diagnostic cards that repeated them —
@@ -78,6 +100,33 @@ class setup_wizard {
         }
 
         return ['ready' => $blockers === [], 'stages' => $stages, 'blockers' => $blockers];
+    }
+
+    /**
+     * Whether an experiment can be prepared: built, not yet run.
+     *
+     * Preparation makes a course, questions, a scale tree and simulated
+     * people. None of that needs a browser or a worker process, and requiring
+     * them here refused to build anything until the whole runtime was in
+     * place — so a person could not prepare on Friday and sort out the worker
+     * on Monday, and a CI job that had not downloaded a browser yet could not
+     * prepare at all. Running is what needs the rest, and running checks it.
+     *
+     * @return array{ready: bool, blockers: string[]}
+     */
+    public static function preparation_state(): array {
+        $component = 'local_catquizlab';
+
+        $blockers = [];
+        foreach ([self::engine_stage($component), self::environment_stage($component)] as $stage) {
+            foreach ($stage['steps'] as $step) {
+                if (empty($step['ok'])) {
+                    $blockers[] = $step['label'];
+                }
+            }
+        }
+
+        return ['ready' => $blockers === [], 'blockers' => $blockers];
     }
 
     /**

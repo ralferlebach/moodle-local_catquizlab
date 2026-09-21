@@ -206,10 +206,22 @@ class worker_runtime {
 
         $node = trim((string) get_config('local_catquizlab', 'worker_node_path'));
         $npm = dirname($node) . '/npm';
-        $dir = $CFG->dirroot . '/local/catquizlab/worker';
+        $source = $CFG->dirroot . '/local/catquizlab/worker';
+        $dir = worker_launcher::runtime_dir();
 
         if (!is_executable($npm)) {
             return ['exitcode' => 127, 'output' => get_string('runtime:nonpm', 'local_catquizlab', $npm)];
+        }
+
+        // Installed in the dataroot, from the manifest the plugin ships. The
+        // plugin directory is replaced on every upgrade; the dataroot is not.
+        if (!is_dir($dir) && !@mkdir($dir, 0700, true)) {
+            return ['exitcode' => 1, 'output' => get_string('worker:runtimedirfailed', 'local_catquizlab', $dir)];
+        }
+        foreach (['package.json', 'package-lock.json'] as $manifest) {
+            if (is_readable($source . '/' . $manifest)) {
+                copy($source . '/' . $manifest, $dir . '/' . $manifest);
+            }
         }
 
         // The `npm ci` form where a lockfile exists: it installs exactly what was

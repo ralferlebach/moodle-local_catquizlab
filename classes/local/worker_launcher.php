@@ -369,12 +369,30 @@ class worker_launcher {
         $environment = [
             'HOME=' . $home,
             'PUPPETEER_CACHE_DIR=' . $cache,
+            // Where the worker's dependencies live: in the dataroot, which
+            // survives a plugin upgrade. In the plugin directory they did not —
+            // every upgrade replaced the folder, the modules vanished, and an
+            // installation that was ready on Friday was not on Monday. Node
+            // falls back to NODE_PATH for anything it cannot find beside the
+            // script, so the script itself needs no change.
+            'NODE_PATH=' . self::runtime_dir() . '/node_modules',
             'XDG_CACHE_HOME=' . $home . '/.cache',
             'XDG_CONFIG_HOME=' . $home . '/.config',
             'XDG_DATA_HOME=' . $home . '/.local/share',
         ];
 
         return $environment;
+    }
+
+    /**
+     * The directory the worker's dependencies are installed in.
+     *
+     * @return string
+     */
+    public static function runtime_dir(): string {
+        global $CFG;
+
+        return $CFG->dataroot . '/local_catquizlab/worker-runtime';
     }
 
     /**

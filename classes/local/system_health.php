@@ -299,7 +299,10 @@ class system_health {
     public static function worker_modules_installed(): bool {
         global $CFG;
 
-        return is_dir($CFG->dirroot . '/local/catquizlab/worker/node_modules/puppeteer');
+        // Either place: the dataroot is where they are installed now, and the
+        // plugin directory is where a developer's checkout still has them.
+        return is_dir(worker_launcher::runtime_dir() . '/node_modules/puppeteer')
+            || is_dir($CFG->dirroot . '/local/catquizlab/worker/node_modules/puppeteer');
     }
 
     /**

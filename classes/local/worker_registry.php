@@ -218,6 +218,62 @@ class worker_registry {
     }
 
     /**
+     * Give a worker the registry did not start a slot of its own.
+     *
+     * @param string $workerid The worker.
+     * @return bool Whether a slot was free for it.
+     */
+    public static function adopt(string $workerid): bool {
+        $concurrency = max(1, (int) get_config('local_catquizlab', 'worker_concurrency'));
+
+        for ($slot = 1; $slot <= $concurrency; $slot++) {
+            if (self::acquire_slot($slot, $workerid) !== null) {
+                self::report($workerid, 0, 'starting');
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Keep why a worker stopped, where the interface and the log can read it.
+     *
+     * A fatal error is an error; the other three are a worker doing what it
+     * was told. Recording them the same way — as a stopped worker — is what
+     * made "finished; played 1 attempt" alarming and routine at once.
+     *
+     * @param string $workerid The worker.
+     * @param string $reason queue-empty, max-jobs, stop-requested or fatal-error.
+     * @return void
+     */
+    public static function record_stop(string $workerid, string $reason): void {
+        global $DB;
+
+        $worker = $DB->get_record('local_catquizlab_worker', ['workerid' => $workerid]);
+        if (!$worker) {
+            return;
+        }
+
+        $fatal = $reason === 'fatal-error';
+
+        $DB->update_record('local_catquizlab_worker', (object) [
+            'id'           => $worker->id,
+            'status'       => $fatal ? self::STATUS_CRASHED : self::STATUS_STOPPED,
+            'workerstate'  => 'stopped' . ($reason !== '' ? ':' . $reason : ''),
+            'lasterror'    => $fatal ? 'fatal-error' : $worker->lasterror,
+            'timemodified' => time(),
+        ]);
+
+        debug_trace::record(
+            debug_trace::WORKER,
+            'worker_stopped',
+            ['workerid' => $workerid, 'reason' => $reason],
+            $fatal ? 'error' : 'ok'
+        );
+    }
+
+    /**
      * Whether a worker's departure leaves work with nobody to do it.
      *
      * A rotation limit is a resource setting — how many sittings one browser

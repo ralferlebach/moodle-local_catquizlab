@@ -438,7 +438,7 @@ if ($runid === 0) {
     // updater.
     // The interrupted-updating message, so the module can show it without a
     // second round trip at the moment the round trips are failing.
-    $PAGE->requires->string_for_js('live:interrupted', $component);
+    $PAGE->requires->strings_for_js(['live:interrupted', 'live:reconnect'], $component);
     $PAGE->requires->js_call_amd('local_catquizlab/livestatus', 'init', [
         \local_catquizlab\external\live_status::current_shape(),
         optional_param('experimentid', 0, PARAM_INT),

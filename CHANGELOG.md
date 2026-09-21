@@ -6,6 +6,100 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.6.69] — 2026-09-21
+
+The four audit findings, four defects found on the way, and a diagnostic for
+the failure on the live installation that this plugin could not see.
+
+### The failure it could not see
+Six runs on a live installation failed every sitting with "Division by zero"
+for two days. Every check this plugin had said they were ready — the checks
+read configuration, and the failure was in what the engine did with it. The
+browser saw an error page; the site shows no debug information; so the worker
+reported the words and not the place.
+
+Why the words reached a Moodle error page at all: the engine's own error
+handling catches `Exception`, and `DivisionByZeroError` is an `Error`. It falls
+through every catch block the engine has.
+
+**`engine_dryrun`** asks the engine for a question exactly as the attempt page
+does, in PHP, inside a transaction it rolls back, and catches `Throwable` — with
+file, line and trace. It runs as the last part of readiness, so a run that
+would fail on its first sitting is held before one is queued. And the worker
+calls `local_catquizlab_diagnose_attempt` on every page error, which replays
+the selection for that sitting server-side and appends
+`DivisionByZeroError at local/catquiz/…/x.php:123` to the failure. The next
+failure on that installation will say where it is.
+
+I could not reproduce the failure here: the same configuration — ten by ten
+subscales, three hundred items — plays twenty-five questions and finishes, on
+an engine identical to that installation's `main`. The diagnostic is the honest
+answer to that.
+
+### A readiness refusal that did not refuse
+The run log for that installation shows `stage_failed stage=readiness` — "300
+questions, over the global maximum of 25" — followed by `provisioning_ready`.
+`stage_failed()` looked for a `failed` key that only the container stage set;
+readiness and access answered `ok => false`, were logged as failed, and were
+then ignored. Any stage answering `ok => false` stops provisioning now.
+
+### "0,3" was 0
+The experiment form used `PARAM_FLOAT` for twelve typed numbers. Moodle's own
+documentation says not to: on a site whose language writes decimals with a
+comma, "0,3" becomes 0 and "2,5" becomes 2. A standard-error floor of 0 is a
+different experiment from the one designed, silently. `PARAM_LOCALISEDFLOAT`
+now, with the form rejecting what it cannot read rather than storing zero, and
+values written back the way the person's language writes them.
+
+### The breaker wrote the cause into a column that did not exist
+`local_catquizlab_run` had no `lasterror`; Moodle dropped the field without a
+word, so the cause was never on the run. The column exists now, and a test
+reads it back.
+
+### The audit findings
+**Circuit breaker, wired where it fires.** The worker reports through
+`job_complete`, which reached an older streak check that paused the run. The
+breaker is there now, and the old method delegates to it. A regression test
+reports ten terminal failures through `job_complete` itself and asserts the
+run held, the five waiting sittings untouched and unclaimable, the ten causes
+grouped as one, and the experiment BLOCKED.
+
+**Rotation with a reason.** The worker's last heartbeat carries why it stopped.
+A replacement is launched only for `max-jobs`; a worker that stopped because it
+was asked to is not replaced — which it was, for a release, undoing the stop
+somebody requested. `fatal-error` is recorded as a crash; the other three as a
+worker doing what it was told. `launch_pool()` is called with the one argument
+it takes.
+
+**A worker the launcher did not start is adopted, not stopped.** It
+authenticated; it takes a free slot. Telling it to stop made every CI worker
+play nothing, reported as "played 1 attempt, 0 finished".
+
+**The runtime survives an upgrade.** `node_modules` install into the dataroot
+and are found through `NODE_PATH`; `package-lock.json` is versioned; the
+pipeline task ships enabled and the upgrade restores it where the plugin is
+enabled; the `enabled` switch is checked before the execution queue moves.
+
+**The live page updates what is visible.** The poll returns each run's status
+card rendered, and the page swaps it in — there is no status logic in
+JavaScript to disagree with the server's. Counts are scoped to the experiment
+in view and say so. An interrupted poll offers to resume.
+
+### Preparing needs the engine; running needs the rest
+`Prepare experiment` refused on any installation without a browser installed.
+Preparation builds courses and questions and needs neither. It requires the
+engine and somewhere to build now; the browser, worker and pipeline are checked
+when an experiment is queued — with what is missing named — and again when its
+turn comes.
+
+### Verification
+PHPUnit 683 tests / 3634 assertions, Behat 32 scenarios / 235 steps, phpcs with
+the Moodle standard clean, PHPDoc clean, both workflows parse. Run against this
+instance: all five strategies pass the 15-answer smoke test; the interface
+end-to-end run passes (6.7 minutes, three people).
+
+---
+
 ## [0.6.67] — 2026-09-19
 
 Both end-to-end jobs, run locally until they passed.

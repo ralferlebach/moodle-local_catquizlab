@@ -277,6 +277,14 @@ class run_orchestrator {
         if (is_array($result) && !empty($result['failed'])) {
             return true;
         }
+        // A stage that answers ok => false has failed. Readiness and access
+        // answered that way and were logged as failed — and then provisioning
+        // carried on, because only stages that also set 'failed' were stopped.
+        // Six runs on a live installation reached "ready" past a readiness
+        // refusal that said, in words, why they could not work.
+        if (is_array($result) && array_key_exists('ok', $result) && empty($result['ok'])) {
+            return true;
+        }
         if ($stage === self::STAGE_MATERIALISE && is_array($result)) {
             return !self::materialisation_complete($result);
         }
@@ -577,12 +585,38 @@ class run_orchestrator {
                 // call cat_readiness directly rather than through the stage.
                 $readiness = cat_readiness::check((int) $context['runid']);
 
+                if (!$readiness['ok']) {
+                    return [
+                        'ok'     => false,
+                        'reason' => cat_readiness::summary($readiness),
+                        // The counts travel with the stage so the interface can
+                        // show what was actually found rather than only that it
+                        // failed.
+                        'facts'  => $readiness['facts'],
+                    ];
+                }
+
+                // Configuration can be right and the engine can still throw on
+                // the first question. Every check above reads settings; this one
+                // asks the engine for an item exactly as the attempt page would,
+                // inside a transaction it rolls back, and catches what it throws
+                // — with the file and the line a production error page hides.
+                $dryrun = engine_dryrun::first_question((int) $context['runid']);
+                if (!$dryrun['ok']) {
+                    return [
+                        'ok'     => false,
+                        'reason' => get_string('readiness:enginethrew', 'local_catquizlab', $dryrun['reason']),
+                        'facts'  => $readiness['facts'] + [
+                            'code'      => 'engine-dryrun-failed',
+                            'exception' => $dryrun['exception'],
+                        ],
+                    ];
+                }
+
                 return [
-                    'ok'     => $readiness['ok'],
-                    'reason' => $readiness['ok'] ? '' : cat_readiness::summary($readiness),
-                    // The counts travel with the stage so the interface can show
-                    // what was actually found rather than only that it failed.
-                    'facts'  => $readiness['facts'],
+                    'ok'     => true,
+                    'reason' => '',
+                    'facts'  => $readiness['facts'] + ['firstquestionid' => $dryrun['questionid']],
                 ];
 
             case self::STAGE_ATTEMPTS:

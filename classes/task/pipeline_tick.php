@@ -60,6 +60,13 @@ class pipeline_tick extends \core\task\scheduled_task {
         // there is no id to continue.
         \local_catquizlab\local\debug_trace::enter_task('\\local_catquizlab\\task\\pipeline_tick');
 
+        // The switch comes first. A disabled plugin that still advanced its
+        // execution queue was starting experiments while saying it was off,
+        // which is the one thing a switch must not do.
+        if (!get_config('local_catquizlab', 'enabled')) {
+            return;
+        }
+
         // The execution queue moves here, because this is the thing that runs
         // by itself. Somebody who queued five experiments before going home
         // should find five results, not five experiments still waiting for a
@@ -67,10 +74,6 @@ class pipeline_tick extends \core\task\scheduled_task {
         $advanced = \local_catquizlab\local\execution_queue::advance();
         if ($advanced['started'] > 0) {
             mtrace('local_catquizlab: started queued experiment ' . $advanced['started'] . '.');
-        }
-
-        if (!get_config('local_catquizlab', 'enabled')) {
-            return;
         }
 
         // Dead workers first, then their claims, then the timeout fallback.

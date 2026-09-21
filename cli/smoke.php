@@ -78,12 +78,18 @@ $GLOBALS['USER'] = get_admin();
 // share the worker slots, so each waits out its timeout on the other's work and
 // reports a failure about the test rather than about the plugin. That happened,
 // and it cost a strategy an undeserved FAIL.
-$lock = $CFG->dataroot . '/local_catquizlab/smoke.lock';
-@mkdir(dirname($lock), 0777, true);
-$lockhandle = fopen($lock, 'c');
-if ($lockhandle === false || !flock($lockhandle, LOCK_EX | LOCK_NB)) {
+// Moodle's own lock, not flock: a file lock is inherited by every process this
+// script starts, and the worker it launches kept it for as long as it lived —
+// so the second strategy found the first one "still running" after it had
+// passed and printed its result.
+$lockfactory = \core\lock\lock_config::get_lock_factory('local_catquizlab');
+$lock = $lockfactory->get_lock('smoke', 5);
+if (!$lock) {
     cli_error('Another smoke test is running. They cannot share an installation.');
 }
+register_shutdown_function(static function () use ($lock): void {
+    $lock->release();
+});
 
 $strategy = (string) $options['strategy'];
 $persons = max(1, (int) $options['persons']);
@@ -207,7 +213,7 @@ step('Other queued work deferred for the duration.');
 
 $started = microtime(true);
 worker_registry::reap();
-$launch = worker_launcher::launch_pool(worker_launcher::config_from_settings(), 1);
+$launch = worker_launcher::launch_pool(worker_launcher::config_from_settings());
 
 if ((int) $launch['launched'] > 0) {
     step('Worker started and reported.', $started);

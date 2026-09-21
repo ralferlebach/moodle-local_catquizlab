@@ -129,22 +129,22 @@ class experiment_form extends \moodleform {
         $mform->hideIf('allowdegenerate', 'model', 'eq', '1pl');
 
         $mform->addElement('text', 'discriminationa', get_string('form:paramone', $component), ['size' => 10]);
-        $mform->setType('discriminationa', PARAM_FLOAT);
+        $mform->setType('discriminationa', PARAM_LOCALISEDFLOAT);
         $mform->setDefault('discriminationa', 1.0);
         $mform->hideIf('discriminationa', 'model', 'eq', '1pl');
 
         $mform->addElement('text', 'discriminationb', get_string('form:paramtwo', $component), ['size' => 10]);
-        $mform->setType('discriminationb', PARAM_FLOAT);
+        $mform->setType('discriminationb', PARAM_LOCALISEDFLOAT);
         $mform->setDefault('discriminationb', 0.3);
         $mform->hideIf('discriminationb', 'discriminationdist', 'eq', 'constant');
 
         $mform->addElement('text', 'guessingmin', get_string('form:guessingmin', $component), ['size' => 10]);
-        $mform->setType('guessingmin', PARAM_FLOAT);
+        $mform->setType('guessingmin', PARAM_LOCALISEDFLOAT);
         $mform->setDefault('guessingmin', 0.1);
         $mform->hideIf('guessingmin', 'model', 'noteq', '3pl');
 
         $mform->addElement('text', 'guessingmax', get_string('form:guessingmax', $component), ['size' => 10]);
-        $mform->setType('guessingmax', PARAM_FLOAT);
+        $mform->setType('guessingmax', PARAM_LOCALISEDFLOAT);
         $mform->setDefault('guessingmax', 0.25);
         $mform->hideIf('guessingmax', 'model', 'noteq', '3pl');
 
@@ -187,32 +187,32 @@ class experiment_form extends \moodleform {
         // Variant parameters appear only for the variant they belong to, so the
         // form never asks for a shift on a pool that is not shifted.
         $mform->addElement('text', 'recipeshift', get_string('form:shift', $component), ['size' => 8]);
-        $mform->setType('recipeshift', PARAM_FLOAT);
+        $mform->setType('recipeshift', PARAM_LOCALISEDFLOAT);
         $mform->setDefault('recipeshift', pool_mutator::DEFAULT_SHIFT);
         $mform->hideIf('recipeshift', 'variant', 'noteq', 'shifted');
 
         $mform->addElement('text', 'recipefactor', get_string('form:stretch', $component), ['size' => 8]);
-        $mform->setType('recipefactor', PARAM_FLOAT);
+        $mform->setType('recipefactor', PARAM_LOCALISEDFLOAT);
         $mform->setDefault('recipefactor', pool_mutator::DEFAULT_STRETCH);
         $mform->hideIf('recipefactor', 'variant', 'noteq', 'stretched');
 
         $mform->addElement('text', 'recipefraction', get_string('form:fraction', $component), ['size' => 8]);
-        $mform->setType('recipefraction', PARAM_FLOAT);
+        $mform->setType('recipefraction', PARAM_LOCALISEDFLOAT);
         $mform->setDefault('recipefraction', 0.1);
         $mform->addHelpButton('recipefraction', 'form:fraction', $component);
 
         $mform->addElement('text', 'recipesd', get_string('form:errorsd', $component), ['size' => 8]);
-        $mform->setType('recipesd', PARAM_FLOAT);
+        $mform->setType('recipesd', PARAM_LOCALISEDFLOAT);
         $mform->setDefault('recipesd', 0.5);
         $mform->hideIf('recipesd', 'variant', 'noteq', 'calibrationerror');
 
         $mform->addElement('text', 'recipegapmin', get_string('form:gapmin', $component), ['size' => 8]);
-        $mform->setType('recipegapmin', PARAM_FLOAT);
+        $mform->setType('recipegapmin', PARAM_LOCALISEDFLOAT);
         $mform->setDefault('recipegapmin', -0.5);
         $mform->hideIf('recipegapmin', 'variant', 'noteq', 'gappy');
 
         $mform->addElement('text', 'recipegapmax', get_string('form:gapmax', $component), ['size' => 8]);
-        $mform->setType('recipegapmax', PARAM_FLOAT);
+        $mform->setType('recipegapmax', PARAM_LOCALISEDFLOAT);
         $mform->setDefault('recipegapmax', 0.5);
         $mform->hideIf('recipegapmax', 'variant', 'noteq', 'gappy');
 
@@ -272,12 +272,12 @@ class experiment_form extends \moodleform {
         $mform->setDefault('subscalemax', 5);
 
         $mform->addElement('text', 'semin', get_string('form:semin', $component), ['size' => 8]);
-        $mform->setType('semin', PARAM_FLOAT);
+        $mform->setType('semin', PARAM_LOCALISEDFLOAT);
         $mform->setDefault('semin', 0.35);
         $mform->addHelpButton('semin', 'form:semin', $component);
 
         $mform->addElement('text', 'semax', get_string('form:semax', $component), ['size' => 8]);
-        $mform->setType('semax', PARAM_FLOAT);
+        $mform->setType('semax', PARAM_LOCALISEDFLOAT);
         $mform->setDefault('semax', 0.75);
 
         // Sweep.
@@ -363,6 +363,24 @@ class experiment_form extends \moodleform {
      */
     public function validation($data, $files) {
         $errors = parent::validation($data, $files);
+
+        // A number that could not be read is false, not zero. Storing it as
+        // zero — which the old float type did for "0,3" on a German site — made
+        // a standard-error floor of 0 and a discrimination of 0 out of typing
+        // mistakes, and the experiment ran with them without a word.
+        $floats = [
+            'discriminationa', 'discriminationb', 'guessingmin', 'guessingmax',
+            'recipeshift', 'recipefactor', 'recipefraction', 'recipesd',
+            'recipegapmin', 'recipegapmax', 'semin', 'semax',
+        ];
+        foreach ($floats as $field) {
+            if (array_key_exists($field, $data) && $data[$field] === false) {
+                $errors[$field] = get_string('form:notanumber', 'local_catquizlab');
+            }
+        }
+        if ($errors !== []) {
+            return $errors;
+        }
 
         $definition = self::to_definition((array) $data);
         $result = (new experiment_definition($definition))->validate();
@@ -522,6 +540,16 @@ class experiment_form extends \moodleform {
     }
 
     /**
+     * A float, written the way the person's language writes it.
+     *
+     * @param float $value The number.
+     * @return string
+     */
+    protected static function localised(float $value): string {
+        return format_float($value, -1, true, true);
+    }
+
+    /**
      * Convert a stored definition back into form data.
      *
      * @param array $definition The stored definition.
@@ -550,22 +578,22 @@ class experiment_form extends \moodleform {
             'model'              => (string) ($normalised['model'] ?? '2pl'),
             'discriminationdist' => (string) ($discrimination['dist'] ?? 'constant'),
             'allowdegenerate'    => !empty($params['allowdegenerate']) ? 1 : 0,
-            'discriminationa'    => (float) ($discrimination['value']
-                ?? $discrimination['meanlog'] ?? $discrimination['min'] ?? 1.0),
-            'discriminationb'    => (float) ($discrimination['sdlog'] ?? $discrimination['max'] ?? 0.3),
-            'guessingmin'        => (float) ($guessing['min'] ?? $guessing['value'] ?? 0.1),
-            'guessingmax'        => (float) ($guessing['max'] ?? 0.25),
+            'discriminationa'    => self::localised((float) ($discrimination['value']
+                ?? $discrimination['meanlog'] ?? $discrimination['min'] ?? 1.0)),
+            'discriminationb'    => self::localised((float) ($discrimination['sdlog'] ?? $discrimination['max'] ?? 0.3)),
+            'guessingmin'        => self::localised((float) ($guessing['min'] ?? $guessing['value'] ?? 0.1)),
+            'guessingmax'        => self::localised((float) ($guessing['max'] ?? 0.25)),
             'categories'         => (int) ($params['categories'] ?? 4),
             'poolcategories'     => (int) ($normalised['pool']['scales']['categories'] ?? 10),
             'poolsubcategories'  => (int) ($normalised['pool']['scales']['subcategories'] ?? 10),
             'poolitems'          => (int) ($normalised['pool']['scales']['itemspersubscale'] ?? 25),
             'variant'            => (string) ($normalised['pool']['variant'] ?? 'ideal'),
-            'recipeshift'        => (float) ($recipe['shift'] ?? pool_mutator::DEFAULT_SHIFT),
-            'recipefactor'       => (float) ($recipe['factor'] ?? pool_mutator::DEFAULT_STRETCH),
-            'recipefraction'     => (float) ($recipe['fraction'] ?? 0.1),
-            'recipesd'           => (float) ($recipe['sd'] ?? 0.5),
-            'recipegapmin'       => (float) ($recipe['gapmin'] ?? -0.5),
-            'recipegapmax'       => (float) ($recipe['gapmax'] ?? 0.5),
+            'recipeshift'        => self::localised((float) ($recipe['shift'] ?? pool_mutator::DEFAULT_SHIFT)),
+            'recipefactor'       => self::localised((float) ($recipe['factor'] ?? pool_mutator::DEFAULT_STRETCH)),
+            'recipefraction'     => self::localised((float) ($recipe['fraction'] ?? 0.1)),
+            'recipesd'           => self::localised((float) ($recipe['sd'] ?? 0.5)),
+            'recipegapmin'       => self::localised((float) ($recipe['gapmin'] ?? -0.5)),
+            'recipegapmax'       => self::localised((float) ($recipe['gapmax'] ?? 0.5)),
             'stratum'            => (string) ($normalised['persons']['stratum'] ?? 'conforming'),
             'severity'           => (string) ($normalised['persons']['severity'] ?? 'none'),
             'personcount'        => (int) ($normalised['persons']['count'] ?? 50),
@@ -575,8 +603,8 @@ class experiment_form extends \moodleform {
             'globalmax'          => (int) ($normalised['budgets']['global']['maxitems'] ?? 25),
             'subscalemin'        => (int) ($normalised['budgets']['subscale']['minitems'] ?? 3),
             'subscalemax'        => (int) ($normalised['budgets']['subscale']['maxitems'] ?? 5),
-            'semin'              => (float) ($normalised['budgets']['se']['min'] ?? 0.35),
-            'semax'              => (float) ($normalised['budgets']['se']['max'] ?? 0.75),
+            'semin'              => self::localised((float) ($normalised['budgets']['se']['min'] ?? 0.35)),
+            'semax'              => self::localised((float) ($normalised['budgets']['se']['max'] ?? 0.75)),
             'sweepstrategies'    => (array) ($factors['strategy'] ?? []),
             'sweepvariants'      => (array) ($factors['variant'] ?? []),
             'sweepstrata'        => (array) ($factors['stratum'] ?? []),

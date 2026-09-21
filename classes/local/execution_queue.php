@@ -64,6 +64,13 @@ class execution_queue {
             return ['ok' => false, 'position' => 0, 'reason' => 'not-ready'];
         }
 
+        // The runtime — browser, worker, pipeline — is needed to run, not to
+        // wait in line. An entry queued before the worker is set up simply
+        // waits; what is still missing is said now, and checked again when its
+        // turn comes.
+        $setup = setup_wizard::state();
+        $warning = empty($setup['ready']) ? 'setup-incomplete: ' . implode(', ', $setup['blockers']) : '';
+
         // Already in the line: asking twice should not mean running twice.
         $existing = $DB->get_record_select(
             'local_catquizlab_execqueue',
@@ -91,7 +98,7 @@ class execution_queue {
             'timecreated'  => time(),
         ]);
 
-        return ['ok' => true, 'position' => $position, 'reason' => ''];
+        return ['ok' => true, 'position' => $position, 'reason' => '', 'warning' => $warning];
     }
 
     /**
@@ -157,6 +164,13 @@ class execution_queue {
 
         $entry = reset($next);
         $experimentid = (int) $entry->experimentid;
+
+        // The installation has to be able to run now. An entry queued before
+        // the runtime was set up waits here — it is not skipped, because the
+        // thing missing is on the installation, not on the experiment.
+        if (empty(setup_wizard::state()['ready'])) {
+            return ['started' => 0, 'reason' => 'setup-incomplete'];
+        }
 
         // Ready when it reaches the front, not merely when it was queued: an
         // experiment can be reset or fail while it waits.

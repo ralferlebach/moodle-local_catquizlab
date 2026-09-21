@@ -490,20 +490,47 @@ final class worker_registry_test extends \advanced_testcase {
             ]);
         }
         $this->assertFalse(\local_catquizlab\local\run_lifecycle::check_failure_streak($runid));
-        $this->assertFalse(\local_catquizlab\local\run_lifecycle::is_paused($runid));
+        $this->assertNotSame(registry::STATUS_FAILED, (int) $DB->get_field('local_catquizlab_run', 'status', ['id' => $runid]));
+
+        // Sittings still waiting, which the breaker must keep out of the pool.
+        for ($i = 0; $i < 5; $i++) {
+            $DB->insert_record('local_catquizlab_attempt', (object) [
+                'runid' => $runid, 'personid' => 0, 'status' => attempt_scheduler::STATUS_QUEUED,
+                'tries' => 0, 'timecreated' => time(), 'timemodified' => time(),
+            ]);
+        }
 
         $DB->insert_record('local_catquizlab_attempt', (object) [
             'runid' => $runid, 'personid' => 0, 'status' => attempt_scheduler::STATUS_FAILED,
-            'tries' => 3, 'timecreated' => time(), 'timemodified' => time() + 100,
+            'tries' => 3, 'lasterror' => 'Division by zero', 'timecreated' => time(), 'timemodified' => time() + 100,
         ]);
 
         // Retrying 1600 attempts that all fail the same way exhausts the queue
-        // and leaves nothing to diagnose.
+        // and leaves nothing to diagnose. The run is held as failed — not
+        // merely paused — with the cause on it, and the experiment is blocked.
         $this->assertTrue(\local_catquizlab\local\run_lifecycle::check_failure_streak($runid));
-        $this->assertTrue(\local_catquizlab\local\run_lifecycle::is_paused($runid));
-        $this->assertStringContainsString(
-            (string) \local_catquizlab\local\run_lifecycle::FAILURE_STREAK_LIMIT,
-            \local_catquizlab\local\run_lifecycle::pause_reason($runid)
+        $held = $DB->get_record('local_catquizlab_run', ['id' => $runid]);
+        $this->assertSame(registry::STATUS_FAILED, (int) $held->status);
+        $this->assertStringContainsString('Division by zero', (string) $held->lasterror);
+
+        // The five waiting sittings were not touched: still queued, and out of
+        // reach because their run cannot hand out work.
+        $this->assertSame(5, $DB->count_records('local_catquizlab_attempt', [
+            'runid' => $runid, 'status' => attempt_scheduler::STATUS_QUEUED,
+        ]));
+
+        $log = array_filter(\local_catquizlab\local\run_log::entries($runid), static function (array $entry): bool {
+            return $entry['event'] === \local_catquizlab\local\run_log::RUN_AUTOPAUSED;
+        });
+        $this->assertCount(1, $log);
+        $entry = reset($log);
+        $this->assertSame(10, (int) $entry['detail']['failure_count']);
+        $this->assertSame(5, (int) $entry['detail']['held']);
+
+        $experimentid = (int) $DB->get_field('local_catquizlab_run', 'experimentid', ['id' => $runid]);
+        $this->assertSame(
+            \local_catquizlab\local\experiment_runner::STATE_BLOCKED,
+            \local_catquizlab\local\experiment_runner::state($experimentid)['state']
         );
     }
 
@@ -1396,11 +1423,62 @@ final class worker_registry_test extends \advanced_testcase {
         $this->resetAfterTest();
         $this->setAdminUser();
 
+        // Every slot taken, so there is nothing to give it.
+        $concurrency = max(1, (int) get_config('local_catquizlab', 'worker_concurrency'));
+        for ($slot = 1; $slot <= $concurrency; $slot++) {
+            \local_catquizlab\local\worker_registry::acquire_slot($slot, 'occupant-' . $slot);
+        }
+
         $reply = \local_catquizlab\external\worker_heartbeat::execute('ghost-worker', 0, 'working');
 
         // Its slot was reaped and may already have been given away. Two workers
         // believing they hold one slot is worse than one stopping early.
         $this->assertFalse($reply['known']);
         $this->assertTrue($reply['stop']);
+    }
+
+    /**
+     * A worker the launcher did not start takes a free slot rather than stopping.
+     *
+     * @return void
+     */
+    public function test_an_unknown_worker_with_a_free_slot_is_adopted(): void {
+        $this->resetAfterTest();
+        $this->setAdminUser();
+
+        // Started by hand or by a CI job: it authenticated, so it is entitled to
+        // work. Telling it to stop made every such worker play exactly nothing,
+        // which is how a CI run reported "played 1 attempt, 0 finished".
+        $reply = \local_catquizlab\external\worker_heartbeat::execute('by-hand', 0, 'starting');
+
+        $this->assertTrue($reply['known']);
+        $this->assertFalse($reply['stop']);
+        $this->assertTrue(worker_registry::has_reported('by-hand'));
+    }
+
+    /**
+     * A replacement is launched only for a rotation, never for a requested stop.
+     *
+     * @return void
+     */
+    public function test_only_a_rotation_stop_is_replaced(): void {
+        global $DB;
+        $this->resetAfterTest();
+        $this->setAdminUser();
+
+        worker_registry::acquire_slot(1, 'w1');
+        worker_registry::report('w1', 0, 'working');
+
+        // Asked to stop, and stopping: the record says so, and says why.
+        \local_catquizlab\external\worker_heartbeat::execute('w1', 0, 'stopping', 'stop-requested');
+        $row = $DB->get_record('local_catquizlab_worker', ['workerid' => 'w1']);
+        $this->assertSame(worker_registry::STATUS_STOPPED, (int) $row->status);
+        $this->assertSame('stopped:stop-requested', $row->workerstate);
+
+        // A fatal error is recorded as one, not as a worker doing what it was told.
+        worker_registry::acquire_slot(1, 'w2');
+        \local_catquizlab\external\worker_heartbeat::execute('w2', 0, 'stopping', 'fatal-error');
+        $row = $DB->get_record('local_catquizlab_worker', ['workerid' => 'w2']);
+        $this->assertSame(worker_registry::STATUS_CRASHED, (int) $row->status);
     }
 }

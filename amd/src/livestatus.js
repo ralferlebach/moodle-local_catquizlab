@@ -115,11 +115,15 @@ const poll = async() => {
             setRegion(region.name, region.text);
         });
 
-        // The run rows, from the same verdict the page was rendered with —
-        // there is no second opinion about a run's state on this side.
+        // The run rows: the server renders the card and the page swaps it in.
+        // Two hidden spans used to be updated beside a visible card that never
+        // changed. There is deliberately no status logic here to disagree with
+        // the server's.
         (status.runs || []).forEach((run) => {
-            setRegion(`catquizlab-run-${run.runid}-state`, run.state);
-            setRegion(`catquizlab-run-${run.runid}-progress`, `${run.done} / ${run.total}`);
+            const cell = document.querySelector(`[data-region="catquizlab-run-${run.runid}-card"]`);
+            if (cell && run.cardhtml && cell.innerHTML.trim() !== run.cardhtml.trim()) {
+                cell.innerHTML = run.cardhtml;
+            }
 
             const bar = document.querySelector(`[data-region="catquizlab-run-${run.runid}-bar"]`);
             if (bar) {
@@ -178,8 +182,33 @@ const poll = async() => {
         if (failures >= 3) {
             setRegion('catquizlab-liveerror', M.util.get_string('live:interrupted', 'local_catquizlab'));
             stop();
+
+            // A way back that is not a full reload. The message said updating
+            // had stopped and offered nothing but F5.
+            const box = document.querySelector('[data-region="catquizlab-liveerror"]');
+            if (box && !box.querySelector('button')) {
+                const button = document.createElement('button');
+                button.type = 'button';
+                button.className = 'btn btn-sm btn-outline-secondary ml-2';
+                button.textContent = M.util.get_string('live:reconnect', 'local_catquizlab');
+                button.addEventListener('click', () => {
+                    failures = 0;
+                    setRegion('catquizlab-liveerror', '');
+                    start();
+                });
+                box.appendChild(button);
+            }
         }
     }
+};
+
+/**
+ * Resume polling at the rate the tab's visibility calls for.
+ */
+const start = () => {
+    stop();
+    timer = window.setInterval(poll, document.hidden ? BACKGROUND_INTERVAL : INTERVAL);
+    poll();
 };
 
 /**

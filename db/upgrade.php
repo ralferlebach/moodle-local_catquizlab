@@ -403,6 +403,46 @@ function xmldb_local_catquizlab_upgrade($oldversion): bool {
         upgrade_plugin_savepoint(true, 2026091710, 'local', 'catquizlab');
     }
 
+    if ($oldversion < 2026091902) {
+        // The pipeline task used to ship disabled, and Moodle re-applies the
+        // shipped default whenever a plugin upgrade rewrites the task table.
+        // Every upgrade therefore switched the pipeline off on installations
+        // that had it on. The task ships enabled now; this restores it on any
+        // installation whose plugin is enabled, which is the state they had.
+        if (get_config('local_catquizlab', 'enabled')) {
+            $task = $DB->get_record('task_scheduled', [
+                'classname' => '\\local_catquizlab\\task\\pipeline_tick',
+            ]);
+            if ($task && (int) $task->disabled === 1) {
+                $DB->set_field('task_scheduled', 'disabled', 0, ['id' => $task->id]);
+            }
+        }
+
+        upgrade_plugin_savepoint(true, 2026091902, 'local', 'catquizlab');
+    }
+
+    if ($oldversion < 2026091903) {
+        // Room for the stop reason beside the state: "stopped:stop-requested"
+        // is longer than the twenty characters the column had.
+        $table = new xmldb_table('local_catquizlab_worker');
+        $field = new xmldb_field('workerstate', XMLDB_TYPE_CHAR, '40', null, null, null, null, 'currentattempt');
+        if ($dbman->field_exists($table, $field)) {
+            $dbman->change_field_precision($table, $field);
+        }
+
+        // Where the circuit breaker keeps the cause. It wrote lasterror to the
+        // run since 0.6.63, and Moodle dropped the field silently because the
+        // column did not exist — so the cause was never stored on the run and
+        // "Division by zero (×10)" was read from the attempts each time.
+        $table = new xmldb_table('local_catquizlab_run');
+        $field = new xmldb_field('lasterror', XMLDB_TYPE_TEXT, null, null, null, null, null);
+        if (!$dbman->field_exists($table, $field)) {
+            $dbman->add_field($table, $field);
+        }
+
+        upgrade_plugin_savepoint(true, 2026091903, 'local', 'catquizlab');
+    }
+
     return true;
 }
 

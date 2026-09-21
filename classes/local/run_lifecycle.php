@@ -170,7 +170,7 @@ class run_lifecycle {
      *
      * @var int
      */
-    public const FAILURE_STREAK_LIMIT = 10;
+    public const FAILURE_STREAK_LIMIT = circuit_breaker::THRESHOLD;
 
     /**
      * Hold a run's attempts back, or let them go again.
@@ -247,53 +247,20 @@ class run_lifecycle {
     }
 
     /**
-     * Pause a run that is failing its way through the queue.
+     * Stop a run that is failing the same way over and over.
      *
-     * Called after each failed attempt. The streak is counted over the most
-     * recent attempts rather than over all of them, so a run that failed early
-     * and recovered is not punished for its history.
+     * Delegates to the circuit breaker, which is the one place that decides
+     * this. Two implementations of "ten failures in a row" existed for a
+     * release: this one, reached by the worker's completion report, paused the
+     * run; the newer one, reached by the scheduler's retry path, held it as
+     * failed with the cause. The worker path is the one that fires in
+     * practice, so the newer behaviour never showed up where it mattered.
      *
      * @param int $runid The run.
-     * @return bool Whether this call paused the run.
+     * @return bool Whether this call tripped the breaker.
      */
     public static function check_failure_streak(int $runid): bool {
-        global $DB;
-
-        if (self::is_paused($runid)) {
-            return false;
-        }
-
-        $recent = $DB->get_records_select(
-            'local_catquizlab_attempt',
-            'runid = :runid AND status IN (:collected, :failed)',
-            [
-                'runid'     => $runid,
-                'collected' => attempt_scheduler::STATUS_COLLECTED,
-                'failed'    => attempt_scheduler::STATUS_FAILED,
-            ],
-            'timemodified DESC',
-            'id, status',
-            0,
-            self::FAILURE_STREAK_LIMIT
-        );
-
-        if (count($recent) < self::FAILURE_STREAK_LIMIT) {
-            return false;
-        }
-
-        foreach ($recent as $attempt) {
-            if ((int) $attempt->status !== attempt_scheduler::STATUS_FAILED) {
-                return false;
-            }
-        }
-
-        self::set_paused(
-            $runid,
-            true,
-            get_string('ops:autopaused', 'local_catquizlab', self::FAILURE_STREAK_LIMIT)
-        );
-
-        return true;
+        return (bool) circuit_breaker::check($runid)['tripped'];
     }
 
     /**

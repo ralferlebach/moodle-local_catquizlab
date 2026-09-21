@@ -164,9 +164,12 @@ class job_complete extends external_api {
         $DB->set_field('local_catquizlab_attempt', 'leaseexpires', 0, ['id' => $attemptid]);
 
         // A run failing the same way over and over does not improve by being
-        // retried; pausing it keeps the queue free for work that can succeed.
+        // retried. The breaker holds it as failed with the cause, blocks the
+        // experiment, and keeps the remaining sittings out of the pool — this is
+        // the path the worker actually reports through, so the breaker has to
+        // be here and not only on the scheduler's retry path.
         if (!$finished) {
-            \local_catquizlab\local\run_lifecycle::check_failure_streak((int) $attempt->runid);
+            \local_catquizlab\local\circuit_breaker::check((int) $attempt->runid);
         }
 
         \local_catquizlab\local\run_lifecycle::attempt_finished((int) $attempt->runid);

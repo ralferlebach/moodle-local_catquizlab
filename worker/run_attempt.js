@@ -192,6 +192,27 @@ async function playAttempt(browser, job) {
     } catch (error) {
         failure = error.message;
         console.error(`Attempt ${job.attemptid} failed: ${error.message}`);
+
+        // The page said what went wrong and not where: a production site shows
+        // no debug information, so "Division by zero" arrived without a file
+        // or a line for two days. The server can replay the selection this
+        // sitting was making and catch the exception itself.
+        if (/Fehler|Error|error=/.test(String(error.message))) {
+            try {
+                const where = await callWs('local_catquizlab_diagnose_attempt', {attemptid: job.attemptid});
+                if (where && where.file) {
+                    failure += ` | server replay: ${where.class} at ${where.file}:${where.line}`;
+                    if (where.trace) {
+                        failure += ` | trace: ${String(where.trace).split('\n').slice(0, 4).join(' <- ')}`;
+                    }
+                    console.error(`Attempt ${job.attemptid} located: ${where.class} at ${where.file}:${where.line}`);
+                } else if (where && where.reason) {
+                    failure += ` | server replay: ${where.reason}`;
+                }
+            } catch (diagnoseError) {
+                failure += ` | (diagnosis unavailable: ${diagnoseError.message})`;
+            }
+        }
     } finally {
         await page.close();
         await context.close();
@@ -199,7 +220,7 @@ async function playAttempt(browser, job) {
             // The reason travels with the report. Without it the server sees a
             // failed attempt and no explanation, and the retry count is all
             // anyone has to go on.
-            message: failure ? String(failure).slice(0, 500) : '',
+            message: failure ? String(failure).slice(0, 2000) : '',
             attemptid: job.attemptid,
             status,
             runtimems: Date.now() - started,
@@ -955,10 +976,14 @@ async function main() {
     // ended normally should not hold a place for the length of the heartbeat
     // timeout, and a crashed one should not look like this.
     try {
+        // The reason travels with the last report. Without it the server saw
+        // "stopping" and started a replacement whatever the cause — including
+        // for a worker it had itself just asked to stop.
         await callWs('local_catquizlab_worker_heartbeat', {
             workerid: WORKER_ID,
             attemptid: 0,
             state: 'stopping',
+            reason: reason,
         });
     } catch (error) {
         // Nothing to do about it here; the reaper will notice in its own time.
