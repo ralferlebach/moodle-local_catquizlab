@@ -48,7 +48,8 @@ class log_view {
         $lines = array_merge(
             self::from_debug($filter),
             self::from_runlog($filter),
-            self::from_tasks($filter)
+            self::from_tasks($filter),
+            self::from_dispatch($filter)
         );
 
         // Newest last: a log is read downwards, and a person pasting the tail
@@ -233,6 +234,58 @@ class log_view {
         }
 
         return $lines;
+    }
+
+    /**
+     * The pipeline's last decision about starting a worker.
+     *
+     * Recorded on every tick whether or not debug recording is on: it is the
+     * one line that answers "why is nothing running", and it used to exist
+     * only in cron's output.
+     *
+     * @param array $filter The filter.
+     * @return array[]
+     */
+    protected static function from_dispatch(array $filter): array {
+        if (!empty($filter['channel']) && $filter['channel'] !== 'task') {
+            return [];
+        }
+
+        $last = json_decode((string) get_config('local_catquizlab', 'lastdispatch'), true);
+        if (!is_array($last) || empty($last['time'])) {
+            return [];
+        }
+        if (!empty($filter['since']) && (int) $last['time'] < (int) $filter['since']) {
+            return [];
+        }
+
+        $text = 'pipeline tick: started ' . (int) $last['launched'] . ' worker(s), '
+            . (int) $last['claimable'] . ' sitting(s) claimable'
+            . ((string) $last['reason'] !== '' ? ', reason=' . $last['reason'] : '');
+
+        return [self::line((int) $last['time'], PHP_INT_MAX, 'task', $text, [
+            'failed' => (int) $last['launched'] === 0 && (string) $last['reason'] !== '',
+        ])];
+    }
+
+    /**
+     * When the most recent entry of any source was written.
+     *
+     * @return int A timestamp, or 0 when nothing was ever recorded.
+     */
+    public static function latest(): int {
+        global $DB;
+
+        $times = [0];
+        foreach (['local_catquizlab_runlog', 'local_catquizlab_debug'] as $table) {
+            if ($DB->get_manager()->table_exists($table)) {
+                $times[] = (int) $DB->get_field_sql('SELECT MAX(timecreated) FROM {' . $table . '}');
+            }
+        }
+        $last = json_decode((string) get_config('local_catquizlab', 'lastdispatch'), true);
+        $times[] = (int) ($last['time'] ?? 0);
+
+        return max($times);
     }
 
     /**

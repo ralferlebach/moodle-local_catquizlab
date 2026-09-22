@@ -83,10 +83,15 @@ class live_status extends external_api {
             ? 'runid IN (SELECT id FROM {local_catquizlab_run} WHERE experimentid = :experimentid) AND status = :status'
             : 'status = :status';
         $count = static function (int $status) use ($DB, $scope, $experimentid): int {
-            return (int) $DB->count_records_select('local_catquizlab_attempt', $scope, [
-                'experimentid' => $experimentid,
-                'status'       => $status,
-            ]);
+            // Only the placeholders the SQL has. Passing experimentid to the
+            // site-wide form, which has no :experimentid, is a DML parameter
+            // mismatch.
+            $params = ['status' => $status];
+            if ($experimentid > 0) {
+                $params['experimentid'] = $experimentid;
+            }
+
+            return (int) $DB->count_records_select('local_catquizlab_attempt', $scope, $params);
         };
 
         return [

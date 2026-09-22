@@ -119,7 +119,22 @@ echo html_writer::empty_tag('input', [
 echo html_writer::end_tag('form');
 
 if ($lines === []) {
-    echo $OUTPUT->notification(get_string('logs:empty', $component), \core\output\notification::NOTIFY_INFO);
+    // When the last thing happened, and a way to see it: "nothing recorded in
+    // this window" on a one-hour window read as "nothing is recorded at all".
+    $latest = log_view::latest();
+    $message = get_string('logs:empty', $component);
+    if ($latest > 0) {
+        $message .= ' ' . get_string('logs:latest', $component, (object) [
+            'when' => userdate($latest),
+            'ago'  => \local_catquizlab\local\duration::ago($latest),
+        ]) . ' ' . html_writer::link(
+            new moodle_url($pageurl, ['hours' => 0] + array_filter($filter, static function ($v): bool {
+                return $v !== '' && $v !== 0 && $v !== null;
+            })),
+            get_string('logs:showall', $component)
+        );
+    }
+    echo $OUTPUT->notification($message, \core\output\notification::NOTIFY_INFO);
 } else {
     echo html_writer::tag('p', get_string('logs:count', $component, count($lines)), ['class' => 'small text-muted']);
 

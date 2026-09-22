@@ -127,6 +127,29 @@ if ($action === 'startexperiment') {
     );
 }
 
+// Every held run at once. The cause behind the reported installation's held
+// runs — starting abilities seeded at 0.0 — is removed by the reset itself, so
+// eight runs held for the same reason need one press, not eight.
+if ($action === 'resetallheld') {
+    require_sesskey();
+    require_capability('local/catquizlab:execute', $context);
+
+    $released = 0;
+    $runs = 0;
+    foreach ($DB->get_fieldset_select('local_catquizlab_run', 'id', 'status = ?', [registry::STATUS_FAILED]) as $heldid) {
+        $reset = \local_catquizlab\local\circuit_breaker::reset_and_continue((int) $heldid);
+        $released += (int) $reset['released'];
+        $runs++;
+    }
+
+    redirect(
+        new moodle_url('/local/catquizlab/runs.php'),
+        get_string('circuit:resetall', $component, (object) ['runs' => $runs, 'released' => $released]),
+        null,
+        \core\output\notification::NOTIFY_SUCCESS
+    );
+}
+
 // Letting a held run try again, after somebody has dealt with the cause. Not
 // offered automatically and not retried in a loop: the whole point of holding a
 // run is that repeating it without a change repeats the failure.
@@ -185,9 +208,7 @@ if ($action !== '' && $runid > 0) {
         }
 
         $parts = [];
-        foreach ($result['removed'] as $label => $count) {
-            $parts[] = $count . ' ' . $label;
-        }
+        $parts[] = \local_catquizlab\local\purger::counts_line($result['removed']);
 
         redirect(
             new moodle_url('/local/catquizlab/runs.php'),
@@ -233,9 +254,7 @@ if ($action !== '' && $runid > 0) {
         }
 
         $parts = [];
-        foreach ($result['removed'] as $label => $count) {
-            $parts[] = $count . ' ' . $label;
-        }
+        $parts[] = \local_catquizlab\local\purger::counts_line($result['removed']);
 
         redirect($returnurl, get_string('scales:cleanupdone', $component, implode(', ', $parts)));
     }
@@ -261,9 +280,7 @@ if ($action !== '' && $runid > 0) {
         $result = \local_catquizlab\local\run_lifecycle::reset_and_rerun($runid);
 
         $parts = [];
-        foreach ($result['removed'] as $label => $count) {
-            $parts[] = $count . ' ' . $label;
-        }
+        $parts[] = \local_catquizlab\local\purger::counts_line($result['removed']);
 
         redirect(
             $returnurl,
@@ -292,9 +309,7 @@ if ($action !== '' && $runid > 0) {
         }
 
         $parts = [];
-        foreach ($result['removed'] as $label => $count) {
-            $parts[] = $count . ' ' . $label;
-        }
+        $parts[] = \local_catquizlab\local\purger::counts_line($result['removed']);
 
         redirect($returnurl, get_string('run:reset', $component, implode(', ', $parts) ?: '-'));
     }

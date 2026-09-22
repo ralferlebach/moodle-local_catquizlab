@@ -99,6 +99,18 @@ class pipeline_tick extends \core\task\scheduled_task {
         }
 
         $result = worker_launcher::launch_pool(worker_launcher::config_from_settings());
+
+        // Kept where the interface can read it. The tick's output goes to
+        // cron's own log, which the person looking at a page that says nothing
+        // is happening cannot see — and "nothing is happening" is exactly when
+        // they need to know what the tick decided and why.
+        set_config('lastdispatch', json_encode([
+            'time'     => time(),
+            'launched' => (int) ($result['launched'] ?? 0),
+            'reason'   => (string) ($result['reason'] ?? ''),
+            'claimable' => (int) \local_catquizlab\local\attempt_scheduler::queue_breakdown()['claimable'],
+        ]), 'local_catquizlab');
+
         if ($result === null) {
             mtrace('local_catquizlab: worker pool not dispatched.');
         } else if ((int) $result['launched'] > 0) {

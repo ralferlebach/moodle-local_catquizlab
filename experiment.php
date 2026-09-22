@@ -86,9 +86,7 @@ if ($action === 'delete' && $id > 0) {
 
     if (trim($typed) !== trim($preview['name'])) {
         $lines = [];
-        foreach ($preview['counts'] as $label => $count) {
-            $lines[] = $count . ' ' . get_string('purge:count' . $label, $component);
-        }
+        $lines[] = \local_catquizlab\local\purger::counts_line($preview['counts']);
 
         $message = html_writer::tag('p', get_string('purge:typename', $component, (object) [
             'counts' => implode(', ', $lines) ?: '-',
@@ -146,9 +144,7 @@ if ($action === 'delete' && $id > 0) {
     }
 
     $parts = [];
-    foreach ($result['removed'] as $label => $count) {
-        $parts[] = $count . ' ' . $label;
-    }
+    $parts[] = \local_catquizlab\local\purger::counts_line($result['removed']);
 
     redirect($manageurl, get_string('purge:done', $component, implode(', ', $parts) ?: '-'));
 }

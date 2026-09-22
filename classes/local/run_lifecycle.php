@@ -521,7 +521,7 @@ class run_lifecycle {
 
         $run = $DB->get_record('local_catquizlab_run', ['id' => $runid]);
         if ($run && (int) $run->testcmid > 0) {
-            $counts['activity'] = 1;
+            $counts['activities'] = 1;
         }
 
         if ($DB->get_manager()->table_exists('local_catquizlab_item')) {
@@ -581,13 +581,8 @@ class run_lifecycle {
     public static function reset_preview_message(int $runid, string $component): string {
         $preview = self::preview_reset($runid);
 
-        $lines = [];
-        foreach ($preview['counts'] as $label => $count) {
-            $lines[] = $count . ' ' . get_string('purge:count' . $label, $component);
-        }
-
         return get_string('run:confirmreset', $component, $runid)
-            . \html_writer::tag('p', implode(', ', $lines) ?: '-', ['class' => 'mt-2'])
+            . \html_writer::tag('p', purger::counts_line($preview['counts']), ['class' => 'mt-2'])
             . \html_writer::tag('p', get_string('run:resetkeeps', $component), ['class' => 'small text-muted']);
     }
 

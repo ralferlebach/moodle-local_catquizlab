@@ -383,4 +383,98 @@ final class audit_test extends \advanced_testcase {
         $CFG->proxypassword = 's3cret';
         $this->assertStringContainsString('u:s3cret@', \local_catquizlab\local\worker_runtime::proxy_url());
     }
+
+    /**
+     * Queued sittings of a held run are named as held, not as stalled.
+     *
+     * @return void
+     */
+    public function test_held_work_is_not_reported_as_stalled(): void {
+        global $DB;
+        $this->resetAfterTest();
+        $this->setAdminUser();
+
+        /** @var \local_catquizlab_generator $generator */
+        $generator = $this->getDataGenerator()->get_plugin_generator('local_catquizlab');
+        $runid = (int) $generator->create_run()->id;
+        $DB->set_field('local_catquizlab_run', 'status', \local_catquizlab\local\registry::STATUS_FAILED, ['id' => $runid]);
+        $DB->set_field('local_catquizlab_run', 'lasterror', 'Division by zero', ['id' => $runid]);
+        for ($i = 0; $i < 3; $i++) {
+            $DB->insert_record('local_catquizlab_attempt', (object) [
+                'runid' => $runid, 'personid' => 0,
+                'status' => \local_catquizlab\local\attempt_scheduler::STATUS_QUEUED,
+                'tries' => 0, 'timecreated' => time(), 'timemodified' => time(),
+            ]);
+        }
+
+        // This was the reported installation: every run held, the page saying
+        // "stalled — start workers", and the start correctly doing nothing
+        // because nothing was claimable.
+        $verdict = \local_catquizlab\local\situation::assess();
+        $this->assertNotSame(\local_catquizlab\local\situation::STALLED, $verdict['state']);
+        $this->assertStringContainsString('#' . $runid, $verdict['headline']);
+        $this->assertStringContainsString('Division by zero', $verdict['detail']);
+    }
+
+    /**
+     * The live poll answers for the whole site without a parameter mismatch.
+     *
+     * @return void
+     */
+    public function test_the_live_poll_works_without_an_experiment(): void {
+        $this->resetAfterTest();
+        $this->setAdminUser();
+
+        $site = \local_catquizlab\external\live_status::execute(0);
+        $this->assertSame('site', $site['scope']);
+        \core_external\external_api::clean_returnvalue(\local_catquizlab\external\live_status::execute_returns(), $site);
+
+        /** @var \local_catquizlab_generator $generator */
+        $generator = $this->getDataGenerator()->get_plugin_generator('local_catquizlab');
+        $experimentid = (int) $generator->create_experiment()->id;
+        $this->assertSame('experiment', \local_catquizlab\external\live_status::execute($experimentid)['scope']);
+    }
+
+    /**
+     * Every count a preview or a result can contain has a name.
+     *
+     * @return void
+     */
+    public function test_every_count_has_a_name(): void {
+        global $DB;
+        $this->resetAfterTest();
+        $this->setAdminUser();
+
+        // Every key the previews and the reset and deletion results produce.
+        // One of them — "activity" — had no string, and the reset preview
+        // failed with a debugging notice; the other results printed the
+        // internal keys to the person.
+        $keys = ['activities', 'activity', 'activityfailed', 'attempts', 'collected', 'contexts', 'course',
+            'engineitems', 'enginescales', 'enrolments', 'experiment', 'failed', 'generations', 'items',
+            'logentries', 'nodes', 'open', 'people', 'questions', 'results', 'run', 'runs', 'scales', 'tasks',
+            'total', 'users'];
+        foreach ($keys as $key) {
+            $this->assertTrue(
+                get_string_manager()->string_exists('purge:count' . $key, 'local_catquizlab'),
+                'no name for the count "' . $key . '"'
+            );
+            $this->assertSame(
+                '2 ' . get_string('purge:count' . $key, 'local_catquizlab'),
+                \local_catquizlab\local\purger::counts_line([$key => 2])
+            );
+        }
+
+        // The reset preview of a run with a test activity renders without a
+        // debugging notice — which PHPUnit turns into a failure by itself.
+        /** @var \local_catquizlab_generator $generator */
+        $generator = $this->getDataGenerator()->get_plugin_generator('local_catquizlab');
+        $runid = (int) $generator->create_run()->id;
+        $DB->set_field('local_catquizlab_run', 'testcmid', 4711, ['id' => $runid]);
+
+        $message = \local_catquizlab\local\run_lifecycle::reset_preview_message($runid, 'local_catquizlab');
+        $this->assertStringContainsString(get_string('purge:countactivities', 'local_catquizlab'), $message);
+
+        // An unknown key still reads as something rather than failing.
+        $this->assertSame('3 somethingnew', \local_catquizlab\local\purger::count_label('somethingnew', 3));
+    }
 }

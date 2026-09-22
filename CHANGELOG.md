@@ -6,6 +6,88 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.6.75] — 2026-09-22
+
+The reset preview asked for a string that did not exist.
+
+    Invalid get_string() identifier: 'purge:countactivity'
+      line 586 of run_lifecycle.php: reset_preview_message()
+
+The run reset preview counted the test activity under `activity`; the
+experiment preview, written earlier, counted it under `activities`, and only
+that string existed. Every reset of a run with a test showed the notice.
+
+It was one of six places that turned a set of counts into text, each with its
+own idea of which keys existed. The other five — reset and deletion results in
+`runs.php` and `experiment.php` — printed the internal keys to the person:
+"3 enginescales, 50 enrolments". `purger::count_label()` and `counts_line()` are
+the one place now; the reset preview uses `activities`; and the sixteen keys that
+had no name have one in both languages. An unknown key reads as itself rather
+than failing.
+
+### Checked across the plugin, not only here
+All 886 string identifiers used literally in PHP, templates and JavaScript
+exist. The 31 places that build an identifier from a variable were enumerated
+against their actual value sets: this family was the only one with a gap.
+
+A test names every count key, asserts each renders as its translated name, and
+renders the reset preview of a run with a test activity — a debugging notice
+fails a PHPUnit test by itself, so the reported notice cannot come back
+unnoticed.
+
+PHPUnit 688 tests / 3724 assertions, Behat 32 scenarios / 235 steps, phpcs and
+PHPDoc clean.
+
+---
+
+## [0.6.74] — 2026-09-22
+
+Everything green, nothing running, no logs — and why.
+
+### "Stalled" was the wrong word
+Every run on the reported installation had been held by the circuit breaker
+after "Division by zero" (the seeded starting abilities fixed in 0.6.71). Held
+runs keep their sittings queued and out of reach. The situation counted those
+sittings as waiting for a worker and said "stalled — start workers"; the
+launcher knew there was nothing a worker could take, answered
+`no-claimable-work`, and started nothing. Both were right. Only the page was
+wrong, and nothing anywhere said so.
+
+Reproduced here, then: "5 attempts waiting, no worker running → Start workers",
+with 0 claimable and 5 blocked.
+
+The situation now counts only claimable work as waiting, and when queued work
+belongs to a held run it says so, with the cause:
+
+    Run #215 was stopped after repeated failures; 5 test sittings are held back.
+    Cause: … Division by zero                                [Show and continue]
+
+It comes before the not-ready check: held runs prove the installation has run.
+
+### One press for all held runs
+Step 3 offers "Clear the errors of all N runs and continue" when more than one
+run is held. The reset removes the seeded starting abilities as well, so runs
+held by the old Division by zero are repaired by the same press. Measured: five
+held runs continued, 37 sittings claimable, and the situation moves on.
+
+### The pipeline says what it decided
+Each tick keeps its decision — workers started, sittings claimable, reason —
+where step 5 shows it, whether or not debug recording is on. It used to exist
+only in cron's output, which is exactly where the person looking at a page that
+says nothing is happening cannot look. An empty log window now names the time
+of the most recent entry and offers to show everything.
+
+### Audit finding: live status for the whole site
+The site-wide poll passed `:experimentid` to SQL that had no such placeholder.
+Only the parameters the query uses are passed now; a test calls the poll with
+and without an experiment and validates both against the return structure.
+
+### Verification
+PHPUnit 687 tests / 3670 assertions, Behat 32 scenarios / 235 steps, phpcs and
+PHPDoc clean.
+
+---
+
 ## [0.6.73] — 2026-09-22
 
 "No npm found" on a server where npm was installed.

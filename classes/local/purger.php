@@ -483,6 +483,48 @@ class purger {
     }
 
     /**
+     * A count and what it counts, in the reader's language.
+     *
+     * Every preview and every result of a reset or a deletion goes through
+     * here. The keys come from several places — the run tables, the engine,
+     * enrolments, accounts — and they used to be turned into text in six
+     * places, each with its own idea of which keys existed: one asked for a
+     * string that was not there and failed with a debugging notice, the other
+     * five printed the internal key ("3 enginescales") to the person.
+     *
+     * @param string $label The internal key.
+     * @param int $count How many.
+     * @return string
+     */
+    public static function count_label(string $label, int $count): string {
+        $manager = get_string_manager();
+        $key = 'purge:count' . $label;
+
+        $name = $manager->string_exists($key, 'local_catquizlab')
+            ? get_string($key, 'local_catquizlab')
+            : $label;
+
+        return $count . ' ' . $name;
+    }
+
+    /**
+     * A whole set of counts as one line.
+     *
+     * @param array $counts Label => count.
+     * @return string
+     */
+    public static function counts_line(array $counts): string {
+        $parts = [];
+        foreach ($counts as $label => $count) {
+            if ((int) $count !== 0) {
+                $parts[] = self::count_label((string) $label, (int) $count);
+            }
+        }
+
+        return $parts === [] ? '-' : implode(', ', $parts);
+    }
+
+    /**
      * The engine-side objects a run created: its activity and its questions.
      *
      * Public because a reset needs exactly this too. A reset that clears the lab
