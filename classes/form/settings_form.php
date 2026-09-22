@@ -115,6 +115,27 @@ class settings_form extends \moodleform {
     }
 
     /**
+     * The settings this form edits.
+     *
+     * One list, used to save and to fill the form. Two hand-written lists
+     * drifted apart: the debug level was shown and read back and never
+     * written, so choosing it did nothing and the page came back saying "Off".
+     *
+     * @return string[]
+     */
+    public static function saved_fields(): array {
+        return [
+            'experimentcourseid',
+            'enabled',
+            'worker_base_url',
+            'worker_node_path',
+            'worker_concurrency',
+            'worker_max_jobs',
+            'debuglevel',
+        ];
+    }
+
+    /**
      * Check the values before they are stored.
      *
      * @param array $data Submitted data.

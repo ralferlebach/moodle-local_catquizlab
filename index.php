@@ -313,10 +313,14 @@ if ($tab === 'settings') {
 
     if ($data = $settingsform->get_data()) {
         require_capability('local/catquizlab:execute', $context);
-        foreach (
-            ['experimentcourseid', 'enabled', 'worker_base_url', 'worker_node_path',
-            'worker_concurrency', 'worker_max_jobs'] as $name
-        ) {
+        // Every field the form offers. The list was written by hand and
+        // debuglevel was left out of it, so the form showed the setting, read
+        // it back, and silently discarded what anybody chose: switched on,
+        // saved, and off again with no action in between.
+        //
+        // Taken from the form itself now, so a field that is added to the form
+        // is saved without anybody remembering this list.
+        foreach (\local_catquizlab\form\settings_form::saved_fields() as $name) {
             if (isset($data->$name)) {
                 set_config($name, $data->$name, $component);
             }
@@ -327,15 +331,15 @@ if ($tab === 'settings') {
         );
     }
 
-    $settingsform->set_data((object) [
-        'experimentcourseid' => (int) get_config($component, 'experimentcourseid'),
-        'enabled'            => (int) get_config($component, 'enabled'),
-        'worker_base_url'    => (string) get_config($component, 'worker_base_url'),
-        'worker_node_path'   => (string) get_config($component, 'worker_node_path'),
-        'worker_concurrency' => (int) (get_config($component, 'worker_concurrency') ?: 1),
-        'worker_max_jobs'    => (int) get_config($component, 'worker_max_jobs'),
-        'debuglevel'         => (string) get_config($component, 'debuglevel') ?: 'off',
-    ]);
+    $current = [];
+    foreach (\local_catquizlab\form\settings_form::saved_fields() as $name) {
+        $current[$name] = get_config($component, $name);
+    }
+    // The two that need a value when nothing is stored yet.
+    $current['worker_concurrency'] = (int) ($current['worker_concurrency'] ?: 1);
+    $current['debuglevel'] = (string) ($current['debuglevel'] ?: 'off');
+
+    $settingsform->set_data((object) $current);
 }
 
 $tabs = [];

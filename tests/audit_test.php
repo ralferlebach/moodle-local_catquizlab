@@ -561,4 +561,38 @@ final class audit_test extends \advanced_testcase {
         $this->assertSame(0, $registry::reap_dead_processes());
         $this->assertSame(1, $registry::summary()['live']);
     }
+
+    /**
+     * Every setting the form offers is a setting the form saves.
+     *
+     * @return void
+     */
+    public function test_the_settings_form_saves_what_it_shows(): void {
+        $this->resetAfterTest();
+        $this->setAdminUser();
+
+        $form = new \local_catquizlab\form\settings_form();
+        $property = new \ReflectionProperty($form, '_form');
+        $property->setAccessible(true);
+        $mform = $property->getValue($form);
+
+        $elements = [];
+        foreach ($mform->_elements as $element) {
+            $name = $element->getName();
+            if ($name === null || $name === '' || in_array($element->getType(), ['submit', 'header', 'static', 'hidden'], true)) {
+                continue;
+            }
+            $elements[] = $name;
+        }
+
+        $saved = \local_catquizlab\form\settings_form::saved_fields();
+
+        // The debug level was offered, read back and never written: choosing
+        // it did nothing, and the page came back saying "Off" with nobody
+        // having touched it.
+        foreach ($elements as $name) {
+            $this->assertContains($name, $saved, 'the form shows "' . $name . '" but does not save it');
+        }
+        $this->assertContains('debuglevel', $saved);
+    }
 }

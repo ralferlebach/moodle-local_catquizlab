@@ -6,6 +6,26 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.6.77] — 2026-09-22
+
+Debug recording switched itself off.
+
+It never switched on. The settings form offered the setting and read it back,
+but the code that saves the form iterated a hand-written list of field names
+that did not include `debuglevel`. Choosing a level, saving, and finding "Off"
+again was the form discarding the choice in silence — on every save, for
+everyone.
+
+There is one list now, `settings_form::saved_fields()`, used both to save the
+form and to fill it, so the two cannot drift apart. A test walks the form's
+own elements and asserts that each one is in that list: a field added to the
+form and forgotten in the saving code fails the test rather than the user.
+
+PHPUnit 691 tests / 3743 assertions, Behat 32 scenarios / 235 steps, phpcs and
+PHPDoc clean.
+
+---
+
 ## [0.6.76] — 2026-09-22
 
 Division by zero, the second cause — and the worker that held its slot while
