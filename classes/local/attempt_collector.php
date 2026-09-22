@@ -176,6 +176,19 @@ class attempt_collector {
             'timemodified' => time(),
         ]);
 
+        // The engine's person parameters for this person have done their work:
+        // the numbers are in this plugin's tables now. They go, so the next
+        // simulated person is estimated from their own answers alone — and so
+        // the context never accumulates fifty identical abilities, whose
+        // standard deviation is zero and which the engine then divides by.
+        $person = $DB->get_field('local_catquizlab_attempt', 'personid', ['id' => $attemptid]);
+        if ($person) {
+            user_provisioner::forget_engine_person_params(
+                (int) $DB->get_field('local_catquizlab_attempt', 'runid', ['id' => $attemptid]),
+                (int) $DB->get_field('local_catquizlab_person', 'moodleuserid', ['id' => $person])
+            );
+        }
+
         return $trace;
     }
 

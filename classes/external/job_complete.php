@@ -140,10 +140,27 @@ class job_complete extends external_api {
             // Pull the engine trace into the attempt when possible (no-op without the engine).
             if ($engineattemptid > 0) {
                 attempt_collector::collect($attemptid);
+
+                // The sitting is in this plugin's tables now. The engine's
+                // person parameters for this simulated person go, so the next
+                // person is estimated from their own answers and not from the
+                // people before them — and so the context never fills with
+                // identical abilities whose standard deviation is zero.
+                \local_catquizlab\local\user_provisioner::forget_engine_person_params(
+                    (int) $attempt->runid,
+                    (int) $DB->get_field('local_catquizlab_person', 'moodleuserid', ['id' => $attempt->personid])
+                );
             }
         } else {
             // Requeue with backoff while tries remain, otherwise fail for good.
             attempt_scheduler::retry_or_fail($attemptid);
+
+            // A failed sitting leaves the engine's person parameters behind
+            // too, and they count towards the same prior.
+            \local_catquizlab\local\user_provisioner::forget_engine_person_params(
+                (int) $attempt->runid,
+                (int) $DB->get_field('local_catquizlab_person', 'moodleuserid', ['id' => $attempt->personid])
+            );
         }
 
         // Every terminal attempt asks the lifecycle whether the run is done.
@@ -222,7 +239,10 @@ class job_complete extends external_api {
     public static function execute_returns(): external_single_structure {
         return new external_single_structure([
             'acknowledged' => new external_value(PARAM_BOOL, 'True when the report was accepted.'),
-            'message'      => new external_value(PARAM_TEXT, 'Human-readable status.'),
+            // Not PARAM_TEXT: the message can carry a replayed exception with
+            // angle brackets and newlines, and the input side already had to
+            // be widened for exactly that.
+            'message'      => new external_value(PARAM_RAW, 'Human-readable status.'),
         ]);
     }
 }

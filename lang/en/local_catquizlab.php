@@ -1221,6 +1221,7 @@ $string['wizard:workerexec'] = 'Worker execution enabled';
 $string['worker:crashed'] = 'crashed:';
 $string['worker:fleet'] = 'Live workers:';
 $string['worker:heading'] = 'Workers and attempt queue';
+$string['worker:processgone'] = 'The process (pid {$a}) no longer exists on this host; the slot was released.';
 $string['worker:queue'] = 'Attempts claimable / running / collected / failed:';
 $string['worker:recenterrors'] = 'Recent attempt failures';
 $string['worker:runtimedirfailed'] = 'The worker runtime directory could not be created: {$a}';

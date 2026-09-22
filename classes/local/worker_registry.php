@@ -218,6 +218,65 @@ class worker_registry {
     }
 
     /**
+     * Release slots whose process no longer exists on this host.
+     *
+     * Only this host, and only where a pid was recorded: a pid from another
+     * machine says nothing here, and killing a slot whose worker is alive
+     * elsewhere would be worse than waiting.
+     *
+     * @return int How many were released.
+     */
+    public static function reap_dead_processes(): int {
+        global $DB;
+
+        if (!function_exists('posix_kill')) {
+            return 0;
+        }
+
+        $host = gethostname() ?: '';
+        if ($host === '') {
+            return 0;
+        }
+
+        [$insql, $params] = $DB->get_in_or_equal(
+            [self::STATUS_STARTING, self::STATUS_RUNNING],
+            SQL_PARAMS_NAMED,
+            'st'
+        );
+        $params['host'] = $host;
+
+        $released = 0;
+        $rows = $DB->get_records_select(
+            'local_catquizlab_worker',
+            'status ' . $insql . ' AND hostname = :host AND pid IS NOT NULL AND pid > 0',
+            $params
+        );
+
+        foreach ($rows as $row) {
+            // Signal 0 asks whether the process exists without touching it.
+            if (@posix_kill((int) $row->pid, 0)) {
+                continue;
+            }
+            // EPERM (errno 1) means the process exists but belongs to another
+            // user: alive, and not ours to declare dead.
+            if (posix_get_last_error() === 1) {
+                continue;
+            }
+
+            $DB->update_record('local_catquizlab_worker', (object) [
+                'id'           => $row->id,
+                'status'       => self::STATUS_CRASHED,
+                'workerstate'  => 'stopped:process-gone',
+                'lasterror'    => get_string('worker:processgone', 'local_catquizlab', $row->pid),
+                'timemodified' => time(),
+            ]);
+            $released++;
+        }
+
+        return $released;
+    }
+
+    /**
      * Give a worker the registry did not start a slot of its own.
      *
      * @param string $workerid The worker.
@@ -406,6 +465,12 @@ class worker_registry {
         global $DB;
 
         $now = time();
+        // A worker whose process is gone, whatever its heartbeat says. Waiting
+        // out the five-minute timeout meant a crashed worker held the only
+        // slot while the page reported "1 worker running" and the tick answered
+        // "all-slots-busy" — both true of the row, neither true of the machine.
+        self::reap_dead_processes();
+
         $cutoff = $now - self::HEARTBEAT_TIMEOUT;
 
         [$insql, $params] = $DB->get_in_or_equal(

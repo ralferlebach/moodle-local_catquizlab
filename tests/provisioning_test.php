@@ -590,17 +590,22 @@ final class provisioning_test extends \advanced_testcase {
                 'timecreated' => time(), 'timemodified' => time(),
             ]);
         }
-        // And one the engine measured, which is left alone.
+        // And one the engine measured in an earlier round of this run.
         $DB->insert_record('local_catquiz_personparams', (object) [
             'userid' => 2000, 'catscaleid' => 1, 'contextid' => $contextid,
             'ability' => 0.7, 'standarderror' => 0.4, 'status' => 1,
             'timecreated' => time(), 'timemodified' => time(),
         ]);
 
+        // Preparing the run clears its contexts completely, measured rows
+        // included. They belong to sittings this preparation is discarding,
+        // and leaving them is what made every sitting after a reset fail at
+        // once: fifty abilities from the previous round, all the same, whose
+        // standard deviation the engine takes as its prior.
         $removed = \local_catquizlab\local\user_provisioner::remove_seeded_parameters($runid);
 
-        $this->assertSame(50, $removed);
-        $this->assertSame(1, $DB->count_records('local_catquiz_personparams', ['contextid' => $contextid]));
+        $this->assertSame(51, $removed);
+        $this->assertSame(0, $DB->count_records('local_catquiz_personparams', ['contextid' => $contextid]));
         $this->assertSame(0, \local_catquizlab\local\user_provisioner::remove_seeded_parameters($runid));
         $this->assertSame(0, \local_catquizlab\local\user_provisioner::remove_seeded_parameters(0));
     }

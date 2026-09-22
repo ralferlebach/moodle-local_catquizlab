@@ -6,6 +6,70 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.6.76] — 2026-09-22
+
+Division by zero, the second cause — and the worker that held its slot while
+dead.
+
+### It never needed the seeding. Fifty people are enough.
+`updatepersonability::calculate_sd_from_past_attempts()` takes the standard
+deviation of the abilities already in the CAT context as the prior for the next
+estimate, once **fifty** of them are there (`NUM_ESTIMATION_THRESHOLD`).
+`model_raschmodel.php:734` then divides by its square.
+
+Simulated people all start from the same value. The engine writes one ability
+per person as each sitting begins, so a run with fifty people fills the context
+with fifty identical numbers, and their standard deviation is zero. Removing the
+seeding in 0.6.71 removed one source of identical values; the engine's own were
+the other. A run that was provisioned, played, reset and provisioned again kept
+the previous round's fifty — which is why every sitting after the reset failed
+immediately.
+
+My own fifty-person run had reached twenty-nine collected sittings when I
+called it a success. It would have failed at the fiftieth. That was luck, not
+evidence.
+
+**The fix is not a workaround.** The engine's person parameters for a simulated
+person are removed once their sitting has been read back into this plugin's
+tables — on collection, and on terminal failure. Person fifty-one being
+estimated partly from persons one to fifty is a dependency between observations
+that an experiment must not have: each simulated person sits the test once,
+alone. Provisioning clears the run's contexts entirely for the same reason.
+
+Recommended to the engine, and not changed here: a standard deviation of zero
+is not a prior. A floor in `calculate_sd_from_past_attempts()` would have made
+this a biased estimate rather than an error page.
+
+### A crashed worker held the only slot for five minutes
+The worker died on a web service error without reporting anything. Its registry
+row kept a fresh heartbeat, so the page said "1 worker running", the run card
+said "waiting for a worker", and the tick answered "all-slots-busy" — all three
+true of the row, none true of the machine.
+
+The worker now hands its slot back before exiting, with `fatal-error` as the
+reason. And the registry checks whether the process still exists on this host
+rather than waiting out the timeout: signal 0, this host only, a pid that
+belongs to somebody else left alone. Measured both ways — a dead pid releases
+the slot at once, a live one is untouched.
+
+### `job_complete` refused the diagnosis it had asked for
+The reply's `message` was `PARAM_TEXT` and the replayed exception carries angle
+brackets, so the worker crashed while reporting why it had failed. `PARAM_RAW`,
+as the request side already was.
+
+### Verification
+PHPUnit 690 tests / 3734 assertions, Behat 32 scenarios / 235 steps, phpcs and
+PHPDoc clean, worker JS syntax clean.
+
+What is measured: the mechanism (fifty identical abilities produce a standard
+deviation of zero), the cleanup (per person on collection, whole context on
+provisioning), and the slot release. What is not: a complete fifty-sitting run
+past the threshold. One sitting of that experiment takes about two minutes here
+and fifty of them exceed the time I had. The threshold is 50; it is now
+impossible to reach, but I have not watched it not happen.
+
+---
+
 ## [0.6.75] — 2026-09-22
 
 The reset preview asked for a string that did not exist.

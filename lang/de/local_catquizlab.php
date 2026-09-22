@@ -1221,6 +1221,7 @@ $string['wizard:workerexec'] = 'Ausführung von Simulationsprozessen aktiviert';
 $string['worker:crashed'] = 'Abgestürzt:';
 $string['worker:fleet'] = 'Laufende Simulationsprozess:';
 $string['worker:heading'] = 'Simulationsprozess und Warteschlange der Testbearbeitungen';
+$string['worker:processgone'] = 'Der Prozess (PID {$a}) existiert auf diesem Host nicht mehr; der Platz wurde freigegeben.';
 $string['worker:queue'] = 'Simulierte Testbearbeitungen abholbar / laufend / eingesammelt / fehlgeschlagen:';
 $string['worker:recenterrors'] = 'Letzte fehlgeschlagene simulierte Testbearbeitungen';
 $string['worker:runtimedirfailed'] = 'Das Ausführungsumgebung des Simulationsprozesses-Verzeichnis konnte nicht angelegt werden: {$a}';

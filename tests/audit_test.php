@@ -477,4 +477,88 @@ final class audit_test extends \advanced_testcase {
         // An unknown key still reads as something rather than failing.
         $this->assertSame('3 somethingnew', \local_catquizlab\local\purger::count_label('somethingnew', 3));
     }
+
+    /**
+     * The engine's prior never fills up with identical abilities.
+     *
+     * @return void
+     */
+    public function test_a_persons_engine_parameters_go_when_their_sitting_is_read(): void {
+        global $DB;
+        $this->resetAfterTest();
+        $this->setAdminUser();
+
+        if (!\local_catquizlab\local\environment::engine_available()) {
+            $this->markTestSkipped('No CAT engine installed.');
+        }
+
+        /** @var \local_catquizlab_generator $generator */
+        $generator = $this->getDataGenerator()->get_plugin_generator('local_catquizlab');
+        $runid = (int) $generator->create_run()->id;
+        $contextid = 7777;
+        $root = 55;
+        $DB->insert_record('local_catquizlab_scalemap', (object) [
+            'runid' => $runid, 'level' => 0, 'catscaleid' => $root, 'parentcatscaleid' => 0,
+            'contextid' => $contextid, 'nodekey' => 'root', 'generation' => 1, 'timecreated' => time(),
+        ]);
+
+        // The engine writes one ability per person per scale. Fifty people all
+        // start from the same value, and once fifty are in the context the
+        // engine takes their standard deviation as the prior for the next
+        // estimate: zero, and the estimate divides by it. That is the
+        // "Division by zero" — no seeding needed, only enough people.
+        $mine = 4242;
+        for ($i = 1; $i <= 50; $i++) {
+            $DB->insert_record('local_catquiz_personparams', (object) [
+                'userid' => $i === 1 ? $mine : 9000 + $i, 'catscaleid' => $root, 'contextid' => $contextid,
+                'attemptid' => 0, 'ability' => 0.0, 'standarderror' => null, 'status' => 0,
+                'timecreated' => time(), 'timemodified' => time(),
+            ]);
+        }
+
+        // One person's sitting has been read back: their rows go, nobody
+        // else's does.
+        $removed = \local_catquizlab\local\user_provisioner::forget_engine_person_params($runid, $mine);
+        $this->assertSame(1, $removed);
+        $this->assertSame(49, $DB->count_records('local_catquiz_personparams', ['contextid' => $contextid]));
+
+        // Preparing the run again clears the context completely, so a reset
+        // does not start against fifty stale abilities — which is what made
+        // every sitting after a reset fail at once.
+        $this->assertSame(49, \local_catquizlab\local\user_provisioner::remove_seeded_parameters($runid));
+        $this->assertSame(0, $DB->count_records('local_catquiz_personparams', ['contextid' => $contextid]));
+    }
+
+    /**
+     * A worker whose process is gone does not hold its slot.
+     *
+     * @return void
+     */
+    public function test_a_dead_process_does_not_hold_a_slot(): void {
+        global $DB;
+        $this->resetAfterTest();
+
+        $registry = \local_catquizlab\local\worker_registry::class;
+
+        // A worker that crashed a second ago: heartbeat fresh, process gone.
+        // It used to hold the only slot for five minutes, during which the page
+        // said "1 worker running" and the pipeline said "all-slots-busy".
+        $registry::acquire_slot(1, 'crashed', 999999);
+        $DB->set_field('local_catquizlab_worker', 'status', $registry::STATUS_RUNNING, ['workerid' => 'crashed']);
+        $DB->set_field('local_catquizlab_worker', 'heartbeat', time(), ['workerid' => 'crashed']);
+        $this->assertSame(1, $registry::summary()['live']);
+
+        $this->assertSame(1, $registry::reap_dead_processes());
+        $this->assertSame(0, $registry::summary()['live']);
+        $this->assertSame(
+            $registry::STATUS_CRASHED,
+            (int) $DB->get_field('local_catquizlab_worker', 'status', ['workerid' => 'crashed'])
+        );
+
+        // A process that is alive is left alone, whatever its heartbeat says.
+        $registry::acquire_slot(2, 'alive', getmypid());
+        $DB->set_field('local_catquizlab_worker', 'status', $registry::STATUS_RUNNING, ['workerid' => 'alive']);
+        $this->assertSame(0, $registry::reap_dead_processes());
+        $this->assertSame(1, $registry::summary()['live']);
+    }
 }

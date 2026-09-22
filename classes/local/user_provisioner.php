@@ -129,6 +129,72 @@ class user_provisioner {
      * @param int $runid The run.
      * @return int How many rows were removed.
      */
+    /**
+     * Drop the engine's person parameters for one simulated person of a run.
+     *
+     * Called once a sitting has been read back, so the numbers are already in
+     * this plugin's own tables and nothing is lost.
+     *
+     * Not housekeeping: independence. The engine builds its prior from the
+     * abilities already in the context, and once fifty of them are there it
+     * takes their standard deviation as that prior. Simulated people all start
+     * from the same value, so fifty of them have a standard deviation of zero,
+     * and the estimate for the fifty-first divides by it — the "Division by
+     * zero" on the live installation, which needed no seeding at all, only
+     * enough people. Beyond the crash, person fifty-one being estimated
+     * partly from persons one to fifty is a dependency between observations
+     * that an experiment must not have: each simulated person sits the test
+     * once, alone.
+     *
+     * @param int $runid The run.
+     * @param int $userid The simulated person's account.
+     * @return int Rows removed.
+     */
+    public static function forget_engine_person_params(int $runid, int $userid): int {
+        global $DB;
+
+        $usable = $userid > 0
+            && environment::engine_available()
+            && $DB->get_manager()->table_exists('local_catquiz_personparams');
+
+        if (!$usable) {
+            return 0;
+        }
+
+        $contextids = $DB->get_fieldset_select(
+            'local_catquizlab_scalemap',
+            'DISTINCT contextid',
+            'runid = :runid AND contextid > 0',
+            ['runid' => $runid]
+        );
+        if ($contextids === []) {
+            return 0;
+        }
+
+        [$insql, $params] = $DB->get_in_or_equal($contextids, SQL_PARAMS_NAMED, 'ctx');
+        $params['userid'] = $userid;
+        $select = 'userid = :userid AND contextid ' . $insql;
+
+        $removed = $DB->count_records_select('local_catquiz_personparams', $select, $params);
+        if ($removed > 0) {
+            $DB->delete_records_select('local_catquiz_personparams', $select, $params);
+        }
+
+        return $removed;
+    }
+
+    /**
+     * Clear the engine's person parameters in a run's contexts.
+     *
+     * Called when a run is provisioned or provisioned again. Everything in
+     * those contexts belongs to sittings this preparation is discarding, and
+     * leaving it is what made every sitting after a reset fail at once: the
+     * previous round's fifty identical abilities, whose standard deviation the
+     * engine takes as the prior for the next estimate.
+     *
+     * @param int $runid The run.
+     * @return int Rows removed.
+     */
     public static function remove_seeded_parameters(int $runid): int {
         global $DB;
 
@@ -146,8 +212,13 @@ class user_provisioner {
             return 0;
         }
 
+        // Everything in this run's contexts. It used to be only what an older
+        // version had seeded (status 0, no standard error), which left the
+        // engine's own rows from a previous round of the same run in place —
+        // fifty identical abilities that made every sitting after a reset fail
+        // immediately.
         [$insql, $params] = $DB->get_in_or_equal($contextids, SQL_PARAMS_NAMED, 'ctx');
-        $select = 'contextid ' . $insql . ' AND status = 0 AND standarderror IS NULL';
+        $select = 'contextid ' . $insql;
 
         $removed = $DB->count_records_select('local_catquiz_personparams', $select, $params);
         if ($removed > 0) {

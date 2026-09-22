@@ -994,8 +994,30 @@ async function main() {
 
 if (require.main === module) {
     const entry = SELF_TEST ? selfTest : main;
-    entry().catch((error) => {
+    entry().catch(async (error) => {
         console.error(error);
+
+        // Hand the slot back before dying. A worker that crashed — as this one
+        // did on a web service error — kept its slot until its heartbeat
+        // lapsed five minutes later, during which the page said "1 worker
+        // running", the pipeline said "all-slots-busy", and nothing ran.
+        if (!SELF_TEST) {
+            try {
+                await callWs('local_catquizlab_worker_heartbeat', {
+                    workerid: WORKER_ID,
+                    attemptid: 0,
+                    state: 'stopping',
+                    reason: 'fatal-error',
+                });
+                console.error(`Worker ${WORKER_ID} released its slot after a fatal error.`);
+            } catch (reportError) {
+                // The web service is the thing that just failed, so this may
+                // fail too. The registry's own check for a vanished process
+                // covers what this cannot.
+                console.error(`Worker ${WORKER_ID} could not release its slot: ${reportError.message}`);
+            }
+        }
+
         process.exit(1);
     });
 }
