@@ -192,7 +192,7 @@ class robustness_analysis {
             if ($map === []) {
                 continue;
             }
-            $rows = local_analysis::subscale_rows($member, $map);
+            $rows = local_analysis::subscale_rows($member + results_query::detail($member), $map);
             foreach ($rows as $row) {
                 $subscalerows[] = $row;
             }

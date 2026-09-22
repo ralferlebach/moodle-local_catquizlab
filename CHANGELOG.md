@@ -6,6 +6,37 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.6.79] — 2026-09-22
+
+The evaluation still ran out of memory, further along.
+
+0.6.78 stopped the page reading every row. What it did not stop was what each
+surviving row carried: every observation held the **decoded** trace and the
+**decoded** person profile. A hundred-subscale profile is three kilobytes as
+JSON and about thirty as PHP arrays, so an observation weighed 54 kB and 577 of
+them weighed 30 MB — on a page whose overview computes means.
+
+Measured per tab before: 46 MB peak. After: **16 to 24 MB**, all tabs, at a
+128 MB limit.
+
+The two heavy structures left the row. `results_query::detail()` reads them for
+the one observation being looked at and caches that one, so the tabs that need
+them — subscales, deficits, robustness, test flow — hold one decoded pair at a
+time instead of all of them. The row keeps the two ids it takes to fetch them.
+
+The page also asks for the headroom Moodle gives its own reports
+(`raise_memory_limit(MEMORY_EXTRA)`). An evaluation over every sitting of a
+large experiment is a report, and a default web request is not sized for one.
+
+The regression test now also asserts that observations carry neither structure,
+that `detail()` supplies both for a row, and that a hundred observations
+serialise to under half a megabyte.
+
+PHPUnit 692 tests / 3752 assertions, Behat 32 scenarios / 235 steps, phpcs and
+PHPDoc clean.
+
+---
+
 ## [0.6.78] — 2026-09-22
 
 The evaluation ran out of memory on a real experiment.

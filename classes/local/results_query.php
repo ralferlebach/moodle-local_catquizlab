@@ -55,6 +55,12 @@ class results_query {
     /** @var array The active filter. */
     protected array $filter;
 
+    /** @var int The attempt whose detail is cached. */
+    protected static int $detailfor = 0;
+
+    /** @var array The cached detail of that attempt. */
+    protected static array $detail = [];
+
     /** @var array|null Cached observations. */
     protected ?array $observations = null;
 
@@ -202,8 +208,6 @@ class results_query {
                 'stopreached' => self::stop_reached((string) ($trace['stopreason'] ?? '')),
                 'runtimems'   => (int) ($attempt->runtimems ?? 0),
                 'items'       => (array) ($trace['items'] ?? []),
-                'profile'     => json_decode((string) $person->profilejson, true) ?: [],
-                'trace'       => $trace,
             ];
         }
         $attempts->close();
@@ -363,6 +367,44 @@ class results_query {
         }
 
         return metrics::exposure($attempts, $this->pool_size());
+    }
+
+    /**
+     * The decoded trace and person profile of one observation.
+     *
+     * Kept out of the observation itself: both are large once PHP has them as
+     * arrays — about 54 kB a row together for a hundred-subscale experiment —
+     * and most of the page computes means that need neither. Read here for the
+     * row being looked at, and cached for that row only, so the tabs that walk
+     * every observation hold one decoded pair at a time instead of all of them.
+     *
+     * @param array $observation One row of {@see observations()}.
+     * @return array{profile: array, trace: array}
+     */
+    public static function detail(array $observation): array {
+        global $DB;
+
+        $attemptid = (int) ($observation['attemptid'] ?? 0);
+        if ($attemptid > 0 && $attemptid === self::$detailfor) {
+            return self::$detail;
+        }
+
+        $trace = [];
+        $profile = [];
+
+        if ($attemptid > 0) {
+            $json = $DB->get_field('local_catquizlab_attempt', 'tracejson', ['id' => $attemptid]);
+            $trace = json_decode((string) $json, true) ?: [];
+        }
+        $personid = (int) ($observation['personid'] ?? 0);
+        if ($personid > 0) {
+            $json = $DB->get_field('local_catquizlab_person', 'profilejson', ['id' => $personid]);
+            $profile = json_decode((string) $json, true) ?: [];
+        }
+
+        self::$detailfor = $attemptid;
+
+        return self::$detail = ['profile' => $profile, 'trace' => $trace];
     }
 
     /**

@@ -696,7 +696,12 @@ class results_page {
         // to be read, so it belongs above the individual flows.
         $verdicts = [];
         foreach ($observations as $observation) {
-            $verdicts[] = test_flow::feasibility($observation, $this->cat_parameters($observation['runid']));
+            // The trace and the profile for this one row; see
+            // results_query::detail() for why they are not in the row.
+            $verdicts[] = test_flow::feasibility(
+                $observation + results_query::detail($observation),
+                $this->cat_parameters($observation['runid'])
+            );
         }
         $out .= \html_writer::tag('h3', get_string('results:feasibility', $component), ['class' => 'h5 mt-4']);
         $out .= $this->render_feasibility($verdicts);
@@ -820,7 +825,7 @@ class results_page {
      */
     protected function render_single_flow(array $observation): string {
         $component = 'local_catquizlab';
-        $flow = test_flow::steps($observation);
+        $flow = test_flow::steps($observation + results_query::detail($observation));
 
         if ($flow['source'] === test_flow::SOURCE_NONE) {
             return \html_writer::div(get_string('flow:nosteps', $component), 'alert alert-info');
@@ -1219,7 +1224,7 @@ class results_page {
             if ($map === []) {
                 continue;
             }
-            $subscales = local_analysis::subscale_rows($observation, $map);
+            $subscales = local_analysis::subscale_rows($observation + results_query::detail($observation), $map);
             $ranking = local_analysis::ranking($subscales, $observation['strategy']);
             if ($ranking !== null) {
                 $rankings[] = $ranking;

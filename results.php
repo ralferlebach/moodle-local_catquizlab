@@ -82,6 +82,14 @@ foreach (['budget', 'cellkey'] as $key) {
 admin_externalpage_setup('local_catquizlab_manage');
 
 $context = context_system::instance();
+
+// What Moodle grants its own reports. An evaluation over every sitting of a
+// large experiment is a report, and the default limit of a web request is not
+// sized for one: this page died with "Allowed memory size exhausted" on an
+// installation with nine thousand sittings. The reads are proportional to what
+// is reported now, and this is the headroom the platform intends for pages
+// like it.
+raise_memory_limit(MEMORY_EXTRA);
 $component = 'local_catquizlab';
 $pageurl = new moodle_url('/local/catquizlab/results.php', $filter + ['tab' => $tab]);
 $PAGE->set_url($pageurl);

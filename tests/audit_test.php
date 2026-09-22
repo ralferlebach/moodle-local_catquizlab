@@ -654,5 +654,26 @@ final class audit_test extends \advanced_testcase {
         // And a query count that does not grow with the two hundred people who
         // did not sit: the runs, the sittings, and one read per person who did.
         $this->assertLessThan(40, $queries, 'the evaluation read ' . $queries . ' times for ten sittings');
+
+        // The heavy structures are not in the rows. A decoded profile of a
+        // hundred-subscale experiment is about thirty kilobytes, and carrying
+        // it and the trace in every observation is what filled the memory.
+        $first = reset($observations);
+        $this->assertArrayNotHasKey('profile', $first);
+        $this->assertArrayNotHasKey('trace', $first);
+        $this->assertArrayHasKey('attemptid', $first);
+        $this->assertArrayHasKey('personid', $first);
+
+        // They are there for the row that needs them.
+        $detail = \local_catquizlab\local\results_query::detail($first);
+        $this->assertArrayHasKey('profile', $detail);
+        $this->assertSame(35, count($detail['trace']['items']));
+
+        // A hundred observations hold well under a megabyte between them.
+        $this->assertLessThan(
+            500 * 1024,
+            strlen(serialize($observations)),
+            'the observations carry more than half a kilobyte per row'
+        );
     }
 }
