@@ -145,17 +145,26 @@ class worker_launcher {
         global $CFG;
 
         $node = (string) ($config['node'] ?? get_config('local_catquizlab', 'worker_node_path'));
-        $npx = dirname($node) . '/npx';
-        if (!is_executable($npx)) {
+
+        // Puppeteer's own command line, from the packages npm just installed,
+        // run by Node directly. This used npx found beside the Node binary: it
+        // failed the same way npm did when npx was a link into somebody's home
+        // directory, and where it worked it downloaded Puppeteer a second time
+        // because it ran in the plugin directory, where no packages are.
+        $cli = self::runtime_dir() . '/node_modules/puppeteer/lib/cjs/puppeteer/node/cli.js';
+        if (!is_readable($cli)) {
+            $cli = $CFG->dirroot . '/local/catquizlab/worker/node_modules/puppeteer/lib/cjs/puppeteer/node/cli.js';
+        }
+        if (!is_readable($cli)) {
             return [
                 'exitcode' => 127,
-                'output'   => get_string('ops:nonpx', 'local_catquizlab', $npx),
+                'output'   => get_string('runtime:nopuppeteercli', 'local_catquizlab'),
                 'command'  => '',
             ];
         }
 
-        $argv = [$npx, '--yes', 'puppeteer', 'browsers', 'install', 'chrome'];
-        $command = 'cd ' . escapeshellarg($CFG->dirroot . '/local/catquizlab/worker') . ' && '
+        $argv = [$node, $cli, 'browsers', 'install', 'chrome'];
+        $command = 'cd ' . escapeshellarg(self::runtime_dir()) . ' && '
             . self::command_with_environment($config, $argv);
 
         $output = [];

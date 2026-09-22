@@ -6,6 +6,43 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.6.73] — 2026-09-22
+
+"No npm found" on a server where npm was installed.
+
+`/usr/bin/npm` existed and ran in the administrator's shell, and the plugin said
+there was no npm next to Node. The candidate was checked with `is_executable()`,
+which on a symlink answers for the link and not for where it points. An npm
+linked into a personal home directory — nvm puts it there — works for that
+person and not for the web server user, who cannot enter that home directory.
+Telling that administrator to install npm sent them to apt, which refused
+because npm was already there.
+
+Each candidate is now actually run as the web server user, with the Node it will
+be run with, and only a version answer counts. When none works, the message says
+what was found and why it did not count:
+
+    /usr/bin/npm exists, but points to /home/…/.nvm/…/npm, which the web server
+    user "www-data" cannot read. This is typical of an npm installed with nvm in
+    a personal home directory.
+
+followed by how to install Node and npm system-wide as a pair. Reproduced as
+`www-data` with a link into a mode-700 home directory; the search reports it and
+falls back to a working npm where one exists.
+
+The same fault a second time, for npx: the browser installation looked for npx
+beside the Node binary with `is_executable()`, and its "no npx found next to the
+configured Node binary" is the message that looks exactly like the old npm one.
+It no longer uses npx at all. Puppeteer's own command line comes from the
+packages npm has just installed and is run by Node directly, from the runtime
+directory — where the previous version, running in the plugin directory, would
+have downloaded Puppeteer a second time. Measured with no npx and no packages in
+the plugin directory: `npm ci` 10 s, then the browser in 5 s.
+
+PHPUnit 685 tests / 3665 assertions; phpcs and PHPDoc clean.
+
+---
+
 ## [0.6.72] — 2026-09-22
 
 Setting up the worker runtime on a server nobody prepared for it.

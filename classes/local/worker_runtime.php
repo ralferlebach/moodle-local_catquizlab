@@ -479,9 +479,17 @@ class worker_runtime {
         $source = $CFG->dirroot . '/local/catquizlab/worker';
         $dir = worker_launcher::runtime_dir();
 
-        $npm = self::find_npm($node);
+        $probe = self::npm_probe($node);
+        $npm = $probe['path'];
         if ($npm === null) {
-            return ['exitcode' => 127, 'output' => get_string('runtime:nonpm', 'local_catquizlab', dirname($node) . '/npm')];
+            // What was found and why it did not count, before the generic
+            // advice: "install npm" to somebody who has npm is the message
+            // that sent a person to apt, where it could not be installed.
+            $output = $probe['findings'] === []
+                ? get_string('runtime:nonpm', 'local_catquizlab', dirname($node) . '/npm')
+                : implode("\n", $probe['findings']) . "\n\n" . get_string('runtime:npmfix', 'local_catquizlab');
+
+            return ['exitcode' => 127, 'output' => $output];
         }
 
         // Installed in the dataroot, from the manifest the plugin ships. The
@@ -513,15 +521,26 @@ class worker_runtime {
     /**
      * The npm that belongs to a Node binary, or any npm on the path.
      *
-     * Beside the binary first, because that is the npm built for that Node.
-     * Then the path: distribution packages put node and npm in different
-     * packages, and a node without an npm beside it is the normal case on
-     * Ubuntu, not a broken installation.
+     * A candidate counts only if it actually runs as this process's user.
+     * is_executable() on a symlink answered for the link and not for where it
+     * points: an npm linked into somebody's home directory — nvm puts it there —
+     * works in that person's shell and not for the web server, and the message
+     * said "no npm found" to a person looking at /usr/bin/npm.
      *
      * @param string $node The Node binary.
      * @return string|null
      */
     protected static function find_npm(string $node): ?string {
+        return self::npm_probe($node)['path'];
+    }
+
+    /**
+     * Every npm candidate, and what happened when this process tried it.
+     *
+     * @param string $node The Node binary.
+     * @return array{path: string|null, version: string, findings: string[]}
+     */
+    public static function npm_probe(string $node): array {
         $candidates = [dirname($node) . '/npm', '/usr/bin/npm', '/usr/local/bin/npm'];
 
         $which = @exec('command -v npm 2>/dev/null');
@@ -529,13 +548,47 @@ class worker_runtime {
             $candidates[] = trim($which);
         }
 
-        foreach ($candidates as $candidate) {
-            if (is_executable($candidate)) {
-                return $candidate;
+        $user = self::process_user();
+        $findings = [];
+
+        foreach (array_unique($candidates) as $candidate) {
+            if (!file_exists($candidate) && !is_link($candidate)) {
+                continue;
             }
+
+            $target = is_link($candidate) ? (string) @readlink($candidate) : '';
+            $resolved = (string) @realpath($candidate);
+
+            if ($resolved === '' || !is_readable($resolved)) {
+                $findings[] = get_string('runtime:npmunreachable', 'local_catquizlab', (object) [
+                    'path'   => $candidate,
+                    'target' => $target !== '' ? $target : $candidate,
+                    'user'   => $user,
+                ]);
+                continue;
+            }
+
+            // Run it, with the Node it will be run with. A version answer is
+            // the only evidence that counts.
+            $output = [];
+            $exit = 1;
+            $command = 'PATH=' . escapeshellarg(dirname($node) . ':/usr/local/bin:/usr/bin:/bin')
+                . ' ' . escapeshellarg($candidate) . ' --version 2>&1';
+            @exec($command, $output, $exit);
+            $version = trim((string) ($output[0] ?? ''));
+
+            if ($exit === 0 && preg_match('/^\d+\.\d+/', $version)) {
+                return ['path' => $candidate, 'version' => $version, 'findings' => $findings];
+            }
+
+            $findings[] = get_string('runtime:npmfailed', 'local_catquizlab', (object) [
+                'path'   => $candidate,
+                'user'   => $user,
+                'output' => \core_text::substr(implode(' ', $output), 0, 200),
+            ]);
         }
 
-        return null;
+        return ['path' => null, 'version' => '', 'findings' => $findings];
     }
 
     /**
