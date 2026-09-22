@@ -6,6 +6,62 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.6.72] — 2026-09-22
+
+Setting up the worker runtime on a server nobody prepared for it.
+
+### Before anything is downloaded, the server is asked
+The preparation step shows, and "Set up the worker runtime" checks first:
+
+- **Writable directories.** Every directory the installation and the worker
+  write to is created if missing and actually written to — not just checked
+  with `is_writable()`, which answers for permission bits and not for a full
+  disk, a read-only mount or an ACL. The message names the operating-system
+  user and gives the command:
+
+      The PHP process runs as user "www-data" and cannot write to: …/worker-runtime,
+      …/worker-home, … Ask your server administrator to run:
+      sudo chown -R www-data /…/moodledata/local_catquizlab
+
+  Measured by running the check as `www-data` against directories owned by root.
+- **Disk space.** About 600 MB for the packages and a browser.
+- **The npm registry and the browser download**, through Moodle's own HTTP
+  client so that the site's proxy settings apply. Checked only while something
+  still has to be downloaded, and cached for ten minutes so a page load does
+  not wait for the network.
+
+If any of it fails, the setup stops before npm starts — measured: refused in
+0.0 s, rather than two minutes of npm followed by an error written for npm's
+developers.
+
+### Moodle's proxy reaches npm and Puppeteer
+It was not passed on at all. A server behind a proxy — the normal case at a
+university — could reach the internet from Moodle and not from the installation
+Moodle started, and the failure read as npm's network error. `HTTPS_PROXY`,
+`HTTP_PROXY`, the npm equivalents and `NO_PROXY` now come from the site's web
+proxy settings. The proxy password never appears in a message.
+
+### From the round before, also in this release
+The setup button crashed on `implode()`: it read a key `ensure()` never
+returned, and the crash hid npm's output. Node 18 was refused although Puppeteer
+24 supports it — it is what Ubuntu 24.04 ships; 18.19.1 now plays a full
+sitting (measured, fifteen questions). npm is looked for on the path as well as
+beside Node, and its absence says `sudo apt install npm`. "Knoten.js" is Node.js
+again in the four strings about the runtime.
+
+The dependencies install into the dataroot and the worker finds them through
+`NODE_PATH`. I had a development `node_modules` in my plugin directory that hid
+every fault in this path; it was removed for these measurements, and a fresh
+setup through the button installed 98 packages and a browser in 10 seconds, after
+which a worker started by the pipeline played sittings of a fifty-person
+experiment on MariaDB.
+
+### Verification
+PHPUnit 685 tests / 3665 assertions, Behat 32 scenarios / 235 steps, phpcs and
+PHPDoc clean.
+
+---
+
 ## [0.6.71] — 2026-09-22
 
 The Division by zero, found and removed. It was mine.

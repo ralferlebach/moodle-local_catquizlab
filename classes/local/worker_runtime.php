@@ -94,6 +94,16 @@ class worker_runtime {
             $baseurl !== '' ? $baseurl : get_string('runtime:baseurlmissing', $component)
         );
 
+        // What the installation itself needs from the server: somewhere to
+        // write, room to write it, and — only while something still has to be
+        // downloaded — a way out to the internet. Shown before the button is
+        // pressed, so a person learns what to ask their administrator for
+        // rather than reading an npm error after two minutes of waiting.
+        $needsdownload = !system_health::worker_modules_installed() || !self::browser_present();
+        foreach (self::preflight($needsdownload) as $step) {
+            $steps[] = $step;
+        }
+
         $missing = [];
         foreach ($steps as $step) {
             if (!$step['ok']) {
@@ -102,6 +112,245 @@ class worker_runtime {
         }
 
         return ['ok' => $missing === [], 'steps' => $steps, 'missing' => $missing];
+    }
+
+    /** @var int Bytes the dependencies and a browser need, with room to spare. */
+    public const DISK_NEEDED = 600 * 1024 * 1024;
+
+    /** @var string A tiny endpoint of the npm registry, answering {} when reachable. */
+    public const NPM_PING = 'https://registry.npmjs.org/-/ping';
+
+    /** @var string Where Puppeteer downloads its Chrome from. */
+    public const BROWSER_HOST = 'https://storage.googleapis.com/chrome-for-testing-public/';
+
+    /** @var int Seconds a network check is trusted before it is repeated. */
+    public const NETWORK_TTL = 600;
+
+    /**
+     * What the server must allow before anything can be installed.
+     *
+     * @param bool $network Whether to check the two download hosts as well.
+     * @return array[] Steps, in the same shape as verify()'s.
+     */
+    public static function preflight(bool $network = true): array {
+        $component = 'local_catquizlab';
+        $steps = [];
+        $user = self::process_user();
+
+        // Every directory the installation and the worker write to, created
+        // if missing and then actually written to. is_writable() alone answers
+        // for the permission bits and not for a full disk, a read-only mount or
+        // an ACL, all of which fail the same way later and less legibly.
+        $unwritable = [];
+        foreach (self::runtime_directories() as $dir) {
+            if (!self::can_write($dir)) {
+                $unwritable[] = $dir;
+            }
+        }
+        $steps[] = self::step(
+            'storage',
+            get_string('preflight:storage', $component),
+            $unwritable === [],
+            $unwritable === []
+                ? get_string('preflight:storageok', $component, $user)
+                : get_string('preflight:storagefailed', $component, (object) [
+                    'user' => $user,
+                    'dirs' => implode(', ', $unwritable),
+                    'root' => dirname($unwritable[0]),
+                ])
+        );
+
+        $free = @disk_free_space(worker_launcher::runtime_dir() === '' ? '/' : dirname(worker_launcher::runtime_dir()));
+        $enough = $free === false || $free >= self::DISK_NEEDED;
+        $steps[] = self::step(
+            'diskspace',
+            get_string('preflight:diskspace', $component),
+            $enough,
+            $free === false
+                ? get_string('preflight:diskspaceunknown', $component)
+                : get_string($enough ? 'preflight:diskspaceok' : 'preflight:diskspacefailed', $component, (object) [
+                    'free'   => display_size((int) $free),
+                    'needed' => display_size(self::DISK_NEEDED),
+                ])
+        );
+
+        if ($network) {
+            $hosts = [
+                'npmregistry'     => [self::NPM_PING, 'preflight:npmregistry'],
+                'browserdownload' => [self::BROWSER_HOST, 'preflight:browserdownload'],
+            ];
+            foreach ($hosts as $id => [$url, $label]) {
+                $reach = self::reachable($url);
+                $steps[] = self::step(
+                    $id,
+                    get_string($label, $component),
+                    $reach['ok'],
+                    $reach['ok']
+                        ? get_string('preflight:reachable', $component, (object) [
+                            'host' => parse_url($url, PHP_URL_HOST),
+                            'via'  => self::proxy_url() === '' ? get_string('preflight:direct', $component)
+                                : get_string('preflight:viaproxy', $component, self::proxy_display()),
+                        ])
+                        : get_string('preflight:unreachable', $component, (object) [
+                            'host'  => parse_url($url, PHP_URL_HOST),
+                            'error' => $reach['error'],
+                            'hint'  => self::proxy_url() === ''
+                                ? get_string('preflight:hintnoproxy', $component)
+                                : get_string('preflight:hintproxy', $component, self::proxy_display()),
+                        ])
+                );
+            }
+        }
+
+        return $steps;
+    }
+
+    /**
+     * Whether a host answers at all, through Moodle's own HTTP client.
+     *
+     * Moodle's client, so that the site's proxy settings apply exactly as they
+     * will for npm and the browser download. Any HTTP answer counts, a 403
+     * included: the question is whether the network lets us through, not
+     * whether this particular path serves a page.
+     *
+     * @param string $url The URL.
+     * @return array{ok: bool, error: string}
+     */
+    public static function reachable(string $url): array {
+        global $CFG;
+        require_once($CFG->libdir . '/filelib.php');
+
+        $key = 'preflight_' . md5($url);
+        $cached = json_decode((string) get_config('local_catquizlab', $key), true);
+        if (is_array($cached) && (int) ($cached['at'] ?? 0) > time() - self::NETWORK_TTL) {
+            return ['ok' => (bool) $cached['ok'], 'error' => (string) $cached['error']];
+        }
+
+        $curl = new \curl(['ignoresecurity' => true]);
+        $curl->head($url, ['CURLOPT_TIMEOUT' => 10, 'CURLOPT_CONNECTTIMEOUT' => 8]);
+        $info = $curl->get_info();
+        $status = (int) ($info['http_code'] ?? 0);
+        $errno = (int) $curl->get_errno();
+
+        $ok = $errno === 0 && $status > 0;
+        $error = $ok ? '' : ($curl->error !== '' ? $curl->error : 'HTTP ' . $status);
+
+        set_config($key, json_encode(['ok' => $ok, 'error' => $error, 'at' => time()]), 'local_catquizlab');
+
+        return ['ok' => $ok, 'error' => $error];
+    }
+
+    /**
+     * Forget cached network answers, so the next check asks again.
+     *
+     * @return void
+     */
+    public static function forget_network_checks(): void {
+        foreach ([self::NPM_PING, self::BROWSER_HOST] as $url) {
+            unset_config('preflight_' . md5($url), 'local_catquizlab');
+        }
+    }
+
+    /**
+     * The directories the installation and the worker write to.
+     *
+     * @return string[]
+     */
+    public static function runtime_directories(): array {
+        global $CFG;
+
+        $home = trim((string) get_config('local_catquizlab', 'worker_home'));
+        if ($home === '') {
+            $home = $CFG->dataroot . '/local_catquizlab/worker-home';
+        }
+        $cache = trim((string) get_config('local_catquizlab', 'worker_cache_dir'));
+        if ($cache === '') {
+            $cache = $home . '/.cache/puppeteer';
+        }
+
+        return array_values(array_unique([
+            worker_launcher::runtime_dir(),
+            $home,
+            $cache,
+            $CFG->dataroot . '/local_catquizlab/worker-logs',
+        ]));
+    }
+
+    /**
+     * Whether this process can create a file in a directory.
+     *
+     * @param string $dir The directory, created if it does not exist.
+     * @return bool
+     */
+    protected static function can_write(string $dir): bool {
+        if (!is_dir($dir) && !@mkdir($dir, 0700, true) && !is_dir($dir)) {
+            return false;
+        }
+
+        $probe = $dir . '/.catquizlab-write-test-' . getmypid();
+        if (@file_put_contents($probe, 'x') !== 1) {
+            return false;
+        }
+        @unlink($probe);
+
+        return true;
+    }
+
+    /**
+     * The operating-system user this PHP process runs as.
+     *
+     * Named in every message about permissions, because "the web server user"
+     * is not something an administrator can type into chown.
+     *
+     * @return string
+     */
+    public static function process_user(): string {
+        if (function_exists('posix_geteuid') && function_exists('posix_getpwuid')) {
+            $info = @posix_getpwuid(posix_geteuid());
+            if (is_array($info) && !empty($info['name'])) {
+                return (string) $info['name'];
+            }
+        }
+
+        $name = (string) @get_current_user();
+
+        return $name !== '' ? $name : 'www-data';
+    }
+
+    /**
+     * Moodle's proxy, as a URL npm and the browser download understand.
+     *
+     * @return string Empty when the site uses no proxy.
+     */
+    public static function proxy_url(): string {
+        global $CFG;
+
+        $host = trim((string) ($CFG->proxyhost ?? ''));
+        if ($host === '') {
+            return '';
+        }
+
+        $port = (int) ($CFG->proxyport ?? 0);
+        $auth = '';
+        if (trim((string) ($CFG->proxyuser ?? '')) !== '') {
+            $auth = rawurlencode((string) $CFG->proxyuser) . ':' . rawurlencode((string) ($CFG->proxypassword ?? '')) . '@';
+        }
+        $scheme = (($CFG->proxytype ?? 'HTTP') === 'SOCKS5') ? 'socks5' : 'http';
+
+        return $scheme . '://' . $auth . $host . ($port > 0 ? ':' . $port : '');
+    }
+
+    /**
+     * The proxy as it may be shown: host and port, never the password.
+     *
+     * @return string
+     */
+    protected static function proxy_display(): string {
+        global $CFG;
+
+        $port = (int) ($CFG->proxyport ?? 0);
+
+        return trim((string) ($CFG->proxyhost ?? '')) . ($port > 0 ? ':' . $port : '');
     }
 
     /**
@@ -115,6 +364,28 @@ class worker_runtime {
         $component = 'local_catquizlab';
         $changed = [];
         $log = [];
+
+        // The server's side first, asked fresh. Starting an npm install that
+        // cannot write or cannot reach the registry costs minutes and ends in
+        // an error written for npm's developers, not for the person who
+        // pressed the button.
+        self::forget_network_checks();
+        $needsdownload = !system_health::worker_modules_installed() || !self::browser_present();
+        $blocked = array_filter(self::preflight($needsdownload), static function (array $step): bool {
+            return empty($step['ok']);
+        });
+        if ($blocked !== []) {
+            $verified = self::verify();
+
+            return [
+                'ok'      => false,
+                'changed' => [],
+                'log'     => array_values(array_map(static function (array $step): string {
+                    return $step['label'] . ': ' . $step['detail'];
+                }, $blocked)),
+                'steps'   => $verified['steps'],
+            ];
+        }
 
         if (system_health::node_version() === null) {
             $found = self::find_node();
@@ -205,12 +476,12 @@ class worker_runtime {
         global $CFG;
 
         $node = trim((string) get_config('local_catquizlab', 'worker_node_path'));
-        $npm = dirname($node) . '/npm';
         $source = $CFG->dirroot . '/local/catquizlab/worker';
         $dir = worker_launcher::runtime_dir();
 
-        if (!is_executable($npm)) {
-            return ['exitcode' => 127, 'output' => get_string('runtime:nonpm', 'local_catquizlab', $npm)];
+        $npm = self::find_npm($node);
+        if ($npm === null) {
+            return ['exitcode' => 127, 'output' => get_string('runtime:nonpm', 'local_catquizlab', dirname($node) . '/npm')];
         }
 
         // Installed in the dataroot, from the manifest the plugin ships. The
@@ -237,6 +508,34 @@ class worker_runtime {
         @exec($command . ' 2>&1', $output, $exitcode);
 
         return ['exitcode' => (int) $exitcode, 'output' => self::tail(implode("\n", $output))];
+    }
+
+    /**
+     * The npm that belongs to a Node binary, or any npm on the path.
+     *
+     * Beside the binary first, because that is the npm built for that Node.
+     * Then the path: distribution packages put node and npm in different
+     * packages, and a node without an npm beside it is the normal case on
+     * Ubuntu, not a broken installation.
+     *
+     * @param string $node The Node binary.
+     * @return string|null
+     */
+    protected static function find_npm(string $node): ?string {
+        $candidates = [dirname($node) . '/npm', '/usr/bin/npm', '/usr/local/bin/npm'];
+
+        $which = @exec('command -v npm 2>/dev/null');
+        if (is_string($which) && trim($which) !== '') {
+            $candidates[] = trim($which);
+        }
+
+        foreach ($candidates as $candidate) {
+            if (is_executable($candidate)) {
+                return $candidate;
+            }
+        }
+
+        return null;
     }
 
     /**

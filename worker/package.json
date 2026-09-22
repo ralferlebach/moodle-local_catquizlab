@@ -4,7 +4,7 @@
   "private": true,
   "description": "Puppeteer worker for local_catquizlab: plays simulated CAT attempts through the real mod_adaptivequiz UI. Triggered by timed ad-hoc tasks of the plugin; all simulation logic (response oracle) stays server-side.",
   "engines": {
-    "node": ">=20"
+    "node": ">=18"
   },
   "scripts": {
     "start": "node run_attempt.js",

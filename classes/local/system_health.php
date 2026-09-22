@@ -44,7 +44,13 @@ class system_health {
     public const FAIL = 'fail';
 
     /** @var int The Node major version the worker needs. */
-    public const NODE_MAJOR = 20;
+    /**
+     * The oldest Node the worker runs on: Puppeteer 24's own floor.
+     *
+     * It was 20, which refused the Node Ubuntu 24.04 ships (18.19) with a
+     * red cross and no way forward, although nothing in the worker needs more.
+     */
+    public const NODE_MAJOR = 18;
 
     /**
      * The whole health picture.

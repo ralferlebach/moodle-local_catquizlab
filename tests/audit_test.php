@@ -345,4 +345,42 @@ final class audit_test extends \advanced_testcase {
         $this->assertStringContainsString('worker_exec_enabled', $result['reason']);
         $this->assertStringContainsString('worker_token', $result['reason']);
     }
+
+    /**
+     * The installation says what the server must allow before it tries.
+     *
+     * @return void
+     */
+    public function test_the_preflight_names_what_the_server_must_allow(): void {
+        global $CFG;
+        $this->resetAfterTest();
+
+        $steps = \local_catquizlab\local\worker_runtime::preflight(false);
+        $ids = array_column($steps, 'id');
+
+        // Writable directories and disk space are checked every time; both
+        // name the operating-system user, because "the web server user" is
+        // not something an administrator can type into chown.
+        $this->assertContains('storage', $ids);
+        $this->assertContains('diskspace', $ids);
+        $storage = $steps[array_search('storage', $ids)];
+        $this->assertTrue($storage['ok']);
+        $this->assertStringContainsString(\local_catquizlab\local\worker_runtime::process_user(), $storage['detail']);
+
+        // Moodle's proxy reaches npm and the browser download. Without it a
+        // site behind a proxy could reach the internet from Moodle and not
+        // from the installation it started.
+        $CFG->proxyhost = 'proxy.example.org';
+        $CFG->proxyport = 3128;
+        $CFG->proxybypass = 'localhost';
+        $environment = implode(' ', \local_catquizlab\local\worker_launcher::runtime_environment([]));
+        $this->assertStringContainsString('HTTPS_PROXY=http://proxy.example.org:3128', $environment);
+        $this->assertStringContainsString('npm_config_https_proxy=http://proxy.example.org:3128', $environment);
+        $this->assertStringContainsString('NO_PROXY=localhost', $environment);
+
+        // And a password in the proxy never reaches a message.
+        $CFG->proxyuser = 'u';
+        $CFG->proxypassword = 's3cret';
+        $this->assertStringContainsString('u:s3cret@', \local_catquizlab\local\worker_runtime::proxy_url());
+    }
 }

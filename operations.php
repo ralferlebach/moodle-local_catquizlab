@@ -92,14 +92,40 @@ if ($action !== '') {
     }
 
     if ($action === 'setupruntime') {
+        require_sesskey();
+        // An npm install and a browser download can take minutes.
+        core_php_time_limit::raise(900);
+
         $result = \local_catquizlab\local\worker_runtime::ensure();
+
+        // What is still missing, from the steps themselves. This read a key
+        // ensure() never returned, and the page died on implode() — which hid
+        // the one thing a person needs here: what npm said when it failed.
+        $missing = [];
+        foreach ((array) ($result['steps'] ?? []) as $step) {
+            if (empty($step['ok'])) {
+                $missing[] = (string) $step['label'];
+            }
+        }
+        $changed = (array) ($result['changed'] ?? []);
+
+        $message = $result['ok']
+            ? ($changed === []
+                ? get_string('runtime:setupnothing', $component)
+                : get_string('runtime:setupdone', $component, implode(', ', $changed)))
+            : get_string('runtime:setupfailed', $component, implode(', ', $missing));
+
+        $log = array_filter(array_map('strval', (array) ($result['log'] ?? [])));
+        if ($log !== []) {
+            $message .= html_writer::tag('pre', s(implode("\n\n", $log)), [
+                'class' => 'small mt-2 mb-0',
+                'style' => 'max-height: 20rem; overflow: auto; white-space: pre-wrap;',
+            ]);
+        }
+
         redirect(
             $pageurl,
-            $result['ok']
-                ? ($result['changed'] === []
-                    ? get_string('runtime:setupnothing', $component)
-                    : get_string('runtime:setupdone', $component, implode(', ', $result['changed'])))
-                : get_string('runtime:setupfailed', $component, implode(', ', $result['missing'])),
+            $message,
             null,
             $result['ok']
                 ? \core\output\notification::NOTIFY_SUCCESS

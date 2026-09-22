@@ -366,7 +366,26 @@ class worker_launcher {
             }
         }
 
-        $environment = [
+        $environment = [];
+
+        // Moodle's proxy, for npm and for Puppeteer's browser download. Without
+        // it a site behind a proxy — the normal case at a university — could
+        // reach the internet from Moodle and not from the installation it
+        // started, and the failure read as npm's network error.
+        $proxy = worker_runtime::proxy_url();
+        if ($proxy !== '') {
+            $names = ['HTTPS_PROXY', 'HTTP_PROXY', 'https_proxy', 'http_proxy', 'npm_config_proxy', 'npm_config_https_proxy'];
+            foreach ($names as $name) {
+                $environment[] = $name . '=' . $proxy;
+            }
+            $bypass = trim((string) ($CFG->proxybypass ?? ''));
+            if ($bypass !== '') {
+                $environment[] = 'NO_PROXY=' . $bypass;
+                $environment[] = 'no_proxy=' . $bypass;
+            }
+        }
+
+        $environment = array_merge($environment, [
             'HOME=' . $home,
             'PUPPETEER_CACHE_DIR=' . $cache,
             // Where the worker's dependencies live: in the dataroot, which
@@ -379,7 +398,7 @@ class worker_launcher {
             'XDG_CACHE_HOME=' . $home . '/.cache',
             'XDG_CONFIG_HOME=' . $home . '/.config',
             'XDG_DATA_HOME=' . $home . '/.local/share',
-        ];
+        ]);
 
         return $environment;
     }
