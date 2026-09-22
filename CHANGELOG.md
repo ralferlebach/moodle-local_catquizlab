@@ -6,6 +6,39 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.6.78] — 2026-09-22
+
+The evaluation ran out of memory on a real experiment.
+
+    Allowed memory size of 134217728 bytes exhausted
+      in lib/dml/mysqli_native_moodle_database.php on line 1368
+
+Nine runs of a thousand people each: `results_query::observations()` read every
+sitting of every run — nine thousand rows, trace JSON and all — and then every
+person, profile JSON and all, before computing a single figure. Measured on the
+same shape of data: **54 MB for the two reads alone**, on top of everything a
+Moodle page already holds. It died before the first mean.
+
+Both reads are now proportional to what is actually reported:
+
+- The sittings come through a recordset, one row at a time, restricted to those
+  that were collected and carry a trace. What stays in memory is one small
+  array per observation, not one database row per sitting.
+- People are fetched as they are needed and cached. A person who never sat the
+  test is never read. In the reported experiment that is 8423 of 9000.
+
+Measured after the change, same data, PHP's memory limit left at 128 MB:
+**577 observations, 44 MB peak, 0.1 seconds.** Before: no answer at all.
+
+A test builds two hundred people of whom ten sat the test, and asserts that the
+evaluation returns ten observations and reads fewer than forty times — a count
+that cannot grow with the people who did not sit.
+
+PHPUnit 692 tests / 3745 assertions, Behat 32 scenarios / 235 steps, phpcs and
+PHPDoc clean.
+
+---
+
 ## [0.6.77] — 2026-09-22
 
 Debug recording switched itself off.

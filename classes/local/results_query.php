@@ -122,22 +122,44 @@ class results_query {
         }
 
         [$insql, $params] = $DB->get_in_or_equal(array_keys($runs), SQL_PARAMS_NAMED, 'run');
-        $attempts = $DB->get_records_select(
-            'local_catquizlab_attempt',
-            'runid ' . $insql,
-            $params,
-            'runid ASC, id ASC'
-        );
 
+        // People are fetched as they are needed and kept in a small cache.
+        // Every person of every run used to be held at once, profile JSON
+        // included: nine thousand people at roughly three kilobytes each is
+        // twenty-five megabytes before a single number is computed, and with
+        // the sittings beside them the page ran out of memory. Only people who
+        // actually sat the test are read now.
         $persons = [];
-        foreach ($DB->get_records_select('local_catquizlab_person', 'runid ' . $insql, $params) as $person) {
-            $persons[(int) $person->id] = $person;
-        }
+        $personfields = 'id, runid, twinid, twinindex, severity, stratum, abilityglobal, profilejson';
+
+        // A recordset, and only sittings that have something to report. Every
+        // sitting of every run used to be loaded at once — nine thousand rows
+        // carrying a full trace each — and the page died of exhausted memory
+        // before it computed anything. A recordset holds one row at a time;
+        // what stays is one small array per observation.
+        $params['collected'] = attempt_scheduler::STATUS_COLLECTED;
+        $params['validated'] = attempt_scheduler::STATUS_VALIDATED;
+        $attempts = $DB->get_recordset_select(
+            'local_catquizlab_attempt',
+            'runid ' . $insql . ' AND status IN (:collected, :validated) AND tracejson IS NOT NULL',
+            $params,
+            'runid ASC, id ASC',
+            'id, runid, personid, runtimems, tracejson'
+        );
 
         $rows = [];
         foreach ($attempts as $attempt) {
             $trace = json_decode((string) $attempt->tracejson, true) ?: [];
-            $person = $persons[(int) $attempt->personid] ?? null;
+
+            $personid = (int) $attempt->personid;
+            if (!array_key_exists($personid, $persons)) {
+                $persons[$personid] = $DB->get_record(
+                    'local_catquizlab_person',
+                    ['id' => $personid],
+                    $personfields
+                ) ?: null;
+            }
+            $person = $persons[$personid];
             if ($person === null || $trace === []) {
                 // An attempt without a trace has no outcome to report. Counting
                 // it as a zero would quietly bias every mean it entered.
@@ -184,6 +206,7 @@ class results_query {
                 'trace'       => $trace,
             ];
         }
+        $attempts->close();
 
         return $this->observations = $rows;
     }

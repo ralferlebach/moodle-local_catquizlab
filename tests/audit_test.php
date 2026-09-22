@@ -595,4 +595,64 @@ final class audit_test extends \advanced_testcase {
         }
         $this->assertContains('debuglevel', $saved);
     }
+
+    /**
+     * The evaluation reads only what it reports on.
+     *
+     * @return void
+     */
+    public function test_the_evaluation_does_not_load_every_row(): void {
+        global $DB;
+        $this->resetAfterTest();
+        $this->setAdminUser();
+
+        /** @var \local_catquizlab_generator $generator */
+        $generator = $this->getDataGenerator()->get_plugin_generator('local_catquizlab');
+        $run = $generator->create_run();
+        $runid = (int) $run->id;
+        $DB->set_field('local_catquizlab_run', 'status', \local_catquizlab\local\registry::STATUS_FINISHED, ['id' => $runid]);
+
+        // A profile of the size a hundred-subscale experiment produces.
+        $profile = json_encode(['subscales' => array_fill(0, 100, ['key' => 'cat', 'theta' => 0.3])]);
+        $trace = json_encode([
+            'finaltheta' => 0.4, 'finalse' => 0.3, 'items' => range(1, 35),
+            'responses' => array_fill(1, 35, 1.0), 'nitems' => 35, 'steps' => 35,
+            'stopreason' => 'se', 'scaleabilities' => [],
+        ]);
+
+        // Two hundred people, of whom ten sat the test. The page used to read
+        // every person and every sitting, profile JSON and all, and ran out of
+        // memory on an installation with nine thousand of each.
+        $withtrace = [];
+        for ($i = 1; $i <= 200; $i++) {
+            $personid = (int) $DB->insert_record('local_catquizlab_person', (object) [
+                'runid' => $runid, 'twinid' => $i, 'twinindex' => $i, 'severity' => 'none',
+                'stratum' => 'conforming', 'abilityglobal' => 0.1, 'profilejson' => $profile,
+                'timecreated' => time(), 'timemodified' => time(),
+            ]);
+            $collected = $i <= 10;
+            $id = (int) $DB->insert_record('local_catquizlab_attempt', (object) [
+                'runid' => $runid, 'personid' => $personid,
+                'status' => $collected
+                    ? \local_catquizlab\local\attempt_scheduler::STATUS_COLLECTED
+                    : \local_catquizlab\local\attempt_scheduler::STATUS_QUEUED,
+                'tries' => 1, 'runtimems' => 5000, 'tracejson' => $collected ? $trace : null,
+                'timecreated' => time(), 'timemodified' => time(),
+            ]);
+            if ($collected) {
+                $withtrace[] = $id;
+            }
+        }
+
+        $reads = $DB->perf_get_reads();
+        $observations = (new \local_catquizlab\local\results_query(['runid' => $runid]))->observations();
+        $queries = $DB->perf_get_reads() - $reads;
+
+        // Only the sittings that have something to report.
+        $this->assertCount(count($withtrace), $observations);
+
+        // And a query count that does not grow with the two hundred people who
+        // did not sit: the runs, the sittings, and one read per person who did.
+        $this->assertLessThan(40, $queries, 'the evaluation read ' . $queries . ' times for ten sittings');
+    }
 }
