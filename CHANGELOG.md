@@ -6,6 +6,81 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.6.71] — 2026-09-22
+
+The Division by zero, found and removed. It was mine.
+
+### Where it was
+Reproduced on a fresh MariaDB installation with the reported experiment —
+fastest, ten by ten subscales of 25 items, fifty people — and located by both
+the browser with debug display and the server-side replay, independently:
+
+    DivisionByZeroError at local/catquiz/classes/local/model/model_raschmodel.php:734
+      ← model_raschmodel::get_ability_tr_jacobian()   catcalc.php:188
+      ← mathcat::newton_raphson()                      catcalc.php:200
+
+Line 734 divides by the square of a standard deviation: the prior of the trusted
+region around the ability estimate. That standard deviation comes from
+`updatepersonability::calculate_sd_from_past_attempts()`, which — once a context
+holds **fifty** person parameters — takes the standard deviation of their
+abilities as the prior. Fifty identical values have a standard deviation of
+zero.
+
+### Where the identical values came from
+This plugin. `seed_person_parameters()` wrote one row per simulated person per
+scale, all at 0.0, before any sitting — on the belief, documented in the code,
+that the engine needed a value before it could choose a first question. Fifty
+people, 111 scales: 5550 rows, all 0.0000, in every context of every run.
+
+Every experiment I tested had one to five people. Below fifty, the engine
+answers 1.0 and never computes the standard deviation. The reported experiment
+had exactly fifty. The hunt through subscale counts, database families and
+engine versions was a hunt in the wrong place: it was the head count.
+
+### The fix
+Provisioning writes no starting abilities. The engine chooses a first question
+without them — verified server-side and in a browser — and writes its own
+parameters as it measures. A person nobody knows anything about should have no
+prior; the engine's default for an empty context is sd = 1.
+
+`remove_seeded_parameters()` strips the rows an earlier version left in a run's
+contexts — status 0, no standard error, nothing measured — and leaves anything
+the engine wrote. It runs during provisioning and inside "Clear the errors and
+continue", so a run prepared by 0.6.70 or earlier is repaired by the same button
+that resumes it. Measured on MariaDB: 5527 seeded rows removed, then nine of ten
+sittings with fifty people finished at 7–14 questions, no division. The tenth
+was the first after a cache purge and fails a different, retried way.
+
+A regression test seeds fifty people at 0.0 beside one measured parameter and
+asserts the fifty go and the one stays.
+
+### Recommended to the engine, not changed here
+`calculate_sd_from_past_attempts()` should never return 0 — a prior with zero
+variance is not a prior. A floor at line 528 would have turned this into a
+biased estimate rather than an error page. That is a one-line change in the
+`ALiSe-v-1.2.0-legacy` branch, and it is not made in this plugin. No file under
+`local/catquiz` or `mod/adaptivequiz` is modified by this repository; I checked.
+
+### Two CI jobs, both mine
+The structure job: one `</div>` too many in the recovery section of
+`progress.mustache`, left from wrapping the card in a `<details>` — every tag
+now balances. The worker end-to-end job: `--verify` counted attempts with
+`registry::STATUS_FINISHED`, a run status whose value means "validated" for an
+attempt, a state no worker reaches. The job played its sitting to the end and
+was counted as having finished nothing. Attempt statuses now.
+
+### Also
+`job_complete`'s message is `PARAM_RAW`: the replay trace contains `<` and
+`PARAM_TEXT` refused it, which would have discarded exactly the information the
+replay exists to keep.
+
+### Verification
+PHPUnit 684 tests / 3657 assertions, Behat 32 scenarios / 235 steps, phpcs with
+the Moodle standard clean, PHPDoc clean, every template tag balanced. Fifty
+people, MariaDB, real browser: nine of ten sittings finished, none divided.
+
+---
+
 ## [0.6.70] — 2026-09-21
 
 Why no run ever started on any installation but mine.

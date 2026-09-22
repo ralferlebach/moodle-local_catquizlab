@@ -103,12 +103,16 @@ function local_catquizlab_e2e_verify(int $runid): int {
     $finished = $DB->count_records_select(
         'local_catquizlab_attempt',
         'runid = :runid AND status = :status',
-        ['runid' => $runid, 'status' => registry::STATUS_FINISHED]
+        // Attempt statuses, not run statuses: registry::STATUS_FINISHED is 30,
+        // which for an attempt means "validated" — a state no worker reaches.
+        // The CI job played its sitting to the end and was counted as having
+        // finished nothing.
+        ['runid' => $runid, 'status' => attempt_scheduler::STATUS_COLLECTED]
     );
     $failed = $DB->count_records_select(
         'local_catquizlab_attempt',
         'runid = :runid AND status = :status',
-        ['runid' => $runid, 'status' => registry::STATUS_FAILED]
+        ['runid' => $runid, 'status' => attempt_scheduler::STATUS_FAILED]
     );
 
     fwrite(STDERR, "Run {$runid}: {$finished}/{$total} attempts finished, {$failed} failed." . PHP_EOL);

@@ -206,6 +206,12 @@ class circuit_breaker {
             return ['ok' => false, 'released' => 0];
         }
 
+        // Starting abilities an earlier version seeded, if this run still has
+        // them: they are the cause behind every "Division by zero" that tripped
+        // this breaker on a run with fifty people, and retrying without
+        // removing them repeats it exactly.
+        user_provisioner::remove_seeded_parameters($runid);
+
         // The failed sittings go back in the queue with their counters cleared;
         // the ones that were held were never touched and need nothing.
         $released = $DB->count_records('local_catquizlab_attempt', [

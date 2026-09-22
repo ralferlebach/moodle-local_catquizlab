@@ -54,7 +54,7 @@ class job_complete extends external_api {
             'runtimems' => new external_value(PARAM_INT, 'Wall-clock runtime of the attempt in milliseconds.', VALUE_DEFAULT, 0),
             'engineattemptid' => new external_value(PARAM_INT, 'The adaptivequiz_attempt id (0 when unknown).', VALUE_DEFAULT, 0),
             'message'         => new external_value(
-                PARAM_TEXT,
+                PARAM_RAW,
                 'The worker\'s own reason when the attempt did not finish, kept so a retried '
                     . 'attempt says why rather than only showing a rising try count.',
                 VALUE_DEFAULT,

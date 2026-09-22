@@ -118,6 +118,46 @@ class user_provisioner {
     }
 
     /**
+     * Remove starting person parameters an earlier version wrote for a run.
+     *
+     * Recognisable as what seeding wrote and nothing else writes: status 0, no
+     * standard error, no attempt behind them. A parameter the engine measured
+     * has a standard error and is left alone. Runs prepared before this fix
+     * carry the seeded rows in their context, and every sitting in them fails
+     * until the rows are gone.
+     *
+     * @param int $runid The run.
+     * @return int How many rows were removed.
+     */
+    public static function remove_seeded_parameters(int $runid): int {
+        global $DB;
+
+        if (!environment::engine_available() || !$DB->get_manager()->table_exists('local_catquiz_personparams')) {
+            return 0;
+        }
+
+        $contextids = $DB->get_fieldset_select(
+            'local_catquizlab_scalemap',
+            'DISTINCT contextid',
+            'runid = :runid AND contextid > 0',
+            ['runid' => $runid]
+        );
+        if ($contextids === []) {
+            return 0;
+        }
+
+        [$insql, $params] = $DB->get_in_or_equal($contextids, SQL_PARAMS_NAMED, 'ctx');
+        $select = 'contextid ' . $insql . ' AND status = 0 AND standarderror IS NULL';
+
+        $removed = $DB->count_records_select('local_catquiz_personparams', $select, $params);
+        if ($removed > 0) {
+            $DB->delete_records_select('local_catquiz_personparams', $select, $params);
+        }
+
+        return $removed;
+    }
+
+    /**
      * Write the starting person parameters of a run's simulated users.
      *
      * The engine expects a person to have an ability on every scale of the test

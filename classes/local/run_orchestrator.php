@@ -744,10 +744,18 @@ class run_orchestrator {
         );
         $users = user_provisioner::provision($runid);
 
-        // The starting ability of every simulated person on every scale of the
-        // run. The engine needs one before it can choose a first question, and
-        // a person the worker drops straight into an attempt has none.
-        $seeded = user_provisioner::seed_person_parameters($runid);
+        // No starting abilities are written. They used to be: one row per
+        // person per scale, all at 0.0, on the belief that the engine needed a
+        // value before it could choose a first question. It does not — and
+        // once a context held fifty of them (the engine's threshold), it took
+        // their standard deviation as the prior for every estimate. Fifty
+        // identical values have a standard deviation of zero, and the first
+        // answer of every sitting divided by it. That is what "Division by
+        // zero" on the live installation was, for every run with fifty people.
+        //
+        // A person nobody knows anything about should have no prior. The
+        // engine's own default for an empty context is sd = 1, which is one.
+        $seeded = user_provisioner::remove_seeded_parameters($runid);
 
         $course = course_provisioner::provision($runid);
 
@@ -758,7 +766,7 @@ class run_orchestrator {
         return [
             'persons' => $persons,
             'users'   => $users,
-            'seeded'  => $seeded,
+            'unseeded' => $seeded,
             'course'  => $course,
         ];
     }
