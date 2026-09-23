@@ -105,6 +105,12 @@ if ($hassiteconfig) {
         get_string('setting:worker', $component),
         get_string('setting:worker_desc', $component)
     ));
+    $settings->add(new admin_setting_configduration(
+        $component . '/logretention',
+        get_string('setting:logretention', $component),
+        get_string('setting:logretention_desc', $component),
+        30 * DAYSECS
+    ));
     $settings->add(new admin_setting_configcheckbox(
         $component . '/worker_exec_enabled',
         get_string('setting:worker_exec_enabled', $component),

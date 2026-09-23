@@ -53,7 +53,8 @@ class log_view {
         );
 
         // Newest last: a log is read downwards, and a person pasting the tail
-        // of it wants the end to be the end.
+        // of it wants the end to be the end. Reversible, because somebody
+        // watching something happen wants the newest line first.
         usort($lines, static function (array $a, array $b): int {
             return $a['time'] <=> $b['time'] ?: $a['seq'] <=> $b['seq'];
         });
@@ -65,7 +66,14 @@ class log_view {
             }));
         }
 
-        return array_slice($lines, -$limit);
+        $lines = self::narrow($lines, $filter);
+        $lines = array_slice($lines, -$limit);
+
+        if (!empty($filter['newestfirst'])) {
+            $lines = array_reverse($lines);
+        }
+
+        return $lines;
     }
 
     /**
@@ -132,6 +140,10 @@ class log_view {
                 'runid'         => (int) $row->runid,
                 'correlationid' => (string) ($row->correlationid ?? ''),
                 'failed'        => $row->outcome === 'error',
+                'severity'      => $row->outcome === 'error' ? self::ERROR
+                    : ($row->outcome === 'warning' ? self::WARNING : self::DEBUG),
+                'action'        => (string) $row->action,
+                'userid'        => (int) ($row->userid ?? 0),
             ]);
         }
 
@@ -188,6 +200,13 @@ class log_view {
                 'runid'         => (int) $row->runid,
                 'correlationid' => (string) ($row->correlationid ?? ''),
                 'failed'        => $row->event === run_log::STAGE_FAILED || $row->event === run_log::RUN_FAILED,
+                'severity'      => in_array($row->event, [run_log::STAGE_FAILED, run_log::RUN_FAILED], true)
+                    ? self::ERROR
+                    : ($row->event === run_log::RUN_AUTOPAUSED
+                        ? self::WARNING : self::INFO),
+                'action'        => (string) $row->event,
+                'attemptno'     => (int) ($row->attemptno ?? 0),
+                'userid'        => (int) ($row->userid ?? 0),
             ]);
         }
 
@@ -269,6 +288,38 @@ class log_view {
     }
 
     /**
+     * Remove entries older than the configured retention.
+     *
+     * A debug recording on a busy installation writes a row per service call;
+     * left alone it grows without a ceiling. Nothing here is the record of an
+     * experiment — that is in the run tables and the results — so a window
+     * that covers troubleshooting is enough.
+     *
+     * @return int Rows removed.
+     */
+    public static function prune(): int {
+        global $DB;
+
+        $retention = (int) get_config('local_catquizlab', 'logretention');
+        if ($retention <= 0) {
+            return 0;
+        }
+
+        $cutoff = time() - $retention;
+        $removed = 0;
+
+        foreach (['local_catquizlab_debug', 'local_catquizlab_runlog'] as $table) {
+            if (!$DB->get_manager()->table_exists($table)) {
+                continue;
+            }
+            $removed += (int) $DB->count_records_select($table, 'timecreated < ?', [$cutoff]);
+            $DB->delete_records_select($table, 'timecreated < ?', [$cutoff]);
+        }
+
+        return $removed;
+    }
+
+    /**
      * When the most recent entry of any source was written.
      *
      * @return int A timestamp, or 0 when nothing was ever recorded.
@@ -330,7 +381,92 @@ class log_view {
             'runid'  => (int) ($meta['runid'] ?? 0),
             'correlationid' => (string) ($meta['correlationid'] ?? ''),
             'failed' => !empty($meta['failed']),
+            // A level on every line, so a reader can ask for the errors
+            // without knowing which of the four sources wrote them.
+            'severity' => (string) ($meta['severity'] ?? (!empty($meta['failed']) ? self::ERROR : self::INFO)),
+            'action'   => (string) ($meta['action'] ?? ''),
+            'attemptno' => (int) ($meta['attemptno'] ?? 0),
+            'userid'   => (int) ($meta['userid'] ?? 0),
         ];
+    }
+
+    /** @var string Everything that happened, in order. */
+    public const DEBUG = 'debug';
+
+    /** @var string The normal course of events. */
+    public const INFO = 'info';
+
+    /** @var string Something that deserves attention but is not a failure. */
+    public const WARNING = 'warning';
+
+    /** @var string Something failed. */
+    public const ERROR = 'error';
+
+    /** @var string[] The levels, least to most severe. */
+    public const SEVERITIES = [self::DEBUG, self::INFO, self::WARNING, self::ERROR];
+
+    /**
+     * Whether a line is at least as severe as the level asked for.
+     *
+     * @param string $line The line's severity.
+     * @param string $wanted The lowest severity to show.
+     * @return bool
+     */
+    public static function at_least(string $line, string $wanted): bool {
+        $order = array_flip(self::SEVERITIES);
+
+        return ($order[$line] ?? 1) >= ($order[$wanted] ?? 0);
+    }
+
+    /**
+     * The filters that narrow the lines after they are gathered.
+     *
+     * Applied here rather than in each source's query: the four sources store
+     * different columns, and a reader asking for "everything about correlation
+     * X, errors only, oldest first" should not have to know which of them can
+     * answer in SQL.
+     *
+     * @param array[] $lines The gathered lines.
+     * @param array $filter The filter.
+     * @return array[]
+     */
+    protected static function narrow(array $lines, array $filter): array {
+        $severity = (string) ($filter['severity'] ?? '');
+        $action = trim((string) ($filter['action'] ?? ''));
+        $correlation = trim((string) ($filter['correlationid'] ?? ''));
+        $attempt = (int) ($filter['attemptno'] ?? 0);
+        $userid = (int) ($filter['userid'] ?? 0);
+        $until = (int) ($filter['until'] ?? 0);
+
+        return array_values(array_filter($lines, static function (array $line) use (
+            $severity,
+            $action,
+            $correlation,
+            $attempt,
+            $userid,
+            $until
+        ): bool {
+            if ($severity !== '' && !self::at_least((string) $line['severity'], $severity)) {
+                return false;
+            }
+            if ($action !== '' && stripos((string) $line['action'] . ' ' . $line['text'], $action) === false) {
+                return false;
+            }
+            if ($correlation !== '' && stripos((string) $line['correlationid'], $correlation) === false) {
+                return false;
+            }
+            if ($attempt > 0 && (int) $line['attemptno'] !== $attempt) {
+                return false;
+            }
+            if ($userid > 0 && (int) $line['userid'] !== $userid) {
+                return false;
+            }
+            if ($until > 0 && (int) $line['time'] > $until) {
+                return false;
+            }
+
+            return true;
+        }));
     }
 
     /**

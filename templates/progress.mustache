@@ -21,6 +21,7 @@
     * queue - claimable, notdue, blocked, paused, running, collected, failed
     * pipelinestatus - the pipeline as a status card
     * formurl, sesskey - where recovery actions post
+    * logsurl - the execution log, filtered to what is shown here
     * canexecute - whether to offer them at all
 
     Example context (json):
@@ -92,6 +93,7 @@
         },
         "formurl": "/local/catquizlab/operations.php",
         "sesskey": "abc123",
+        "logsurl": "/local/catquizlab/logs.php?hours=24",
         "experimentid": 0,
         "canexecute": true
 }
@@ -245,6 +247,10 @@
 <div class="card mb-3">
     <div class="card-body">
         <h3 class="h5">{{#str}}progress:runs, local_catquizlab{{/str}}</h3>
+        <p class="small mb-2">
+            {{#str}}progress:eventlogelsewhere, local_catquizlab{{/str}}
+            <a href="{{logsurl}}">{{#str}}progress:openeventlog, local_catquizlab{{/str}}</a>
+        </p>
         {{#runs.hasany}}
             <table class="table table-sm">
                 <tbody>
@@ -319,6 +325,16 @@
                         <td>{{subject}}</td>
                         <td class="small text-muted">
                             {{#running}}{{#str}}task:isrunning, local_catquizlab{{/str}}{{/running}}
+                        {{#canrequeue}}
+                            <form method="post" action="{{formurl}}" class="d-inline">
+                                <input type="hidden" name="sesskey" value="{{sesskey}}">
+                                <input type="hidden" name="action" value="requeuetask">
+                                <input type="hidden" name="taskid" value="{{id}}">
+                                <button type="submit" class="btn btn-sm btn-outline-secondary">
+                                    {{#str}}task:requeuenow, local_catquizlab{{/str}}
+                                </button>
+                            </form>
+                        {{/canrequeue}}
                             {{^running}}{{due}}{{/running}}
                         </td>
                         <td class="small text-muted">{{failures}}</td>
@@ -335,11 +351,23 @@
 <div class="card mb-3">
     <div class="card-body">
         <h3 class="h5">{{#str}}worker:heading, local_catquizlab{{/str}}</h3>
+        <p class="small text-muted mb-2">{{#str}}worker:environmentheading, local_catquizlab{{/str}}</p>
         {{#workers.hasany}}
             {{#workers.rows}}
                 <div class="mb-2">
-                    <div class="small text-muted">{{workerid}}</div>
+                    <div class="small text-muted">{{workerid}} — {{statename}}</div>
                     {{#status}}{{> local_catquizlab/statuscard }}{{/status}}
+                    <ul class="list-inline small text-muted mb-1 mt-1">
+                        <li class="list-inline-item">{{#str}}worker:slot, local_catquizlab{{/str}}: {{slot}}</li>
+                        <li class="list-inline-item">{{#str}}worker:playing, local_catquizlab{{/str}}:
+                            {{#attemptid}}#{{attemptid}}{{#runid}} ({{#str}}results:run, local_catquizlab{{/str}} {{runid}}){{/runid}}{{/attemptid}}{{^attemptid}}{{#str}}worker:nothingplaying, local_catquizlab{{/str}}{{/attemptid}}</li>
+                        <li class="list-inline-item">{{#str}}worker:jobsdone, local_catquizlab{{/str}}: {{jobsdone}}</li>
+                        <li class="list-inline-item">{{#str}}worker:lastheartbeat, local_catquizlab{{/str}}: {{heartbeatago}}</li>
+                        <li class="list-inline-item">{{#str}}worker:uptime, local_catquizlab{{/str}}: {{uptime}}</li>
+                    </ul>
+                    {{#haserror}}
+                        <p class="small text-danger mb-1">{{lasterror}}</p>
+                    {{/haserror}}
                     {{#log}}
                         <details class="ml-4">
                             <summary class="small">{{#str}}ops:workerlog, local_catquizlab{{/str}}</summary>
@@ -357,7 +385,7 @@
 
 <div class="card mb-3">
     <div class="card-body">
-        <h3 class="h5">{{#str}}ops:queue, local_catquizlab{{/str}}</h3>
+        <h3 class="h5">{{#experimentid}}{{#str}}queue:ofexperiment, local_catquizlab{{/str}}{{/experimentid}}{{^experimentid}}{{#str}}ops:queue, local_catquizlab{{/str}}{{/experimentid}}</h3>
         {{#queuestatus}}
             <div class="mb-2" data-card="queue">{{> local_catquizlab/statuscard }}</div>
         {{/queuestatus}}

@@ -98,6 +98,15 @@ class pipeline_tick extends \core\task\scheduled_task {
             mtrace("local_catquizlab: reclaimed {$reclaimed} stale attempt(s).");
         }
 
+        // Old log entries, once an hour's worth of ticks. Cheap, and it keeps
+        // the debug store from growing without a ceiling.
+        if ((int) date('i') < 5) {
+            $pruned = \local_catquizlab\local\log_view::prune();
+            if ($pruned > 0) {
+                mtrace("local_catquizlab: removed {$pruned} old log entries.");
+            }
+        }
+
         $result = worker_launcher::launch_pool(worker_launcher::config_from_settings());
 
         // Kept where the interface can read it. The tick's output goes to

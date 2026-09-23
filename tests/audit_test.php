@@ -783,4 +783,61 @@ final class audit_test extends \advanced_testcase {
         $again = \local_catquizlab\local\status_report::queue($breakdown);
         $this->assertSame($card['state'], $again['state']);
     }
+
+    /**
+     * A simulated person sits the test once at a time.
+     *
+     * @return void
+     */
+    public function test_two_workers_never_get_the_same_person(): void {
+        global $DB;
+        $this->resetAfterTest();
+        $this->setAdminUser();
+
+        /** @var \local_catquizlab_generator $generator */
+        $generator = $this->getDataGenerator()->get_plugin_generator('local_catquizlab');
+        $run = $generator->create_run();
+        $runid = (int) $run->id;
+        $DB->set_field('local_catquizlab_run', 'status', \local_catquizlab\local\registry::STATUS_READY, ['id' => $runid]);
+
+        $alice = (int) $generator->create_person(['runid' => $runid])->id;
+        $bob = (int) $generator->create_person(['runid' => $runid])->id;
+
+        // Alice is already sitting the test, with a live lease.
+        $busy = (int) $DB->insert_record('local_catquizlab_attempt', (object) [
+            'runid' => $runid, 'personid' => $alice,
+            'status' => \local_catquizlab\local\attempt_scheduler::STATUS_RUNNING,
+            'tries' => 1, 'leaseowner' => 'worker-a', 'leaseexpires' => time() + 600,
+            'timecreated' => time(), 'timemodified' => time(),
+        ]);
+        // Her second sitting, and one of Bob's, both waiting.
+        $second = (int) $DB->insert_record('local_catquizlab_attempt', (object) [
+            'runid' => $runid, 'personid' => $alice,
+            'status' => \local_catquizlab\local\attempt_scheduler::STATUS_QUEUED,
+            'tries' => 0, 'timecreated' => time(), 'timemodified' => time(),
+        ]);
+        $bobs = (int) $DB->insert_record('local_catquizlab_attempt', (object) [
+            'runid' => $runid, 'personid' => $bob,
+            'status' => \local_catquizlab\local\attempt_scheduler::STATUS_QUEUED,
+            'tries' => 0, 'timecreated' => time(), 'timemodified' => time(),
+        ]);
+
+        // Two workers logging in as the same person open the same adaptive
+        // quiz attempt, and Moodle rejects the second one's answers with
+        // "adaptivequiz/uniquenotpartofattempt". With a thousand people, two
+        // sittings each and a hundred workers, that is the normal case.
+        $claim = \local_catquizlab\external\job_claim::execute('worker-b');
+        $this->assertTrue($claim['hasjob']);
+        $this->assertSame($bobs, (int) $claim['attemptid']);
+        $this->assertNotSame($second, (int) $claim['attemptid']);
+
+        // Once Alice's sitting is over, her second one is claimable.
+        $DB->update_record('local_catquizlab_attempt', (object) [
+            'id' => $busy,
+            'status' => \local_catquizlab\local\attempt_scheduler::STATUS_COLLECTED,
+            'leaseowner' => null, 'leaseexpires' => 0,
+        ]);
+        $next = \local_catquizlab\external\job_claim::execute('worker-c');
+        $this->assertSame($second, (int) $next['attemptid']);
+    }
 }

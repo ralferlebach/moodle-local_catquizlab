@@ -80,8 +80,12 @@ final class external_test extends \advanced_testcase {
             'status' => \local_catquizlab\local\attempt_scheduler::STATUS_QUEUED,
             'timecreated' => $now, 'timemodified' => $now,
         ]);
+        // A second person: two sittings of the same person are deliberately
+        // never handed out at once, which is what this test would otherwise
+        // trip over while testing queue order.
+        $secondperson = $generator->create_person(['runid' => $run->id]);
         $second = $DB->insert_record('local_catquizlab_attempt', (object) [
-            'runid' => $run->id, 'personid' => $person->id,
+            'runid' => $run->id, 'personid' => $secondperson->id,
             'status' => \local_catquizlab\local\attempt_scheduler::STATUS_QUEUED,
             'timecreated' => $now + 1, 'timemodified' => $now + 1,
         ]);

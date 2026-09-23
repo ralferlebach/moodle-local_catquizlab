@@ -511,6 +511,52 @@ class worker_registry {
      *
      * @return array[] One entry per worker, most recently active first.
      */
+    /**
+     * A worker state in words.
+     *
+     * @param int $status One of the STATUS_ constants.
+     * @return string
+     */
+    public static function status_label(int $status): string {
+        $keys = [
+            self::STATUS_STARTING => 'worker:statestarting',
+            self::STATUS_RUNNING  => 'worker:staterunning',
+            self::STATUS_STOPPED  => 'worker:statestopped',
+            self::STATUS_CRASHED  => 'worker:statecrashed',
+        ];
+
+        return get_string($keys[$status] ?? 'worker:stateunknown', 'local_catquizlab');
+    }
+
+    /**
+     * Every worker the registry knows, newest first.
+     *
+     * Not only the live ones. A central operations view that shows live
+     * workers only cannot answer "what happened to the worker that was
+     * running my experiment": a crash and an orderly stop look identical from
+     * there, namely absent.
+     *
+     * @param int $limit How many to return.
+     * @return \stdClass[]
+     */
+    public static function recent(int $limit = 20): array {
+        global $DB;
+
+        return array_values($DB->get_records(
+            'local_catquizlab_worker',
+            null,
+            'timemodified DESC, id DESC',
+            '*',
+            0,
+            $limit
+        ));
+    }
+
+    /**
+     * The workers that are reporting in and doing work.
+     *
+     * @return \stdClass[]
+     */
     public static function live(): array {
         global $DB;
 

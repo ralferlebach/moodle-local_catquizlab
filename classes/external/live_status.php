@@ -72,7 +72,8 @@ class live_status extends external_api {
         require_capability('local/catquizlab:view', $context);
 
         $workers = worker_registry::summary();
-        $verdict = situation::assess();
+        $breakdown = attempt_scheduler::queue_breakdown($experimentid);
+        $verdict = situation::assess($experimentid, $breakdown);
 
         // Scoped to the experiment in view. Counting the whole installation
         // beside a table that shows one experiment produced two truths on one
@@ -111,7 +112,7 @@ class live_status extends external_api {
             // a second renderer disagreeing with the first.
             'changed'        => $verdict['state'],
             'shape'          => self::shape(),
-            'regions'        => self::regions(),
+            'regions'        => self::regions($experimentid),
             // The runs of the experiment in view, each carrying the same
             // verdict the page renders from. One snapshot, one source: the
             // header and the table disagreed because they asked two different
@@ -238,15 +239,19 @@ class live_status extends external_api {
      * HTML for them would mean two places deciding what a status card looks
      * like.
      *
+     * @param int $experimentid The experiment in view, or 0 for the installation.
      * @return array[]
      */
-    protected static function regions(): array {
-        // One count for the card and for the numbers beside it, so a poll
-        // cannot report two different queues in one answer.
-        $breakdown = \local_catquizlab\local\attempt_scheduler::queue_breakdown();
+    protected static function regions(int $experimentid = 0): array {
+        // One count for the card and for the numbers beside it, and scoped to
+        // the experiment in view, so a poll answers for one thing. The worker
+        // pool and the pipeline below stay site-wide, because they are — the
+        // interface labels them as the execution environment rather than as
+        // part of this experiment.
+        $breakdown = \local_catquizlab\local\attempt_scheduler::queue_breakdown($experimentid);
         $queue = \local_catquizlab\local\status_report::queue($breakdown);
         $pipeline = \local_catquizlab\local\status_report::pipeline();
-        $situation = \local_catquizlab\local\situation::assess();
+        $situation = \local_catquizlab\local\situation::assess($experimentid, $breakdown);
 
         return [
             // The situation names its sentence 'headline'; its 'state' is the

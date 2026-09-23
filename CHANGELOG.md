@@ -6,6 +6,101 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.6.83] — 2026-09-23
+
+Measured at fifty thousand queued sittings, because small runs prove nothing.
+
+The end-to-end tests show the chain works on a handful of sittings. They say
+nothing about an installation with a real experiment on it. Measured here, on
+50 000 queued sittings with 200 in flight:
+
+    claim a sitting     4843 ms  →    39 ms
+    live poll           6916 ms  →  1060 ms
+    queue counts        1338 ms  →   480 ms
+    run status card     1296 ms  →   477 ms
+
+A claim took nearly five seconds because every question about "queued and due"
+or "is this person busy" read the whole table. With six workers claiming and a
+browser polling, that was the server's capacity spent on finding work rather
+than doing it — and it is the shape of the collapse the reported installation
+saw at 112 workers.
+
+- Four indexes on the sitting table: (status, nextruntime), (personid, status),
+  (status, leaseexpires), (status, runid).
+- The person-busy exclusion reads the two hundred people currently playing
+  once, instead of asking per candidate row.
+- One count per poll, threaded into the situation, the queue card and the run
+  cards, instead of each taking its own.
+- One grouped query for the terminal states instead of three full counts.
+
+What is still not fast: the queue counts themselves, about half a second at
+this size, because counting fifty thousand rows is counting fifty thousand
+rows. With a two-second poll that is a quarter of a core per open browser. If
+you leave a page open overnight on a large experiment, close it.
+
+### Does it keep running when you switch your computer off?
+Yes. The pipeline is a Moodle scheduled task and the workers are server-side
+processes started detached by it — nothing here depends on a browser being
+open. Your own log is the evidence: `pipeline tick: started 112 worker(s)` at
+02:18. The interface only reads state; progress is there the next morning.
+
+PHPUnit 695 tests / 3772 assertions, phpcs and PHPDoc clean.
+
+---
+
+## [0.6.82] — 2026-09-23
+
+Two workers played the same person.
+
+    Attempt did not reach the finish page after 1 answer(s).
+    error="Während der Verarbeitung Ihrer Antworten ist ein Fehler aufgetreten
+    (adaptivequiz/uniquenotpartofattempt)"
+
+Two workers logging in as the same simulated person open the same adaptive quiz
+attempt, and Moodle rejects the second one's answers. Claiming excluded nothing
+about people: with a thousand people, two sittings each and — as the reported
+installation's log shows — a hundred and twelve workers, this was not a race
+that might happen, it was the normal case. It cost a night of results.
+
+A sitting is no longer handed out while that person has another in flight. The
+claim query excludes them, so there is no window between checking and claiming.
+Measured: the second sitting of a busy person is not handed out, a free
+person's is, and the moment the first sitting ends the second becomes
+claimable. A test asserts all three.
+
+This is also what the experiment assumes. A simulated person sits the test
+alone; two of their sittings overlapping would share an ability estimate
+between observations that are supposed to be independent.
+
+### Also in this release, from the audit
+**#94** — the live snapshot answers for one thing. `queue_breakdown()`,
+`situation::assess()` and the queue card take the experiment in view;
+`live_status` passes it through to all of them. The worker pool and the
+pipeline stay site-wide, and the page now says so: "Queue of this experiment"
+against "Execution environment (whole installation)".
+
+**#56** — the worker overview shows every worker, not only the live ones, with
+its slot, what it is playing, sittings done, last heartbeat, uptime and last
+error; STOPPED, CRASHED and stale are visible states. Ad-hoc tasks waiting out
+a failure delay can be tried again from the page. The event history stays on
+step 5 on purpose — one log surface, not two — and step 3 links into it.
+
+**#90** — the log gained an explicit from/to window, a severity on every line
+with a "at least this severe" filter, filters for action or event, correlation
+id and attempt number, a newest-first toggle, a JSON download of exactly what
+is filtered, and a copy-to-clipboard button.
+
+What #90 asks for and the stored data cannot give: millisecond timestamps, and
+worker or task id filters. The log tables have second resolution and no such
+columns; adding them is a schema change and a writing change, not a filter, and
+I have not made it. That part of the issue is still open, and I would rather
+say so than ship a filter that quietly matches nothing.
+
+PHPUnit 695 tests / 3770 assertions, Behat 32 scenarios / 235 steps, phpcs and
+PHPDoc clean.
+
+---
+
 ## [0.6.81] — 2026-09-22
 
 One card, two queues.

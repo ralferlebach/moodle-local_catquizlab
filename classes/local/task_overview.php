@@ -157,6 +157,9 @@ class task_overview {
                     ? get_string('task:failing', $component, duration::human((int) $row->faildelay))
                     : '',
                 'running'   => !empty($row->timestarted),
+                // Offered only where it would do something: a task that is
+                // waiting out a failure delay.
+                'canrequeue' => (int) $row->faildelay > 0 && empty($row->timestarted),
             ];
         }
 

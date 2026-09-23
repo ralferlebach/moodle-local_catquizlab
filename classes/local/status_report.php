@@ -168,7 +168,7 @@ class status_report {
         }
 
         if ($status === registry::STATUS_READY || $status === registry::STATUS_RUNNING) {
-            $breakdown = attempt_scheduler::queue_breakdown();
+            $breakdown = $breakdown ?? attempt_scheduler::queue_breakdown();
             $workers = worker_registry::summary();
 
             // Ready with work and nobody to do it is the state that never

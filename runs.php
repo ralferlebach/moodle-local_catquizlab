@@ -150,6 +150,33 @@ if ($action === 'resetallheld') {
     );
 }
 
+// An ad-hoc task that is waiting out a failure delay, tried again now. Moodle
+// backs a failed task off for up to a day; on an installation somebody is
+// watching, waiting a day to find out whether the fix worked is the wrong unit
+// of time. Core's own field, cleared the way core clears it.
+if ($action === 'requeuetask' && optional_param('taskid', 0, PARAM_INT) > 0) {
+    require_sesskey();
+    require_capability('local/catquizlab:execute', $context);
+
+    $taskid = required_param('taskid', PARAM_INT);
+    $record = $DB->get_record('task_adhoc', ['id' => $taskid]);
+
+    if ($record && strpos((string) $record->classname, 'local_catquizlab') !== false) {
+        $DB->update_record('task_adhoc', (object) [
+            'id'          => $taskid,
+            'faildelay'   => 0,
+            'nextruntime' => time(),
+        ]);
+        $message = get_string('task:requeued', $component);
+        $level = \core\output\notification::NOTIFY_SUCCESS;
+    } else {
+        $message = get_string('task:notours', $component);
+        $level = \core\output\notification::NOTIFY_WARNING;
+    }
+
+    redirect(new moodle_url('/local/catquizlab/runs.php'), $message, null, $level);
+}
+
 // The sittings that gave up, once more. Not the same as continuing a held run:
 // this run was never held, it simply has sittings that failed three times and
 // will otherwise never reach its planned number.

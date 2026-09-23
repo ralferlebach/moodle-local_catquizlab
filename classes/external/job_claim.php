@@ -94,15 +94,32 @@ class job_claim extends external_api {
         //
         // A pause is still checked below, because it can change between this
         // query and the claim.
+        // And never a person who is already sitting the test somewhere else.
+        // Two workers logging in as the same simulated person open the same
+        // adaptive quiz attempt, and Moodle rejects the second one's answers:
+        // "adaptivequiz/uniquenotpartofattempt". With a thousand people, two
+        // sittings each and a hundred workers, that is not a rare race — it is
+        // the normal case, and it cost a night of results on a live
+        // installation. A person sits the test once at a time, which is also
+        // what the experiment assumes.
         $queued = $DB->get_records_select(
             'local_catquizlab_attempt',
             'status = :status AND nextruntime <= :now
-               AND runid IN (SELECT id FROM {local_catquizlab_run} WHERE status IN (:ready, :running))',
+               AND runid IN (SELECT id FROM {local_catquizlab_run} WHERE status IN (:ready, :running))
+               AND personid NOT IN (
+                   SELECT DISTINCT busy.personid
+                     FROM {local_catquizlab_attempt} busy
+                    WHERE busy.status = :inflight
+                      AND busy.leaseexpires > :leasenow
+                      AND busy.personid > 0
+               )',
             [
-                'status'  => attempt_scheduler::STATUS_QUEUED,
-                'now'     => time(),
-                'ready'   => \local_catquizlab\local\registry::STATUS_READY,
-                'running' => \local_catquizlab\local\registry::STATUS_RUNNING,
+                'status'   => attempt_scheduler::STATUS_QUEUED,
+                'now'      => time(),
+                'ready'    => \local_catquizlab\local\registry::STATUS_READY,
+                'running'  => \local_catquizlab\local\registry::STATUS_RUNNING,
+                'inflight' => attempt_scheduler::STATUS_RUNNING,
+                'leasenow' => time(),
             ],
             'nextruntime ASC, timecreated ASC, id ASC',
             '*',

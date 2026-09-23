@@ -85,30 +85,50 @@ class attempt_scheduler {
      * state that hands out work, or paused by a decision somebody took. Those
      * four need four different responses, and one number gave them one.
      *
+     * @param int $experimentid Restrict to one experiment, or 0 for the installation.
      * @return array{claimable: int, notdue: int, blocked: int, paused: int,
      *               running: int, collected: int, failed: int, queued: int}
      */
-    public static function queue_breakdown(): array {
+    public static function queue_breakdown(int $experimentid = 0): array {
         global $DB;
+
+        // Scoped to one experiment when the caller names one. A page showing
+        // experiment A used to put A's progress beside the whole
+        // installation's queue: "18 of 50" over "150 sittings blocked" when
+        // the 150 belonged to experiment B. The counts and the card now answer
+        // for the same thing; the worker pool and the pipeline stay
+        // site-wide, because they are, and the interface says so.
+        $scope = '';
+        $scopeparams = [];
+        if ($experimentid > 0) {
+            $scope = ' AND runid IN (SELECT id FROM {local_catquizlab_run} WHERE experimentid = :experimentid)';
+            $scopeparams['experimentid'] = $experimentid;
+        }
+
+        // One grouped query for the terminal states instead of one count per
+        // state: three separate counts over fifty thousand sittings cost about
+        // 450 ms, and a live poll asks for them every two seconds.
+        $bystatus = $DB->get_records_sql(
+            'SELECT status, COUNT(1) AS n
+               FROM {local_catquizlab_attempt}
+              WHERE 1 = 1' . $scope . '
+           GROUP BY status',
+            $scopeparams
+        );
+        $count = static function (int $status) use ($bystatus): int {
+            return (int) ($bystatus[$status]->n ?? 0);
+        };
 
         $now = time();
         $counts = [
+            'experimentid' => $experimentid,
             'claimable' => 0,
             'notdue'    => 0,
             'blocked'   => 0,
             'paused'    => 0,
-            'running'   => (int) $DB->count_records(
-                'local_catquizlab_attempt',
-                ['status' => self::STATUS_RUNNING]
-            ),
-            'collected' => (int) $DB->count_records(
-                'local_catquizlab_attempt',
-                ['status' => self::STATUS_COLLECTED]
-            ),
-            'failed'    => (int) $DB->count_records(
-                'local_catquizlab_attempt',
-                ['status' => self::STATUS_FAILED]
-            ),
+            'running'   => $count(self::STATUS_RUNNING),
+            'collected' => $count(self::STATUS_COLLECTED),
+            'failed'    => $count(self::STATUS_FAILED),
         ];
 
         // Grouped by run so the run's state is read once rather than per
@@ -120,9 +140,10 @@ class attempt_scheduler {
                     COUNT(1) AS total
                FROM {local_catquizlab_attempt} a
                JOIN {local_catquizlab_run} r ON r.id = a.runid
-              WHERE a.status = :queued
-           GROUP BY a.runid, r.status, r.manifestjson',
-            ['now' => $now, 'queued' => self::STATUS_QUEUED]
+              WHERE a.status = :queued'
+              . ($experimentid > 0 ? ' AND r.experimentid = :experimentid' : '')
+              . ' GROUP BY a.runid, r.status, r.manifestjson',
+            ['now' => $now, 'queued' => self::STATUS_QUEUED] + $scopeparams
         );
 
         foreach ($rows as $row) {

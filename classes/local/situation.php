@@ -60,25 +60,36 @@ class situation {
     /**
      * Assess the installation as a whole.
      *
+     * @param int $experimentid Restrict to one experiment, or 0 for the installation.
+     * @param array|null $breakdown The queue counts, when the caller has them.
      * @return array{state: string, headline: string, detail: string, action: array|null}
      */
-    public static function assess(): array {
+    public static function assess(int $experimentid = 0, ?array $breakdown = null): array {
         global $DB;
 
-        $breakdown = attempt_scheduler::queue_breakdown();
+        // Counted by the caller where there is one. A live poll used to take
+        // this count three times over, and on fifty thousand queued sittings
+        // each one costs half a second.
+        $breakdown = $breakdown ?? attempt_scheduler::queue_breakdown($experimentid);
 
         // The first run that holds queued work back, with its cause. Queued
         // sittings of a held run are not waiting for a worker; they are waiting
         // for a person, and saying "stalled — start workers" about them sent
         // somebody pressing a button that correctly did nothing.
+        $heldparams = ['queued' => attempt_scheduler::STATUS_QUEUED, 'failed' => registry::STATUS_FAILED];
+        $heldscope = '';
+        if ($experimentid > 0) {
+            $heldscope = ' AND r.experimentid = :experimentid';
+            $heldparams['experimentid'] = $experimentid;
+        }
         $held = $DB->get_records_sql(
             'SELECT r.id, r.lasterror, COUNT(a.id) AS waiting
                FROM {local_catquizlab_run} r
                JOIN {local_catquizlab_attempt} a ON a.runid = r.id AND a.status = :queued
-              WHERE r.status = :failed
+              WHERE r.status = :failed' . $heldscope . '
            GROUP BY r.id, r.lasterror
            ORDER BY r.id ASC',
-            ['queued' => attempt_scheduler::STATUS_QUEUED, 'failed' => registry::STATUS_FAILED],
+            $heldparams,
             0,
             1
         );

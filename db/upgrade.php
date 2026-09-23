@@ -443,6 +443,33 @@ function xmldb_local_catquizlab_upgrade($oldversion): bool {
         upgrade_plugin_savepoint(true, 2026091903, 'local', 'catquizlab');
     }
 
+    if ($oldversion < 2026092302) {
+        // Indexes the queue needs once it is large. On fifty thousand queued
+        // sittings a claim took 4.8 seconds and a live poll 6.9, because every
+        // question about "queued and due" or "this person is busy" scanned the
+        // whole table. With six workers claiming and a browser polling every
+        // two seconds, that is the server's whole capacity spent on finding
+        // work rather than doing it.
+        $table = new xmldb_table('local_catquizlab_attempt');
+        // Counting the queue groups by run within one status, so the status
+        // comes first: the other way round the database reads every row to
+        // answer "how many are queued, per run".
+        $indexes = [
+            'status-nextruntime'  => ['status', 'nextruntime'],
+            'personid-status'     => ['personid', 'status'],
+            'status-leaseexpires' => ['status', 'leaseexpires'],
+            'status-runid'        => ['status', 'runid'],
+        ];
+        foreach ($indexes as $name => $fields) {
+            $index = new xmldb_index($name, XMLDB_INDEX_NOTUNIQUE, $fields);
+            if (!$dbman->index_exists($table, $index)) {
+                $dbman->add_index($table, $index);
+            }
+        }
+
+        upgrade_plugin_savepoint(true, 2026092302, 'local', 'catquizlab');
+    }
+
     return true;
 }
 

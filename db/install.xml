@@ -179,6 +179,10 @@
       </KEYS>
       <INDEXES>
         <INDEX NAME="runid-status" UNIQUE="false" FIELDS="runid, status"/>
+        <INDEX NAME="status-nextruntime" UNIQUE="false" FIELDS="status, nextruntime"/>
+        <INDEX NAME="personid-status" UNIQUE="false" FIELDS="personid, status"/>
+        <INDEX NAME="status-leaseexpires" UNIQUE="false" FIELDS="status, leaseexpires"/>
+        <INDEX NAME="status-runid" UNIQUE="false" FIELDS="status, runid"/>
       </INDEXES>
     </TABLE>
 
