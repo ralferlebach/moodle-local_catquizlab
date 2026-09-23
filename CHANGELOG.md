@@ -6,6 +6,33 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.6.84] — 2026-09-23
+
+The worker end-to-end job: the last open step was cron.
+
+0.6.83's smoke test prepares its own installation, and the job's log shows it
+doing so — course, worker account, token, browser, pipeline. One step stayed
+open: "Cron has run recently". On a fresh CI installation cron has never run,
+and the script stopped there.
+
+The honest fix is to run one cron pass, not to write the timestamp readiness
+looks at. `cli/smoke.php` does that, once, only while something is still open:
+the first strategy pays the minute it takes and the four after it find the
+timestamp already there.
+
+Measured from factory state — cron timestamps deleted, plugin switch and worker
+switch off:
+
+    == CatQuizLab smoke test: classic ==
+      Setup: course, pipeline
+      Cron: one pass run.
+      …
+    PASS: 2 attempts played, 2 with estimates, 28 result rows.
+
+PHPUnit 695 tests / 3772 assertions, phpcs and PHPDoc clean.
+
+---
+
 ## [0.6.83] — 2026-09-23
 
 Measured at fifty thousand queued sittings, because small runs prove nothing.

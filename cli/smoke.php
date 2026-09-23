@@ -138,6 +138,18 @@ if (!$runtimeready) {
         : 'FAILED — ' . implode(' | ', array_slice((array) ($runtime['log'] ?? []), 0, 2))), $started);
 }
 
+// Cron, really run rather than asserted. Readiness asks whether cron runs at
+// all, and on a fresh CI installation it never has — the job drives everything
+// itself, so the honest way to satisfy that is to run one pass, not to write
+// the timestamp it looks at.
+if (!\local_catquizlab\local\setup_wizard::state()['ready']) {
+    $started = microtime(true);
+    ob_start();
+    \core\cron::run_main_process(0);
+    ob_end_clean();
+    step('Cron: one pass run.', $started);
+}
+
 // Can this installation run anything at all. Asking after building an
 // experiment is asking too late.
 $wizard = \local_catquizlab\local\setup_wizard::state();
