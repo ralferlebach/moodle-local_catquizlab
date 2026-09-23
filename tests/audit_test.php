@@ -676,4 +676,111 @@ final class audit_test extends \advanced_testcase {
             'the observations carry more than half a kilobyte per row'
         );
     }
+
+    /**
+     * Sittings that gave up are named, and can be tried again.
+     *
+     * @return void
+     */
+    public function test_a_run_says_how_many_gave_up(): void {
+        global $DB;
+        $this->resetAfterTest();
+        $this->setAdminUser();
+
+        /** @var \local_catquizlab_generator $generator */
+        $generator = $this->getDataGenerator()->get_plugin_generator('local_catquizlab');
+        $runid = (int) $generator->create_run()->id;
+
+        // Ninety collected, ten that failed three times. The run will never
+        // reach a hundred, and the card used to say only "90 of 100
+        // collected" — which reads as work still in hand.
+        for ($i = 0; $i < 100; $i++) {
+            $failed = $i >= 90;
+            $DB->insert_record('local_catquizlab_attempt', (object) [
+                'runid' => $runid, 'personid' => 0,
+                'status' => $failed
+                    ? \local_catquizlab\local\attempt_scheduler::STATUS_FAILED
+                    : \local_catquizlab\local\attempt_scheduler::STATUS_COLLECTED,
+                'tries' => $failed ? \local_catquizlab\local\attempt_scheduler::MAX_TRIES : 1,
+                'lasterror' => $failed ? 'browser closed' : null,
+                'timecreated' => time(), 'timemodified' => time(),
+            ]);
+        }
+        $DB->set_field('local_catquizlab_run', 'status', \local_catquizlab\local\registry::STATUS_FINISHED, ['id' => $runid]);
+
+        $card = \local_catquizlab\local\status_report::run($runid);
+        $this->assertStringContainsString('10', $card['reason']);
+        $this->assertSame('requeuefailed', $card['action']['command'] ?? '');
+
+        $requeued = \local_catquizlab\local\run_lifecycle::requeue_failed($runid);
+        $this->assertSame(10, $requeued);
+
+        $counts = \local_catquizlab\local\run_lifecycle::attempt_counts($runid);
+        $this->assertSame(10, $counts['open']);
+        $this->assertSame(0, $counts['failed']);
+
+        // With work to do again, the run is ready rather than finished.
+        $this->assertSame(
+            \local_catquizlab\local\registry::STATUS_READY,
+            (int) $DB->get_field('local_catquizlab_run', 'status', ['id' => $runid])
+        );
+
+        // The counters were cleared, so they get their three tries again.
+        $maxtries = (int) $DB->get_field_sql(
+            'SELECT MAX(tries) FROM {local_catquizlab_attempt} WHERE runid = ? AND status = ?',
+            [$runid, \local_catquizlab\local\attempt_scheduler::STATUS_QUEUED]
+        );
+        $this->assertSame(0, $maxtries);
+
+        $this->assertSame(0, \local_catquizlab\local\run_lifecycle::requeue_failed($runid));
+    }
+
+    /**
+     * The queue card and the numbers beside it come from one count.
+     *
+     * @return void
+     */
+    public function test_the_queue_card_agrees_with_the_numbers_beside_it(): void {
+        global $DB;
+        $this->resetAfterTest();
+        $this->setAdminUser();
+
+        /** @var \local_catquizlab_generator $generator */
+        $generator = $this->getDataGenerator()->get_plugin_generator('local_catquizlab');
+        $runid = (int) $generator->create_run()->id;
+        $DB->set_field('local_catquizlab_run', 'status', \local_catquizlab\local\registry::STATUS_READY, ['id' => $runid]);
+
+        for ($i = 0; $i < 20; $i++) {
+            $DB->insert_record('local_catquizlab_attempt', (object) [
+                'runid' => $runid, 'personid' => 0,
+                'status' => \local_catquizlab\local\attempt_scheduler::STATUS_QUEUED,
+                'tries' => 0, 'nextruntime' => $i < 15 ? 0 : time() + 300,
+                'timecreated' => time(), 'timemodified' => time(),
+            ]);
+        }
+
+        $breakdown = \local_catquizlab\local\attempt_scheduler::queue_breakdown();
+        $card = \local_catquizlab\local\status_report::queue($breakdown);
+
+        // The card describes the count it was given rather than taking its
+        // own: a page that counted twice showed "7074 claimable" in the
+        // headline and "7134" three lines below, with two different numbers
+        // for the sittings waiting out a retry delay.
+        $this->assertStringContainsString((string) $breakdown['claimable'], $card['state']);
+        $this->assertSame(15, $breakdown['claimable']);
+        $this->assertSame(5, $breakdown['notdue']);
+
+        // A queue that moves between the two reads cannot make them disagree,
+        // because there is only one read.
+        $DB->execute(
+            'UPDATE {local_catquizlab_attempt} SET status = ? WHERE runid = ? AND status = ?',
+            [
+                \local_catquizlab\local\attempt_scheduler::STATUS_COLLECTED,
+                $runid,
+                \local_catquizlab\local\attempt_scheduler::STATUS_QUEUED,
+            ]
+        );
+        $again = \local_catquizlab\local\status_report::queue($breakdown);
+        $this->assertSame($card['state'], $again['state']);
+    }
 }

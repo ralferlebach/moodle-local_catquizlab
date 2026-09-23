@@ -150,6 +150,27 @@ if ($action === 'resetallheld') {
     );
 }
 
+// The sittings that gave up, once more. Not the same as continuing a held run:
+// this run was never held, it simply has sittings that failed three times and
+// will otherwise never reach its planned number.
+if ($action === 'requeuefailed' && $runid > 0) {
+    require_sesskey();
+    require_capability('local/catquizlab:execute', $context);
+
+    $requeued = \local_catquizlab\local\run_lifecycle::requeue_failed($runid);
+
+    redirect(
+        new moodle_url('/local/catquizlab/runs.php', ['runid' => $runid]),
+        $requeued > 0
+            ? get_string('run:requeued', $component, $requeued)
+            : get_string('run:nothingtorequeue', $component),
+        null,
+        $requeued > 0
+            ? \core\output\notification::NOTIFY_SUCCESS
+            : \core\output\notification::NOTIFY_INFO
+    );
+}
+
 // Letting a held run try again, after somebody has dealt with the cause. Not
 // offered automatically and not retried in a loop: the whole point of holding a
 // run is that repeating it without a change repeats the failure.

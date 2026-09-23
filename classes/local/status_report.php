@@ -196,10 +196,7 @@ class status_report {
                 return self::card(
                     self::GOOD,
                     get_string('report:runrunning', $component),
-                    get_string('report:progress', $component, (object) [
-                        'done'  => $counts['collected'],
-                        'total' => $counts['total'],
-                    ]),
+                    self::progress_line($counts, $component),
                     null
                 );
             }
@@ -214,10 +211,7 @@ class status_report {
                 return self::card(
                     self::GOOD,
                     get_string('report:runrotating', $component),
-                    get_string('report:progress', $component, (object) [
-                        'done'  => $counts['collected'],
-                        'total' => $counts['total'],
-                    ]),
+                    self::progress_line($counts, $component),
                     null
                 );
             }
@@ -228,33 +222,30 @@ class status_report {
             return self::card(
                 $counts['open'] > 0 ? self::WATCH : self::GOOD,
                 get_string('report:runwaiting', $component),
-                get_string('report:progress', $component, (object) [
-                    'done'  => $counts['collected'],
-                    'total' => $counts['total'],
-                ]),
+                self::progress_line($counts, $component),
                 null
             );
         }
 
         if ($status === registry::STATUS_FINISHED) {
+            // Finished with sittings that gave up is not the same as finished:
+            // the run holds fewer observations than it was designed for, and
+            // the only way back to the planned number is another try.
             return self::card(
-                self::GOOD,
+                (int) ($counts['failed'] ?? 0) > 0 ? self::WATCH : self::GOOD,
                 get_string('report:runfinished', $component),
-                get_string('report:progress', $component, (object) [
-                    'done'  => $counts['collected'],
-                    'total' => $counts['total'],
-                ]),
-                null
+                self::progress_line($counts, $component),
+                (int) ($counts['failed'] ?? 0) > 0 ? [
+                    'label'   => get_string('action:requeuefailed', $component, $counts['failed']),
+                    'command' => 'requeuefailed',
+                ] : null
             );
         }
 
         return self::card(
             self::WATCH,
             run_registry::status_label($status),
-            get_string('report:progress', $component, (object) [
-                'done'  => $counts['collected'],
-                'total' => $counts['total'],
-            ]),
+            self::progress_line($counts, $component),
             null
         );
     }
@@ -304,11 +295,17 @@ class status_report {
     /**
      * The state of the attempt queue.
      *
+     * @param array|null $breakdown The queue counts, when the caller has
+     *      already taken them. A page that draws this card beside the same
+     *      numbers used to count twice, a fraction of a second apart, and on a
+     *      moving queue the two disagreed: "7074 claimable" in the headline
+     *      and "7134" three lines below it, with two different numbers for the
+     *      sittings waiting out a retry delay.
      * @return array
      */
-    public static function queue(): array {
+    public static function queue(?array $breakdown = null): array {
         $component = 'local_catquizlab';
-        $breakdown = attempt_scheduler::queue_breakdown();
+        $breakdown = $breakdown ?? attempt_scheduler::queue_breakdown();
 
         if ($breakdown['queued'] === 0 && $breakdown['running'] === 0) {
             return self::card(self::GOOD, get_string('report:queueempty', $component), '', null);
@@ -465,5 +462,28 @@ class status_report {
             'reason' => $reason,
             'action' => $action,
         ];
+    }
+    /**
+     * Progress, with the sittings that failed for good named.
+     *
+     * "896 of 1000 collected" on a run that will never reach 1000 reads as
+     * work still in hand. The hundred-odd sittings that gave up after their
+     * third try are the whole difference, and they were invisible.
+     *
+     * @param array $counts The attempt counts of the run.
+     * @param string $component For the strings.
+     * @return string
+     */
+    protected static function progress_line(array $counts, string $component): string {
+        $line = get_string('report:progress', $component, (object) [
+            'done'  => $counts['collected'],
+            'total' => $counts['total'],
+        ]);
+
+        if ((int) ($counts['failed'] ?? 0) > 0) {
+            $line .= ' ' . get_string('report:progressfailed', $component, $counts['failed']);
+        }
+
+        return $line;
     }
 }

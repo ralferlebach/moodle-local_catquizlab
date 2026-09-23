@@ -110,6 +110,34 @@ function step(string $line, float $since = 0.0): void {
 
 cli_heading('CatQuizLab smoke test: ' . $strategy);
 
+// Set the installation up, then ask whether it is ready. This script used to
+// only ask, and relied on whatever the surrounding job had arranged — which
+// stopped being enough when readiness grew to cover the worker switch, the PHP
+// binary and the browser cache. A test script that cannot prepare its own
+// installation reports the job's setup, not the plugin.
+$base = getenv('CATLAB_BASE_URL') ?: ($CFG->wwwroot ?: 'http://127.0.0.1:8000');
+set_config('worker_base_url', rtrim($base, '/'), 'local_catquizlab');
+
+$node = getenv('CATLAB_NODE') ?: trim((string) @exec('command -v node 2>/dev/null'));
+if ($node !== '' && is_executable($node)) {
+    set_config('worker_node_path', $node, 'local_catquizlab');
+}
+
+$setup = \local_catquizlab\local\setup_wizard::run(true);
+step('Setup: ' . ($setup['changed'] === [] ? 'nothing to change' : implode(', ', $setup['changed'])));
+
+// The worker's packages and its browser, installed into the dataroot where the
+// worker looks for them.
+$runtimeready = \local_catquizlab\local\system_health::worker_modules_installed()
+    && \local_catquizlab\local\worker_runtime::browser_present();
+
+if (!$runtimeready) {
+    $started = microtime(true);
+    $runtime = \local_catquizlab\local\worker_runtime::ensure();
+    step('Runtime: ' . ($runtime['ok'] ? implode(', ', $runtime['changed']) ?: 'already there'
+        : 'FAILED — ' . implode(' | ', array_slice((array) ($runtime['log'] ?? []), 0, 2))), $started);
+}
+
 // Can this installation run anything at all. Asking after building an
 // experiment is asking too late.
 $wizard = \local_catquizlab\local\setup_wizard::state();

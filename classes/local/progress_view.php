@@ -141,7 +141,8 @@ class progress_view {
             // Named so the live updater knows where to write; the other cards
             // on this page are per-row and are refreshed by a reload when the
             // rows change.
-            'queuestatus' => status_report::queue() + ['region' => 'catquizlab-queue'],
+            // The same counts the list below the card shows, taken once.
+            'queuestatus' => status_report::queue($breakdown) + ['region' => 'catquizlab-queue'],
             'queue'       => $breakdown + [
                 // Shown individually because each needs a different response,
                 // and one "queued" number conflated all four.

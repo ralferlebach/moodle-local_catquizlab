@@ -241,7 +241,10 @@ class live_status extends external_api {
      * @return array[]
      */
     protected static function regions(): array {
-        $queue = \local_catquizlab\local\status_report::queue();
+        // One count for the card and for the numbers beside it, so a poll
+        // cannot report two different queues in one answer.
+        $breakdown = \local_catquizlab\local\attempt_scheduler::queue_breakdown();
+        $queue = \local_catquizlab\local\status_report::queue($breakdown);
         $pipeline = \local_catquizlab\local\status_report::pipeline();
         $situation = \local_catquizlab\local\situation::assess();
 

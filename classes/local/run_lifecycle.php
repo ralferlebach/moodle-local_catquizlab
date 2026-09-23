@@ -247,6 +247,53 @@ class run_lifecycle {
     }
 
     /**
+     * Put a run's sittings that gave up back in the queue.
+     *
+     * A sitting that failed three times stays failed, and its run never reaches
+     * its planned number: "896 of 1000 collected" on a run where the missing
+     * hundred will never arrive. Sometimes the cause was transient — a browser
+     * that died, a server under load — and the only thing needed is another
+     * try. Their counters are cleared, so they get the full three again.
+     *
+     * @param int $runid The run.
+     * @return int How many were requeued.
+     */
+    public static function requeue_failed(int $runid): int {
+        global $DB;
+
+        $failed = $DB->count_records('local_catquizlab_attempt', [
+            'runid' => $runid,
+            'status' => attempt_scheduler::STATUS_FAILED,
+        ]);
+        if ($failed === 0) {
+            return 0;
+        }
+
+        $DB->execute(
+            'UPDATE {local_catquizlab_attempt}
+                SET status = :queued, tries = 0, nextruntime = 0, lasterror = NULL,
+                    leaseowner = NULL, leaseexpires = 0, timemodified = :now
+              WHERE runid = :runid AND status = :failed',
+            [
+                'queued' => attempt_scheduler::STATUS_QUEUED,
+                'failed' => attempt_scheduler::STATUS_FAILED,
+                'runid'  => $runid,
+                'now'    => time(),
+            ]
+        );
+
+        // The run has work again, so it may not stay finished.
+        $status = (int) $DB->get_field('local_catquizlab_run', 'status', ['id' => $runid]);
+        if (in_array($status, [registry::STATUS_FINISHED, registry::STATUS_FAILED], true)) {
+            $DB->set_field('local_catquizlab_run', 'status', registry::STATUS_READY, ['id' => $runid]);
+        }
+
+        run_log::record($runid, run_log::RUN_RESUMED, ['requeued' => $failed]);
+
+        return $failed;
+    }
+
+    /**
      * Stop a run that is failing the same way over and over.
      *
      * Delegates to the circuit breaker, which is the one place that decides

@@ -6,6 +6,74 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.6.81] — 2026-09-22
+
+One card, two queues.
+
+    7074 claimable, 90 in progress        Claimable now: 7134
+    Waiting for a retry delay: 60         Waiting for a retry delay: 86
+
+The headline and the list three lines below it counted the queue separately, a
+fraction of a second apart, and on a queue with twenty workers moving through
+it they disagreed by sixty sittings. Both were right when they were taken;
+neither matched the other.
+
+The count is taken once now and handed to the card that describes it —
+`status_report::queue($breakdown)` — on the progress page and in the live poll.
+A test asserts the card reports the count it was given, and that a queue moving
+between the two reads cannot make them disagree.
+
+### A correction to what 0.6.80 said
+I wrote that runs stop short because sittings fail for good. On the reported
+installation they do not: "Failed: 0". The sittings that are missing from a
+run's total are waiting out a retry delay after a failed try, and they come
+back by themselves. What 0.6.80 added — naming sittings that gave up, and the
+button to try them again — is right for runs that do have failures, and it was
+not the explanation for these.
+
+PHPUnit 694 tests / 3764 assertions, Behat 32 scenarios / 235 steps, phpcs and
+PHPDoc clean.
+
+---
+
+## [0.6.80] — 2026-09-22
+
+Runs that stop short, and a CI job that reported its own setup.
+
+### "896 of 1000 collected" on a run that will never reach 1000
+A sitting that fails three times is failed for good. It stays that way, nothing
+requeues it, and its run never reaches the number it was designed for. The
+status card showed only what had been collected, so the hundred-odd sittings
+that had given up were invisible: the card read as work still in hand.
+
+The card names them now — "104 gave up after repeated failures" — a finished
+run with failures is amber rather than green, and it offers **"Try the 104
+failed sittings again"**. That clears their counters, so they get their three
+tries afresh, and puts the run back to ready. Measured on a thousand sittings:
+104 requeued, run ready, no sitting left failed.
+
+This is deliberately not the same action as continuing a held run. A held run
+was stopped by the circuit breaker and needs its cause dealt with; these runs
+were never held, they simply lost sittings along the way — a browser that died,
+a server under load — and the observations are recoverable by trying again.
+
+### The worker end-to-end job
+The smoke test only checked whether the installation was ready and relied on
+whatever the surrounding job had arranged. That stopped being enough when
+readiness grew to cover the worker switch, the PHP binary and the browser
+cache: the job reported fifteen open steps and stopped, which is a report about
+the job's setup rather than about the plugin.
+
+`cli/smoke.php` prepares its own installation now: base URL and Node path from
+the environment (`CATLAB_BASE_URL`, `CATLAB_NODE`, or whatever is on the path),
+then the setup itself, then the worker runtime — packages and browser into the
+dataroot, where the worker looks for them.
+
+PHPUnit 693 tests / 3760 assertions, Behat 32 scenarios / 235 steps, phpcs and
+PHPDoc clean, both workflows parse.
+
+---
+
 ## [0.6.79] — 2026-09-22
 
 The evaluation still ran out of memory, further along.

@@ -153,6 +153,7 @@ class attempt_scheduler {
         return $counts;
     }
 
+
     /**
      * Whether there is work a worker could actually pick up right now.
      *
@@ -173,6 +174,7 @@ class attempt_scheduler {
      * @return int How many attempts went back into the queue.
      */
     public static function release_lease(string $workerid): int {
+
         global $DB;
 
         $held = $DB->get_records_select(
@@ -201,6 +203,7 @@ class attempt_scheduler {
      * @return void
      */
     public static function record_error(int $attemptid, string $error): void {
+
         global $DB;
 
         if (trim($error) === '') {
@@ -228,6 +231,7 @@ class attempt_scheduler {
      * @return int How many attempts went back into the queue.
      */
     public static function reclaim_stale(?int $runid, int $timeoutseconds): int {
+
         global $DB;
 
         $now = time();
@@ -273,6 +277,7 @@ class attempt_scheduler {
      * @return int The number of attempts aborted.
      */
     public static function abort(int $runid): int {
+
         global $DB;
 
         $active = [self::STATUS_QUEUED, self::STATUS_RUNNING];
@@ -314,6 +319,7 @@ class attempt_scheduler {
      * @return int The resulting status.
      */
     protected static function apply_retry(int $attemptid, int $tries, int $now): int {
+
         global $DB;
 
         $status = self::retry_status($tries);
@@ -348,6 +354,7 @@ class attempt_scheduler {
      * @return int The number of attempts newly created.
      */
     public static function schedule(int $runid): int {
+
         global $DB;
 
         $now = time();
@@ -390,6 +397,7 @@ class attempt_scheduler {
      * @return void
      */
     public static function queue(int $runid): void {
+
         $task = new \local_catquizlab\task\schedule_attempts();
         $task->set_custom_data(['runid' => $runid]);
         \core\task\manager::queue_adhoc_task($task, true);
