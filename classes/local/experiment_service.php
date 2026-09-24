@@ -141,6 +141,60 @@ class experiment_service {
     }
 
     /**
+     * The effective budgets of every planned run, one row each.
+     *
+     * @param array $expansion What sweep::expand() returned.
+     * @return array[]
+     */
+    protected static function budget_preview(array $expansion): array {
+        $rows = [];
+        $seen = [];
+
+        foreach ((array) ($expansion['runs'] ?? []) as $run) {
+            $definition = (array) ($run['definition'] ?? []);
+            $key = (string) ($run['cellkey'] ?? '');
+
+            // One row per cell: replications of the same cell share budgets.
+            if ($key === '' || isset($seen[$key])) {
+                continue;
+            }
+            $seen[$key] = true;
+
+            $global = (array) ($definition['budgets']['global'] ?? []);
+            $subscale = (array) ($definition['budgets']['subscale'] ?? []);
+            $strategy = (string) ($definition['strategy'] ?? '');
+
+            $rows[] = [
+                'cellkey'      => $key,
+                'strategy'     => strategy_catalog::has($strategy)
+                    ? strategy_catalog::label($strategy)
+                    : $strategy,
+                'globalmin'    => (string) ($global['minitems'] ?? ''),
+                'globalmax'    => self::budget_text($global['maxitems'] ?? null),
+                'subscalemin'  => (string) ($subscale['minitems'] ?? ''),
+                'subscalemax'  => self::budget_text($subscale['maxitems'] ?? null),
+                'overridden'   => isset($definition['budgetsbystrategy'][$strategy]),
+            ];
+        }
+
+        return $rows;
+    }
+
+    /**
+     * A budget maximum as the preview shows it.
+     *
+     * @param mixed $value The stored value.
+     * @return string
+     */
+    protected static function budget_text($value): string {
+        if (experiment_definition::is_unlimited($value)) {
+            return get_string('budget:unlimited', 'local_catquizlab');
+        }
+
+        return $value === null ? '' : (string) $value;
+    }
+
+    /**
      * Duplicate an experiment as a fresh draft.
      *
      * @param int $id The experiment to copy.
@@ -229,6 +283,11 @@ class experiment_service {
             'attempts'     => (int) ($capacity['attempts'] ?? 0),
             'large'        => $runs > self::LARGE_SWEEP_RUNS,
             'excluded'     => (int) ($expansion['excluded'] ?? 0),
+            // What each run would actually use, after the factors and after
+            // the per-strategy budgets. A preview that shows only how many
+            // runs there will be does not say whether "classic" kept its
+            // unlimited ceiling — which is the thing somebody is checking.
+            'budgetrows'   => self::budget_preview($expansion),
             'errors'       => [],
             'warnings'     => $warnings,
             'factors'      => (array) ($normalised['sweep']['factors'] ?? []),

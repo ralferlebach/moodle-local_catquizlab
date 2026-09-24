@@ -6,6 +6,44 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.6.87] — 2026-09-23
+
+The per-run budgets are editable, and the preview shows what each run will use.
+
+0.6.86 put per-strategy budgets and "unlimited" into the schema and the sweep,
+and said plainly that the form did not edit them. It does now.
+
+**Editing.** A collapsed section, one row per strategy the installed engine can
+play, four fields each: fewest and most questions overall, then per subscale.
+An empty field means "use the budgets above", so a strategy nobody touched
+does not gain an override. A maximum accepts the word `unlimited`. Measured
+through the form and back:
+
+    classic  global 20..unlimited     → perstrategy_classic_globalmax = "unlimited"
+    allsubs  global   ..80, sub ..5   → two fields, nothing else
+    fastest  (left empty)             → no override at all
+
+**Preview.** The plan already said how many runs there would be. It now also
+says what each of them will use, computed the same way provisioning will
+compute it — after the factors, after the per-strategy budgets:
+
+    Cover all subscales       10..80         subscale 3..5   own budget
+    Fixed-form baseline       20..unlimited  subscale 3..4   own budget
+    Cover relevant subscales  10..250        subscale 3..4
+
+A count of runs does not answer "did classic keep its unlimited ceiling",
+which is the thing somebody is checking before pressing the button.
+
+Still open from audit section 5: refusing a budget a strategy cannot use —
+`allsubs` with a hundred subscales and a global maximum of 35 is caught by
+readiness, but only once the run is being provisioned, not while it is being
+typed.
+
+PHPUnit 699 tests / 3809 assertions, Behat 32 scenarios / 235 steps, phpcs and
+PHPDoc clean.
+
+---
+
 ## [0.6.86] — 2026-09-23
 
 Audit section 5: CAT parameters per run, and "unlimited".

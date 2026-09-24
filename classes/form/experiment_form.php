@@ -271,6 +271,31 @@ class experiment_form extends \moodleform {
         $mform->setType('subscalemax', PARAM_INT);
         $mform->setDefault('subscalemax', 5);
 
+        // Budgets that belong to one strategy. Left empty, a strategy uses the
+        // budgets above; filled, it overrides only what is filled. This is how
+        // "classic without a ceiling, allsubs at eighty" is said without a
+        // sweep multiplying every budget across every strategy.
+        $mform->addElement('header', 'perstrategy', get_string('form:perstrategy', $component));
+        $mform->setExpanded('perstrategy', false);
+        $mform->addElement('static', 'perstrategyhelp', '', get_string('form:perstrategyhelp', $component));
+
+        foreach (strategy_catalog::keys() as $key) {
+            if (!strategy_catalog::runnable($key)) {
+                continue;
+            }
+
+            $group = [];
+            foreach (['globalmin', 'globalmax', 'subscalemin', 'subscalemax'] as $field) {
+                $name = 'perstrategy_' . $key . '_' . $field;
+                $group[] = $mform->createElement('text', $name, '', ['size' => 6]);
+                // Text, not integer: a maximum may be the word "unlimited".
+                $mform->setType($name, PARAM_ALPHANUMEXT);
+            }
+
+            $mform->addGroup($group, 'perstrategygroup_' . $key, strategy_catalog::label($key), ' ', false);
+            $mform->addHelpButton('perstrategygroup_' . $key, 'form:perstrategy', $component);
+        }
+
         $mform->addElement('text', 'semin', get_string('form:semin', $component), ['size' => 8]);
         $mform->setType('semin', PARAM_LOCALISEDFLOAT);
         $mform->setDefault('semin', 0.35);
@@ -481,6 +506,7 @@ class experiment_form extends \moodleform {
                 'twins'    => ['enabled' => !empty($data['twins'])],
                 'naming'   => ['pattern' => 'P-{stratum}-{index:04d}'],
             ],
+            'budgetsbystrategy' => self::per_strategy_budgets($data),
             'budgets'       => [
                 'global'   => [
                     'minitems' => (int) ($data['globalmin'] ?? 20),
@@ -537,6 +563,72 @@ class experiment_form extends \moodleform {
         }
 
         return $definition;
+    }
+
+    /**
+     * The per-strategy budget block, from the form's fields.
+     *
+     * Only what somebody filled in: an empty field means "use the budgets
+     * above", and a strategy with four empty fields does not appear at all.
+     *
+     * @param array $data The submitted form data.
+     * @return array<string, array>
+     */
+    protected static function per_strategy_budgets(array $data): array {
+        $bystrategy = [];
+
+        foreach (strategy_catalog::keys() as $key) {
+            $levels = [];
+
+            $levelfields = [
+                'global'   => ['minitems' => 'globalmin', 'maxitems' => 'globalmax'],
+                'subscale' => ['minitems' => 'subscalemin', 'maxitems' => 'subscalemax'],
+            ];
+            foreach ($levelfields as $level => $fields) {
+                foreach ($fields as $target => $field) {
+                    $value = trim((string) ($data['perstrategy_' . $key . '_' . $field] ?? ''));
+                    if ($value === '') {
+                        continue;
+                    }
+
+                    $levels[$level][$target] = experiment_definition::is_unlimited($value)
+                        ? experiment_definition::UNLIMITED
+                        : (int) $value;
+                }
+            }
+
+            if ($levels !== []) {
+                $bystrategy[$key] = $levels;
+            }
+        }
+
+        return $bystrategy;
+    }
+
+    /**
+     * The per-strategy budget fields, from a stored definition.
+     *
+     * @param array $normalised The stored definition.
+     * @return array<string, string>
+     */
+    protected static function per_strategy_fields(array $normalised): array {
+        $fields = [];
+
+        foreach ((array) ($normalised['budgetsbystrategy'] ?? []) as $key => $levels) {
+            $levelfields = [
+                'global'   => ['minitems' => 'globalmin', 'maxitems' => 'globalmax'],
+                'subscale' => ['minitems' => 'subscalemin', 'maxitems' => 'subscalemax'],
+            ];
+            foreach ($levelfields as $level => $map) {
+                foreach ($map as $source => $field) {
+                    if (isset($levels[$level][$source])) {
+                        $fields['perstrategy_' . $key . '_' . $field] = (string) $levels[$level][$source];
+                    }
+                }
+            }
+        }
+
+        return $fields;
     }
 
     /**
@@ -631,7 +723,7 @@ class experiment_form extends \moodleform {
             )),
             'poolpreset'         => (int) ($normalised['poolpreset'] ?? 0),
             'personspreset'      => (int) ($normalised['personspreset'] ?? 0),
-        ];
+        ] + self::per_strategy_fields($normalised);
     }
 
     /**

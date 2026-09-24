@@ -391,6 +391,8 @@ $previewcontext = false;
 if ($preview !== null && $preview['runs'] > 0) {
     $previewcontext = [
         'cells'        => $preview['cells'],
+        'budgetrows'   => $preview['budgetrows'] ?? [],
+        'hasbudgetrows' => !empty($preview['budgetrows']),
         'replications' => $preview['replications'],
         'runs'         => $preview['runs'],
         'attempts'     => $preview['attempts'],

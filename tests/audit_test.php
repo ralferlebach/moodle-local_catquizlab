@@ -993,4 +993,58 @@ final class audit_test extends \advanced_testcase {
         $result = (new \local_catquizlab\local\experiment_definition($classic))->validate();
         $this->assertTrue($result['valid'], implode(' | ', $result['errors']));
     }
+
+    /**
+     * The form edits per-strategy budgets, and the preview shows the result.
+     *
+     * @return void
+     */
+    public function test_per_strategy_budgets_can_be_edited_and_previewed(): void {
+        $this->resetAfterTest();
+        $this->setAdminUser();
+
+        $read = new \ReflectionMethod(\local_catquizlab\form\experiment_form::class, 'per_strategy_budgets');
+        $read->setAccessible(true);
+        $write = new \ReflectionMethod(\local_catquizlab\form\experiment_form::class, 'per_strategy_fields');
+        $write->setAccessible(true);
+
+        // Four fields per strategy; empty means "use the budgets above".
+        $block = $read->invoke(null, [
+            'perstrategy_classic_globalmin' => '20',
+            'perstrategy_classic_globalmax' => 'unlimited',
+            'perstrategy_allsubs_globalmax' => '80',
+            'perstrategy_allsubs_subscalemax' => '5',
+            'perstrategy_fastest_globalmax' => '',
+        ]);
+
+        $this->assertArrayNotHasKey('fastest', $block, 'an empty field became an override');
+        $this->assertSame('unlimited', $block['classic']['global']['maxitems']);
+        $this->assertSame(80, $block['allsubs']['global']['maxitems']);
+
+        // And back into the form without loss.
+        $fields = $write->invoke(null, ['budgetsbystrategy' => $block]);
+        $this->assertSame('unlimited', $fields['perstrategy_classic_globalmax']);
+        $this->assertSame('80', $fields['perstrategy_allsubs_globalmax']);
+
+        // The preview shows what each run will actually use, before anything
+        // is created: a count of runs does not say whether classic kept its
+        // unlimited ceiling, which is the thing being checked.
+        $definition = \local_catquizlab\local\experiment_definition::example_baseline();
+        $definition['budgetsbystrategy'] = $block;
+        $preview = \local_catquizlab\local\experiment_service::preview($definition + [
+            'sweep' => ['factors' => ['strategy' => ['classic', 'allsubs', 'relsubs']]],
+        ]);
+
+        $rows = [];
+        foreach ($preview['budgetrows'] as $row) {
+            $rows[$row['strategy']] = $row;
+        }
+
+        $classic = $rows[\local_catquizlab\local\strategy_catalog::label('classic')];
+        $this->assertSame(get_string('budget:unlimited', 'local_catquizlab'), $classic['globalmax']);
+        $this->assertTrue($classic['overridden']);
+
+        $relsubs = $rows[\local_catquizlab\local\strategy_catalog::label('relsubs')];
+        $this->assertFalse($relsubs['overridden']);
+    }
 }

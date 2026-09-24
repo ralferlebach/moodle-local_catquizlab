@@ -201,7 +201,33 @@
                         {{/cansweep}}
                     </div>
                 </div>
-            {{/preview}}
+            
+        {{#hasbudgetrows}}
+            <h4 class="h6 mt-3">{{#str}}preview:budgets, local_catquizlab{{/str}}</h4>
+            <table class="table table-sm small">
+                <thead>
+                    <tr>
+                        <th scope="col">{{#str}}form:strategy, local_catquizlab{{/str}}</th>
+                        <th scope="col">{{#str}}form:globalmin, local_catquizlab{{/str}}</th>
+                        <th scope="col">{{#str}}form:globalmax, local_catquizlab{{/str}}</th>
+                        <th scope="col">{{#str}}form:subscalemin, local_catquizlab{{/str}}</th>
+                        <th scope="col">{{#str}}form:subscalemax, local_catquizlab{{/str}}</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {{#budgetrows}}
+                        <tr>
+                            <td>{{strategy}}{{#overridden}} <span class="badge badge-info">{{#str}}preview:ownbudget, local_catquizlab{{/str}}</span>{{/overridden}}</td>
+                            <td>{{globalmin}}</td>
+                            <td>{{globalmax}}</td>
+                            <td>{{subscalemin}}</td>
+                            <td>{{subscalemax}}</td>
+                        </tr>
+                    {{/budgetrows}}
+                </tbody>
+            </table>
+        {{/hasbudgetrows}}
+    {{/preview}}
 
             {{#exchange}}
                 <div class="card">
