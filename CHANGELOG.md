@@ -6,6 +6,48 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.6.86] — 2026-09-23
+
+Audit section 5: CAT parameters per run, and "unlimited".
+
+### A maximum that does not apply
+The engine has understood `-1` as "stop applying this ceiling" all along;
+this plugin refused it, because every budget had to be a positive integer. A
+definition writes the word — `"maxitems": "unlimited"` — because a definition is
+read by people, and it reaches the engine as -1.
+
+### Budgets that belong to one strategy
+A sweep is a cartesian product, so a budget swept as a factor is applied to
+every strategy. "Classic without a ceiling, allsubs at eighty, relsubs at
+forty" could not be said: saying it produced six more cells nobody asked for.
+
+An optional block says it directly:
+
+    "budgetsbystrategy": {
+        "classic": {"global": {"minitems": 20, "maxitems": "unlimited"}},
+        "allsubs": {"global": {"maxitems": 80}, "subscale": {"maxitems": 5}},
+        "relsubs": {"global": {"maxitems": 40}, "subscale": {"maxitems": 8}}
+    }
+
+It is applied to the cell after the factors, so it narrows rather than
+multiplies. Measured — three strategies, three runs:
+
+    allsubs   global 10..80        subscale 3..5   engine maximum 80
+    classic   global 20..unlimited subscale 3..4   engine maximum -1
+    relsubs   global 10..40        subscale 3..8   engine maximum 40
+
+Only the levels named are replaced; the rest of the cell keeps what it had. The
+cell's own definition carries the result, so the manifest and the
+reproducibility package document the values the run actually used.
+
+What this does not yet include, from the same audit section: an editable
+per-run preview in the interface, and refusing a budget a strategy cannot use.
+The schema and the sweep carry it; the form does not edit it yet.
+
+PHPUnit 698 tests / 3801 assertions, phpcs and PHPDoc clean.
+
+---
+
 ## [0.6.85] — 2026-09-23
 
 Audit 2026092303: #94 closed, and a strategy that could never have run.

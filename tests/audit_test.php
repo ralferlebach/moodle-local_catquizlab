@@ -940,4 +940,57 @@ final class audit_test extends \advanced_testcase {
             $compat['compatible']
         );
     }
+
+    /**
+     * Budgets can belong to one strategy, and a maximum can be unlimited.
+     *
+     * @return void
+     */
+    public function test_budgets_can_differ_per_strategy_and_be_unlimited(): void {
+        $this->resetAfterTest();
+        $this->setAdminUser();
+
+        $definition = \local_catquizlab\local\experiment_definition::example_baseline();
+        $definition['budgetsbystrategy'] = [
+            'classic' => ['global' => ['minitems' => 20, 'maxitems' => 'unlimited']],
+            'allsubs' => ['global' => ['maxitems' => 80], 'subscale' => ['maxitems' => 5]],
+            'relsubs' => ['global' => ['maxitems' => 40], 'subscale' => ['maxitems' => 8]],
+        ];
+
+        // A cartesian sweep cannot say "classic without a ceiling, allsubs at
+        // eighty": sweeping the budget as a factor applies every level to every
+        // strategy and produces the combinations nobody asked for.
+        $plan = \local_catquizlab\local\sweep::expand([
+            'base'    => $definition,
+            'factors' => ['strategy' => ['classic', 'allsubs', 'relsubs']],
+        ]);
+
+        $this->assertCount(3, $plan['cells']);
+
+        $seen = [];
+        foreach ($plan['runs'] as $run) {
+            $def = $run['definition'];
+            $seen[$def['strategy']] = [
+                (string) $def['budgets']['global']['maxitems'],
+                (string) $def['budgets']['subscale']['maxitems'],
+            ];
+        }
+
+        $this->assertSame(['unlimited', '4'], $seen['classic']);
+        $this->assertSame(['80', '5'], $seen['allsubs']);
+        $this->assertSame(['40', '8'], $seen['relsubs']);
+
+        // Unlimited is a word in the definition and -1 to the engine, which
+        // already reads that as "stop applying this maximum".
+        $unlimited = \local_catquizlab\local\experiment_definition::engine_maximum('unlimited', 15);
+        $this->assertSame(-1, $unlimited);
+        $this->assertSame(80, \local_catquizlab\local\experiment_definition::engine_maximum(80, 15));
+        $this->assertSame(15, \local_catquizlab\local\experiment_definition::engine_maximum(null, 15));
+
+        // And a definition with an unlimited maximum validates.
+        $classic = $definition;
+        $classic['budgets']['global'] = ['minitems' => 20, 'maxitems' => 'unlimited'];
+        $result = (new \local_catquizlab\local\experiment_definition($classic))->validate();
+        $this->assertTrue($result['valid'], implode(' | ', $result['errors']));
+    }
 }

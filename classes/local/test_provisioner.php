@@ -71,9 +71,11 @@ class test_provisioner {
             'strategykey'             => $strategy,
             'teststrategy'            => strategy_catalog::engine_id($strategy),
             'minquestions'            => (int) ($global['minitems'] ?? 10),
-            'maxquestions'            => (int) ($global['maxitems'] ?? 15),
+            // Minus one where the definition says unlimited: the engine stops
+            // applying the ceiling at that value.
+            'maxquestions'            => experiment_definition::engine_maximum($global['maxitems'] ?? null, 15),
             'minquestionspersubscale' => (int) ($subscale['minitems'] ?? 3),
-            'maxquestionspersubscale' => (int) ($subscale['maxitems'] ?? 4),
+            'maxquestionspersubscale' => experiment_definition::engine_maximum($subscale['maxitems'] ?? null, 4),
             'se_min'                  => (float) ($se['min'] ?? 0.35),
             'se_max'                  => (float) ($se['max'] ?? 1.0),
         ];

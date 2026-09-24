@@ -388,13 +388,21 @@ class experiment_definition {
                 continue;
             }
             self::require_positive_int($block, 'minitems', $errors, 'budgets.' . $level . '.minitems');
-            self::require_positive_int($block, 'maxitems', $errors, 'budgets.' . $level . '.maxitems');
-            if (
-                isset($block['minitems'], $block['maxitems'])
-                    && is_numeric($block['minitems']) && is_numeric($block['maxitems'])
-                    && (int) $block['minitems'] > (int) $block['maxitems']
-            ) {
-                $errors[] = self::msg('def:mingtmax', 'budgets.' . $level);
+
+            // A maximum may be UNLIMITED, which the engine already understands
+            // as -1 and stops applying. "Classic" with no ceiling and
+            // "allsubs" with eighty were not expressible before, because the
+            // maximum had to be a positive number.
+            if (!self::is_unlimited($block['maxitems'] ?? null)) {
+                self::require_positive_int($block, 'maxitems', $errors, 'budgets.' . $level . '.maxitems');
+
+                if (
+                    isset($block['minitems'], $block['maxitems'])
+                        && is_numeric($block['minitems']) && is_numeric($block['maxitems'])
+                        && (int) $block['minitems'] > (int) $block['maxitems']
+                ) {
+                    $errors[] = self::msg('def:mingtmax', 'budgets.' . $level);
+                }
             }
         }
 
@@ -782,6 +790,42 @@ class experiment_definition {
         if (!isset($data[$key]) || !is_int($data[$key])) {
             $errors[] = self::msg('def:integer', $label);
         }
+    }
+
+    /** @var string What a definition writes when a maximum is not to apply. */
+    public const UNLIMITED = 'unlimited';
+
+    /** @var int What the engine reads as "stop applying this maximum". */
+    public const ENGINE_UNLIMITED = -1;
+
+    /**
+     * Whether a budget value means "no ceiling".
+     *
+     * Written as the word in a definition, because a definition is read by
+     * people; passed to the engine as -1, because that is what it reads.
+     *
+     * @param mixed $value The stored value.
+     * @return bool
+     */
+    public static function is_unlimited($value): bool {
+        return $value === self::UNLIMITED
+            || $value === self::ENGINE_UNLIMITED
+            || (is_numeric($value) && (int) $value === self::ENGINE_UNLIMITED);
+    }
+
+    /**
+     * A budget maximum as the engine wants it.
+     *
+     * @param mixed $value The stored value.
+     * @param int $default What to use when nothing is stored.
+     * @return int The number, or -1 for unlimited.
+     */
+    public static function engine_maximum($value, int $default): int {
+        if (self::is_unlimited($value)) {
+            return self::ENGINE_UNLIMITED;
+        }
+
+        return $value === null || $value === '' ? $default : (int) $value;
     }
 
     /**

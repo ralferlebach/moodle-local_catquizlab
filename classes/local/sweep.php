@@ -346,6 +346,59 @@ class sweep {
             );
         }
 
+        // Budgets that belong to one strategy rather than to every cell. A
+        // sweep is a cartesian product, so a global maximum swept as a factor
+        // is applied to every strategy — and "classic with no ceiling,
+        // allsubs with eighty, relsubs with forty" cannot be said that way
+        // without also producing the six combinations nobody asked for.
+        // These are applied after the combination, to the cell that matches.
+        $definition = self::apply_strategy_budgets($definition);
+
+        return $definition;
+    }
+
+    /**
+     * Apply the budgets a definition reserves for one strategy.
+     *
+     * The block is optional and looks like this:
+     *
+     *     "budgetsbystrategy": {
+     *         "classic": {"global": {"minitems": 20, "maxitems": "unlimited"}},
+     *         "allsubs": {"global": {"maxitems": 80}, "subscale": {"maxitems": 5}}
+     *     }
+     *
+     * Only the levels named are replaced; anything not mentioned keeps what the
+     * cell already had. The cell's own definition carries the result, so the
+     * manifest and the reproducibility package document the values the run
+     * actually used rather than the ones it started from.
+     *
+     * @param array $definition The cell, after the factors have been applied.
+     * @return array
+     */
+    protected static function apply_strategy_budgets(array $definition): array {
+        $bystrategy = (array) ($definition['budgetsbystrategy'] ?? []);
+        $strategy = (string) ($definition['strategy'] ?? '');
+
+        if ($bystrategy === [] || $strategy === '' || !isset($bystrategy[$strategy])) {
+            return $definition;
+        }
+
+        foreach ((array) $bystrategy[$strategy] as $level => $block) {
+            if (!in_array($level, ['global', 'subscale', 'se'], true) || !is_array($block)) {
+                continue;
+            }
+
+            $definition['budgets'][$level] = $block + (array) ($definition['budgets'][$level] ?? []);
+        }
+
+        // The schema-1 mirrors would now contradict what was just set.
+        unset(
+            $definition['budgets']['minitems'],
+            $definition['budgets']['maxitems'],
+            $definition['budgets']['setarget'],
+            $definition['budgets']['fromlegacy']
+        );
+
         return $definition;
     }
 
