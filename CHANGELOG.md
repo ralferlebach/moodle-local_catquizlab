@@ -6,6 +6,34 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.6.90] — 2026-09-23
+
+RESULTS-003: a download no longer exists twice.
+
+`send_file()` takes a finished string, so an export held the dataset and the
+formatted file at the same time — the export twice over in memory, to send it
+once. `results_export::stream()` writes rows to the output as they are
+formatted; the JSON form is assembled piece by piece rather than through one
+`json_encode()` of everything, which would build the very string this exists to
+avoid.
+
+Measured on five thousand sittings:
+
+    assembled  20.8 MB
+    streamed   13.5 MB
+
+The remainder is the dataset itself, which is RESULTS-001 and still materialised.
+
+The method writes; `results.php` sends the headers. That keeps one job in one
+place and makes the writing testable — a test asserts the CSV has a header and
+one line per sitting (a stream that goes wrong produces a prefix, not a short
+file), that the columns match the assembled dataset, and that the JSON parses
+and carries all its rows.
+
+PHPUnit 701 tests / 3824 assertions, phpcs and PHPDoc clean.
+
+---
+
 ## [0.6.89] — 2026-09-23
 
 Audit section 8: the export tab, and a selection nobody can analyse.

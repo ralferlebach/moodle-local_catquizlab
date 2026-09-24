@@ -360,6 +360,56 @@ class results_export {
     }
 
     /**
+     * Write an export straight to the client, a row at a time.
+     *
+     * A download used to hold the dataset and the finished string at once: for
+     * a large experiment that is the export twice over in memory, to send it
+     * once. Rows go out as they are formatted and the buffer is flushed, so
+     * what is held is one row.
+     *
+     * The dataset itself is still built in one piece — that is RESULTS-001,
+     * and it is bounded for now by the size ceiling on the page.
+     *
+     * Writing only: the caller sends the headers, which keeps this testable
+     * and keeps one job in one place.
+     *
+     * @param results_query $query The selection.
+     * @param string $level One of the LEVEL_ constants.
+     * @param string $format csv or json.
+     * @return void
+     */
+    public static function stream(results_query $query, string $level, string $format): void {
+        $dataset = self::dataset($query, $level);
+
+        $out = fopen('php://output', 'w');
+
+        if ($format === 'csv') {
+            fputcsv($out, $dataset['columns']);
+            foreach ($dataset['rows'] as $row) {
+                $line = [];
+                foreach ($dataset['columns'] as $column) {
+                    $line[] = $row[$column] ?? '';
+                }
+                fputcsv($out, $line);
+            }
+        } else {
+            // Written by hand rather than json_encode() on the whole thing,
+            // which would build the very string this exists to avoid.
+            fwrite($out, '{"metadata":' . json_encode(self::metadata($query, $level), JSON_UNESCAPED_SLASHES));
+            fwrite($out, ',"columns":' . json_encode($dataset['columns']));
+            fwrite($out, ',"rows":[');
+            $first = true;
+            foreach ($dataset['rows'] as $row) {
+                fwrite($out, ($first ? '' : ',') . json_encode($row, JSON_UNESCAPED_SLASHES));
+                $first = false;
+            }
+            fwrite($out, ']}');
+        }
+
+        fclose($out);
+    }
+
+    /**
      * A file name that carries the level and the filter.
      *
      * @param results_query $query The data source.

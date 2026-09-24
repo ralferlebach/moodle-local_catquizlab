@@ -109,23 +109,17 @@ if ($action === 'csv' || $action === 'json') {
         $level = results_export::LEVEL_ATTEMPT;
     }
 
-    if ($action === 'csv') {
-        $content = results_export::to_csv(results_export::dataset($query, $level));
-        $mimetype = 'text/csv';
-    } else {
-        $content = results_export::to_json($query, $level);
-        $mimetype = 'application/json';
-    }
+    // Streamed rather than assembled: send_file() takes a finished string, so
+    // the dataset and the formatted export were held at the same time.
+    core_php_time_limit::raise(600);
 
-    send_file(
-        $content,
-        results_export::filename($query, $level, $action),
-        0,
-        0,
-        true,
-        true,
-        $mimetype
-    );
+    $format = $action === 'csv' ? 'csv' : 'json';
+    header('Content-Type: ' . ($format === 'csv' ? 'text/csv' : 'application/json') . '; charset=utf-8');
+    header('Content-Disposition: attachment; filename="'
+        . results_export::filename($query, $level, $format) . '"');
+    header('Cache-Control: no-store');
+
+    results_export::stream($query, $level, $format);
     die();
 }
 // Counted before anything is read. A selection this large is declined with a

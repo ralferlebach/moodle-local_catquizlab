@@ -1097,4 +1097,69 @@ final class audit_test extends \advanced_testcase {
         $this->assertNotSame([], $swept);
         $this->assertStringContainsString('45', reset($swept));
     }
+
+    /**
+     * A download is written as it goes, and says the same as before.
+     *
+     * @return void
+     */
+    public function test_an_export_streams_without_a_second_copy(): void {
+        global $DB;
+        $this->resetAfterTest();
+        $this->setAdminUser();
+
+        /** @var \local_catquizlab_generator $generator */
+        $generator = $this->getDataGenerator()->get_plugin_generator('local_catquizlab');
+        $run = $generator->create_run();
+        $DB->set_field('local_catquizlab_run', 'status', \local_catquizlab\local\registry::STATUS_FINISHED, ['id' => $run->id]);
+        $person = $generator->create_person(['runid' => $run->id]);
+
+        $trace = json_encode([
+            'finaltheta' => 0.4, 'finalse' => 0.3, 'items' => range(1, 10),
+            'responses' => array_fill(1, 10, 1.0), 'nitems' => 10, 'steps' => 10,
+            'stopreason' => 'se', 'scaleabilities' => [],
+        ]);
+        for ($i = 0; $i < 25; $i++) {
+            $DB->insert_record('local_catquizlab_attempt', (object) [
+                'runid' => $run->id, 'personid' => $person->id,
+                'status' => \local_catquizlab\local\attempt_scheduler::STATUS_COLLECTED,
+                'tries' => 1, 'runtimems' => 1000, 'tracejson' => $trace,
+                'timecreated' => time(), 'timemodified' => time(),
+            ]);
+        }
+
+        $filter = ['experimentid' => (int) $run->experimentid];
+        $query = new \local_catquizlab\local\results_query($filter);
+
+        ob_start();
+        \local_catquizlab\local\results_export::stream($query, 'attempt', 'csv');
+        $csv = ob_get_clean();
+
+        // A header and one line per sitting: the file is complete, not a
+        // prefix of one, which is what a stream gets wrong when it gets it
+        // wrong.
+        $lines = array_values(array_filter(explode("\n", trim($csv))));
+        $this->assertCount(26, $lines);
+
+        $dataset = \local_catquizlab\local\results_export::dataset(
+            new \local_catquizlab\local\results_query($filter),
+            'attempt'
+        );
+        $this->assertSame(implode(',', $dataset['columns']), $lines[0]);
+        $this->assertCount(25, $dataset['rows']);
+
+        // And the JSON form is valid JSON rather than a concatenation that
+        // happens to look like it.
+        ob_start();
+        \local_catquizlab\local\results_export::stream(
+            new \local_catquizlab\local\results_query($filter),
+            'attempt',
+            'json'
+        );
+        $json = json_decode(ob_get_clean(), true);
+        $this->assertIsArray($json);
+        $this->assertCount(25, $json['rows']);
+        $this->assertSame($dataset['columns'], $json['columns']);
+        $this->assertArrayHasKey('metadata', $json);
+    }
 }
