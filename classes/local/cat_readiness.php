@@ -94,11 +94,13 @@ class cat_readiness {
 
         $facts = self::pool_facts($runid);
         $facts['strategy'] = (string) ($definition['strategy'] ?? '');
+
         $facts['enforcespersubscale'] = $facts['strategy'] !== ''
             && strategy_catalog::has($facts['strategy'])
             && strategy_catalog::enforces_per_subscale_minimum($facts['strategy']);
 
         $reasons = array_merge(
+            self::check_strategy($facts, $component),
             self::check_pool_exists($facts, $component),
             self::check_budgets($definition, $facts, $component)
         );
@@ -287,5 +289,29 @@ class cat_readiness {
      */
     public static function summary(array $result): string {
         return implode(' ', $result['reasons']);
+    }
+    /**
+     * Whether the installed engine can play the chosen strategy.
+     *
+     * The engine builds its strategies from classes, and this fork ships six
+     * of them for eight constants. A run of one of the other two provisions
+     * cleanly — courses, questions, people, sittings — and then fails every
+     * sitting, because nothing on the engine side answers to that number.
+     *
+     * @param array $facts What is known about the run.
+     * @param string $component For the strings.
+     * @return string[]
+     */
+    protected static function check_strategy(array $facts, string $component): array {
+        $strategy = (string) ($facts['strategy'] ?? '');
+
+        if ($strategy === '' || strategy_catalog::runnable($strategy)) {
+            return [];
+        }
+
+        return [get_string('readiness:strategynotinengine', $component, (object) [
+            'label' => strategy_catalog::label($strategy),
+            'id'    => strategy_catalog::engine_id($strategy),
+        ])];
     }
 }

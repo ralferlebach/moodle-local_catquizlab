@@ -283,7 +283,17 @@ class strategy_catalog {
     public static function menu(): array {
         $menu = [];
         foreach (self::keys() as $key) {
-            $menu[$key] = self::CATALOG[$key]['label'];
+            $label = self::CATALOG[$key]['label'];
+
+            // Offered, but named as what it is. Removing it silently would
+            // leave somebody wondering where a strategy went; choosing it
+            // unmarked let them build an experiment whose every sitting then
+            // failed on the engine side.
+            if (!self::runnable($key)) {
+                $label .= ' — ' . get_string('strategy:notinengine', 'local_catquizlab');
+            }
+
+            $menu[$key] = $label;
         }
         return $menu;
     }
@@ -294,12 +304,70 @@ class strategy_catalog {
      * @return array{compatible: bool, missing: string[]} Missing constant names, empty when compatible.
      */
     public static function engine_compatibility(): array {
+        $runnable = self::runnable_engine_ids();
         $missing = [];
-        foreach (self::CATALOG as $entry) {
-            if (!defined($entry['constant'])) {
+
+        foreach (self::CATALOG as $key => $entry) {
+            // A constant is not a strategy. The engine builds its list from the
+            // classes under teststrategy\strategy, and this fork ships six of
+            // them for eight constants: "balanced" and "pilot" could be chosen
+            // here, provisioned, and every sitting of them then failed, because
+            // nothing on the engine side answers to those numbers.
+            if (!defined($entry['constant']) || !in_array(self::engine_id($key), $runnable, true)) {
                 $missing[] = $entry['constant'];
             }
         }
+
         return ['compatible' => $missing === [], 'missing' => $missing];
+    }
+
+    /**
+     * The strategy numbers the installed engine can actually play.
+     *
+     * Read from the engine's own classes, the same way the engine reads them,
+     * so a fork with more or fewer strategies is described correctly rather
+     * than assumed.
+     *
+     * @return int[]
+     */
+    public static function runnable_engine_ids(): array {
+        static $ids = null;
+
+        if ($ids !== null) {
+            return $ids;
+        }
+
+        $ids = [];
+        if (!environment::engine_available()) {
+            return $ids;
+        }
+
+        $classes = \core_component::get_component_classes_in_namespace(
+            'local_catquiz',
+            'teststrategy\\strategy'
+        );
+        foreach ($classes as $classname => $unused) {
+            try {
+                $strategy = new $classname();
+                if (isset($strategy->id)) {
+                    $ids[] = (int) $strategy->id;
+                }
+            } catch (\Throwable $ignored) {
+                // A class that cannot be built cannot play a sitting either.
+                continue;
+            }
+        }
+
+        return $ids;
+    }
+
+    /**
+     * Whether the installed engine can play this strategy.
+     *
+     * @param string $key The catalogue key.
+     * @return bool
+     */
+    public static function runnable(string $key): bool {
+        return self::has($key) && in_array(self::engine_id($key), self::runnable_engine_ids(), true);
     }
 }

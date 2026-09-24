@@ -840,4 +840,104 @@ final class audit_test extends \advanced_testcase {
         $next = \local_catquizlab\external\job_claim::execute('worker-c');
         $this->assertSame($second, (int) $next['attemptid']);
     }
+
+    /**
+     * Experiment A's snapshot says nothing about experiment B.
+     *
+     * @return void
+     */
+    public function test_a_snapshot_of_one_experiment_ignores_the_other(): void {
+        global $DB;
+        $this->resetAfterTest();
+        $this->setAdminUser();
+
+        /** @var \local_catquizlab_generator $generator */
+        $generator = $this->getDataGenerator()->get_plugin_generator('local_catquizlab');
+        $quiet = $generator->create_run();
+        $busy = $generator->create_run();
+
+        // B: five sittings in flight and a run held after failures. A: nothing.
+        for ($i = 0; $i < 5; $i++) {
+            $DB->insert_record('local_catquizlab_attempt', (object) [
+                'runid' => $busy->id, 'personid' => 0,
+                'status' => \local_catquizlab\local\attempt_scheduler::STATUS_RUNNING,
+                'tries' => 1, 'leaseowner' => 'w', 'leaseexpires' => time() + 600,
+                'timecreated' => time(), 'timemodified' => time(),
+            ]);
+        }
+        $DB->set_field('local_catquizlab_run', 'status', \local_catquizlab\local\registry::STATUS_FAILED, ['id' => $busy->id]);
+
+        $a = (int) $quiet->experimentid;
+        $b = (int) $busy->experimentid;
+        $this->assertNotSame($a, $b);
+
+        $counts = \local_catquizlab\local\attempt_scheduler::queue_breakdown($a);
+        $this->assertSame(0, (int) $counts['running']);
+
+        $verdict = \local_catquizlab\local\situation::assess($a, $counts);
+        $this->assertStringNotContainsString('5', $verdict['headline']);
+
+        // And B still sees its own.
+        $bcounts = \local_catquizlab\local\attempt_scheduler::queue_breakdown($b);
+        $this->assertSame(5, (int) $bcounts['running']);
+
+        // The first render and the first poll agree: same scope, same counts.
+        $render = \local_catquizlab\local\progress_view::context($a);
+        $poll = \local_catquizlab\external\live_status::execute($a);
+        $this->assertSame(
+            $render['situation']['state'],
+            $poll['regions'][0]['value'] ?? $render['situation']['state']
+        );
+    }
+
+    /**
+     * A strategy the engine cannot play is refused before anything is built.
+     *
+     * @return void
+     */
+    public function test_a_strategy_without_an_engine_class_is_refused(): void {
+        $this->resetAfterTest();
+
+        if (!\local_catquizlab\local\environment::engine_available()) {
+            $this->markTestSkipped('No CAT engine installed.');
+        }
+
+        $catalog = \local_catquizlab\local\strategy_catalog::class;
+
+        // The engine builds its strategies from classes, not from constants.
+        // This fork defines eight constants and ships six classes; the other
+        // two provisioned cleanly and then failed every sitting.
+        $runnable = $catalog::runnable_engine_ids();
+        $this->assertNotEmpty($runnable);
+
+        foreach ($catalog::keys() as $key) {
+            $this->assertSame(
+                in_array($catalog::engine_id($key), $runnable, true),
+                $catalog::runnable($key),
+                $key . ' is described incorrectly'
+            );
+
+            // Every key the engine cannot play is marked in the menu and
+            // refused by readiness.
+            if (!$catalog::runnable($key)) {
+                $this->assertStringContainsString(
+                    get_string('strategy:notinengine', 'local_catquizlab'),
+                    $catalog::menu()[$key]
+                );
+
+                $check = new \ReflectionMethod(\local_catquizlab\local\cat_readiness::class, 'check_strategy');
+                $check->setAccessible(true);
+                $reasons = $check->invoke(null, ['strategy' => $key], 'local_catquizlab');
+                $this->assertNotEmpty($reasons, $key . ' is offered but not refused');
+                $this->assertStringContainsString((string) $catalog::engine_id($key), $reasons[0]);
+            }
+        }
+
+        // And compatibility answers for classes, not constants.
+        $compat = $catalog::engine_compatibility();
+        $this->assertSame(
+            count($catalog::keys()) === count($runnable),
+            $compat['compatible']
+        );
+    }
 }

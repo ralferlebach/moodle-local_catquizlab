@@ -106,14 +106,17 @@ class situation {
                 'waiting' => (int) $heldrun->waiting,
                 'cause'   => (string) $heldrun->lasterror,
             ] : null,
-            'running'    => $DB->count_records(
-                'local_catquizlab_attempt',
-                ['status' => attempt_scheduler::STATUS_RUNNING]
-            ),
-            'failedruns' => $DB->count_records(
-                'local_catquizlab_run',
-                ['status' => registry::STATUS_FAILED]
-            ),
+            // Both scoped like everything else here. Left site-wide, experiment
+            // A's headline could be about experiment B's five sittings in
+            // flight and two held runs — which is the whole point of the
+            // experiment selector above it.
+            'running'    => (int) $breakdown['running'],
+            'failedruns' => $experimentid > 0
+                ? $DB->count_records('local_catquizlab_run', [
+                    'experimentid' => $experimentid,
+                    'status'       => registry::STATUS_FAILED,
+                ])
+                : $DB->count_records('local_catquizlab_run', ['status' => registry::STATUS_FAILED]),
             'wizard'     => setup_wizard::state(),
         ]);
     }

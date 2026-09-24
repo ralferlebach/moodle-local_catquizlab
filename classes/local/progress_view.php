@@ -161,7 +161,9 @@ class progress_view {
                 'rows'    => $debug,
             ],
             'ambiguous'   => ['hasany' => $ambiguous !== [], 'rows' => $ambiguous],
-            'situation'   => situation::assess(),
+            // The same scope and the same count as the first live poll, so the
+            // page does not change its mind two seconds after it is drawn.
+            'situation'   => situation::assess($experimentid, $breakdown),
             'runs'        => ['hasany' => $runs !== [], 'rows' => $runs],
             'tasks'       => task_overview::state(),
             'workers'     => ['hasany' => $workers !== [], 'rows' => $workers],

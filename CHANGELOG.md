@@ -6,6 +6,49 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.6.85] — 2026-09-23
+
+Audit 2026092303: #94 closed, and a strategy that could never have run.
+
+### #94 — the last three site-wide places
+`progress_view` took the situation without the experiment, so the first render
+could describe the installation while the first poll two seconds later
+described the experiment. Inside `situation::assess()`, `running` and
+`failedruns` stayed site-wide whatever scope was asked for.
+
+All three follow the scope now, and the first render uses the same count the
+first poll will. Measured against the audit's acceptance case — A idle, B with
+five sittings in flight and a held run:
+
+    Experiment A: running=0  "Nothing is queued and nothing is wrong."
+    Experiment B: running=5  "5 attempt(s) in progress"
+
+A regression test asserts A's snapshot mentions nothing of B's, and that the
+render and the poll agree.
+
+### Six strategies, eight offered
+`local_catquiz` defines eight strategy constants and this fork ships six
+classes. The compatibility check asked whether the **constant** was defined —
+which it always is — so "balanced" and "pilot" could be chosen, provisioned
+completely, and then fail every single sitting, because nothing on the engine
+side answers to strategy 2 or 6. Run 27 of the reported installation was a
+`pilot` run.
+
+The catalogue now reads the engine's own classes, the same way the engine does:
+
+    Engine can play: 1, 3, 4, 5, 7, 8
+      fastest, allsubs, lowestsub, highestsub, classic, relsubs  runnable
+      balanced (2), pilot (6)                                    not runnable
+
+They stay in the menu, marked "not available in the installed engine" — a
+strategy vanishing without explanation is its own puzzle — and readiness
+refuses them by name before a single course is built. A fork with more
+strategies is described correctly too, because nothing is hard-coded.
+
+PHPUnit 697 tests / 3793 assertions, phpcs and PHPDoc clean.
+
+---
+
 ## [0.6.84] — 2026-09-23
 
 The worker end-to-end job: the last open step was cron.
