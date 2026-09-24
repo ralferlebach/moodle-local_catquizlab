@@ -1047,4 +1047,54 @@ final class audit_test extends \advanced_testcase {
         $relsubs = $rows[\local_catquizlab\local\strategy_catalog::label('relsubs')];
         $this->assertFalse($relsubs['overridden']);
     }
+
+    /**
+     * A budget a strategy cannot satisfy is refused while it is typed.
+     *
+     * @return void
+     */
+    public function test_an_impossible_budget_is_refused_in_the_form(): void {
+        $this->resetAfterTest();
+        $this->setAdminUser();
+
+        $check = new \ReflectionMethod(\local_catquizlab\form\experiment_form::class, 'impossible_budgets');
+        $check->setAccessible(true);
+
+        // The reported run: allsubs over a hundred subscales, three questions
+        // each, a global maximum of thirty-five. Readiness caught it — after a
+        // course, 2500 questions and a thousand accounts had been built.
+        $errors = $check->invoke(null, [
+            'categories' => 10, 'subcategories' => 10, 'strategy' => 'allsubs',
+            'subscalemin' => 3, 'globalmax' => 35,
+        ]);
+        $this->assertArrayHasKey('globalmax', $errors);
+        $this->assertStringContainsString('300', $errors['globalmax']);
+
+        // Raising the maximum, or lifting it for that strategy alone, settles it.
+        $this->assertSame([], $check->invoke(null, [
+            'categories' => 10, 'subcategories' => 10, 'strategy' => 'allsubs',
+            'subscalemin' => 3, 'globalmax' => 400,
+        ]));
+        $this->assertSame([], $check->invoke(null, [
+            'categories' => 10, 'subcategories' => 10, 'strategy' => 'allsubs',
+            'subscalemin' => 3, 'globalmax' => 35,
+            'perstrategy_allsubs_globalmax' => 'unlimited',
+        ]));
+
+        // A strategy that does not have to serve every subscale is not bound
+        // by the arithmetic at all.
+        $this->assertSame([], $check->invoke(null, [
+            'categories' => 10, 'subcategories' => 10, 'strategy' => 'classic',
+            'subscalemin' => 3, 'globalmax' => 35,
+        ]));
+
+        // And a swept strategy counts even when it is not the chosen one.
+        $swept = $check->invoke(null, [
+            'categories' => 3, 'subcategories' => 3, 'strategy' => 'classic',
+            'sweepstrategies' => ['classic', 'allsubs'],
+            'subscalemin' => 5, 'globalmax' => 20,
+        ]);
+        $this->assertNotSame([], $swept);
+        $this->assertStringContainsString('45', reset($swept));
+    }
 }

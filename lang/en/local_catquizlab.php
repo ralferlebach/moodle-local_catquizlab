@@ -925,6 +925,7 @@ $string['results:subscale'] = 'Subscale';
 $string['results:subscaletable'] = 'Local recovery by subscale';
 $string['results:tabpending'] = 'This tab is being built in a later stage of the results work.';
 $string['results:tabs'] = 'Results sections';
+$string['results:toolarge'] = 'This selection covers {$a->count} test sittings, more than the {$a->limit} an analysis page can hold. Choose one experiment, or narrow the filter above — every figure here refers to the filter anyway. For everything at once, use the export on a single experiment and combine the files.';
 $string['results:toprogress'] = 'Go to step 3';
 $string['run:cannotcancel'] = 'A run in this state cannot be cancelled.';
 $string['run:cannotreproduce'] = 'A run can only be reproduced once it has finished, failed or been cancelled.';

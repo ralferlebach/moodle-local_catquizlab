@@ -110,6 +110,44 @@ class results_query {
         return $runs;
     }
 
+    /** @var int Observations beyond which an unfiltered selection is refused. */
+    public const TOO_MANY = 50000;
+
+    /**
+     * Whether this selection is larger than a page can honestly analyse.
+     *
+     * "All experiments" on an installation with a year of work behind it is
+     * not a question anybody means to ask, and answering it badly — a blank
+     * page after the tabs have already rendered, which is what a memory
+     * failure looks like mid-output — is worse than declining.
+     *
+     * @return array{toolarge: bool, count: int, limit: int}
+     */
+    public function size_check(): array {
+        global $DB;
+
+        $runs = $this->runs();
+        if ($runs === []) {
+            return ['toolarge' => false, 'count' => 0, 'limit' => self::TOO_MANY];
+        }
+
+        [$insql, $params] = $DB->get_in_or_equal(array_keys($runs), SQL_PARAMS_NAMED, 'run');
+        $params['collected'] = attempt_scheduler::STATUS_COLLECTED;
+        $params['validated'] = attempt_scheduler::STATUS_VALIDATED;
+
+        $count = (int) $DB->count_records_select(
+            'local_catquizlab_attempt',
+            'runid ' . $insql . ' AND status IN (:collected, :validated) AND tracejson IS NOT NULL',
+            $params
+        );
+
+        return [
+            'toolarge' => $count > self::TOO_MANY,
+            'count'    => $count,
+            'limit'    => self::TOO_MANY,
+        ];
+    }
+
     /**
      * One row per attempt, carrying its outcome and its experimental coordinates.
      *

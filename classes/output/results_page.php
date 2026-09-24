@@ -584,7 +584,10 @@ class results_page {
         ];
 
         foreach (results_export::levels() as $level => $stringkey) {
-            $dataset = results_export::dataset($this->query, $level);
+            // The size, not the contents. Building four full datasets to print
+            // four numbers is how opening this tab cost as much as four
+            // downloads.
+            $rowcount = results_export::row_count($this->query, $level);
             $links = \html_writer::link(
                 new \moodle_url('/local/catquizlab/results.php', $this->filter + [
                     'tab' => 'export', 'level' => $level, 'action' => 'csv',
@@ -603,7 +606,7 @@ class results_page {
             $table->data[] = [
                 get_string($stringkey, $component),
                 get_string($stringkey . '_desc', $component),
-                count($dataset['rows']),
+                $rowcount < 0 ? get_string('export:sizeunknown', $component) : $rowcount,
                 $links,
             ];
         }

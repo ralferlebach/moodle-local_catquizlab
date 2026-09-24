@@ -407,6 +407,17 @@ class experiment_form extends \moodleform {
             return $errors;
         }
 
+        // A budget a strategy cannot use, caught while it is being typed. The
+        // readiness check catches it too, but only once the run is being
+        // provisioned: by then a course, two and a half thousand questions and
+        // a thousand accounts exist for a run that was never going to start.
+        foreach (self::impossible_budgets((array) $data) as $field => $message) {
+            $errors[$field] = $message;
+        }
+        if ($errors !== []) {
+            return $errors;
+        }
+
         $definition = self::to_definition((array) $data);
         $result = (new experiment_definition($definition))->validate();
 
@@ -563,6 +574,85 @@ class experiment_form extends \moodleform {
         }
 
         return $definition;
+    }
+
+    /**
+     * Budgets that the chosen strategies cannot satisfy.
+     *
+     * The same arithmetic readiness uses, applied to every strategy this
+     * experiment will run — the one chosen, plus every level of a swept
+     * strategy factor — and to whichever budget each of them will actually
+     * use, its own or the shared one.
+     *
+     * @param array $data The submitted form data.
+     * @return array<string, string> Field name => message.
+     */
+    protected static function impossible_budgets(array $data): array {
+        $categories = (int) ($data['categories'] ?? 0);
+        $subcategories = (int) ($data['subcategories'] ?? 0);
+        $leaves = $categories * $subcategories;
+
+        if ($leaves <= 0) {
+            return [];
+        }
+
+        $overrides = self::per_strategy_budgets($data);
+        $errors = [];
+
+        foreach (self::strategies_in_play($data) as $key) {
+            if (!strategy_catalog::enforces_per_subscale_minimum($key)) {
+                continue;
+            }
+
+            $own = (array) ($overrides[$key] ?? []);
+            $submin = (int) ($own['subscale']['minitems'] ?? $data['subscalemin'] ?? 0);
+            $max = $own['global']['maxitems'] ?? ($data['globalmax'] ?? 0);
+
+            if ($submin <= 0 || experiment_definition::is_unlimited($max) || (int) $max <= 0) {
+                continue;
+            }
+
+            if ($submin * $leaves <= (int) $max) {
+                continue;
+            }
+
+            // Reported on the field somebody can change: their own maximum
+            // where they set one, the shared maximum otherwise.
+            $field = isset($own['global']['maxitems'])
+                ? 'perstrategygroup_' . $key
+                : 'globalmax';
+
+            $errors[$field] = get_string('readiness:subscalefloorabovemaximum', 'local_catquizlab', (object) [
+                'floor'    => $submin * $leaves,
+                'maximum'  => (int) $max,
+                'leaves'   => $leaves,
+                'submin'   => $submin,
+                'strategy' => strategy_catalog::label($key),
+            ]);
+        }
+
+        return $errors;
+    }
+
+    /**
+     * Every strategy this experiment would run.
+     *
+     * @param array $data The submitted form data.
+     * @return string[]
+     */
+    protected static function strategies_in_play(array $data): array {
+        $keys = [];
+
+        if (!empty($data['strategy'])) {
+            $keys[] = (string) $data['strategy'];
+        }
+        foreach ((array) ($data['sweepstrategies'] ?? []) as $level) {
+            $keys[] = (string) $level;
+        }
+
+        return array_values(array_unique(array_filter($keys, static function (string $key): bool {
+            return strategy_catalog::has($key);
+        })));
     }
 
     /**

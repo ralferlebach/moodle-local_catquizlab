@@ -6,6 +6,60 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.6.89] — 2026-09-23
+
+Audit section 8: the export tab, and a selection nobody can analyse.
+
+**RESULTS-002.** Opening the export tab built all four datasets — run, sitting,
+subscale, item — so that four row counts could be printed beside four download
+links. On a large experiment that is the whole export, four times over, to
+answer "how big is it". `results_export::row_count()` answers from the
+observations instead; where a level's size cannot be known cheaply, the table
+says "known when exported" rather than building megabytes to find out.
+Measured: **155 ms and 16 MB** for the tab, where it used to be four exports.
+
+**RESULTS-004.** "All experiments" had no ceiling. The page counts the
+selection first — one query, before anything is read — and declines above fifty
+thousand sittings with the number and a way forward: pick an experiment, narrow
+the filter, or export per experiment and combine. Rendering until the memory
+runs out looks like a page that simply stops after the tabs, which is exactly
+what was reported.
+
+Still open from this section: `observations()` materialises the selection
+(RESULTS-001) and the downloads hold dataset and formatted string at once
+(RESULTS-003). The ceiling bounds both for now; streaming is the real answer
+and it is not in this release.
+
+PHPUnit 700 tests / 3817 assertions, phpcs and PHPDoc clean.
+
+---
+
+## [0.6.88] — 2026-09-23
+
+A budget a strategy cannot satisfy is refused while it is typed.
+
+Readiness has caught this since 0.6.72 — but only once the run is being
+provisioned, by which time a course, two and a half thousand questions and a
+thousand accounts exist for a run that was never going to start. The reported
+run 21 went exactly that way.
+
+The form does the same arithmetic on submit, for every strategy the experiment
+would run — the chosen one and every level of a swept strategy factor — against
+whichever budget each will actually use, its own or the shared one. Measured:
+
+    allsubs, 10×10 subscales, min 3, max 35     refused: "300 questions … above 35"
+    the same with max 400                       accepted
+    the same, allsubs' own maximum unlimited    accepted
+    classic (serves no subscale floor), max 35  accepted
+    swept: classic + allsubs, 3×3, min 5, max 20  refused: "45 questions …"
+
+The error lands on the field that can fix it: the strategy's own maximum where
+one is set, the shared maximum otherwise.
+
+PHPUnit 700 tests / 3816 assertions, phpcs and PHPDoc clean.
+
+---
+
 ## [0.6.87] — 2026-09-23
 
 The per-run budgets are editable, and the preview shows what each run will use.

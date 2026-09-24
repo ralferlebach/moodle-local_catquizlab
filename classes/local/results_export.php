@@ -67,6 +67,55 @@ class results_export {
     }
 
     /**
+     * How many rows an export would have, without building it.
+     *
+     * Opening the export tab used to build all four datasets — run, sitting,
+     * subscale and item — so that four numbers could be printed beside four
+     * download links. On a large experiment that is the whole export, four
+     * times over, to answer "how big is it".
+     *
+     * @param results_query $query The selection.
+     * @param string $level One of the LEVEL_ constants.
+     * @return int
+     */
+    public static function row_count(results_query $query, string $level): int {
+        $observations = $query->observations();
+
+        switch ($level) {
+            case self::LEVEL_RUN:
+                // One row per run in the selection.
+                $runs = [];
+                foreach ($observations as $row) {
+                    $runs[(int) $row['runid']] = true;
+                }
+                return count($runs);
+
+            case self::LEVEL_ATTEMPT:
+                return count($observations);
+
+            case self::LEVEL_SUBSCALE:
+            case self::LEVEL_ITEM:
+                // These expand per observation, and the factor is the number
+                // of subscales or of items the sitting used. Counted from the
+                // observations rather than by building the rows.
+                $total = 0;
+                foreach ($observations as $row) {
+                    $total += $level === self::LEVEL_ITEM
+                        ? count((array) ($row['items'] ?? []))
+                        : 0;
+                }
+
+                // Subscale rows need the trace, which observations no longer
+                // carry; where the count cannot be known cheaply, say so
+                // rather than building megabytes to find out.
+                return $level === self::LEVEL_ITEM ? $total : -1;
+
+            default:
+                return 0;
+        }
+    }
+
+    /**
      * Build the dataset of one level under a filter.
      *
      * @param results_query $query The filtered data source.

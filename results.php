@@ -128,6 +128,24 @@ if ($action === 'csv' || $action === 'json') {
     );
     die();
 }
+// Counted before anything is read. A selection this large is declined with a
+// number and a way forward, rather than rendered until the memory runs out —
+// which looks like a page that simply stops after the tabs.
+$size = $query->size_check();
+if ($size['toolarge']) {
+    echo $OUTPUT->header();
+    echo \local_catquizlab\output\shell::render('results', optional_param('experimentid', 0, PARAM_INT));
+    echo $OUTPUT->notification(
+        get_string('results:toolarge', $component, (object) [
+            'count' => $size['count'],
+            'limit' => $size['limit'],
+        ]),
+        \core\output\notification::NOTIFY_WARNING
+    );
+    echo $OUTPUT->footer();
+    die();
+}
+
 $page = new results_page($query, $tab, $filter);
 
 if (!$page->tab_exists($tab)) {

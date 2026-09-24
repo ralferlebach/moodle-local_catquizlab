@@ -925,6 +925,7 @@ $string['results:subscale'] = 'Subskala';
 $string['results:subscaletable'] = 'Lokale Wiederherstellung nach Subskala';
 $string['results:tabpending'] = 'Dieser Reiter entsteht in einer späteren Etappe der Ergebnisarbeit.';
 $string['results:tabs'] = 'Ergebnisbereiche';
+$string['results:toolarge'] = 'Diese Auswahl umfasst {$a->count} Testbearbeitungen und damit mehr als die {$a->limit}, die eine Auswertungsseite halten kann. Bitte ein Experiment wählen oder den Filter oben einschränken — alle Zahlen hier beziehen sich ohnehin auf den Filter. Für alles zusammen bitte den Export je Experiment verwenden und die Dateien zusammenführen.';
 $string['results:toprogress'] = 'Zu Schritt 3';
 $string['run:cannotcancel'] = 'Ein Versuchsdurchlauf in diesem Zustand lässt sich nicht abbrechen.';
 $string['run:cannotreproduce'] = 'Ein Versuchsdurchlauf lässt sich erst reproduzieren, wenn er abgeschlossen, fehlgeschlagen oder abgebrochen ist.';
