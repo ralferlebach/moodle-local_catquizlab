@@ -269,6 +269,21 @@ class run_lifecycle {
             return 0;
         }
 
+        // Their diagnosis first: clearing lasterror is what made a second
+        // failure unreadable, because the first one was gone by the time
+        // anybody looked.
+        $failedids = $DB->get_fieldset_select(
+            'local_catquizlab_attempt',
+            'id',
+            'runid = ? AND status = ?',
+            [$runid, attempt_scheduler::STATUS_FAILED]
+        );
+        foreach ($failedids as $failedid) {
+            attempt_history::record((int) $failedid, attempt_history::REQUEUED, [
+                'detail' => (string) $DB->get_field('local_catquizlab_attempt', 'lasterror', ['id' => $failedid]),
+            ]);
+        }
+
         $DB->execute(
             'UPDATE {local_catquizlab_attempt}
                 SET status = :queued, tries = 0, nextruntime = 0, lasterror = NULL,

@@ -176,6 +176,21 @@ class job_complete extends external_api {
             );
         }
 
+        // What this execution did, kept where a retry cannot erase it.
+        \local_catquizlab\local\attempt_history::record(
+            $attemptid,
+            $finished
+                ? \local_catquizlab\local\attempt_history::COLLECTED
+                : \local_catquizlab\local\attempt_history::FAILED,
+            [
+                'workerid'        => (string) ($params['workerid'] ?? ''),
+                'engineattemptid' => (int) ($params['engineattemptid'] ?? 0),
+                'runtimems'       => (int) ($params['runtimems'] ?? 0),
+                'detail'          => (string) ($params['message'] ?? ''),
+                'tryno'           => (int) $attempt->tries,
+            ]
+        );
+
         // The lease is over either way: the attempt is no longer being played.
         $DB->set_field('local_catquizlab_attempt', 'leaseowner', null, ['id' => $attemptid]);
         $DB->set_field('local_catquizlab_attempt', 'leaseexpires', 0, ['id' => $attemptid]);

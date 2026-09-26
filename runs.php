@@ -177,6 +177,41 @@ if ($action === 'requeuetask' && optional_param('taskid', 0, PARAM_INT) > 0) {
     redirect(new moodle_url('/local/catquizlab/runs.php'), $message, null, $level);
 }
 
+// One sitting, not the whole run. The recovery a person actually wants when
+// they are looking at the row that failed.
+if ($action === 'requeueattempt' && optional_param('attemptid', 0, PARAM_INT) > 0) {
+    require_sesskey();
+    require_capability('local/catquizlab:execute', $context);
+
+    $attemptid = required_param('attemptid', PARAM_INT);
+    $attempt = $DB->get_record('local_catquizlab_attempt', ['id' => $attemptid]);
+
+    if ($attempt) {
+        \local_catquizlab\local\attempt_history::record(
+            $attemptid,
+            \local_catquizlab\local\attempt_history::REQUEUED,
+            ['detail' => (string) $attempt->lasterror]
+        );
+        $DB->update_record('local_catquizlab_attempt', (object) [
+            'id' => $attemptid,
+            'status' => \local_catquizlab\local\attempt_scheduler::STATUS_QUEUED,
+            'tries' => 0, 'nextruntime' => 0, 'lasterror' => null,
+            'leaseowner' => null, 'leaseexpires' => 0, 'timemodified' => time(),
+        ]);
+        $runstatus = (int) $DB->get_field('local_catquizlab_run', 'status', ['id' => $attempt->runid]);
+        if (in_array($runstatus, [registry::STATUS_FINISHED, registry::STATUS_FAILED], true)) {
+            $DB->set_field('local_catquizlab_run', 'status', registry::STATUS_READY, ['id' => $attempt->runid]);
+        }
+    }
+
+    redirect(
+        new moodle_url('/local/catquizlab/runs.php', ['runid' => (int) ($attempt->runid ?? 0)]),
+        get_string('attempt:requeued', $component, $attemptid),
+        null,
+        \core\output\notification::NOTIFY_SUCCESS
+    );
+}
+
 // The sittings that gave up, once more. Not the same as continuing a held run:
 // this run was never held, it simply has sittings that failed three times and
 // will otherwise never reach its planned number.
@@ -546,6 +581,94 @@ if ($runid > 0) {
         [get_string('run:progress', $component), $run['progress'] . '%'],
     ];
     echo html_writer::table($table);
+
+    // One row per sitting that did not simply work: what was tried, by which
+    // worker, how it ended, and what to do about it. Only the interesting
+    // ones — a run of a thousand collected sittings has nothing to say here.
+    $troubled = $DB->get_records_select(
+        'local_catquizlab_attempt',
+        'runid = :runid AND (status = :failed OR tries > 1 OR lasterror IS NOT NULL)',
+        [
+            'runid'  => $runid,
+            'failed' => \local_catquizlab\local\attempt_scheduler::STATUS_FAILED,
+        ],
+        'id ASC',
+        'id, personid, status, tries, engineattemptid, leaseowner, lasterror, timemodified',
+        0,
+        200
+    );
+
+    if ($troubled !== []) {
+        echo $OUTPUT->heading(get_string('attempt:diagnostics', $component), 4);
+        echo html_writer::tag('p', get_string('attempt:diagnosticsexplain', $component), ['class' => 'text-muted']);
+
+        $attempttable = new html_table();
+        $attempttable->attributes['class'] = 'generaltable table-sm';
+        $attempttable->head = [
+            get_string('attempt:id', $component),
+            get_string('attempt:person', $component),
+            get_string('attempt:status', $component),
+            get_string('attempt:tries', $component),
+            get_string('attempt:engineattempt', $component),
+            get_string('attempt:worker', $component),
+            get_string('attempt:when', $component),
+            get_string('attempt:error', $component),
+            '',
+        ];
+
+        foreach ($troubled as $row) {
+            $history = \local_catquizlab\local\attempt_history::of_attempt((int) $row->id);
+            $error = (string) ($row->lasterror ?? '');
+            if ($error === '') {
+                // Cleared by a retry; the history still has it.
+                $error = \local_catquizlab\local\attempt_history::last_failure((int) $row->id);
+            }
+
+            $lines = '';
+            foreach ($history as $entry) {
+                $lines .= html_writer::tag(
+                    'li',
+                    get_string('attempt:historyline', $component, (object) [
+                        'try'     => $entry['tryno'],
+                        'outcome' => $entry['outcomelabel'],
+                        'when'    => $entry['when'],
+                    ]) . ($entry['detail'] !== ''
+                        ? html_writer::tag('div', s(\core_text::substr($entry['detail'], 0, 400)), ['class' => 'text-muted'])
+                        : ''),
+                    ['class' => $entry['failed'] ? 'text-danger' : '']
+                );
+            }
+
+            $action = '';
+            if ((int) $row->status === \local_catquizlab\local\attempt_scheduler::STATUS_FAILED) {
+                $action = html_writer::tag(
+                    'form',
+                    html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'sesskey', 'value' => sesskey()])
+                    . html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'action', 'value' => 'requeueattempt'])
+                    . html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'attemptid', 'value' => $row->id])
+                    . html_writer::tag('button', get_string('attempt:requeueone', $component), [
+                        'type' => 'submit', 'class' => 'btn btn-sm btn-outline-secondary',
+                    ]),
+                    ['method' => 'post', 'action' => (new moodle_url('/local/catquizlab/runs.php'))->out(false)]
+                );
+            }
+
+            $attempttable->data[] = [
+                $row->id,
+                $row->personid,
+                \local_catquizlab\local\attempt_scheduler::status_label((int) $row->status),
+                $row->tries,
+                $row->engineattemptid ?: '-',
+                $row->leaseowner ?: '-',
+                userdate((int) $row->timemodified),
+                ($error !== '' ? html_writer::tag('div', s(\core_text::substr($error, 0, 300))) : '')
+                    . ($lines !== '' ? html_writer::tag('ul', $lines, ['class' => 'small mb-0 pl-3']) : ''),
+                $action,
+            ];
+        }
+
+        echo html_writer::table($attempttable);
+    }
 
     // Whether the simulated person can reach the test at all. An access failure
     // must never surface as a missing question: the two need completely

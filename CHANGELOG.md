@@ -6,6 +6,54 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.6.91] — 2026-09-23
+
+Audit section 7: what was tried on a sitting, kept.
+
+### The critical finding
+`requeue_failed()` cleared `tries`, `nextruntime` and `lasterror`. The
+diagnosis of the try before it was therefore gone — exactly when somebody
+needs it, which is after the retry did not help either.
+
+A sitting's executions are now recorded append-only in
+`local_catquizlab_attemptlog`: one row per execution, written when a worker
+claims it, when it finishes or fails, and when anybody puts it back. Measured:
+
+    before the retry: lasterror = "Division by zero at model_raschmodel.php:734"
+    after the retry:  lasterror = (cleared)
+
+    history:
+      try 1  started                w-1
+      try 1  failed                 w-1   timeout after 33 answers
+      try 2  started                w-2
+      try 2  failed                 w-2   Division by zero at model_raschmodel.php:734
+      try 3  put back in the queue        Division by zero at model_raschmodel.php:734
+
+Both failures stay readable, and they differ — which is the whole point: a
+timeout and an engine exception on the same sitting are two different problems.
+
+### The diagnostic view
+A run's page lists the sittings that needed more than one try, with the columns
+the audit asked for: sitting, person, status, tries, engine attempt, worker,
+last change, what happened, and an action. Sittings that simply worked are not
+listed; a thousand collected rows have nothing to say.
+
+### Selective retry
+"Try this one again" puts a single sitting back — its own diagnosis recorded
+first — without touching the run's other sittings. Collected sittings are never
+affected, which is the recovery goal stated in the audit.
+
+### Two missing strings, found by Behat
+`export:sizeunknown` from 0.6.89 and `results:run` from the worker overview:
+both written into the code, neither into the language files, and the unit tests
+do not render those templates. A scan of all 935 identifiers used across PHP,
+templates and JavaScript now comes back clean.
+
+PHPUnit 702 tests / 3833 assertions, Behat 32 scenarios / 235 steps, phpcs and
+PHPDoc clean.
+
+---
+
 ## [0.6.90] — 2026-09-23
 
 RESULTS-003: a download no longer exists twice.

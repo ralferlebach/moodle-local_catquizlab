@@ -360,7 +360,7 @@
                     <ul class="list-inline small text-muted mb-1 mt-1">
                         <li class="list-inline-item">{{#str}}worker:slot, local_catquizlab{{/str}}: {{slot}}</li>
                         <li class="list-inline-item">{{#str}}worker:playing, local_catquizlab{{/str}}:
-                            {{#attemptid}}#{{attemptid}}{{#runid}} ({{#str}}results:run, local_catquizlab{{/str}} {{runid}}){{/runid}}{{/attemptid}}{{^attemptid}}{{#str}}worker:nothingplaying, local_catquizlab{{/str}}{{/attemptid}}</li>
+                            {{#attemptid}}#{{attemptid}}{{#runid}} ({{#str}}run:label, local_catquizlab{{/str}} {{runid}}){{/runid}}{{/attemptid}}{{^attemptid}}{{#str}}worker:nothingplaying, local_catquizlab{{/str}}{{/attemptid}}</li>
                         <li class="list-inline-item">{{#str}}worker:jobsdone, local_catquizlab{{/str}}: {{jobsdone}}</li>
                         <li class="list-inline-item">{{#str}}worker:lastheartbeat, local_catquizlab{{/str}}: {{heartbeatago}}</li>
                         <li class="list-inline-item">{{#str}}worker:uptime, local_catquizlab{{/str}}: {{uptime}}</li>

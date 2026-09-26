@@ -1162,4 +1162,60 @@ final class audit_test extends \advanced_testcase {
         $this->assertSame($dataset['columns'], $json['columns']);
         $this->assertArrayHasKey('metadata', $json);
     }
+
+    /**
+     * A retry does not erase the diagnosis of the try before it.
+     *
+     * @return void
+     */
+    public function test_the_execution_history_survives_a_retry(): void {
+        global $DB;
+        $this->resetAfterTest();
+        $this->setAdminUser();
+
+        /** @var \local_catquizlab_generator $generator */
+        $generator = $this->getDataGenerator()->get_plugin_generator('local_catquizlab');
+        $run = $generator->create_run();
+        $runid = (int) $run->id;
+        $DB->set_field('local_catquizlab_run', 'status', \local_catquizlab\local\registry::STATUS_FAILED, ['id' => $runid]);
+
+        $attemptid = (int) $DB->insert_record('local_catquizlab_attempt', (object) [
+            'runid' => $runid, 'personid' => 0,
+            'status' => \local_catquizlab\local\attempt_scheduler::STATUS_FAILED,
+            'tries' => \local_catquizlab\local\attempt_scheduler::MAX_TRIES,
+            'lasterror' => 'Division by zero at model_raschmodel.php:734',
+            'timecreated' => time(), 'timemodified' => time(),
+        ]);
+
+        $history = \local_catquizlab\local\attempt_history::class;
+        $history::record($attemptid, $history::STARTED, ['workerid' => 'w-1', 'tryno' => 1]);
+        $history::record($attemptid, $history::FAILED, [
+            'workerid' => 'w-1', 'tryno' => 1, 'detail' => 'timeout after 33 answers',
+        ]);
+        $history::record($attemptid, $history::FAILED, [
+            'workerid' => 'w-2', 'tryno' => 2, 'detail' => 'Division by zero at model_raschmodel.php:734',
+        ]);
+
+        // The retry clears tries, nextruntime and lasterror — which is how the
+        // first failure used to become unreadable by the time the second one
+        // was being investigated.
+        \local_catquizlab\local\run_lifecycle::requeue_failed($runid);
+
+        $this->assertEmpty($DB->get_field('local_catquizlab_attempt', 'lasterror', ['id' => $attemptid]));
+
+        $rows = $history::of_attempt($attemptid);
+        $this->assertCount(4, $rows, 'the retry itself is recorded too');
+
+        $details = array_column($rows, 'detail');
+        $this->assertContains('timeout after 33 answers', $details);
+        $this->assertStringContainsString(
+            'model_raschmodel.php:734',
+            $history::last_failure($attemptid)
+        );
+
+        // And the outcomes of a run can be counted without walking them.
+        $outcomes = $history::outcomes_of_run($runid);
+        $this->assertSame(2, $outcomes[$history::FAILED]);
+        $this->assertSame(1, $outcomes[$history::REQUEUED]);
+    }
 }

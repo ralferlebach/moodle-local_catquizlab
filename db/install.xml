@@ -361,5 +361,26 @@
         <INDEX NAME="experimentid" UNIQUE="false" FIELDS="experimentid"/>
       </INDEXES>
     </TABLE>
+    <TABLE NAME="local_catquizlab_attemptlog" COMMENT="One row per execution of a test sitting: what was tried, by which worker, and how it ended. Append-only, so a retry does not erase the diagnosis of the try before it.">
+      <FIELDS>
+        <FIELD NAME="id" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="true"/>
+        <FIELD NAME="attemptid" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="false" COMMENT="The sitting."/>
+        <FIELD NAME="runid" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="false" COMMENT="Its run, so a run's history reads without a join."/>
+        <FIELD NAME="tryno" TYPE="int" LENGTH="4" NOTNULL="true" DEFAULT="0" SEQUENCE="false" COMMENT="Which execution this was."/>
+        <FIELD NAME="outcome" TYPE="char" LENGTH="20" NOTNULL="true" SEQUENCE="false" COMMENT="started, collected, failed, requeued or abandoned."/>
+        <FIELD NAME="workerid" TYPE="char" LENGTH="100" NOTNULL="false" SEQUENCE="false" COMMENT="Which worker played it."/>
+        <FIELD NAME="engineattemptid" TYPE="int" LENGTH="10" NOTNULL="false" SEQUENCE="false" COMMENT="The engine attempt it produced."/>
+        <FIELD NAME="runtimems" TYPE="int" LENGTH="10" NOTNULL="false" SEQUENCE="false" COMMENT="How long it took."/>
+        <FIELD NAME="detail" TYPE="text" NOTNULL="false" SEQUENCE="false" COMMENT="The error or note, as reported."/>
+        <FIELD NAME="timecreated" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="false"/>
+      </FIELDS>
+      <KEYS>
+        <KEY NAME="primary" TYPE="primary" FIELDS="id"/>
+      </KEYS>
+      <INDEXES>
+        <INDEX NAME="attemptid-id" UNIQUE="false" FIELDS="attemptid, id"/>
+        <INDEX NAME="runid-outcome" UNIQUE="false" FIELDS="runid, outcome"/>
+      </INDEXES>
+    </TABLE>
   </TABLES>
 </XMLDB>

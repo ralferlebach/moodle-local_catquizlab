@@ -470,6 +470,32 @@ function xmldb_local_catquizlab_upgrade($oldversion): bool {
         upgrade_plugin_savepoint(true, 2026092302, 'local', 'catquizlab');
     }
 
+    if ($oldversion < 2026092310) {
+        // The history of a sitting's executions. A retry cleared tries,
+        // nextruntime and lasterror, so the diagnosis of the try before it was
+        // gone — exactly when somebody needs it, which is after a retry did not
+        // help either.
+        $table = new xmldb_table('local_catquizlab_attemptlog');
+        if (!$dbman->table_exists($table)) {
+            $table->add_field('id', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, XMLDB_SEQUENCE);
+            $table->add_field('attemptid', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL);
+            $table->add_field('runid', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL);
+            $table->add_field('tryno', XMLDB_TYPE_INTEGER, '4', null, XMLDB_NOTNULL, null, '0');
+            $table->add_field('outcome', XMLDB_TYPE_CHAR, '20', null, XMLDB_NOTNULL);
+            $table->add_field('workerid', XMLDB_TYPE_CHAR, '100');
+            $table->add_field('engineattemptid', XMLDB_TYPE_INTEGER, '10');
+            $table->add_field('runtimems', XMLDB_TYPE_INTEGER, '10');
+            $table->add_field('detail', XMLDB_TYPE_TEXT);
+            $table->add_field('timecreated', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL);
+            $table->add_key('primary', XMLDB_KEY_PRIMARY, ['id']);
+            $table->add_index('attemptid-id', XMLDB_INDEX_NOTUNIQUE, ['attemptid', 'id']);
+            $table->add_index('runid-outcome', XMLDB_INDEX_NOTUNIQUE, ['runid', 'outcome']);
+            $dbman->create_table($table);
+        }
+
+        upgrade_plugin_savepoint(true, 2026092310, 'local', 'catquizlab');
+    }
+
     return true;
 }
 

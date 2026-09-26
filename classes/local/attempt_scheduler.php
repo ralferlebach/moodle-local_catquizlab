@@ -77,6 +77,24 @@ class attempt_scheduler {
      * @return int The number of attempts reclaimed (requeued or failed).
      */
     /**
+     * A sitting's status in words.
+     *
+     * @param int $status One of the STATUS_ constants.
+     * @return string
+     */
+    public static function status_label(int $status): string {
+        $keys = [
+            self::STATUS_QUEUED    => 'attemptstatus:queued',
+            self::STATUS_RUNNING   => 'attemptstatus:running',
+            self::STATUS_COLLECTED => 'attemptstatus:collected',
+            self::STATUS_VALIDATED => 'attemptstatus:validated',
+            self::STATUS_FAILED    => 'attemptstatus:failed',
+        ];
+
+        return get_string($keys[$status] ?? 'attemptstatus:unknown', 'local_catquizlab');
+    }
+
+    /**
      * How the queue breaks down for an operator, not for the database.
      *
      * `QUEUED` is a storage state and was being read as "waiting for a worker",

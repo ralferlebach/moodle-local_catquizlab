@@ -162,6 +162,14 @@ class job_claim extends external_api {
             'timemodified' => time(),
         ]);
 
+        // The execution starts here, and the history says so before anything
+        // can go wrong with it.
+        \local_catquizlab\local\attempt_history::record(
+            (int) $attempt->id,
+            \local_catquizlab\local\attempt_history::STARTED,
+            ['workerid' => $params['workerid'], 'tryno' => (int) $attempt->tries + 1]
+        );
+
         // The documented lifecycle is READY → first attempt claimed → RUNNING,
         // and this is the moment it happens. Inside the transaction with the
         // claim: a run whose attempt is being played must not be able to look
