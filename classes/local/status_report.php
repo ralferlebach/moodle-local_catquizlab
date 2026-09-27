@@ -232,7 +232,8 @@ class status_report {
             // the run holds fewer observations than it was designed for, and
             // the only way back to the planned number is another try.
             return self::card(
-                (int) ($counts['failed'] ?? 0) > 0 ? self::WATCH : self::GOOD,
+                // Complete by the one rule, not merely finished (#98).
+                run_lifecycle::is_complete($runid) ? self::GOOD : self::WATCH,
                 get_string('report:runfinished', $component),
                 self::progress_line($counts, $component),
                 (int) ($counts['failed'] ?? 0) > 0 ? [

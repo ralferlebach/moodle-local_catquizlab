@@ -6,6 +6,96 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.6.99] — 2026-09-27
+
+#98 finished: the interface test, and what it found.
+
+### The interface test (criterion 11, Playwright)
+`cli/seed_failed_attempt.php` creates a run with one sitting that failed the way
+the live installation's did; `tests/playwright/recovery.spec.js` opens it in the
+real interface, checks the diagnosis field by field, retries every incomplete
+sitting, and checks the history afterwards. The UI end-to-end workflow seeds
+the run before Playwright starts, so the test runs on every CI push.
+
+### What it found
+- **A session key on the run page and in the database.** The worker reports the
+  URL of the page it was on, and some carry `sesskey`. 0.6.98 stripped it from
+  the history; the sitting's own last error, shown in the table, still had it.
+  `attempt_history::redact()` now removes session keys and tokens when an
+  error is stored, when a history entry is written, and when either is shown.
+- **A retried sitting vanished from its own diagnosis.** The "needed attention"
+  filter read the fields a retry clears — status, tries, last error — so the
+  moment a sitting was put back, the page that exists to show its history no
+  longer listed it. It reads the history now: ever failed, or ever put back.
+
+### On catquiz 1.2.1 aede4c2
+0.6.97 reported that `progress::save()` could not find its CAT attempt because
+the attempts are stored as `adaptivequiz` and looked up as `mod_adaptivequiz`.
+The current branch resolves both names (`catquiz::component_names()`); that
+report is settled upstream.
+
+PHPUnit 714 tests / 3934 assertions, Behat 32 scenarios / 235 steps, Playwright
+recovery test passing locally, phpcs and PHPDoc clean.
+
+---
+
+## [0.6.98] — 2026-09-27
+
+#98: a failed sitting, diagnosed, retried and completed.
+
+### Structured diagnosis (criterion 3)
+Every recorded execution now carries its failure taken apart — phase, answers
+given, question slot, page, error, Moodle error code, exception, file and line —
+plus the worker and the correlation id of the request it was reported in. Tried
+on the real reports from the live installation:
+
+    {"phase":"answering","answers":1,"slot":2,"page":"attempt.php",
+     "error":"Fehler: Division by zero","exception":"DivisionByZeroError",
+     "file":"local/catquiz/classes/local/model/model_raschmodel.php","line":734}
+
+Two things the parsing found about the reports themselves: the worker sends the
+text of Moodle's "more information about this error" link as `errorcode` — it
+is discarded, and a real code in brackets is taken instead — and one form of the
+report carries the page URL **with its session key**, which is now stripped
+before anything is stored.
+
+The worker id comes from the sitting's lease, read before the lease is cleared:
+`job_complete` has no worker parameter, and the history had it empty.
+
+### Every incomplete sitting at once (criteria 6, 7, 9)
+"Try every incomplete test sitting of this run again": failed ones and ones
+stuck on an expired lease go back, ones waiting out a retry delay are brought
+forward. Collected sittings are not touched — a test compares them before and
+after. A sitting that has been put back three times and failed the same way each
+time is left alone and counted: the failure is deterministic, and a bulk action
+must not loop on it. It can still be retried on its own.
+
+### Complete is one rule (criterion 8)
+`run_lifecycle::is_complete()`: every planned sitting collected, none failed,
+none open. The finished card uses it.
+
+### Log links (criterion 10)
+Each entry of a sitting's history links to the log by its correlation id.
+
+### Found by the scenario test
+A requeued sitting in a run whose last sitting had just ended **waited for
+ever**. The run goes to AGGREGATING at that moment, every requeue reopened it
+only from FINISHED or FAILED, and an aggregating run hands out nothing. All
+requeues now go through `reopen_for_work()`, which covers all three.
+
+### The scenario (criterion 11, PHPUnit)
+Three sittings through the real web services: two finish, one fails with the
+live installation's report; the diagnosis is checked field by field; every
+incomplete sitting is retried with the collected ones unchanged; the retry
+finishes; the run is complete; the history still holds the failure, the retry
+and the success. A second test runs four failure cycles and asserts the fourth
+is refused.
+
+PHPUnit 714 tests / 3934 assertions, Behat 32 scenarios / 235 steps, phpcs and
+PHPDoc clean.
+
+---
+
 ## [0.6.97] — 2026-09-27
 
 The engine's longest progress retention — and why it does not help yet.

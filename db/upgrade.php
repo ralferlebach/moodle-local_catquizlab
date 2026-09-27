@@ -529,6 +529,25 @@ function xmldb_local_catquizlab_upgrade($oldversion): bool {
         upgrade_plugin_savepoint(true, 2026092311, 'local', 'catquizlab');
     }
 
+    if ($oldversion < 2026092706) {
+        // The diagnosis of an execution in fields, and the request it came in
+        // on. A failure used to be one line of text: the phase, the page, the
+        // error code and the engine's exception were all in it, and none of
+        // them could be filtered, counted or linked.
+        $table = new xmldb_table('local_catquizlab_attemptlog');
+        $fields = [
+            new xmldb_field('diagnosis', XMLDB_TYPE_TEXT),
+            new xmldb_field('correlationid', XMLDB_TYPE_CHAR, '64'),
+        ];
+        foreach ($fields as $field) {
+            if (!$dbman->field_exists($table, $field)) {
+                $dbman->add_field($table, $field);
+            }
+        }
+
+        upgrade_plugin_savepoint(true, 2026092706, 'local', 'catquizlab');
+    }
+
     return true;
 }
 

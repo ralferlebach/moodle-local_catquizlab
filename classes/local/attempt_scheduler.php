@@ -192,7 +192,6 @@ class attempt_scheduler {
         return $counts;
     }
 
-
     /**
      * Whether there is work a worker could actually pick up right now.
      *
@@ -242,6 +241,8 @@ class attempt_scheduler {
      * @return void
      */
     public static function record_error(int $attemptid, string $error): void {
+        // Never a session key in a stored error; see attempt_history::redact().
+        $error = attempt_history::redact($error);
 
         global $DB;
 

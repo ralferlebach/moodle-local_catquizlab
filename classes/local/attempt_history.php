@@ -81,9 +81,105 @@ class attempt_history {
             // Kept whole: this is the thing somebody reads when a retry did
             // not help, and a truncated stack trace is a stack trace nobody
             // can follow.
-            'detail'          => isset($detail['detail']) ? (string) $detail['detail'] : null,
+            'detail'          => isset($detail['detail']) ? self::redact((string) $detail['detail']) : null,
+            'diagnosis'       => isset($detail['detail']) && $detail['detail'] !== ''
+                ? json_encode(self::diagnose((string) $detail['detail']), JSON_UNESCAPED_SLASHES)
+                : null,
+            'correlationid'   => \core_text::substr(debug_trace::correlation_id(), 0, 64),
             'timecreated'     => time(),
         ]);
+    }
+
+    /**
+     * A reported text without the secrets a page URL can carry.
+     *
+     * The worker reports the URL of the page it was on, and Moodle puts the
+     * session key in some of them. Stored as reported, a session key sat in
+     * the sitting's row, in its history, and on the run page for anybody with
+     * access to it — the interface test found it there after the history had
+     * already been cleaned.
+     *
+     * @param string $text The reported text.
+     * @return string
+     */
+    public static function redact(string $text): string {
+        return (string) preg_replace('/([?&](?:sesskey|wstoken|token)=)[^&\s"\'|]+/i', '$1[redacted]', $text);
+    }
+
+    /**
+     * A reported failure, taken apart into what can be filtered and counted.
+     *
+     * The worker reports one line, built from what the browser saw and what
+     * the server replay found. Every field is optional: whatever the line does
+     * not say is left out rather than guessed.
+     *
+     *     Attempt did not reach the finish page after 1 answer(s).
+     *       url=https://…/mod/adaptivequiz/attempt.php title="Fehler | Client01"
+     *       error="Fehler: Division by zero" errorcode="…"
+     *       | server replay: DivisionByZeroError at local/catquiz/…/model_raschmodel.php:734
+     *
+     * @param string $text The reported failure.
+     * @return array phase, answers, slot, url, page, title, error, errorcode, exception, file, line.
+     */
+    public static function diagnose(string $text): array {
+        $text = self::redact($text);
+        $found = [];
+
+        $nostart = stripos($text, 'No question was presented') !== false
+            || stripos($text, 'attempt never started') !== false;
+        $timeout = stripos($text, 'lease') !== false || stripos($text, 'timed out') !== false
+            || stripos($text, 'timeout') !== false;
+        $server = stripos($text, 'fetch failed') !== false || stripos($text, 'ECONNRESET') !== false
+            || stripos($text, 'HTTP ERROR 500') !== false;
+
+        if ($nostart) {
+            $found['phase'] = 'start';
+            $found['answers'] = 0;
+            $found['slot'] = 1;
+        } else if (preg_match('/did not reach the finish page after (\d+) answer/i', $text, $m)) {
+            // The error came after that many answers, so on the next question.
+            $found['phase'] = 'answering';
+            $found['answers'] = (int) $m[1];
+            $found['slot'] = (int) $m[1] + 1;
+        } else if ($timeout) {
+            $found['phase'] = 'timeout';
+        } else if ($server) {
+            $found['phase'] = 'server';
+        }
+
+        if (preg_match('/url=(\S+)/', $text, $m)) {
+            // Without its session key: this history is kept, and a sesskey in
+            // a stored URL is a credential in a table.
+            $found['url'] = preg_replace('/([?&])(?:sesskey|wstoken|token)=[^&]*&?/i', '$1', rtrim($m[1], ',;|'));
+            $found['url'] = rtrim($found['url'], '?&');
+            $found['page'] = basename((string) parse_url($found['url'], PHP_URL_PATH));
+        }
+        foreach (['title', 'error', 'errorcode'] as $key) {
+            if (preg_match('/' . $key . '="([^"]*)"/', $text, $m)) {
+                $found[$key] = $m[1];
+            }
+        }
+        // The older form of the same report: "… page=Fehler: Division by zero".
+        if (!isset($found['error']) && preg_match('/page=([^|]+)/', $text, $m)) {
+            $found['error'] = trim($m[1]);
+        }
+        // An error code is a code. The worker sometimes reports the text of
+        // Moodle's "more information about this error" link in its place.
+        if (isset($found['errorcode']) && !preg_match('/^[a-z0-9_\/]+$/i', $found['errorcode'])) {
+            unset($found['errorcode']);
+        }
+        // The Moodle error code, where the message names one in brackets.
+        if (!isset($found['errorcode']) && preg_match('/\(([a-z_]+\/[a-z_]+)\)/', $text, $m)) {
+            $found['errorcode'] = $m[1];
+        }
+        // What the server replay located: exception class, file and line.
+        if (preg_match('/([A-Za-z_\\\\]+(?:Error|Exception)) at (\S+?):(\d+)/', $text, $m)) {
+            $found['exception'] = $m[1];
+            $found['file'] = $m[2];
+            $found['line'] = (int) $m[3];
+        }
+
+        return $found;
     }
 
     /**
@@ -110,6 +206,8 @@ class attempt_history {
                 'engineattemptid' => (int) ($row->engineattemptid ?? 0),
                 'runtimems'       => (int) ($row->runtimems ?? 0),
                 'detail'          => (string) ($row->detail ?? ''),
+                'diagnosis'       => json_decode((string) ($row->diagnosis ?? ''), true) ?: [],
+                'correlationid'   => (string) ($row->correlationid ?? ''),
                 'when'            => userdate((int) $row->timecreated),
                 'time'            => (int) $row->timecreated,
             ];
@@ -144,6 +242,35 @@ class attempt_history {
         }
 
         return $counts;
+    }
+
+    /**
+     * How often a sitting has been put back and failed again since.
+     *
+     * A sitting that fails the same way after every retry is deterministic:
+     * trying it again changes nothing. Counted from the history, so the count
+     * survives the retry that clears the sitting's own row.
+     *
+     * @param int $attemptid The sitting.
+     * @return int Retries that were followed by another failure.
+     */
+    public static function futile_retries(int $attemptid): int {
+        $futile = 0;
+        $afterrequeue = false;
+
+        foreach (self::of_attempt($attemptid) as $row) {
+            if ($row['outcome'] === self::REQUEUED) {
+                $afterrequeue = true;
+            } else if ($row['outcome'] === self::FAILED && $afterrequeue) {
+                $futile++;
+                $afterrequeue = false;
+            } else if ($row['outcome'] === self::COLLECTED) {
+                $futile = 0;
+                $afterrequeue = false;
+            }
+        }
+
+        return $futile;
     }
 
     /**

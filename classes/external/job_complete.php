@@ -183,7 +183,9 @@ class job_complete extends external_api {
                 ? \local_catquizlab\local\attempt_history::COLLECTED
                 : \local_catquizlab\local\attempt_history::FAILED,
             [
-                'workerid'        => (string) ($params['workerid'] ?? ''),
+                // The worker is not a parameter of this call; it holds the
+                // lease, which is cleared just below. Read before it goes.
+                'workerid'        => (string) ($attempt->leaseowner ?? ''),
                 'engineattemptid' => (int) ($params['engineattemptid'] ?? 0),
                 'runtimems'       => (int) ($params['runtimems'] ?? 0),
                 'detail'          => (string) ($params['message'] ?? ''),

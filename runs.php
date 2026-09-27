@@ -198,10 +198,7 @@ if ($action === 'requeueattempt' && optional_param('attemptid', 0, PARAM_INT) > 
             'tries' => 0, 'nextruntime' => 0, 'lasterror' => null,
             'leaseowner' => null, 'leaseexpires' => 0, 'timemodified' => time(),
         ]);
-        $runstatus = (int) $DB->get_field('local_catquizlab_run', 'status', ['id' => $attempt->runid]);
-        if (in_array($runstatus, [registry::STATUS_FINISHED, registry::STATUS_FAILED], true)) {
-            $DB->set_field('local_catquizlab_run', 'status', registry::STATUS_READY, ['id' => $attempt->runid]);
-        }
+        \local_catquizlab\local\run_lifecycle::reopen_for_work((int) $attempt->runid);
     }
 
     redirect(
@@ -209,6 +206,25 @@ if ($action === 'requeueattempt' && optional_param('attemptid', 0, PARAM_INT) > 
         get_string('attempt:requeued', $component, $attemptid),
         null,
         \core\output\notification::NOTIFY_SUCCESS
+    );
+}
+
+// Every incomplete sitting of the run (#98): failed, stuck on an expired lease,
+// or waiting out a delay. Collected sittings are never touched, and a sitting
+// that keeps failing the same way is left for a deliberate single retry.
+if ($action === 'requeueincomplete' && $runid > 0) {
+    require_sesskey();
+    require_capability('local/catquizlab:execute', $context);
+
+    $done = \local_catquizlab\local\run_lifecycle::requeue_incomplete($runid);
+
+    redirect(
+        new moodle_url('/local/catquizlab/runs.php', ['runid' => $runid]),
+        get_string('attempt:requeuedincomplete', $component, (object) $done),
+        null,
+        $done['skipped'] > 0
+            ? \core\output\notification::NOTIFY_WARNING
+            : \core\output\notification::NOTIFY_SUCCESS
     );
 }
 
@@ -590,7 +606,12 @@ if ($runid > 0) {
     $show = optional_param('show', 'problems', PARAM_ALPHA);
     $scheduler = \local_catquizlab\local\attempt_scheduler::class;
     $filters = [
-        'problems'   => ['runid = :runid AND (status = :failed OR tries > 1 OR lasterror IS NOT NULL)', []],
+        // Ever failed or put back, read from the history: the sitting's own
+        // row is cleared by the retry, and a filter on that row alone hid the
+        // very sittings whose history the page exists to show.
+        'problems'   => ['runid = :runid AND (status = :failed OR tries > 1 OR lasterror IS NOT NULL'
+            . ' OR id IN (SELECT attemptid FROM {local_catquizlab_attemptlog}'
+            . ' WHERE runid = :logrunid AND outcome IN (:logfailed, :logrequeued)))', []],
         'failed'     => ['runid = :runid AND status = :failed', []],
         'retrydelay' => ['runid = :runid AND status = :queued AND nextruntime > :now', []],
         'running'    => ['runid = :runid AND status = :running', []],
@@ -610,6 +631,9 @@ if ($runid > 0) {
         'running'   => $scheduler::STATUS_RUNNING,
         'collected' => $scheduler::STATUS_COLLECTED,
         'now'       => time(),
+        'logrunid'    => $runid,
+        'logfailed'   => \local_catquizlab\local\attempt_history::FAILED,
+        'logrequeued' => \local_catquizlab\local\attempt_history::REQUEUED,
     ];
     // Only the placeholders each filter uses.
     preg_match_all('/:([a-z]+)/', $filters[$show][0], $used);
@@ -639,6 +663,17 @@ if ($runid > 0) {
     echo html_writer::tag('p', get_string('attempt:diagnosticsexplain', $component), ['class' => 'text-muted']);
     echo html_writer::tag('p', implode(' · ', $choices), ['class' => 'small']);
 
+    echo html_writer::tag(
+        'form',
+        html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'sesskey', 'value' => sesskey()])
+        . html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'action', 'value' => 'requeueincomplete'])
+        . html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'runid', 'value' => $runid])
+        . html_writer::tag('button', get_string('attempt:requeueincomplete', $component), [
+            'type' => 'submit', 'class' => 'btn btn-sm btn-outline-primary mb-2',
+        ]),
+        ['method' => 'post', 'action' => (new moodle_url('/local/catquizlab/runs.php'))->out(false)]
+    );
+
     if ($troubled === []) {
         echo html_writer::tag('p', get_string('attemptfilter:none', $component), ['class' => 'text-muted small']);
     } else {
@@ -658,7 +693,7 @@ if ($runid > 0) {
 
         foreach ($troubled as $row) {
             $history = \local_catquizlab\local\attempt_history::of_attempt((int) $row->id);
-            $error = (string) ($row->lasterror ?? '');
+            $error = \local_catquizlab\local\attempt_history::redact((string) ($row->lasterror ?? ''));
             if ($error === '') {
                 // Cleared by a retry; the history still has it.
                 $error = \local_catquizlab\local\attempt_history::last_failure((int) $row->id);
@@ -666,15 +701,41 @@ if ($runid > 0) {
 
             $lines = '';
             foreach ($history as $entry) {
+                // The diagnosis in its fields where it could be taken apart
+                // (#98); the reported text only where it could not.
+                $facts = [];
+                foreach (['phase', 'slot', 'page', 'errorcode', 'exception', 'error'] as $field) {
+                    if (isset($entry['diagnosis'][$field]) && $entry['diagnosis'][$field] !== '') {
+                        $facts[] = get_string('diagnosis:' . $field, $component) . ': '
+                            . s((string) $entry['diagnosis'][$field]);
+                    }
+                }
+                if (isset($entry['diagnosis']['file'])) {
+                    $facts[] = s($entry['diagnosis']['file'] . ':' . ($entry['diagnosis']['line'] ?? '?'));
+                }
+                $text = $facts !== []
+                    ? implode(' · ', $facts)
+                    : s(\core_text::substr($entry['detail'], 0, 400));
+
+                $link = '';
+                if ($entry['correlationid'] !== '') {
+                    $link = ' ' . html_writer::link(
+                        new moodle_url('/local/catquizlab/logs.php', [
+                            'correlationid' => $entry['correlationid'],
+                            'hours'         => 0,
+                        ]),
+                        get_string('attempt:logofthis', $component)
+                    );
+                }
+
                 $lines .= html_writer::tag(
                     'li',
                     get_string('attempt:historyline', $component, (object) [
                         'try'     => $entry['tryno'],
                         'outcome' => $entry['outcomelabel'],
                         'when'    => $entry['when'],
-                    ]) . ($entry['detail'] !== ''
-                        ? html_writer::tag('div', s(\core_text::substr($entry['detail'], 0, 400)), ['class' => 'text-muted'])
-                        : ''),
+                    ]) . $link
+                    . ($text !== '' ? html_writer::tag('div', $text, ['class' => 'text-muted']) : ''),
                     ['class' => $entry['failed'] ? 'text-danger' : '']
                 );
             }

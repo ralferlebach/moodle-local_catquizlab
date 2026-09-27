@@ -378,6 +378,8 @@
         <FIELD NAME="runtimems" TYPE="int" LENGTH="10" NOTNULL="false" SEQUENCE="false" COMMENT="How long it took."/>
         <FIELD NAME="detail" TYPE="text" NOTNULL="false" SEQUENCE="false" COMMENT="The error or note, as reported."/>
         <FIELD NAME="timecreated" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="false"/>
+        <FIELD NAME="diagnosis" TYPE="text" NOTNULL="false" SEQUENCE="false" COMMENT="The reported error taken apart: phase, url, errorcode, exception, file, line, answers, slot. JSON."/>
+        <FIELD NAME="correlationid" TYPE="char" LENGTH="64" NOTNULL="false" SEQUENCE="false" COMMENT="The request this execution was reported in, to find it in the log."/>
       </FIELDS>
       <KEYS>
         <KEY NAME="primary" TYPE="primary" FIELDS="id"/>

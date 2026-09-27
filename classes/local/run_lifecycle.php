@@ -298,14 +298,128 @@ class run_lifecycle {
         );
 
         // The run has work again, so it may not stay finished.
-        $status = (int) $DB->get_field('local_catquizlab_run', 'status', ['id' => $runid]);
-        if (in_array($status, [registry::STATUS_FINISHED, registry::STATUS_FAILED], true)) {
-            $DB->set_field('local_catquizlab_run', 'status', registry::STATUS_READY, ['id' => $runid]);
-        }
+        self::reopen_for_work($runid);
 
         run_log::record($runid, run_log::RUN_RESUMED, ['requeued' => $failed]);
 
         return $failed;
+    }
+
+    /**
+     * Make a run hand out work again after sittings were put back.
+     *
+     * From every state a run reaches once it has run out of work: finished,
+     * failed — and aggregating, which is where it goes the moment the last
+     * sitting ends. Reopened from that state only, a requeued sitting waited
+     * for ever, because an aggregating run hands out nothing.
+     *
+     * @param int $runid The run.
+     * @return void
+     */
+    public static function reopen_for_work(int $runid): void {
+        global $DB;
+
+        $status = (int) $DB->get_field('local_catquizlab_run', 'status', ['id' => $runid]);
+        if (in_array($status, [registry::STATUS_FINISHED, registry::STATUS_FAILED, registry::STATUS_AGGREGATING], true)) {
+            $DB->set_field('local_catquizlab_run', 'status', registry::STATUS_READY, ['id' => $runid]);
+        }
+    }
+
+    /** @var int Retries after which a sitting that keeps failing is left alone. */
+    public const MAX_FUTILE_RETRIES = 3;
+
+    /**
+     * Put every incomplete sitting of a run back, and leave the finished ones.
+     *
+     * Incomplete means failed, being played on an expired lease, or waiting
+     * out a retry delay. Collected sittings are not touched — their results
+     * are the experiment. A sitting that has already been put back and failed
+     * again three times is left where it is: the failure is deterministic, and
+     * requeueing it would only turn a bulk action into an endless loop. It can
+     * still be retried on its own, deliberately.
+     *
+     * @param int $runid The run.
+     * @return array{requeued: int, released: int, hurried: int, skipped: int}
+     */
+    public static function requeue_incomplete(int $runid): array {
+        global $DB;
+
+        $now = time();
+        $done = ['requeued' => 0, 'released' => 0, 'hurried' => 0, 'skipped' => 0];
+
+        $rows = $DB->get_records_select(
+            'local_catquizlab_attempt',
+            'runid = :runid AND (status = :failed
+                OR (status = :running AND leaseexpires < :now1)
+                OR (status = :queued AND nextruntime > :now2))',
+            [
+                'runid'   => $runid,
+                'failed'  => attempt_scheduler::STATUS_FAILED,
+                'running' => attempt_scheduler::STATUS_RUNNING,
+                'queued'  => attempt_scheduler::STATUS_QUEUED,
+                'now1'    => $now,
+                'now2'    => $now,
+            ],
+            'id ASC',
+            'id, status, lasterror'
+        );
+
+        foreach ($rows as $row) {
+            $status = (int) $row->status;
+
+            if ($status === attempt_scheduler::STATUS_QUEUED) {
+                // Waiting out a delay: brought forward, nothing else changes.
+                $DB->set_field('local_catquizlab_attempt', 'nextruntime', 0, ['id' => $row->id]);
+                $done['hurried']++;
+                continue;
+            }
+
+            if (attempt_history::futile_retries((int) $row->id) >= self::MAX_FUTILE_RETRIES) {
+                $done['skipped']++;
+                continue;
+            }
+
+            attempt_history::record((int) $row->id, attempt_history::REQUEUED, [
+                'detail' => $status === attempt_scheduler::STATUS_RUNNING
+                    ? get_string('attempt:leaseexpired', 'local_catquizlab')
+                    : (string) $row->lasterror,
+            ]);
+            $DB->update_record('local_catquizlab_attempt', (object) [
+                'id' => $row->id,
+                'status' => attempt_scheduler::STATUS_QUEUED,
+                'tries' => 0, 'nextruntime' => 0, 'lasterror' => null,
+                'leaseowner' => null, 'leaseexpires' => 0, 'timemodified' => $now,
+            ]);
+            $done[$status === attempt_scheduler::STATUS_RUNNING ? 'released' : 'requeued']++;
+        }
+
+        if ($done['requeued'] + $done['released'] > 0) {
+            self::reopen_for_work($runid);
+            run_log::record($runid, run_log::RUN_RESUMED, $done);
+        }
+
+        return $done;
+    }
+
+    /**
+     * Whether a run holds every sitting it was planned with.
+     *
+     * The one rule for "complete", used wherever completeness is shown or
+     * decided: every planned sitting collected, none failed, none still open.
+     * A run can be finished — nothing left to play — and still not be
+     * complete; the results say so rather than presenting a smaller sample
+     * as the designed one.
+     *
+     * @param int $runid The run.
+     * @return bool
+     */
+    public static function is_complete(int $runid): bool {
+        $counts = self::attempt_counts($runid);
+
+        return $counts['total'] > 0
+            && $counts['collected'] === $counts['total']
+            && $counts['failed'] === 0
+            && $counts['open'] === 0;
     }
 
     /**
