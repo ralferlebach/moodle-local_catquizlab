@@ -1218,4 +1218,51 @@ final class audit_test extends \advanced_testcase {
         $this->assertSame(2, $outcomes[$history::FAILED]);
         $this->assertSame(1, $outcomes[$history::REQUEUED]);
     }
+
+    /**
+     * The log orders within a second, filters by worker, and keeps what it is told to.
+     *
+     * @return void
+     */
+    public function test_the_log_is_a_troubleshooting_console(): void {
+        global $DB;
+        $this->resetAfterTest();
+        $this->setAdminUser();
+
+        set_config('debuglevel', 'verbose', 'local_catquizlab');
+        $trace = \local_catquizlab\local\debug_trace::class;
+        $view = \local_catquizlab\local\log_view::class;
+
+        $trace::record($trace::WORKER, 'heartbeat', ['workerid' => 'exec-7', 'attemptid' => 4711], 'ok');
+        $trace::record($trace::WORKER, 'job_complete', ['workerid' => 'exec-3', 'attemptid' => 4712], 'error');
+
+        // The ids are columns now, not words inside a JSON blob that only a
+        // text search could find.
+        $row = $DB->get_record('local_catquizlab_debug', ['workerid' => 'exec-3']);
+        $this->assertSame(4712, (int) $row->attemptid);
+        $this->assertGreaterThan((int) $row->timecreated * 1000 - 1, (int) $row->timecreatedms);
+
+        $lines = $view::lines(['hours' => 1, 'channel' => 'worker']);
+        $this->assertCount(2, $lines);
+        // Milliseconds in the stamp, so two entries of one second keep an order.
+        $this->assertMatchesRegularExpression('/\\.\\d{3}$/', $lines[0]['stamp']);
+
+        $this->assertCount(1, $view::lines(['hours' => 1, 'channel' => 'worker', 'workerid' => 'exec-7']));
+        $this->assertCount(1, $view::lines(['hours' => 1, 'channel' => 'worker', 'attemptno' => 4712]));
+
+        // A channel filter is a filter: "worker" does not bring the run
+        // lifecycle along.
+        \local_catquizlab\local\run_log::record(0, 'start_requested');
+        foreach ($view::lines(['hours' => 1, 'channel' => 'worker']) as $line) {
+            $this->assertSame('worker', $line['source']);
+        }
+
+        // Retention is a setting, and zero keeps everything.
+        set_config('logretention', 3 * DAYSECS, 'local_catquizlab');
+        $this->assertSame(3 * DAYSECS, $trace::retention());
+        set_config('logretention', 0, 'local_catquizlab');
+        $this->assertSame(0, $trace::retention());
+        unset_config('logretention', 'local_catquizlab');
+        $this->assertSame($trace::KEEP_SECONDS, $trace::retention());
+    }
 }

@@ -55,6 +55,8 @@ $filter = [
     'attemptno'     => optional_param('attemptno', 0, PARAM_INT),
     'userid'        => optional_param('userid', 0, PARAM_INT),
     'newestfirst'   => optional_param('newestfirst', 0, PARAM_BOOL),
+    'workerid'      => optional_param('workerid', '', PARAM_ALPHANUMEXT),
+    'taskid'        => optional_param('taskid', 0, PARAM_INT),
 ];
 
 // An explicit window wins over "the last N hours": somebody who knows when it
@@ -169,9 +171,15 @@ $fields = [
     'to'            => ['logs:to', 'datetime-local'],
     'logaction'     => ['logs:action', 'text'],
     'correlationid' => ['logs:correlationid', 'text'],
+    'workerid'      => ['logs:workerid', 'text'],
+    'taskid'        => ['logs:taskid', 'number'],
+    'attemptno'     => ['logs:attemptno', 'number'],
 ];
 foreach ($fields as $name => [$label, $type]) {
     $value = $name === 'logaction' ? $filter['action'] : ($filter[$name] ?? '');
+    if (in_array($name, ['taskid', 'attemptno'], true) && (int) $value === 0) {
+        $value = '';
+    }
     echo html_writer::label(get_string($label, $component), 'catquizlab-' . $name, true, ['class' => 'mr-2']);
     echo html_writer::empty_tag('input', [
         'type' => $type, 'name' => $name, 'id' => 'catquizlab-' . $name,

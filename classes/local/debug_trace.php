@@ -280,6 +280,14 @@ class debug_trace {
                 'taskclassname' => self::current_task(),
                 'userid'        => (int) ($USER->id ?? 0),
                 'timecreated' => time(),
+                'timecreatedms' => (int) round(microtime(true) * 1000),
+                // Lifted out of the parameters into columns, so the log can be
+                // filtered by them instead of searched for them.
+                'attemptid'     => isset($params['attemptid']) ? (int) $params['attemptid'] : null,
+                'workerid'      => isset($params['workerid'])
+                    ? \core_text::substr((string) $params['workerid'], 0, 100)
+                    : null,
+                'experimentid'  => isset($params['experimentid']) ? (int) $params['experimentid'] : null,
             ]);
 
             self::trim();
@@ -402,6 +410,21 @@ class debug_trace {
     }
 
     /**
+     * How long log entries are kept, in seconds.
+     *
+     * The site's own setting where one is made; seven days otherwise. Zero
+     * keeps everything, for somebody who is collecting evidence and would
+     * rather manage the space themselves.
+     *
+     * @return int
+     */
+    public static function retention(): int {
+        $setting = get_config('local_catquizlab', 'logretention');
+
+        return $setting === false || $setting === '' ? self::KEEP_SECONDS : max(0, (int) $setting);
+    }
+
+    /**
      * Drop the oldest entries beyond the buffer size.
      *
      * @return void
@@ -412,11 +435,14 @@ class debug_trace {
         // Age as well as count. A quiet installation keeps two thousand entries
         // for months, and a recording of what somebody did in June is not
         // diagnosis — it is a log of colleagues nobody asked for.
-        $DB->delete_records_select(
-            'local_catquizlab_debug',
-            'timecreated < ?',
-            [time() - self::KEEP_SECONDS]
-        );
+        $keep = self::retention();
+        if ($keep > 0) {
+            $DB->delete_records_select(
+                'local_catquizlab_debug',
+                'timecreated < ?',
+                [time() - $keep]
+            );
+        }
 
         $count = $DB->count_records('local_catquizlab_debug');
         if ($count <= self::KEEP) {

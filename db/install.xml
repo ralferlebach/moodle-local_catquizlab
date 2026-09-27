@@ -310,6 +310,7 @@
         <FIELD NAME="taskclassname" TYPE="char" LENGTH="120" NOTNULL="false" SEQUENCE="false" COMMENT="Which task class, so a failure names the thing that failed."/>
         <FIELD NAME="userid" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false" COMMENT="Who caused it, where a person did."/>
         <FIELD NAME="timecreated" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="false"/>
+        <FIELD NAME="timecreatedms" TYPE="int" LENGTH="13" NOTNULL="false" SEQUENCE="false" COMMENT="When, in milliseconds: two entries of one second are ordered by this."/>
       </FIELDS>
       <KEYS>
         <KEY NAME="primary" TYPE="primary" FIELDS="id"/>
@@ -332,6 +333,10 @@
         <FIELD NAME="taskclassname" TYPE="char" LENGTH="120" NOTNULL="false" SEQUENCE="false" COMMENT="The task that was running, where one was."/>
         <FIELD NAME="userid" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
         <FIELD NAME="timecreated" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="false"/>
+        <FIELD NAME="timecreatedms" TYPE="int" LENGTH="13" NOTNULL="false" SEQUENCE="false" COMMENT="When, in milliseconds: two entries of one second are ordered by this."/>
+        <FIELD NAME="attemptid" TYPE="int" LENGTH="10" NOTNULL="false" SEQUENCE="false" COMMENT="The sitting, where the entry is about one."/>
+        <FIELD NAME="workerid" TYPE="char" LENGTH="100" NOTNULL="false" SEQUENCE="false" COMMENT="The worker, where the entry is about one."/>
+        <FIELD NAME="experimentid" TYPE="int" LENGTH="10" NOTNULL="false" SEQUENCE="false" COMMENT="The experiment, where known."/>
       </FIELDS>
       <KEYS>
         <KEY NAME="primary" TYPE="primary" FIELDS="id"/>

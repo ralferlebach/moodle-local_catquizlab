@@ -56,7 +56,9 @@ class log_view {
         // of it wants the end to be the end. Reversible, because somebody
         // watching something happen wants the newest line first.
         usort($lines, static function (array $a, array $b): int {
-            return $a['time'] <=> $b['time'] ?: $a['seq'] <=> $b['seq'];
+            // Milliseconds first: two entries of the same second used to keep
+            // only the order their sources happened to be merged in.
+            return $a['ms'] <=> $b['ms'] ?: $a['seq'] <=> $b['seq'];
         });
 
         $search = trim((string) ($filter['search'] ?? ''));
@@ -144,6 +146,9 @@ class log_view {
                     : ($row->outcome === 'warning' ? self::WARNING : self::DEBUG),
                 'action'        => (string) $row->action,
                 'userid'        => (int) ($row->userid ?? 0),
+                'ms'            => (int) ($row->timecreatedms ?? 0),
+                'workerid'      => (string) ($row->workerid ?? ''),
+                'attemptno'     => (int) ($row->attemptid ?? 0),
             ]);
         }
 
@@ -160,6 +165,13 @@ class log_view {
         global $DB;
 
         if (!$DB->get_manager()->table_exists('local_catquizlab_runlog')) {
+            return [];
+        }
+
+        // Only when asked for, or when no channel is: filtering by "worker"
+        // used to bring the whole run lifecycle along, which is the opposite
+        // of what a channel filter is for.
+        if (!empty($filter['channel']) && $filter['channel'] !== 'lifecycle') {
             return [];
         }
 
@@ -207,6 +219,8 @@ class log_view {
                 'action'        => (string) $row->event,
                 'attemptno'     => (int) ($row->attemptno ?? 0),
                 'userid'        => (int) ($row->userid ?? 0),
+                'ms'            => (int) ($row->timecreatedms ?? 0),
+                'taskid'        => (int) ($row->taskid ?? 0),
             ]);
         }
 
@@ -377,7 +391,11 @@ class log_view {
             'text'   => trim($text),
             // ISO-ish and sortable: a support thread is read by somebody in
             // another timezone as often as not.
-            'stamp'  => userdate($time, '%Y-%m-%d %H:%M:%S'),
+            'stamp'  => userdate($time, '%Y-%m-%d %H:%M:%S')
+                . (isset($meta['ms']) && $meta['ms'] > 0 ? sprintf('.%03d', (int) $meta['ms'] % 1000) : ''),
+            'ms'     => (int) ($meta['ms'] ?? ((int) $time * 1000)),
+            'workerid' => (string) ($meta['workerid'] ?? ''),
+            'taskid'   => (int) ($meta['taskid'] ?? 0),
             'runid'  => (int) ($meta['runid'] ?? 0),
             'correlationid' => (string) ($meta['correlationid'] ?? ''),
             'failed' => !empty($meta['failed']),
@@ -437,6 +455,8 @@ class log_view {
         $attempt = (int) ($filter['attemptno'] ?? 0);
         $userid = (int) ($filter['userid'] ?? 0);
         $until = (int) ($filter['until'] ?? 0);
+        $worker = trim((string) ($filter['workerid'] ?? ''));
+        $task = (int) ($filter['taskid'] ?? 0);
 
         return array_values(array_filter($lines, static function (array $line) use (
             $severity,
@@ -444,7 +464,9 @@ class log_view {
             $correlation,
             $attempt,
             $userid,
-            $until
+            $until,
+            $worker,
+            $task
         ): bool {
             if ($severity !== '' && !self::at_least((string) $line['severity'], $severity)) {
                 return false;
@@ -462,6 +484,12 @@ class log_view {
                 return false;
             }
             if ($until > 0 && (int) $line['time'] > $until) {
+                return false;
+            }
+            if ($worker !== '' && stripos((string) $line['workerid'], $worker) === false) {
+                return false;
+            }
+            if ($task > 0 && (int) $line['taskid'] !== $task) {
                 return false;
             }
 

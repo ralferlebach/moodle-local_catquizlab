@@ -496,6 +496,39 @@ function xmldb_local_catquizlab_upgrade($oldversion): bool {
         upgrade_plugin_savepoint(true, 2026092310, 'local', 'catquizlab');
     }
 
+    if ($oldversion < 2026092311) {
+        // What the log filters need to be more than free text: millisecond
+        // time, so two entries of the same second keep their order, and the
+        // sitting, worker and experiment an entry is about, as columns rather
+        // than as words inside a JSON blob that only a text search could find.
+        $debug = new xmldb_table('local_catquizlab_debug');
+        $fields = [
+            new xmldb_field('timecreatedms', XMLDB_TYPE_INTEGER, '13'),
+            new xmldb_field('attemptid', XMLDB_TYPE_INTEGER, '10'),
+            new xmldb_field('workerid', XMLDB_TYPE_CHAR, '100'),
+            new xmldb_field('experimentid', XMLDB_TYPE_INTEGER, '10'),
+        ];
+        foreach ($fields as $field) {
+            if (!$dbman->field_exists($debug, $field)) {
+                $dbman->add_field($debug, $field);
+            }
+        }
+        foreach (['workerid' => ['workerid'], 'attemptid' => ['attemptid']] as $name => $fields) {
+            $index = new xmldb_index($name, XMLDB_INDEX_NOTUNIQUE, $fields);
+            if (!$dbman->index_exists($debug, $index)) {
+                $dbman->add_index($debug, $index);
+            }
+        }
+
+        $runlog = new xmldb_table('local_catquizlab_runlog');
+        $field = new xmldb_field('timecreatedms', XMLDB_TYPE_INTEGER, '13');
+        if (!$dbman->field_exists($runlog, $field)) {
+            $dbman->add_field($runlog, $field);
+        }
+
+        upgrade_plugin_savepoint(true, 2026092311, 'local', 'catquizlab');
+    }
+
     return true;
 }
 

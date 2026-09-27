@@ -53,6 +53,8 @@ class pipeline_tick extends \core\task\scheduled_task {
      * @return void
      */
     public function execute(): void {
+        global $DB;
+
         // Announce which task this is, and continue the id of the click that
         // queued it: a failure inside a task otherwise reads as a failure from
         // nowhere.
@@ -65,6 +67,14 @@ class pipeline_tick extends \core\task\scheduled_task {
         // which is the one thing a switch must not do.
         if (!get_config('local_catquizlab', 'enabled')) {
             return;
+        }
+
+        // Old lifecycle entries go by the same retention as the debug log. They
+        // were kept for ever: a year of runs is a table nobody reads and every
+        // log page has to filter through.
+        $keep = \local_catquizlab\local\debug_trace::retention();
+        if ($keep > 0) {
+            $DB->delete_records_select('local_catquizlab_runlog', 'timecreated < ?', [time() - $keep]);
         }
 
         // The execution queue moves here, because this is the thing that runs

@@ -142,6 +142,7 @@ class run_log {
                 'taskid'        => debug_trace::task_meta()['taskid'],
                 'userid'        => (int) ($USER->id ?? 0),
                 'timecreated'   => time(),
+                'timecreatedms' => (int) round(microtime(true) * 1000),
             ]);
         } catch (\Throwable $e) {
             return 0;

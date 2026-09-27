@@ -6,6 +6,42 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.6.92] — 2026-09-23
+
+#90: what the log could not do because the data did not allow it.
+
+0.6.82 said plainly that millisecond timestamps and worker or task filters
+needed schema changes rather than filters. They are made.
+
+**Milliseconds.** The debug and lifecycle tables gain `timecreatedms`, and the
+merged log sorts by it. Two entries of the same second used to keep only the
+order their sources happened to be merged in; a heartbeat and the failure it
+preceded could appear the wrong way round.
+
+    2026-09-26 23:23:36.501  heartbeat      exec-7
+    2026-09-26 23:23:36.506  job_complete   exec-3  error
+    2026-09-26 23:23:36.511  heartbeat      exec-7
+
+**Structured ids.** The debug table gains `attemptid`, `workerid` and
+`experimentid` as indexed columns, lifted from the parameters every entry
+already carried. A worker or a sitting was findable before only as words inside
+a JSON blob, by free-text search. The log page filters by worker, task id and
+sitting.
+
+**Retention.** A site setting, seven days by default, zero to keep everything.
+It governs the debug log, as the fixed seven days did, and now the run
+lifecycle too, which was kept forever — a year of runs is a table nobody reads
+and every log page has to filter through.
+
+**A channel filter that filtered.** Choosing "worker" also showed the whole run
+lifecycle; the lifecycle source ignored the channel. It answers only to
+"lifecycle" or to no channel at all.
+
+PHPUnit 703 tests / 3846 assertions, Behat 32 scenarios / 235 steps, phpcs and
+PHPDoc clean.
+
+---
+
 ## [0.6.91] — 2026-09-23
 
 Audit section 7: what was tried on a sitting, kept.
