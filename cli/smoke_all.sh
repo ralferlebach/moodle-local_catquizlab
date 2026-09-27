@@ -10,7 +10,12 @@
 set -u
 
 MOODLE="${MOODLE_ROOT:-/home/claude/moodle}"
-STRATEGIES="${STRATEGIES:-classic allsubs balanced fastest relsubs}"
+# Whatever the installed engine can play, asked of the engine, unless the
+# caller names a list. A fixed list with "balanced" in it failed the job for a
+# strategy this engine has no class for.
+if [ -z "${STRATEGIES:-}" ]; then
+    STRATEGIES="$(php "${MOODLE_ROOT:-/home/claude/moodle}/local/catquizlab/cli/smoke.php" --list-strategies 2>/dev/null | tr '\n' ' ')"
+fi
 PERSONS="${PERSONS:-1}"
 MINUTES="${MINUTES:-3}"
 OUT="${OUT:-/tmp/catquizlab-smoke}"

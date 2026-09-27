@@ -6,6 +6,94 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.6.94] — 2026-09-27
+
+Issues #97 and #98, checked criterion by criterion against GitHub.
+
+### #97 — the strategy catalogue follows the engine
+- Validated against `\local_catquiz\teststrategy\info::return_available_strategies(true)`,
+  the engine's own API, rather than a scan of its classes. It also leaves out
+  strategies an administrator has switched off, which a class scan cannot know.
+- The menu offers only the strategies the engine can play. 0.6.85 kept the
+  other two in the menu with a note; the issue asks for them not to be offered,
+  and it is right: a choice that can only fail is not a choice.
+- A stored definition naming `balanced` or `pilot` — from before this was
+  checked, or from another installation — fails validation with the reason,
+  for the chosen strategy and for every level of a swept one.
+
+Measured on catquiz 1.2.1: the engine reports 1, 3, 4, 5, 7, 8; the menu offers
+fastest, allsubs, lowestsub, highestsub, classic, relsubs.
+
+### #98 — filters and a way into the log
+- The run's sitting table filters by what is wrong: needed attention, failed,
+  waiting out a retry delay, being played, lease expired, waiting, without an
+  engine attempt, collected without a trace.
+- Each sitting's number links to the execution log, filtered to that run and
+  that sitting.
+
+### Still open on these issues
+#97: pilot questions modelled separately from selection strategies; one
+catalogue verified across import, manifest, filter and export.
+#98: structured exception fields (errorcode, phase, URL, slot) instead of the
+reported text; a bulk retry of *all* incomplete sittings rather than failed
+ones; the completeness rule `collected == planned && failed == 0 && open == 0`
+as a tested invariant; the Playwright path error → diagnosis → retry → success.
+
+PHPUnit 704 tests / 3854 assertions, Behat 32 scenarios / 235 steps, phpcs and
+PHPDoc clean, all 1290 string identifiers present in both languages.
+
+---
+
+## [0.6.93] — 2026-09-27
+
+catquiz 1.2.1 and the worker CI.
+
+### The engine changed under the collector
+catquiz 1.2.1 on `ALiSe-v-1.2.0-legacy` (2026092612) dropped
+`local_catquiz_attemptscale`. This plugin never touched that table — the break
+was indirect. In 1.2.1 `debug_info` is empty, and the progress row is deleted
+when an attempt ends; those were the two sources of the step count and the
+ability path. Sittings were played and collected with fifteen items, a step
+count of zero and an empty path, and the smoke test refused them with
+"answered fewer than 15 questions (shortest: 0)".
+
+The engine now keeps the path in `graphicalsummary_data`: one entry per
+question with `personability_after`. The collector reads it where the old
+sources are empty and gives it the shape the old path had — step, and a
+scale → ability map — so the test-flow view and the export read it unchanged.
+Measured: fifteen steps, ability from −0.40 after the first question to −1.86
+after the last.
+
+The step count now falls back in order of trust: the engine's summary, its
+debug step count, and last the items read back from the question usage, which
+exist whatever the engine version because they are Moodle's own record of what
+was asked.
+
+### The worker CI
+- It cloned `main` (9 September) while the live installation runs
+  `ALiSe-v-1.2.0-legacy`. Both workflows clone that branch now, overridable
+  through `CATQUIZ_BRANCH`.
+- The engine's two hub subplugins are git submodules. A plain clone leaves
+  their directories empty and Moodle fails on a plugin without a `version.php`.
+  The workflows clone with `--recurse-submodules`.
+- `smoke_all.sh` carried a fixed list with `balanced` in it, which this engine
+  has no class for; readiness refused it, correctly, and the job failed. The
+  list is now asked of the engine: `smoke.php --list-strategies`.
+
+Against the legacy engine:
+
+    fastest PASS   allsubs PASS   lowestsub PASS
+    highestsub PASS   classic PASS   relsubs PASS
+
+A regression test builds an engine row the way 1.2.1 writes it — no
+debug_info, no progress row, a per-question summary — and asserts the path and
+the step count come from it.
+
+PHPUnit 704 tests / 3852 assertions, Behat 32 scenarios / 235 steps, phpcs and
+PHPDoc clean, both workflows parse.
+
+---
+
 ## [0.6.92] — 2026-09-23
 
 #90: what the log could not do because the data did not allow it.

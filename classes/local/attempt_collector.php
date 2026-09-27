@@ -167,6 +167,19 @@ class attempt_collector {
         // ships a delete() for it — so the lab keeps its own copy rather than
         // depending on someone else's retention decision.
         $trace['progress'] = self::read_progress((int) $attempt->engineattemptid);
+
+        // The engine's own per-question summary, where debug_info no longer
+        // carries the path. From catquiz 1.2.1 (2026092612) on, debug_info is
+        // empty and the progress row is deleted when the attempt ends — so a
+        // sitting was collected with its fifteen items and a step count of
+        // zero. The summary has one entry per question with the ability after
+        // it, which is the path.
+        $summary = self::read_summary((int) $attempt->engineattemptid);
+        if ($trace['abilitypath'] === [] && $summary !== []) {
+            $trace['abilitypath'] = $summary;
+        }
+        $trace['summarysteps'] = count($summary);
+
         $trace['steps'] = self::step_series($trace, $debug);
 
         $DB->update_record('local_catquizlab_attempt', (object) [
@@ -325,7 +338,66 @@ class attempt_collector {
         $progress = (array) ($trace['progress'] ?? []);
         $played = (array) ($progress['playedquestions'] ?? []);
 
-        return $played !== [] ? count($played) : (int) ($debug['steps'] ?? 0);
+        if ($played !== []) {
+            return count($played);
+        }
+
+        // The sources in the order they are trustworthy, the first that has an
+        // answer winning: the engine's per-question summary, its debug step
+        // count, and last the items actually read back from the question usage
+        // — which exist whatever the engine version, because they are Moodle's
+        // own record of what was asked.
+        $candidates = [
+            (int) ($trace['summarysteps'] ?? 0),
+            (int) ($debug['steps'] ?? 0),
+            count((array) ($trace['items'] ?? [])),
+        ];
+        foreach ($candidates as $candidate) {
+            if ($candidate > 0) {
+                return $candidate;
+            }
+        }
+
+        return 0;
+    }
+
+    /**
+     * The ability after each question, from the engine's attempt summary.
+     *
+     * @param int $engineattemptid The adaptivequiz attempt.
+     * @return array[] One entry per question: questionid, scaleid, ability.
+     */
+    protected static function read_summary(int $engineattemptid): array {
+        global $DB;
+
+        if ($engineattemptid <= 0) {
+            return [];
+        }
+
+        $json = $DB->get_field('local_catquiz_attempts', 'json', ['attemptid' => $engineattemptid]);
+        $decoded = json_decode((string) $json, true);
+        $rows = (array) ($decoded['graphicalsummary_data'] ?? []);
+
+        // The same shape the debug_info path had — step, and a scale => ability
+        // map — so everything that reads the path (the test-flow view, the
+        // export) reads this one without knowing which engine wrote it. The
+        // summary gives the ability of the question's own scale; that is the
+        // map's one entry.
+        $path = [];
+        foreach (array_values($rows) as $index => $row) {
+            if (!is_array($row) || !array_key_exists('personability_after', $row)) {
+                continue;
+            }
+            $scaleid = (int) ($row['questionscale'] ?? 0);
+            $path[] = [
+                'step'       => $index + 1,
+                'abilities'  => [$scaleid => (float) $row['personability_after']],
+                'questionid' => (int) ($row['id'] ?? 0),
+                'response'   => isset($row['lastresponse']) ? (float) $row['lastresponse'] : null,
+            ];
+        }
+
+        return $path;
     }
 
     /**

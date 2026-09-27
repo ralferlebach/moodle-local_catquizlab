@@ -283,17 +283,14 @@ class strategy_catalog {
     public static function menu(): array {
         $menu = [];
         foreach (self::keys() as $key) {
-            $label = self::CATALOG[$key]['label'];
-
-            // Offered, but named as what it is. Removing it silently would
-            // leave somebody wondering where a strategy went; choosing it
-            // unmarked let them build an experiment whose every sitting then
-            // failed on the engine side.
-            if (!self::runnable($key)) {
-                $label .= ' — ' . get_string('strategy:notinengine', 'local_catquizlab');
+            // Only what the installed engine can play (#97). A strategy it has
+            // no class for is not a choice: choosing it built an experiment
+            // whose every sitting then failed on the engine side. A stored
+            // definition that names one is refused by validation, with the
+            // reason, rather than silently changed.
+            if (self::runnable($key)) {
+                $menu[$key] = self::CATALOG[$key]['label'];
             }
-
-            $menu[$key] = $label;
         }
         return $menu;
     }
@@ -340,6 +337,27 @@ class strategy_catalog {
         $ids = [];
         if (!environment::engine_available()) {
             return $ids;
+        }
+
+        // The engine's own answer where it gives one: it also leaves out
+        // strategies an administrator has switched off, which a scan of the
+        // classes cannot know.
+        $api = '\\local_catquiz\\teststrategy\\info';
+        $hasapi = class_exists($api) && method_exists($api, 'return_available_strategies');
+        if ($hasapi) {
+            try {
+                foreach ((array) \local_catquiz\teststrategy\info::return_available_strategies(true) as $strategy) {
+                    if (is_object($strategy) && isset($strategy->id)) {
+                        $ids[] = (int) $strategy->id;
+                    }
+                }
+                if ($ids !== []) {
+                    return $ids = array_values(array_unique($ids));
+                }
+            } catch (\Throwable $ignored) {
+                // Fall back to reading the classes, as the engine itself does.
+                $ids = [];
+            }
         }
 
         $classes = \core_component::get_component_classes_in_namespace(

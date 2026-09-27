@@ -917,13 +917,10 @@ final class audit_test extends \advanced_testcase {
                 $key . ' is described incorrectly'
             );
 
-            // Every key the engine cannot play is marked in the menu and
-            // refused by readiness.
+            // Every key the engine cannot play is left out of the menu (#97:
+            // offer only what the engine can run) and refused by readiness.
             if (!$catalog::runnable($key)) {
-                $this->assertStringContainsString(
-                    get_string('strategy:notinengine', 'local_catquizlab'),
-                    $catalog::menu()[$key]
-                );
+                $this->assertArrayNotHasKey($key, $catalog::menu(), $key . ' is still offered');
 
                 $check = new \ReflectionMethod(\local_catquizlab\local\cat_readiness::class, 'check_strategy');
                 $check->setAccessible(true);
@@ -1264,5 +1261,59 @@ final class audit_test extends \advanced_testcase {
         $this->assertSame(0, $trace::retention());
         unset_config('logretention', 'local_catquizlab');
         $this->assertSame($trace::KEEP_SECONDS, $trace::retention());
+    }
+
+    /**
+     * A sitting is read back from catquiz 1.2.1, which writes no debug_info.
+     *
+     * @return void
+     */
+    public function test_the_collector_reads_the_engine_summary(): void {
+        $this->resetAfterTest();
+
+        // What catquiz 1.2.1 (ALiSe-v-1.2.0-legacy, 2026092612) stores: no
+        // debug_info, no progress row once the attempt is over, and a
+        // per-question summary with the ability after each question.
+        $summary = [];
+        foreach ([[-0.40, 0], [-0.73, 0], [-1.06, 0], [-1.86, 1]] as $index => [$ability, $response]) {
+            $summary[] = [
+                'id' => (string) (6458 + $index), 'slot' => (string) ($index + 1),
+                'questionscale' => '836', 'lastresponse' => $response,
+                'personability_after' => $ability,
+            ];
+        }
+
+        $read = new \ReflectionMethod(\local_catquizlab\local\attempt_collector::class, 'read_summary');
+        $read->setAccessible(true);
+
+        global $DB;
+        $DB->insert_record('local_catquiz_attempts', (object) [
+            'userid' => 2, 'scaleid' => 836, 'contextid' => 1, 'courseid' => 1, 'attemptid' => 9001,
+            'component' => 'mod_adaptivequiz', 'instanceid' => 1, 'teststrategy' => 1, 'status' => 0,
+            'total_number_of_testitems' => 4, 'number_of_testitems_used' => 4,
+            'personability_before_attempt' => 0, 'personability_after_attempt' => -1.86,
+            'starttime' => time(), 'endtime' => time(),
+            'json' => json_encode(['graphicalsummary_data' => $summary]),
+            'debug_info' => null, 'timecreated' => time(), 'timemodified' => time(),
+        ]);
+
+        $path = $read->invoke(null, 9001);
+
+        // Four points, in the shape the debug_info path had, so everything
+        // that reads the path reads this one unchanged.
+        $this->assertCount(4, $path);
+        $this->assertSame(1, $path[0]['step']);
+        $this->assertSame([836 => -0.40], $path[0]['abilities']);
+        $this->assertSame([836 => -1.86], $path[3]['abilities']);
+
+        // The step count comes from it: a sitting of four questions used to be
+        // collected with its items and a step count of zero.
+        $steps = new \ReflectionMethod(\local_catquizlab\local\attempt_collector::class, 'step_series');
+        $steps->setAccessible(true);
+        $this->assertSame(4, $steps->invoke(null, ['summarysteps' => 4, 'items' => [1, 2, 3, 4]], []));
+
+        // And with no summary at all, the items read back from the question
+        // usage still say how many questions there were.
+        $this->assertSame(3, $steps->invoke(null, ['items' => [1, 2, 3]], []));
     }
 }

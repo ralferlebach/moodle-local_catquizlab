@@ -585,23 +585,63 @@ if ($runid > 0) {
     // One row per sitting that did not simply work: what was tried, by which
     // worker, how it ended, and what to do about it. Only the interesting
     // ones — a run of a thousand collected sittings has nothing to say here.
+    // Which sittings, by what is wrong with them (#98). "problems" is the
+    // default: failed, retried, or with an error on record.
+    $show = optional_param('show', 'problems', PARAM_ALPHA);
+    $scheduler = \local_catquizlab\local\attempt_scheduler::class;
+    $filters = [
+        'problems'   => ['runid = :runid AND (status = :failed OR tries > 1 OR lasterror IS NOT NULL)', []],
+        'failed'     => ['runid = :runid AND status = :failed', []],
+        'retrydelay' => ['runid = :runid AND status = :queued AND nextruntime > :now', []],
+        'running'    => ['runid = :runid AND status = :running', []],
+        'stale'      => ['runid = :runid AND status = :running AND leaseexpires < :now', []],
+        'queued'     => ['runid = :runid AND status = :queued', []],
+        'noengine'   => ['runid = :runid AND status IN (:collected, :failed)'
+            . ' AND (engineattemptid IS NULL OR engineattemptid = 0)', []],
+        'notrace'    => ['runid = :runid AND status = :collected AND tracejson IS NULL', []],
+    ];
+    if (!isset($filters[$show])) {
+        $show = 'problems';
+    }
+    $filterparams = [
+        'runid'     => $runid,
+        'failed'    => $scheduler::STATUS_FAILED,
+        'queued'    => $scheduler::STATUS_QUEUED,
+        'running'   => $scheduler::STATUS_RUNNING,
+        'collected' => $scheduler::STATUS_COLLECTED,
+        'now'       => time(),
+    ];
+    // Only the placeholders each filter uses.
+    preg_match_all('/:([a-z]+)/', $filters[$show][0], $used);
+    $filterparams = array_intersect_key($filterparams, array_flip($used[1]));
+
+    $choices = [];
+    foreach (array_keys($filters) as $key) {
+        $choices[] = $key === $show
+            ? html_writer::tag('strong', get_string('attemptfilter:' . $key, $component))
+            : html_writer::link(
+                new moodle_url('/local/catquizlab/runs.php', ['runid' => $runid, 'show' => $key]),
+                get_string('attemptfilter:' . $key, $component)
+            );
+    }
+
     $troubled = $DB->get_records_select(
         'local_catquizlab_attempt',
-        'runid = :runid AND (status = :failed OR tries > 1 OR lasterror IS NOT NULL)',
-        [
-            'runid'  => $runid,
-            'failed' => \local_catquizlab\local\attempt_scheduler::STATUS_FAILED,
-        ],
+        $filters[$show][0],
+        $filterparams,
         'id ASC',
         'id, personid, status, tries, engineattemptid, leaseowner, lasterror, timemodified',
         0,
         200
     );
 
-    if ($troubled !== []) {
-        echo $OUTPUT->heading(get_string('attempt:diagnostics', $component), 4);
-        echo html_writer::tag('p', get_string('attempt:diagnosticsexplain', $component), ['class' => 'text-muted']);
+    echo $OUTPUT->heading(get_string('attempt:diagnostics', $component), 4);
+    echo html_writer::tag('p', get_string('attempt:diagnosticsexplain', $component), ['class' => 'text-muted']);
+    echo html_writer::tag('p', implode(' · ', $choices), ['class' => 'small']);
 
+    if ($troubled === []) {
+        echo html_writer::tag('p', get_string('attemptfilter:none', $component), ['class' => 'text-muted small']);
+    } else {
         $attempttable = new html_table();
         $attempttable->attributes['class'] = 'generaltable table-sm';
         $attempttable->head = [
@@ -653,8 +693,16 @@ if ($runid > 0) {
                 );
             }
 
+            // Straight into the log, filtered to this sitting (#98): one click
+            // from "this failed" to everything that was recorded about it.
+            $logurl = new moodle_url('/local/catquizlab/logs.php', [
+                'runid'     => $runid,
+                'attemptno' => (int) $row->id,
+                'hours'     => 0,
+            ]);
+
             $attempttable->data[] = [
-                $row->id,
+                html_writer::link($logurl, $row->id, ['title' => get_string('attempt:openlog', $component)]),
                 $row->personid,
                 \local_catquizlab\local\attempt_scheduler::status_label((int) $row->status),
                 $row->tries,

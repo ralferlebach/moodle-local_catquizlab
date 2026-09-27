@@ -56,6 +56,7 @@ use local_catquizlab\local\worker_registry;
     'minutes'  => 5,
     'minanswers' => 15,
     'keep'     => false,
+    'list-strategies' => false,
 ], ['h' => 'help']);
 
 if ($options['help']) {
@@ -106,6 +107,19 @@ $minanswers = max(2, (int) $options['minanswers']);
 function step(string $line, float $since = 0.0): void {
     $suffix = $since > 0 ? sprintf(' (%.1fs)', microtime(true) - $since) : '';
     cli_writeln('  ' . $line . $suffix);
+}
+
+// The strategies the installed engine can actually play, one per line. The
+// runner used to carry a fixed list with "balanced" in it, which this fork of
+// the engine has no class for: readiness refused it, correctly, and the job
+// failed for a strategy nobody could have run.
+if (!empty($options['list-strategies'])) {
+    foreach (\local_catquizlab\local\strategy_catalog::keys() as $key) {
+        if (\local_catquizlab\local\strategy_catalog::runnable($key)) {
+            cli_writeln($key);
+        }
+    }
+    exit(0);
 }
 
 cli_heading('CatQuizLab smoke test: ' . $strategy);

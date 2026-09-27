@@ -282,6 +282,15 @@ class experiment_definition {
     protected static function validate_strategy(array $def, array &$errors): void {
         self::require_enum($def, 'strategy', strategy_catalog::keys(), $errors);
 
+        // A known key the installed engine cannot play is refused by name. A
+        // definition from before this was checked — or from an installation
+        // with another engine — names "balanced" or "pilot", and it gets the
+        // reason rather than a run that fails every sitting (#97).
+        $named = [];
+        if (is_string($def['strategy'] ?? null)) {
+            $named[] = $def['strategy'];
+        }
+
         // A sweep may vary the strategy; every level has to be a known key too.
         $levels = $def['sweep']['factors']['strategy'] ?? null;
         if (is_array($levels)) {
@@ -291,6 +300,22 @@ class experiment_definition {
                         . implode('|', strategy_catalog::keys()));
                     break;
                 }
+                $named[] = $level;
+            }
+        }
+
+        // Only where an engine is there to ask: without one, nothing can run
+        // anyway, and definitions still have to be editable and portable.
+        if (!environment::engine_available()) {
+            return;
+        }
+
+        foreach (array_unique($named) as $key) {
+            if (strategy_catalog::has($key) && !strategy_catalog::runnable($key)) {
+                $errors[] = get_string('readiness:strategynotinengine', 'local_catquizlab', (object) [
+                    'label' => strategy_catalog::label($key),
+                    'id'    => strategy_catalog::engine_id($key),
+                ]);
             }
         }
     }

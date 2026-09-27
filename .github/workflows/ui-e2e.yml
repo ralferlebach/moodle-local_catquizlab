@@ -66,7 +66,15 @@ jobs:
 
       - name: Check out the CAT engine and its host activity
         run: |
-          git clone --depth 1 https://github.com/ralferlebach/moodle-local_catquiz.git \
+          # The branch the live installation runs, not main: catquiz 1.2.1 on
+          # ALiSe-v-1.2.0-legacy dropped local_catquiz_attemptscale and stopped
+          # writing debug_info, and a CI testing against main tested an engine
+          # nobody uses. Its two hub subplugins are git submodules; a plain
+          # clone leaves their directories empty, and Moodle then fails on a
+          # plugin without a version.php.
+          git clone --depth 1 --recurse-submodules --shallow-submodules \
+              -b "${CATQUIZ_BRANCH:-ALiSe-v-1.2.0-legacy}" \
+              https://github.com/ralferlebach/moodle-local_catquiz.git \
               moodle/local/catquiz
           git clone --depth 1 https://github.com/ralferlebach/moodle-mod_adaptivequiz.git \
               moodle/mod/adaptivequiz
