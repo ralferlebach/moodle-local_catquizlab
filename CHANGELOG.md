@@ -6,6 +6,93 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.6.97] — 2026-09-27
+
+The engine's longest progress retention — and why it does not help yet.
+
+### Correction to 0.6.93
+0.6.93 said catquiz 1.2.1 empties `debug_info` and deletes the progress row
+when an attempt ends. Both are defaults, not the engine's design:
+`store_debug_info` is off unless switched on, and `progressretention` is
+`minimal` (issue #56, data minimisation). The `trace` level exists precisely so
+an ability path can be rebuilt without `store_debug_info`.
+
+### What this release does
+- **The setup sets the engine to `trace` with unlimited retention** (0 days).
+  Site-wide, because the engine asks the site level when it records —
+  `set_ability()` calls `should_trace()` without a test level — and a test's own
+  level is capped by the site's. It is a step of its own in the preparation
+  checklist, so an installation that discards the path does not report ready.
+- **Every provisioned test asks for `trace`** in its own settings too.
+- **The collector reads the engine's `abilitytrace` first**: every scale's
+  estimate after every answer, turned into the same step → abilities shape the
+  debug_info path had. It had been read from the progress row and thrown away,
+  because it was not in the list of keys kept.
+- **The collector looks the progress row up by the CAT attempt**
+  (`local_catquiz_attempts.id`), which is what `local_catquiz_progress.attemptid`
+  holds in 1.2.1, and no longer by the activity's attempt id.
+
+### Found on the way: the engine does not persist progress at all
+Measured with `trace` set and a sitting played to the end: no progress row, no
+trace. The reason is not retention. The CAT attempts are stored with
+`component = 'adaptivequiz'`; `progress::save()` resolves its CAT attempt with
+`get_cat_attempt_id($attemptid, 'mod_adaptivequiz')`, finds none, keeps
+`catattemptid` null, and therefore only ever caches the progress — the database
+branch is never reached. The one progress row on the test installation has
+`attemptid = 0`.
+
+This is in `local_catquiz`, not here, and is reported rather than patched. Until
+it is fixed, the collector falls back to the attempt summary
+(`graphicalsummary_data`), which is complete for steps and gives each step the
+ability of the question's own scale.
+
+PHPUnit 711 tests / 3903 assertions, Behat 32 scenarios / 235 steps, phpcs and
+PHPDoc clean.
+
+---
+
+## [0.6.96] — 2026-09-27
+
+#99's two open points, as tests the CI runs on every push.
+
+### The message on a real exhaustion
+0.6.95 said the shutdown message was the right mechanism but had not been
+seen to work under a real out-of-memory error. It has now, and on every CI run.
+
+`resource_guard` is the handler, with its classification free of Moodle calls
+so that it can run in a process that is already dying. `resource_guard_test`
+starts a child PHP process with a 16 MB limit that loads the real class, grows
+until PHP stops it, and reads what it wrote:
+
+    PHP Fatal error:  Allowed memory size of 16777216 bytes exhausted
+    <div class="alert alert-danger mt-3">… limit=16M</div>
+
+The texts are resolved while there is memory to resolve them; at shutdown there
+is only the small reserve PHP keeps.
+
+### The subscale export under load
+The scale test now builds a real scale map — three categories of four
+subscales — and people whose profiles name them, and counts the subscale rows
+the CSV export actually writes: **exactly twelve per sitting plus a header**,
+600 001 lines at fifty thousand sittings, within the same memory and time
+budget. That also proves the fix to 0.6.79's empty subscale export.
+
+### What it found
+Run on its own the test passed; in the full suite twelve rows were missing —
+one sitting's subscales. `results_query::detail()` cached the last sitting by
+its id alone, and PHPUnit resets id sequences between tests: a sitting of this
+test got the profile of a sitting from the test before. In a single request
+that cannot happen, but a cache that answers for the wrong record is worse
+than none. It is keyed by sitting and person, and cleared when a stream begins.
+
+Both tests run in the existing PHPUnit jobs, on PostgreSQL and MariaDB, whose
+drivers buffer differently — which is what the memory budget is about.
+
+PHPUnit 709 tests / 3894 assertions, Behat 32 scenarios / 235 steps, phpcs and
+PHPDoc clean.
+
+---
+
 ## [0.6.95] — 2026-09-27
 
 #99: the evaluation at the size of a real experiment.

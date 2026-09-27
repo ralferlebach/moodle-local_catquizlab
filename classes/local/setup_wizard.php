@@ -210,6 +210,22 @@ class setup_wizard {
             $changed = true;
         }
 
+        // The engine's longest progress retention. Since catquiz 1.2.1 the
+        // default is "minimal": the progress row is deleted when an attempt
+        // ends, and debug_info is written only when store_debug_info is on —
+        // so a sitting was collected with its items and no path. "trace"
+        // records every scale's estimate after every answer, which is what an
+        // experiment reads; zero days keeps it until somebody removes it.
+        //
+        // Site-wide on purpose: the engine asks the site level when it
+        // records (set_ability() calls should_trace() without a test level),
+        // and a test's own level is capped by the site's.
+        if (self::engine_retention_available() && !self::engine_keeps_trace()) {
+            set_config('progressretention', 'trace', 'local_catquiz');
+            set_config('progressretentiondays', 0, 'local_catquiz');
+            $changed = true;
+        }
+
         // The PHP binary the scheduler uses to spawn tasks. Detected and
         // stored here, so the setup does it rather than leaving it as the one
         // amber line a person has to go and find a settings page for.
@@ -559,6 +575,12 @@ class setup_wizard {
                 get_string('wizard:task', $component),
                 $task !== false && !$task->get_disabled()
             ),
+            // The path of every sitting, kept by the engine (catquiz 1.2.1+).
+            self::step(
+                'enginetrace',
+                get_string('wizard:enginetrace', $component),
+                self::engine_keeps_trace()
+            ),
             // The switch the pipeline needs to start a worker. It was checked
             // nowhere, so an installation could pass every step here and still
             // never play a sitting — "stalled", with nothing saying why.
@@ -579,6 +601,29 @@ class setup_wizard {
                 self::php_cli_detail($php, $component)
             ),
         ], get_string('wizard:pipelinehint', $component));
+    }
+
+    /**
+     * Whether the installed engine has progress retention at all.
+     *
+     * @return bool
+     */
+    public static function engine_retention_available(): bool {
+        return class_exists('\\local_catquiz\\local\\progress_retention');
+    }
+
+    /**
+     * Whether the engine records the path and keeps it without a time limit.
+     *
+     * @return bool True too where the engine predates retention: it kept everything.
+     */
+    public static function engine_keeps_trace(): bool {
+        if (!self::engine_retention_available()) {
+            return true;
+        }
+
+        return \local_catquiz\local\progress_retention::site_level() === 'trace'
+            && \local_catquiz\local\progress_retention::retention_days() === 0;
     }
 
     /**

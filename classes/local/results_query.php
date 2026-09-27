@@ -55,8 +55,8 @@ class results_query {
     /** @var array The active filter. */
     protected array $filter;
 
-    /** @var int The attempt whose detail is cached. */
-    protected static int $detailfor = 0;
+    /** @var string The sitting and person whose detail is cached. */
+    protected static string $detailfor = '';
 
     /** @var array The cached detail of that attempt. */
     protected static array $detail = [];
@@ -240,6 +240,9 @@ class results_query {
      */
     public function each_observation(): \Generator {
         global $DB;
+
+        self::$detailfor = '';
+        self::$detail = [];
 
         $runs = $this->runs();
         if ($runs === []) {
@@ -542,8 +545,13 @@ class results_query {
     public static function detail(array $observation): array {
         global $DB;
 
+        // Keyed by sitting and person together, and forgotten whenever a new
+        // stream begins. Keyed by the sitting alone, a cache from an earlier
+        // selection answered for a later sitting that happened to reuse the
+        // id — twelve subscale rows went missing in a test run that way.
         $attemptid = (int) ($observation['attemptid'] ?? 0);
-        if ($attemptid > 0 && $attemptid === self::$detailfor) {
+        $key = $attemptid . ':' . (int) ($observation['personid'] ?? 0);
+        if ($attemptid > 0 && $key === self::$detailfor) {
             return self::$detail;
         }
 
@@ -560,7 +568,7 @@ class results_query {
             $profile = json_decode((string) $json, true) ?: [];
         }
 
-        self::$detailfor = $attemptid;
+        self::$detailfor = $key;
 
         return self::$detail = ['profile' => $profile, 'trace' => $trace];
     }

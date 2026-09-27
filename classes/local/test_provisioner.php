@@ -142,6 +142,9 @@ class test_provisioner {
             'catquiz_firstquestionreuseexistingdata' => '1',
             'catquiz_includetimelimit'               => '0',
             'catquiz_pp_min_inc'                     => $options['pp_min_inc'] ?? 0.01,
+            // The engine's step-by-step path for this test (catquiz 1.2.1+),
+            // capped by the site level, which the setup sets to the same.
+            'catquiz_progressretention'              => 'trace',
             'maxquestionsgroup'                      => [
                 'catquiz_minquestions' => (int) ($options['minquestions'] ?? 10),
                 'catquiz_maxquestions' => (int) ($options['maxquestions'] ?? 15),

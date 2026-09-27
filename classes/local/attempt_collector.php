@@ -175,10 +175,19 @@ class attempt_collector {
         // zero. The summary has one entry per question with the ability after
         // it, which is the path.
         $summary = self::read_summary((int) $attempt->engineattemptid);
+
+        // Richest first. The progress trace (progressretention = trace) holds
+        // every scale's estimate after every answer; debug_info holds the
+        // same when store_debug_info is on; the attempt summary holds only the
+        // scale of each question.
+        $progresspath = self::path_from_progress_trace((array) ($trace['progress']['abilitytrace'] ?? []));
+        if ($trace['abilitypath'] === [] && $progresspath !== []) {
+            $trace['abilitypath'] = $progresspath;
+        }
         if ($trace['abilitypath'] === [] && $summary !== []) {
             $trace['abilitypath'] = $summary;
         }
-        $trace['summarysteps'] = count($summary);
+        $trace['summarysteps'] = max(count($summary), count($progresspath));
 
         $trace['steps'] = self::step_series($trace, $debug);
 
@@ -295,9 +304,22 @@ class attempt_collector {
             return [];
         }
 
-        $record = $DB->get_records(
+        // Keyed by the CAT attempt, not the activity's attempt: since catquiz
+        // 1.2.1 local_catquiz_progress.attemptid is local_catquiz_attempts.id.
+        // Looked up without a component filter, because the engine writes
+        // "adaptivequiz" there while its own progress lookup asks for
+        // "mod_adaptivequiz" — which is also why, as of 1.2.1, the engine
+        // never persists the progress row at all (reported upstream).
+        $catattemptid = (int) $DB->get_field_sql(
+            'SELECT MAX(id) FROM {local_catquiz_attempts} WHERE attemptid = :attemptid',
+            ['attemptid' => $engineattemptid]
+        );
+        $keys = array_values(array_filter([$catattemptid, $engineattemptid]));
+        [$insql, $params] = $DB->get_in_or_equal($keys, SQL_PARAMS_NAMED, 'att');
+        $record = $DB->get_records_select(
             'local_catquiz_progress',
-            ['attemptid' => $engineattemptid],
+            'attemptid ' . $insql,
+            $params,
             'id DESC',
             '*',
             0,
@@ -318,6 +340,10 @@ class attempt_collector {
             'playedquestions', 'playedquestionsbyscale', 'activescales',
             'droppedscales', 'lockedscales', 'responses', 'abilities',
             'preattemptabilities', 'starttime',
+            // The step-by-step path, written by catquiz 1.2.1 when
+            // progressretention is "trace". Without this key in the list the
+            // richest source the engine offers was read and thrown away.
+            'abilitytrace',
         ];
 
         return array_intersect_key($decoded, array_flip($keep));
@@ -359,6 +385,41 @@ class attempt_collector {
         }
 
         return 0;
+    }
+
+    /**
+     * The ability path from the engine's progress trace.
+     *
+     * catquiz 1.2.1 records, with progressretention = trace, a list per scale
+     * of {step, ability}. Turned round into one entry per step with every
+     * scale's ability at that step — the shape the debug_info path had.
+     *
+     * @param array $abilitytrace Scale id => list of {step, ability}.
+     * @return array[]
+     */
+    protected static function path_from_progress_trace(array $abilitytrace): array {
+        $bystep = [];
+        foreach ($abilitytrace as $scaleid => $entries) {
+            foreach ((array) $entries as $entry) {
+                $entry = (array) $entry;
+                if (!isset($entry['step'], $entry['ability'])) {
+                    continue;
+                }
+                $bystep[(int) $entry['step']][(int) $scaleid] = (float) $entry['ability'];
+            }
+        }
+        ksort($bystep);
+
+        $path = [];
+        foreach ($bystep as $step => $abilities) {
+            if ($step <= 0) {
+                continue;
+            }
+            ksort($abilities);
+            $path[] = ['step' => $step, 'abilities' => $abilities];
+        }
+
+        return $path;
     }
 
     /**

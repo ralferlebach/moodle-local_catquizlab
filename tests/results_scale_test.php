@@ -73,10 +73,39 @@ final class results_scale_test extends \advanced_testcase {
         $run = $generator->create_run();
         $DB->set_field('local_catquizlab_run', 'status', registry::STATUS_FINISHED, ['id' => $run->id]);
 
+        // A real scale map — three categories of four subscales — and people
+        // whose profiles name them. Without it the subscale export produces
+        // nothing and a benchmark of it measures nothing.
+        $scales = [];
+        foreach ([1, 2, 3] as $category) {
+            foreach ([1, 2, 3, 4] as $subscale) {
+                $catscaleid = 1000 + $category * 10 + $subscale;
+                $DB->insert_record('local_catquizlab_scalemap', (object) [
+                    'runid' => $run->id, 'level' => \local_catquizlab\local\scale_provisioner::LEVEL_SUBSCALE,
+                    'catscaleid' => $catscaleid, 'parentcatscaleid' => 1000 + $category,
+                    'contextid' => 1, 'nodekey' => 'c' . $category . 's' . $subscale, 'generation' => 1,
+                    'categoryindex' => $category, 'subscaleindex' => $subscale, 'timecreated' => time(),
+                ]);
+                $scales[$catscaleid] = [$category, $subscale];
+            }
+        }
+
+        $profile = ['global' => 0.1, 'categories' => []];
+        foreach ([1, 2, 3] as $category) {
+            $subscales = [];
+            foreach ([1, 2, 3, 4] as $subscale) {
+                $subscales[] = ['index' => $subscale, 'theta' => 0.1 * $subscale];
+            }
+            $profile['categories'][] = ['index' => $category, 'subscales' => $subscales];
+        }
+
         $persons = [];
         for ($i = 0; $i < 50; $i++) {
-            $persons[] = (int) $generator->create_person(['runid' => $run->id])->id;
+            $person = $generator->create_person(['runid' => $run->id]);
+            $DB->set_field('local_catquizlab_person', 'profilejson', json_encode($profile), ['id' => $person->id]);
+            $persons[] = (int) $person->id;
         }
+        $scaleabilities = array_fill_keys(array_keys($scales), 0.1);
 
         // Sittings of thirty-five items and twelve subscales each: the item
         // and subscale levels multiply by those, which is where memory went.
@@ -90,7 +119,7 @@ final class results_scale_test extends \advanced_testcase {
                 'tracejson' => json_encode([
                     'finaltheta' => sin($i), 'finalse' => 0.3 + ($i % 7) / 100, 'items' => $items,
                     'nitems' => 35, 'steps' => 35, 'stopreason' => 'se',
-                    'scaleabilities' => array_fill(0, 12, 0.1),
+                    'scaleabilities' => $scaleabilities,
                 ]),
             ];
             if (count($rows) === 2500) {
@@ -114,6 +143,24 @@ final class results_scale_test extends \advanced_testcase {
             },
             'export sizes' => function () use ($filter): void {
                 results_export::row_count(new results_query($filter), results_export::LEVEL_ITEM);
+            },
+            'subscale sizes' => function () use ($filter): void {
+                $count = results_export::row_count(new results_query($filter), results_export::LEVEL_SUBSCALE);
+                // Twelve subscales per sitting, all of them in the map.
+                $this->assertGreaterThan(0, $count, 'the subscale level produced no rows');
+            },
+            'subscale csv' => function () use ($filter, $n): void {
+                // Lines counted as they pass, then discarded: the export must
+                // actually produce subscale rows. Since 0.6.79 it had silently
+                // produced none, because the rows lacked profile and trace.
+                $lines = 0;
+                ob_start(static function (string $chunk) use (&$lines): string {
+                    $lines += substr_count($chunk, "\n");
+                    return '';
+                }, 8192);
+                results_export::stream(new results_query($filter), results_export::LEVEL_SUBSCALE, 'csv');
+                ob_end_clean();
+                $this->assertSame(12 * $n + 1, $lines, 'twelve subscale rows per sitting and a header');
             },
             'csv download' => function () use ($filter): void {
                 // Discarded as it is written, as a browser would take it.

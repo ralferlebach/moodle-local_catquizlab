@@ -1316,4 +1316,57 @@ final class audit_test extends \advanced_testcase {
         // usage still say how many questions there were.
         $this->assertSame(3, $steps->invoke(null, ['items' => [1, 2, 3]], []));
     }
+
+    /**
+     * The engine's progress trace becomes the ability path, every scale per step.
+     *
+     * @return void
+     */
+    public function test_the_progress_trace_is_read_as_the_path(): void {
+        $this->resetAfterTest();
+
+        // What catquiz 1.2.1 writes with progressretention = trace: per scale,
+        // a list of {step, ability}. Richer than the attempt summary, which
+        // holds only the scale of the question just asked.
+        $abilitytrace = [
+            836 => [['step' => 1, 'ability' => -0.40], ['step' => 2, 'ability' => -0.73]],
+            834 => [['step' => 1, 'ability' => 0.10], ['step' => 2, 'ability' => 0.25]],
+        ];
+
+        $read = new \ReflectionMethod(\local_catquizlab\local\attempt_collector::class, 'path_from_progress_trace');
+        $read->setAccessible(true);
+        $path = $read->invoke(null, $abilitytrace);
+
+        $this->assertCount(2, $path);
+        $this->assertSame(1, $path[0]['step']);
+        $this->assertSame([834 => 0.10, 836 => -0.40], $path[0]['abilities']);
+        $this->assertSame([834 => 0.25, 836 => -0.73], $path[1]['abilities']);
+
+        // Nothing recorded, nothing invented.
+        $this->assertSame([], $read->invoke(null, []));
+    }
+
+    /**
+     * The setup sets the engine to its longest progress retention.
+     *
+     * @return void
+     */
+    public function test_the_setup_keeps_the_engine_trace(): void {
+        $this->resetAfterTest();
+        $this->setAdminUser();
+
+        if (!\local_catquizlab\local\setup_wizard::engine_retention_available()) {
+            $this->markTestSkipped('The installed engine predates progress retention.');
+        }
+
+        set_config('progressretention', 'minimal', 'local_catquiz');
+        set_config('progressretentiondays', 30, 'local_catquiz');
+        $this->assertFalse(\local_catquizlab\local\setup_wizard::engine_keeps_trace());
+
+        \local_catquizlab\local\setup_wizard::run(true);
+
+        $this->assertSame('trace', get_config('local_catquiz', 'progressretention'));
+        $this->assertSame(0, (int) get_config('local_catquiz', 'progressretentiondays'));
+        $this->assertTrue(\local_catquizlab\local\setup_wizard::engine_keeps_trace());
+    }
 }

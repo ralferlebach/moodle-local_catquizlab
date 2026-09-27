@@ -1277,6 +1277,7 @@ $string['wizard:cron'] = 'Cron has run recently';
 $string['wizard:engine'] = '1. System requirements';
 $string['wizard:enginehint'] = 'These plugins are installed by an administrator; this page cannot install them.';
 $string['wizard:engineneeded'] = 'The CAT engine is not installed. Nothing else can be set up until it is.';
+$string['wizard:enginetrace'] = 'The CAT engine keeps each sitting\'s ability path (progress retention "trace", no time limit)';
 $string['wizard:environment'] = '2. Experiment environment';
 $string['wizard:heading'] = 'Setup and readiness';
 $string['wizard:masterswitch'] = 'Plugin enabled';
