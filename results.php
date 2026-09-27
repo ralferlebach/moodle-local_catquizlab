@@ -122,6 +122,30 @@ if ($action === 'csv' || $action === 'json') {
     results_export::stream($query, $level, $format);
     die();
 }
+// If a resource limit is hit anyway — a time limit on a slow database, memory
+// on a server configured below Moodle's own minimum — the page stops wherever
+// it is. Mid-output that is a page with its tabs and nothing below them, which
+// is what was reported. A fatal error is not catchable, but it does reach the
+// shutdown handlers, and one of them can say what happened (#99).
+core_shutdown_manager::register_function(static function () use ($component): void {
+    $error = error_get_last();
+    if (!$error || !in_array($error['type'], [E_ERROR, E_CORE_ERROR], true)) {
+        return;
+    }
+    $message = (string) $error['message'];
+    $memory = stripos($message, 'Allowed memory size') !== false;
+    $time = stripos($message, 'Maximum execution time') !== false;
+    if (!$memory && !$time) {
+        return;
+    }
+    echo html_writer::div(
+        get_string($memory ? 'results:outofmemory' : 'results:outoftime', $component, (object) [
+            'limit' => $memory ? ini_get('memory_limit') : ini_get('max_execution_time'),
+        ]),
+        'alert alert-danger mt-3'
+    );
+});
+
 // Counted before anything is read. A selection this large is declined with a
 // number and a way forward, rather than rendered until the memory runs out —
 // which looks like a page that simply stops after the tabs.

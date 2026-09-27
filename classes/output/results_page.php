@@ -28,6 +28,7 @@ use local_catquizlab\local\local_analysis;
 use local_catquizlab\local\metrics;
 use local_catquizlab\local\results_export;
 use local_catquizlab\local\results_query;
+use local_catquizlab\local\stream_summary;
 use local_catquizlab\local\robustness_analysis;
 use local_catquizlab\local\test_flow;
 use local_catquizlab\local\run_registry;
@@ -43,6 +44,11 @@ use local_catquizlab\local\run_registry;
  * a confidence the data does not support.
  */
 class results_page {
+    /** @var int The most points a scatter chart draws. */
+    public const MAX_POINTS = 2000;
+
+    /** @var array|null Exposure already computed from a streamed pass. */
+    protected ?array $exposureoverride = null;
     /** @var results_query The data source. */
     protected results_query $query;
 
@@ -347,33 +353,28 @@ class results_page {
      */
     protected function render_overview(): string {
         $component = 'local_catquizlab';
-        $rows = $this->query->observations();
-        if ($rows === []) {
-            // An empty string here left the reader with filter controls above
-            // nothing, which reads as a broken page rather than as "there is
-            // nothing yet" — and those need different responses.
+
+        // One streamed pass into per-group summaries: the sittings, their
+        // item lists and their rows are never held, whatever the selection's
+        // size (#99). The figures are the ones the row-based tables gave.
+        $overview = $this->query->overview(self::MAX_POINTS);
+        if ($overview['n'] === 0) {
             return $this->render_no_data();
         }
 
-        $out = \html_writer::tag('h3', get_string('results:globalgroup', $component), ['class' => 'h5']);
-        $out .= $this->render_kpi_cards($rows);
+        $all = $overview['all'];
+        $exposure = metrics::exposure_from_counts($overview['itemcounts'], $overview['n'], $this->query->pool_size());
 
-        // Test length against precision: how much testing the achieved
-        // precision cost. One point is one attempt.
+        $out = \html_writer::tag('h3', get_string('results:globalgroup', $component), ['class' => 'h5']);
+        $out .= $this->render_summary_cards($all, $exposure);
+
         $chart = new scatter_chart(
             get_string('chart:lengthvsse', $component),
             get_string('axis:testlength', $component),
             get_string('axis:finalse', $component)
         );
-        $points = [];
-        foreach ($rows as $row) {
-            if ($row['se'] !== null) {
-                $points[] = ['x' => $row['nitems'], 'y' => $row['se']];
-            }
-        }
-        $chart->set_points($points)
+        $chart->set_points($overview['points'])
             ->set_description(get_string('chart:pointisattempt', $component));
-
         $semin = $this->target_se();
         if ($semin !== null) {
             $chart->add_horizontal_line($semin, get_string('chart:setarget', $component, format_float($semin, 2)));
@@ -381,23 +382,137 @@ class results_page {
 
         $out .= \html_writer::tag('h3', get_string('chart:lengthvsse', $component), ['class' => 'h5 mt-4']);
         $out .= $chart->render_with_summary([
-            get_string('metric:testlength', $component) => $this->format_stat(
-                results_query::summarise($rows, 'nitems')
-            ),
-            get_string('metric:se', $component) => $this->format_stat(
-                results_query::summarise($rows, 'se')
-            ),
+            get_string('metric:testlength', $component) => $this->format_stat($all->describe('nitems')),
+            get_string('metric:se', $component) => $this->format_stat($all->describe('se')),
         ]);
 
-        // The strategy comparison, one metric at a time: RMSE and test length
-        // do not belong on a shared y axis.
         $out .= \html_writer::tag('h3', get_string('chart:strategycomparison', $component), ['class' => 'h5 mt-4']);
-        $out .= $this->render_group_table($rows, 'strategy');
+        $out .= $this->render_summary_group_table($overview['strategy'], 'strategy');
 
         $out .= \html_writer::tag('h3', get_string('results:celltable', $component), ['class' => 'h5 mt-4']);
-        $out .= $this->render_cell_table($rows);
+        $out .= $this->render_summary_cell_table($overview['cell']);
 
         return $out;
+    }
+
+    /**
+     * The overview's key figures from a streamed summary.
+     *
+     * @param stream_summary $all The whole selection.
+     * @param array $exposure Exposure statistics.
+     * @return string
+     */
+    protected function render_summary_cards(stream_summary $all, array $exposure): string {
+        $component = 'local_catquizlab';
+        $cards = [
+            ['metric:testlength', $this->format_stat($all->describe('nitems'))],
+            ['metric:se', $this->format_stat($all->describe('se'))],
+            ['metric:bias', $this->format_stat($all->describe('error'))],
+            ['metric:rmse', format_float($all->rmse(), 4)],
+            ['metric:correlation', $this->format_number($all->correlation())],
+            ['metric:stopsuccess', format_float($all->stop_rate(), 1) . '&nbsp;%'],
+            ['metric:concentration', $this->format_number($exposure['concentration']['gini'] ?? null)],
+            ['metric:runtime', $this->format_runtime($all->describe('runtimems'))],
+        ];
+
+        $out = \html_writer::start_div('row');
+        foreach ($cards as [$key, $value]) {
+            $out .= \html_writer::div(
+                \html_writer::div(
+                    \html_writer::tag('div', get_string($key, $component), ['class' => 'small text-muted'])
+                    . \html_writer::tag('div', $value, ['class' => 'h5 mb-0'])
+                    . \html_writer::tag('div', get_string($key . '_help', $component), ['class' => 'small text-muted mt-1']),
+                    'card-body p-3'
+                ),
+                'col-md-3 mb-3'
+            );
+        }
+
+        return $out . \html_writer::end_div();
+    }
+
+    /**
+     * One row per group, from streamed summaries.
+     *
+     * @param stream_summary[] $groups Group key => summary.
+     * @param string $groupby The grouping, for its label.
+     * @return string
+     */
+    protected function render_summary_group_table(array $groups, string $groupby): string {
+        $component = 'local_catquizlab';
+        $table = new \html_table();
+        $table->attributes['class'] = 'generaltable table-sm';
+        $table->head = [
+            get_string('form:' . $groupby, $component),
+            get_string('report:runs', $component),
+            get_string('metric:testlength', $component),
+            get_string('metric:se', $component),
+            get_string('metric:bias', $component),
+            get_string('metric:rmse', $component),
+            get_string('metric:stopsuccess', $component),
+        ];
+        foreach ($groups as $key => $summary) {
+            $table->data[] = [
+                s(run_registry::group_label($groupby, (string) $key)),
+                $summary->count(),
+                $this->format_stat($summary->describe('nitems')),
+                $this->format_stat($summary->describe('se')),
+                $this->format_stat($summary->describe('error')),
+                format_float($summary->rmse(), 4),
+                format_float($summary->stop_rate(), 1) . '&nbsp;%',
+            ];
+        }
+
+        return \html_writer::table($table);
+    }
+
+    /**
+     * One row per experimental cell, from streamed summaries.
+     *
+     * @param stream_summary[] $cells Cell key => summary.
+     * @return string
+     */
+    protected function render_summary_cell_table(array $cells): string {
+        $component = 'local_catquizlab';
+        $table = new \html_table();
+        $table->attributes['class'] = 'generaltable table-sm';
+        $table->head = [
+            get_string('form:tier', $component),
+            get_string('form:strategy', $component),
+            get_string('form:model', $component),
+            get_string('form:variant', $component),
+            get_string('form:stratum', $component),
+            get_string('form:severity', $component),
+            'n',
+            get_string('metric:testlength', $component),
+            get_string('metric:se', $component),
+            get_string('metric:bias', $component),
+            get_string('metric:rmse', $component),
+            get_string('metric:correlation', $component),
+            get_string('metric:stopsuccess', $component),
+            get_string('metric:runtime', $component),
+        ];
+        foreach ($cells as $key => $summary) {
+            [$tier, $strategy, $model, $variant, $stratum, $severity] = explode('|', (string) $key);
+            $table->data[] = [
+                s(run_registry::group_label('tier', $tier)),
+                s(run_registry::group_label('strategy', $strategy)),
+                s(run_registry::group_label('model', $model)),
+                s(run_registry::group_label('variant', $variant)),
+                s(run_registry::group_label('stratum', $stratum)),
+                s(run_registry::group_label('severity', $severity)),
+                $summary->count(),
+                $this->format_stat($summary->describe('nitems')),
+                $this->format_stat($summary->describe('se')),
+                $this->format_stat($summary->describe('error')),
+                format_float($summary->rmse(), 4),
+                $this->format_number($summary->correlation()),
+                format_float($summary->stop_rate(), 1) . '&nbsp;%',
+                $this->format_runtime($summary->describe('runtimems')),
+            ];
+        }
+
+        return \html_writer::table($table);
     }
 
     /**
@@ -509,16 +624,26 @@ class results_page {
         $out .= \html_writer::tag('p', get_string('results:rawexplain', $component), ['class' => 'text-muted']);
         $out .= $this->render_level_picker($level, 'rawdata');
 
-        $dataset = results_export::dataset($this->query, $level);
-        if ($dataset['rows'] === []) {
+        // One page read from a stream, the rest counted in passing. The whole
+        // dataset used to be built so that a hundred rows could be cut out of
+        // it — at the item level, fifty thousand sittings of thirty-five items
+        // each, to show a hundred (#99).
+        $dataset = results_export::iterate($this->query, $level);
+        $first = max(0, $page) * $perpage;
+        $slice = [];
+        $total = 0;
+        foreach ($dataset['rows'] as $row) {
+            if ($total >= $first && count($slice) < $perpage) {
+                $slice[] = $row;
+            }
+            $total++;
+        }
+        if ($total === 0) {
             return $out . \html_writer::div(
                 get_string('results:noobservations', $component),
                 'alert alert-info'
             );
         }
-
-        $total = count($dataset['rows']);
-        $slice = array_slice($dataset['rows'], max(0, $page) * $perpage, $perpage);
 
         $table = new \html_table();
         $table->attributes['class'] = 'generaltable table-sm';
@@ -1390,7 +1515,7 @@ class results_page {
     protected function render_kpi_cards(array $rows): string {
         $component = 'local_catquizlab';
         $recovery = metrics::ability_recovery($rows);
-        $exposure = $this->query->exposure();
+        $exposure = $this->exposureoverride ?? $this->query->exposure();
         $stopped = 0;
         foreach ($rows as $row) {
             if ($row['stopreached']) {

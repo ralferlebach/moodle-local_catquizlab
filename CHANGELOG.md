@@ -6,6 +6,61 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.6.95] — 2026-09-27
+
+#99: the evaluation at the size of a real experiment.
+
+Measured with fifty thousand sittings of thirty-five items and twelve subscales,
+each page in its own process:
+
+                  before              after
+    overview      174 MB              59 MB
+    raw data      built the export    28 MB   (the same at 9 000)
+    export tab    154 MB              24 MB
+    CSV           the export twice    32 MB
+    JSON          186 MB              54 MB   (most of it the test holding the output)
+
+### What held the memory
+- **The observations**, all of them, for every tab. `results_query` now yields
+  them one at a time (`each_observation()`), reading run by run and in batches
+  of five hundred: a single recordset over everything is not a stream, because
+  the database drivers buffer it.
+- **A person cache with every profile.** The rows read two fields of a person;
+  the cache held the three-kilobyte profile of every person of every run. It
+  holds the two fields now, per run.
+- **The overview's tables.** Grouped by strategy and by cell, each group a copy
+  of its rows, each quantile a sorted copy of those. `stream_summary` keeps a
+  group's numbers packed as eight-byte floats and its running sums for bias,
+  RMSE and correlation; medians and quartiles come from the same function as
+  before, so the figures do not change.
+- **The scatter chart** drew a point per sitting. It draws a reservoir sample of
+  two thousand; the summary beside it is computed from every sitting.
+- **Provenance and metadata** materialised the selection to count it.
+
+The raw data view reads one page from the stream and counts the rest in passing.
+The export tab counts rows by count query or by stream. Downloads write rows as
+they are produced.
+
+### A regression of mine, found on the way
+Since 0.6.79 the subscale rows were built from observations that no longer carry
+the profile and the trace, so the **subscale tab and the subscale export were
+empty on real data**. They fetch both per observation again.
+
+### When a limit is hit anyway
+A fatal error is not catchable, but it reaches the shutdown handlers. The
+results page says what happened — memory or time, the limit, and what to do —
+instead of stopping after its tabs.
+
+### Criteria as tests
+`results_scale_test` builds nine thousand and fifty thousand sittings and fails if
+the overview, the raw data, the export sizes or the CSV download exceeds its
+memory or time budget, measured from a reset peak. Both pass in fifteen seconds.
+
+PHPUnit 706 tests / 3871 assertions, Behat 32 scenarios / 235 steps, phpcs and
+PHPDoc clean.
+
+---
+
 ## [0.6.94] — 2026-09-27
 
 Issues #97 and #98, checked criterion by criterion against GitHub.

@@ -112,23 +112,37 @@ class local_analysis {
     /**
      * Per-subscale observations across a set of attempts.
      *
-     * @param array $observations Rows from {@see results_query::observations()}.
+     * @param iterable $observations Rows, or a stream of rows, from {@see results_query::each_observation()}.
      * @param array $scalemaps Run id => engine scale id => "category:subscale".
      * @return array[] All subscale observations.
      */
-    public static function rows(array $observations, array $scalemaps): array {
-        $rows = [];
+    public static function rows(iterable $observations, array $scalemaps): array {
+        return iterator_to_array(self::each_row($observations, $scalemaps), false);
+    }
+
+    /**
+     * The subscale observations, one at a time.
+     *
+     * The profile and the trace are fetched per observation: since 0.6.79
+     * they are not part of the observation row, and passing the row on its
+     * own gave every sitting an empty profile — the subscale tab and the
+     * subscale export were empty on real data from then until this.
+     *
+     * @param iterable $observations Rows or a stream of rows.
+     * @param array $scalemaps Run id => engine scale id => "category:subscale".
+     * @return \Generator<array>
+     */
+    public static function each_row(iterable $observations, array $scalemaps): \Generator {
         foreach ($observations as $observation) {
             $map = $scalemaps[$observation['runid']] ?? [];
             if ($map === []) {
                 continue;
             }
-            foreach (self::subscale_rows($observation, $map) as $row) {
-                $rows[] = $row;
+            $full = $observation + results_query::detail($observation);
+            foreach (self::subscale_rows($full, $map) as $row) {
+                yield $row;
             }
         }
-
-        return $rows;
     }
 
     /**

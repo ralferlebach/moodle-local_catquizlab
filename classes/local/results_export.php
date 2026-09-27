@@ -79,7 +79,8 @@ class results_export {
      * @return int
      */
     public static function row_count(results_query $query, string $level): int {
-        $observations = $query->observations();
+        // Counted from the stream, never from a materialised selection.
+        $observations = $query->each_observation();
 
         switch ($level) {
             case self::LEVEL_RUN:
@@ -91,7 +92,7 @@ class results_export {
                 return count($runs);
 
             case self::LEVEL_ATTEMPT:
-                return count($observations);
+                return (int) $query->size_check()['count'];
 
             case self::LEVEL_SUBSCALE:
             case self::LEVEL_ITEM:
@@ -102,16 +103,64 @@ class results_export {
                 foreach ($observations as $row) {
                     $total += $level === self::LEVEL_ITEM
                         ? count((array) ($row['items'] ?? []))
-                        : 0;
+                        : (int) ($row['nscales'] ?? 0);
                 }
 
-                // Subscale rows need the trace, which observations no longer
-                // carry; where the count cannot be known cheaply, say so
-                // rather than building megabytes to find out.
-                return $level === self::LEVEL_ITEM ? $total : -1;
+                // Subscale rows are one per subscale a sitting reports on,
+                // which each observation now carries as a count.
+                return $total;
 
             default:
                 return 0;
+        }
+    }
+
+    /**
+     * An export's columns and a stream of its rows.
+     *
+     * The same rows as {@see dataset()}, yielded one at a time for the two
+     * levels that grow with the number of sittings. The download and the raw
+     * data view read this; nothing then holds the export in memory.
+     *
+     * @param results_query $query The selection.
+     * @param string $level One of the LEVEL_ constants.
+     * @return array{columns: string[], rows: iterable}
+     */
+    public static function iterate(results_query $query, string $level): array {
+        switch ($level) {
+            case self::LEVEL_ATTEMPT:
+                return ['columns' => self::ATTEMPT_COLUMNS, 'rows' => self::attempt_rows($query->each_observation())];
+            case self::LEVEL_SUBSCALE:
+                return self::subscales($query, true);
+            default:
+                return self::dataset($query, $level);
+        }
+    }
+
+    /** @var string[] The columns of the sitting-level export. */
+    public const ATTEMPT_COLUMNS = [
+        'attemptid', 'runid', 'personid', 'twinid', 'replication', 'tier',
+        'strategy', 'model', 'variant', 'strength', 'stratum', 'severity',
+        'truetheta', 'esttheta', 'error', 'nitems', 'se', 'stopreason',
+        'stopreached', 'runtimems',
+    ];
+
+    /**
+     * Sitting-level export rows from observations.
+     *
+     * @param iterable $observations Rows or a stream of rows.
+     * @return \Generator<array>
+     */
+    protected static function attempt_rows(iterable $observations): \Generator {
+        foreach ($observations as $observation) {
+            $row = [];
+            foreach (self::ATTEMPT_COLUMNS as $column) {
+                $value = $observation[$column] ?? null;
+                // Booleans are written as 0 and 1: a statistics package reads
+                // those, and "true"/"" would silently become a factor level.
+                $row[$column] = is_bool($value) ? (int) $value : $value;
+            }
+            yield $row;
         }
     }
 
@@ -202,28 +251,20 @@ class results_export {
             'stopreached', 'runtimems',
         ];
 
-        $rows = [];
-        foreach ($query->observations() as $observation) {
-            $row = [];
-            foreach ($columns as $column) {
-                $value = $observation[$column] ?? null;
-                // Booleans are written as 0 and 1: a statistics package reads
-                // those, and "true"/"" would silently become a factor level.
-                $row[$column] = is_bool($value) ? (int) $value : $value;
-            }
-            $rows[] = $row;
-        }
-
-        return ['columns' => $columns, 'rows' => $rows];
+        return [
+            'columns' => $columns,
+            'rows'    => iterator_to_array(self::attempt_rows($query->each_observation()), false),
+        ];
     }
 
     /**
      * One row per subscale of an attempt.
      *
      * @param results_query $query The data source.
+     * @param bool $stream Rows as a stream rather than an array.
      * @return array{columns: string[], rows: array[]}
      */
-    protected static function subscales(results_query $query): array {
+    protected static function subscales(results_query $query, bool $stream = false): array {
         $columns = [
             'attemptid', 'runid', 'personid', 'twinid', 'strategy', 'variant',
             'stratum', 'severity', 'category', 'subscale',
@@ -231,17 +272,19 @@ class results_export {
             'localse', 'items', 'within1se', 'within2se',
         ];
 
-        $rows = [];
-        foreach ($query->subscale_observations() as $observation) {
-            $row = [];
-            foreach ($columns as $column) {
-                $value = $observation[$column] ?? null;
-                $row[$column] = is_bool($value) ? (int) $value : $value;
+        $rows = (static function () use ($query, $columns): \Generator {
+            $source = local_analysis::each_row($query->each_observation(), $query->scale_maps());
+            foreach ($source as $observation) {
+                $row = [];
+                foreach ($columns as $column) {
+                    $value = $observation[$column] ?? null;
+                    $row[$column] = is_bool($value) ? (int) $value : $value;
+                }
+                yield $row;
             }
-            $rows[] = $row;
-        }
+        })();
 
-        return ['columns' => $columns, 'rows' => $rows];
+        return ['columns' => $columns, 'rows' => $stream ? $rows : iterator_to_array($rows, false)];
     }
 
     /**
@@ -273,7 +316,16 @@ class results_export {
         require($CFG->dirroot . '/local/catquizlab/version.php');
 
         $provenance = $query->provenance();
-        $dataset = self::dataset($query, $level);
+
+        // The columns and the count, not the dataset: metadata used to build
+        // the whole export to say how many rows it had, and the JSON download
+        // then built it a second time to write them.
+        $stream = self::iterate($query, $level);
+        $count = 0;
+        foreach ($stream['rows'] as $unused) {
+            $count++;
+        }
+        $dataset = ['columns' => $stream['columns']];
 
         return [
             'schema'        => 'local_catquizlab/results',
@@ -284,7 +336,7 @@ class results_export {
             'runs'          => $provenance['runs'],
             'attempts'      => $provenance['attempts'],
             'replications'  => $provenance['replications'],
-            'rows'          => count($dataset['rows']),
+            'rows'          => $count,
             'columns'       => $dataset['columns'],
             'dispersion'    => $provenance['dispersion'],
             'exported'      => date('c'),
@@ -379,7 +431,8 @@ class results_export {
      * @return void
      */
     public static function stream(results_query $query, string $level, string $format): void {
-        $dataset = self::dataset($query, $level);
+        // A stream of rows, not a dataset: nothing here holds the export.
+        $dataset = self::iterate($query, $level);
 
         $out = fopen('php://output', 'w');
 

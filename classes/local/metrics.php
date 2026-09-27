@@ -115,9 +115,24 @@ class metrics {
                 $counts[$key] = ($counts[$key] ?? 0) + 1;
             }
         }
+
+        return self::exposure_from_counts($counts, count($attempts), $poolsize);
+    }
+
+    /**
+     * Exposure statistics from item counts already taken.
+     *
+     * The same figures as {@see exposure()}, for a caller that counted items
+     * while streaming the sittings and never held their item lists.
+     *
+     * @param array $counts Item => number of sittings it appeared in.
+     * @param int $nattempts How many sittings were counted.
+     * @param int|null $poolsize The pool size, when known.
+     * @return array The exposure statistics.
+     */
+    public static function exposure_from_counts(array $counts, int $nattempts, ?int $poolsize = null): array {
         arsort($counts);
 
-        $nattempts = count($attempts);
         $rates = [];
         foreach ($counts as $key => $count) {
             $rates[$key] = $nattempts ? round($count / $nattempts, 6) : 0.0;
