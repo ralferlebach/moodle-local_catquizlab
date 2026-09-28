@@ -406,7 +406,12 @@ class experiment_definition {
         }
         $budgets = $def['budgets'];
 
-        foreach (['global', 'subscale'] as $level) {
+        // A subscale budget is required only where a strategy uses subscales.
+        // "fastest" with 0 per subscale was refused as "must be a positive
+        // integer" — for a number that strategy never reads.
+        $levels = self::uses_subscale_budget($def) ? ['global', 'subscale'] : ['global'];
+
+        foreach ($levels as $level) {
             $block = $budgets[$level] ?? null;
             if (!is_array($block)) {
                 $errors[] = self::msg('def:missingblock', 'budgets.' . $level);
@@ -815,6 +820,34 @@ class experiment_definition {
         if (!isset($data[$key]) || !is_int($data[$key])) {
             $errors[] = self::msg('def:integer', $label);
         }
+    }
+
+    /**
+     * Whether any strategy this definition would run reads subscale budgets.
+     *
+     * The chosen strategy, every level of a swept one, and every strategy
+     * given its own budget.
+     *
+     * @param array $def The definition.
+     * @return bool
+     */
+    public static function uses_subscale_budget(array $def): bool {
+        $keys = [];
+        if (is_string($def['strategy'] ?? null)) {
+            $keys[] = $def['strategy'];
+        }
+        foreach ((array) ($def['sweep']['factors']['strategy'] ?? []) as $level) {
+            if (is_string($level)) {
+                $keys[] = $level;
+            }
+        }
+        foreach ($keys as $key) {
+            if (strategy_catalog::uses_subscales($key)) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /** @var string What a definition writes when a maximum is not to apply. */

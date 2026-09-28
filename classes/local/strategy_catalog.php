@@ -230,6 +230,23 @@ class strategy_catalog {
      * @return string
      * @throws \coding_exception If the key is unknown.
      */
+    /** @var string[] Strategies that select or report by subscale. */
+    public const SUBSCALE_STRATEGIES = ['balanced', 'allsubs', 'lowestsub', 'highestsub', 'relsubs'];
+
+    /**
+     * Whether a strategy works with subscales at all.
+     *
+     * "fastest" estimates one global ability and "classic" plays a fixed form:
+     * a per-subscale budget means nothing to either, so it is neither required
+     * nor offered for them.
+     *
+     * @param string $key The strategy key.
+     * @return bool
+     */
+    public static function uses_subscales(string $key): bool {
+        return in_array($key, self::SUBSCALE_STRATEGIES, true);
+    }
+
     /**
      * Whether this strategy makes the per-subscale minimum binding.
      *

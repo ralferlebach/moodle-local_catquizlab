@@ -75,7 +75,12 @@ class test_provisioner {
             // applying the ceiling at that value.
             'maxquestions'            => experiment_definition::engine_maximum($global['maxitems'] ?? null, 15),
             'minquestionspersubscale' => (int) ($subscale['minitems'] ?? 3),
-            'maxquestionspersubscale' => experiment_definition::engine_maximum($subscale['maxitems'] ?? null, 4),
+            // Zero or nothing only reaches here for a strategy that does not
+            // use subscales (validation requires a number otherwise), and for
+            // it the right ceiling per subscale is none at all.
+            'maxquestionspersubscale' => (int) ($subscale['maxitems'] ?? 0) === 0
+                ? experiment_definition::ENGINE_UNLIMITED
+                : experiment_definition::engine_maximum($subscale['maxitems'], 4),
             'se_min'                  => (float) ($se['min'] ?? 0.35),
             'se_max'                  => (float) ($se['max'] ?? 1.0),
         ];

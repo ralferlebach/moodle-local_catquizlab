@@ -277,6 +277,13 @@ if ((int) $launch['launched'] > 0) {
     // attempts up exactly as a new one would. Refusing to continue here would
     // fail the test for the system working.
     step('Using the ' . worker_registry::summary()['live'] . ' worker(s) already running.', $started);
+} else if (smoke_work_taken($experimentid) > 0) {
+    // The work was already taken up — by a worker the preparation or the
+    // pipeline started before this one. This worker found the queue empty and
+    // left, which is correct, and the check above only asks who is running
+    // now. Failing here reported a test as broken whose sittings were being
+    // played or already collected.
+    step('Work already taken up by an earlier worker.', $started);
 } else {
     cli_writeln('  worker output: ' . substr((string) $launch['output'], -400));
     cli_error('No worker started and none running (' . $launch['reason'] . ').');
@@ -435,3 +442,25 @@ cli_writeln('');
 cli_writeln('PASS: ' . $collected . ' attempts played, ' . $withestimate
     . ' with estimates, ' . $results . ' result rows.');
 exit(0);
+
+/**
+ * Sittings of this experiment already being played or collected.
+ *
+ * @param int $experimentid The smoke experiment.
+ * @return int
+ */
+function smoke_work_taken(int $experimentid): int {
+    global $DB;
+
+    return (int) $DB->count_records_sql(
+        'SELECT COUNT(1)
+           FROM {local_catquizlab_attempt} a
+           JOIN {local_catquizlab_run} r ON r.id = a.runid
+          WHERE r.experimentid = :experimentid AND a.status IN (:running, :collected)',
+        [
+            'experimentid' => $experimentid,
+            'running'      => attempt_scheduler::STATUS_RUNNING,
+            'collected'    => attempt_scheduler::STATUS_COLLECTED,
+        ]
+    );
+}

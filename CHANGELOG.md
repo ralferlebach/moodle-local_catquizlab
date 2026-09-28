@@ -6,6 +6,46 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.7.0] — 2026-09-28
+
+The experiment form, checked in a browser this time.
+
+### Two phantom strategies in the sweep
+0.6.94 filtered `strategy_catalog::menu()` down to what the engine can play.
+The form does not use that function: it builds both selects — the strategy and
+"Vary strategy" — with its own `experiment_form::strategy_menu()`, which still
+listed all eight. "balanced" and "pilot" stayed on offer in the sweep, came
+preselected, and validation then refused them against the main strategy —
+a form that offered a choice and rejected it on submit. Both selects offer only
+what the engine can play now.
+
+### A subscale budget demanded of a strategy without subscales
+"fastest" with 0 per subscale was refused: "budgets.subscale.minitems must be a
+positive integer" — for a number that strategy never reads. Subscale budgets are
+required only where a strategy in play uses subscales; for one that does not, an
+empty maximum reaches the engine as -1, no ceiling per subscale, rather than 0.
+
+### Per-strategy budgets, labelled and live
+Each row now says what its fields are — "Questions per sitting [from] – [to] ·
+per subscale [from] – [to]" — instead of four boxes and an order given in a
+paragraph above. Empty fields show in grey what they inherit from the shared
+budgets. A row is active only while its strategy is chosen above or in the
+sweep; subscale fields only for strategies that use subscales. All of it follows
+the selection as it changes, and the server enforces the same rule.
+
+### Browser tests for exactly this
+Three Behat scenarios: both selects without "balanced" and "pilot"; "fastest"
+saved with the subscale fields switched off; rows and subscale fields switching
+with the selection. Writing them found that a check on a collapsed section's
+options passes for nothing — hidden options have no text — so the sections are
+opened first and options are checked by value as well as by text.
+
+PHPUnit 714 tests / 3934 assertions; Behat: the full run green except the two
+test-wording steps fixed since, the experiment feature (29 scenarios / 235
+steps) green after them; phpcs and PHPDoc clean.
+
+---
+
 ## [0.6.99] — 2026-09-27
 
 #98 finished: the interface test, and what it found.

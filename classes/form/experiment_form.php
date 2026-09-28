@@ -284,17 +284,94 @@ class experiment_form extends \moodleform {
                 continue;
             }
 
+            // Every field says what it is: "per sitting" and "per subscale",
+            // each from – to. A row of four unlabelled boxes asked the reader
+            // to remember an order given in a paragraph above.
             $group = [];
+            $group[] = $mform->createElement(
+                'static',
+                'perstrategy_' . $key . '_testlabel',
+                '',
+                \html_writer::span(get_string('form:persitting', $component), 'mr-1 text-muted')
+            );
             foreach (['globalmin', 'globalmax', 'subscalemin', 'subscalemax'] as $field) {
+                if ($field === 'subscalemin') {
+                    $group[] = $mform->createElement(
+                        'static',
+                        'perstrategy_' . $key . '_sublabel',
+                        '',
+                        \html_writer::span(get_string('form:persubscale', $component), 'ml-3 mr-1 text-muted')
+                    );
+                }
                 $name = 'perstrategy_' . $key . '_' . $field;
-                $group[] = $mform->createElement('text', $name, '', ['size' => 6]);
+                $attributes = [
+                    'size' => 5,
+                    'aria-label' => strategy_catalog::label($key) . ': ' . get_string('form:' . $field, $component),
+                    'title' => get_string('form:' . $field, $component),
+                    'data-catquizlab-perstrategy' => $key,
+                    'data-catquizlab-field' => $field,
+                ];
+                // A strategy without subscales has no subscale budget to set.
+                if (str_starts_with($field, 'subscale') && !strategy_catalog::uses_subscales($key)) {
+                    $attributes['disabled'] = 'disabled';
+                }
+                $group[] = $mform->createElement('text', $name, '', $attributes);
                 // Text, not integer: a maximum may be the word "unlimited".
                 $mform->setType($name, PARAM_ALPHANUMEXT);
+                if (str_ends_with($field, 'min')) {
+                    $group[] = $mform->createElement('static', $name . '_dash', '', '–');
+                }
             }
 
             $mform->addGroup($group, 'perstrategygroup_' . $key, strategy_catalog::label($key), ' ', false);
             $mform->addHelpButton('perstrategygroup_' . $key, 'form:perstrategy', $component);
         }
+
+        // Which fields apply follows what is chosen, as it is chosen: the
+        // subscale budgets only where a strategy in play uses subscales, a
+        // strategy's own row only while that strategy is in play, and the
+        // shared budgets shown in every empty field of a row as what it will
+        // inherit.
+        global $PAGE;
+        $PAGE->requires->js_amd_inline('
+            require([], function() {
+                var subscalestrategies = ' . json_encode(strategy_catalog::SUBSCALE_STRATEGIES) . ';
+                var byid = function(id) { return document.getElementById(id); };
+                var inplay = function() {
+                    var keys = {};
+                    var main = byid("id_strategy");
+                    if (main) { keys[main.value] = true; }
+                    var sweep = byid("id_sweepstrategies");
+                    if (sweep) {
+                        Array.prototype.forEach.call(sweep.options, function(o) {
+                            if (o.selected) { keys[o.value] = true; }
+                        });
+                    }
+                    return keys;
+                };
+                var update = function() {
+                    var keys = inplay();
+                    var anysub = Object.keys(keys).some(function(k) {
+                        return subscalestrategies.indexOf(k) !== -1;
+                    });
+                    ["id_subscalemin", "id_subscalemax"].forEach(function(id) {
+                        var el = byid(id);
+                        if (el) { el.disabled = !anysub; }
+                    });
+                    document.querySelectorAll("[data-catquizlab-perstrategy]").forEach(function(el) {
+                        var key = el.getAttribute("data-catquizlab-perstrategy");
+                        var field = el.getAttribute("data-catquizlab-field");
+                        var sub = field.indexOf("subscale") === 0;
+                        el.disabled = !keys[key] || (sub && subscalestrategies.indexOf(key) === -1);
+                        var shared = byid("id_" + field);
+                        el.placeholder = shared && !shared.disabled ? shared.value : "";
+                    });
+                };
+                document.addEventListener("change", update);
+                document.addEventListener("input", update);
+                update();
+            });
+        ');
 
         $mform->addElement('text', 'semin', get_string('form:semin', $component), ['size' => 8]);
         $mform->setType('semin', PARAM_LOCALISEDFLOAT);
@@ -675,6 +752,12 @@ class experiment_form extends \moodleform {
                 'subscale' => ['minitems' => 'subscalemin', 'maxitems' => 'subscalemax'],
             ];
             foreach ($levelfields as $level => $fields) {
+                // No subscale budget for a strategy without subscales, whatever
+                // was sent: the field is disabled in the browser, and a request
+                // that fills it anyway describes nothing the engine would use.
+                if ($level === 'subscale' && !strategy_catalog::uses_subscales($key)) {
+                    continue;
+                }
                 foreach ($fields as $target => $field) {
                     $value = trim((string) ($data['perstrategy_' . $key . '_' . $field] ?? ''));
                     if ($value === '') {
@@ -1082,9 +1165,15 @@ class experiment_form extends \moodleform {
      * @return array<string, string>
      */
     public static function strategy_menu(): array {
+        // Only what the installed engine can play — for the strategy and for
+        // the sweep alike. 0.6.94 filtered the catalogue's menu and missed
+        // this one, which both selects use: "balanced" and "pilot" stayed on
+        // offer and validation then refused them.
         $menu = [];
         foreach (strategy_catalog::keys() as $key) {
-            $menu[$key] = strategy_catalog::label($key) . ' (' . $key . ')';
+            if (strategy_catalog::runnable($key)) {
+                $menu[$key] = strategy_catalog::label($key) . ' (' . $key . ')';
+            }
         }
         return $menu;
     }

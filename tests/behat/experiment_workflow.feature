@@ -274,3 +274,56 @@ Feature: Defining and running CAT experiments from the web interface
     When I navigate to "Reports > CAT experiment suite" in site administration
     And I follow "4. Results"
     Then I should see "No run has been started yet"
+
+  @javascript
+  Scenario: Only strategies the engine can play are offered, in both lists
+    Given I navigate to "Reports > CAT experiment suite" in site administration
+    When I follow "New experiment"
+    # Opened first: a collapsed section's options have no visible text, and a
+    # "does not contain" check on invisible options passes for nothing.
+    And I expand all fieldsets
+    # Checked by value as well as by text, so that neither can pass alone.
+    Then the "CAT strategy" select box should contain "allsubs"
+    And the "CAT strategy" select box should not contain "balanced"
+    And the "CAT strategy" select box should not contain "pilot"
+    And the "Vary strategy" select box should contain "allsubs"
+    And the "Vary strategy" select box should contain "Cover all subscales (allsubs)"
+    And the "Vary strategy" select box should not contain "balanced"
+    And the "Vary strategy" select box should not contain "pilot"
+    And the "Vary strategy" select box should not contain "Balanced content control (balanced)"
+
+  @javascript
+  Scenario: A strategy without subscales needs no subscale budget
+    Given I navigate to "Reports > CAT experiment suite" in site administration
+    When I follow "New experiment"
+    And I set the following fields to these values:
+      | Name                   | Behat fastest only                       |
+      | CAT strategy           | Estimate global ability (MFI) (fastest)  |
+      | Minimum items (global) | 15                                       |
+      | Maximum items (global) | 35                                       |
+    # The subscale budgets mean nothing to "fastest": they are switched off,
+    # and saving must not demand them.
+    Then the "Minimum items per subscale" "field" should be disabled
+    And the "Maximum items per subscale" "field" should be disabled
+    And I press "Save experiment"
+    Then I should see "Experiment saved."
+    And I should not see "must be a positive integer"
+
+  @javascript
+  Scenario: Per-strategy budgets are labelled and follow the chosen strategies
+    Given I navigate to "Reports > CAT experiment suite" in site administration
+    When I follow "New experiment"
+    And I set the field "CAT strategy" to "Cover all subscales (allsubs)"
+    And I expand all fieldsets
+    Then I should see "Questions per sitting"
+    And I should see "per subscale"
+    # The chosen strategy's row is active, with subscale fields; a strategy not
+    # in play has its row switched off; "fastest" never has subscale fields.
+    And the "perstrategy_allsubs_globalmax" "field" should be enabled
+    And the "perstrategy_allsubs_subscalemax" "field" should be enabled
+    And the "perstrategy_fastest_globalmax" "field" should be disabled
+    And the "perstrategy_fastest_subscalemax" "field" should be disabled
+    # Choosing "fastest" as well switches its row on — but never its subscale fields.
+    When I set the field "Vary strategy" to "Estimate global ability (MFI) (fastest),Cover all subscales (allsubs)"
+    Then the "perstrategy_fastest_globalmax" "field" should be enabled
+    And the "perstrategy_fastest_subscalemax" "field" should be disabled
