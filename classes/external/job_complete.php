@@ -60,6 +60,13 @@ class job_complete extends external_api {
                 VALUE_DEFAULT,
                 ''
             ),
+            'diagnostics'     => new external_value(
+                PARAM_RAW,
+                'What the browser saw, as JSON: navigation, console and request events, response statuses, '
+                    . 'transport errors, and where the artefacts of a failure were written (#100, #107).',
+                VALUE_DEFAULT,
+                ''
+            ),
         ]);
     }
 
@@ -71,6 +78,7 @@ class job_complete extends external_api {
      * @param int $runtimems Wall-clock runtime in milliseconds.
      * @param int $engineattemptid The adaptivequiz_attempt id, when known.
      * @param string $message The worker's reason, when the attempt did not finish.
+     * @param string $diagnostics The browser's record, as JSON.
      * @return array The acknowledgement.
      */
     public static function execute(
@@ -78,7 +86,8 @@ class job_complete extends external_api {
         string $status,
         int $runtimems = 0,
         int $engineattemptid = 0,
-        string $message = ''
+        string $message = '',
+        string $diagnostics = ''
     ): array {
         global $DB;
 
@@ -88,6 +97,7 @@ class job_complete extends external_api {
             'runtimems'       => $runtimems,
             'engineattemptid' => $engineattemptid,
             'message'         => $message,
+            'diagnostics'     => $diagnostics,
         ]);
 
         $context = \context_system::instance();
@@ -190,6 +200,8 @@ class job_complete extends external_api {
                 'runtimems'       => (int) ($params['runtimems'] ?? 0),
                 'detail'          => (string) ($params['message'] ?? ''),
                 'tryno'           => (int) $attempt->tries,
+                // The browser's own record, kept with the diagnosis (#100).
+                'extra'           => (array) (json_decode((string) ($params['diagnostics'] ?? ''), true) ?: []),
             ]
         );
 

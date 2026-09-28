@@ -6,6 +6,75 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.7.4] — 2026-09-28 — Issue #100, Issue #107 (capture), CI fix
+
+The worker no longer races the page it is driving.
+
+### The race (#100)
+The worker clicked "submit" and only then started waiting for the navigation
+the click caused. Moodle sometimes answers a submission with an intermediate
+page that forwards on its own: the worker's wait ended on that page, and the
+answer loop — "while a question is visible" — took it for the end of the test.
+That is the reported "did not reach the finish page"; reading the page while
+the second navigation replaced it is "Execution context was destroyed".
+
+Reproduced in `worker/test/navigation.test.js` with a server that imitates an
+attempt, random delays of 0–400 ms and an intermediate forwarding page on every
+other submission. Three runs:
+
+    old pattern (until 0.7.3)   1 of 40 questions answered, finish page not reached
+    new pattern                 40 of 40, finish page reached
+
+### The fix — `worker/navigation.js`
+- `clickAndSettle()`: the wait for the navigation is registered before the
+  click, then exactly one expected state is awaited — a question, the finish
+  page or a Moodle error page. The document clicked on is marked, and only a
+  state on a new document counts: a question read on the old one is the
+  question just answered.
+- `withContextRetry()`: a lost execution context during an expected navigation
+  is retried once; anything else, or the same error twice, is reported.
+- Navigation timeouts are no longer swallowed: the outcome is recorded and
+  reported when no expected state follows.
+- The answer loop follows the state each click leads to.
+- `fetch failed` now says which web service, where (without the token), HTTP
+  status, network error code (ECONNRESET, ETIMEDOUT, …), cause, duration,
+  worker and sitting.
+- Browser events — navigations, console errors, page errors, failed requests,
+  lost contexts — and the last response statuses go with every report into the
+  sitting's history, and show on the run page.
+
+### Artefacts of a failed execution (#107, capture)
+On a technical failure the worker writes to moodledata, under
+`local_catquizlab/artefacts/experiment-…/run-…/attempt-…/execution-…/`: the
+screenshot before the failure and the one at it, the DOM, the events and
+response statuses, and the error with URL, title and stack. The path goes into
+the history. Tried in earnest: a single "Invalid login" during a local run was
+placed in seconds from its screenshot and DOM.
+
+`job_claim` now returns the experiment and the execution number the path needs.
+Its return description had first lacked them, and Moodle removes undescribed
+fields; the test called `execute()` directly and missed it. It goes through the
+web service's return cleaning now.
+
+### CI: PHPUnit on Moodle 5.0 and 5.2
+A test of 0.7.3 created an adaptive quiz through `mod_adaptivequiz`'s generator,
+which needs a question category Moodle 5.x no longer provides that way. The test
+only needs a course module and the engine's record: it writes those directly.
+
+### Tests
+Worker: 17 tests, among them the navigation race against a real browser and the
+artefacts written. Local end to end with the new worker: fastest 3 and allsubs 4
+sittings, each at least 20 questions, no failure. The load test — 300 sittings,
+four workers, every execution counted — is a step of the worker end-to-end
+workflow and runs in CI.
+
+### Still open in #107
+The correlation id in the artefact metadata, the ZIP download in the interface,
+configurable retention and cleanup, and a switch in the interface for capturing
+successful executions too (`--capture=all` exists as a worker option).
+
+---
+
 ## [0.7.3] — 2026-09-28 — Issue #104, with the rest of #101
 
 Effective parameters reach the created activity, provably — and the classical

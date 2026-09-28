@@ -66,6 +66,11 @@ const LOGIN_MODE = args['login-mode'] || 'password';
 const LOGIN_URL_TEMPLATE = args['login-url-template'] || '';
 
 const SELF_TEST = args['self-test'] === true;
+// Where a failed execution leaves its screenshots, DOM and events (#107), and
+// whether successful ones do too ('all', for explicit debugging only).
+const ARTEFACT_DIR = args['artefact-dir'] || '';
+const CAPTURE = args.capture === 'all' ? 'all' : 'failure';
+const nav = require('./navigation.js');
 
 // The self test never talks to Moodle, so it must not demand credentials.
 if (require.main === module && !SELF_TEST && (!BASE_URL || !TOKEN)) {
@@ -82,13 +87,34 @@ if (require.main === module && !SELF_TEST && (!BASE_URL || !TOKEN)) {
  */
 async function callWs(wsfunction, params) {
     const url = buildWsUrl(BASE_URL, TOKEN, wsfunction, params);
-    const response = await fetch(url, {method: 'POST'});
-    const data = await response.json();
+    const started = Date.now();
+    let response = null;
+    let data = null;
+    try {
+        response = await fetch(url, {method: 'POST'});
+        if (!response.ok) {
+            throw new Error(`HTTP ${response.status}`);
+        }
+        data = await response.json();
+    } catch (error) {
+        // "fetch failed" on its own said that something went wrong between
+        // here and Moodle, and nothing else. What was called, where, with
+        // which status or network error, after how long, and for whom — the
+        // difference between a server under load and a worker misconfigured.
+        const transport = describeTransportError(wsfunction, url, error, Date.now() - started,
+            response ? response.status : 0, {workerid: WORKER_ID, attemptid: currentAttemptId});
+        const wrapped = new Error(transport.message);
+        wrapped.transport = transport.detail;
+        throw wrapped;
+    }
     if (data && data.exception) {
         throw new Error(`${wsfunction}: ${data.message}`);
     }
     return data;
 }
+
+/** @type {number} The attempt being played, for transport diagnoses. */
+let currentAttemptId = 0;
 
 /**
  * Claim the next queued attempt, or null when the queue is empty.
@@ -125,16 +151,26 @@ async function playAttempt(browser, job) {
     let status = 'failed';
     let failure = '';
 
+    // What the browser sees, kept for the attempt history and — on failure —
+    // written out as screenshots, DOM and events (#107).
+    const recorder = new nav.Recorder(page, {capture: CAPTURE});
+    let transport = null;
+    let artefacts = null;
+    currentAttemptId = job.attemptid;
+
     try {
         await login(page, job.userid, job.username);
         await gotoSettle(page, `${BASE_URL}/mod/adaptivequiz/view.php?id=${job.quizcmid}`);
-        await startAttempt(page);
+        let state = await startAttempt(page, recorder);
 
-        // Answer loop: while a question is on screen, ask the oracle and submit.
+        // Answer loop, driven by the state each click leads to: a question, the
+        // finish page, or an error page — nothing in between (#100). The loop
+        // used to run "while a question is visible", and an intermediate page
+        // on the way to the next question ended it as if the test were over.
         let guard = 0;
         let answeredCount = 0;
-        while (await hasQuestion(page) && guard++ < 1000) {
-            const {qubaid, slot} = await currentQuestionRef(page);
+        while (state === nav.STATE.QUESTION && guard++ < 1000) {
+            const {qubaid, slot} = await nav.withContextRetry(page, () => currentQuestionRef(page), 'read question', recorder);
             const decision = await callWs('local_catquizlab_oracle_answer', {
                 runid: job.runid,
                 // The page identifies a question by usage and slot; the browser
@@ -149,12 +185,26 @@ async function playAttempt(browser, job) {
             if (!decision.ready) {
                 throw new Error(`Oracle not ready for usage ${qubaid} slot ${slot}: ${decision.message}`);
             }
-            const answered = await answerQuestion(page, decision);
+            const answered = await nav.withContextRetry(page, () => answerQuestion(page, decision), 'answer', recorder);
             if (!answered) {
                 throw new Error(`No answer option found for usage ${qubaid} slot ${slot}.`);
             }
-            await submitQuestion(page);
+            await recorder.snapshot();
+            const result = await nav.clickAndSettle(page, SUBMIT_SELECTORS, QUESTION_SELECTORS, {
+                label: `submit answer ${answeredCount + 1}`,
+                timeout: NAV_TIMEOUT,
+                recorder,
+            });
+            if (!result.clicked) {
+                throw new Error(`No way to submit the answer to usage ${qubaid} slot ${slot} was found.`);
+            }
+            state = result.state;
             answeredCount++;
+        }
+
+        if (state === nav.STATE.ERROR) {
+            const detail = await describePage(page);
+            throw new Error(`Moodle showed an error page after ${answeredCount} answer(s). ${detail}`);
         }
 
         engineAttemptId = await readEngineAttemptId(page);
@@ -164,34 +214,32 @@ async function playAttempt(browser, job) {
         // completed experiment: the queue drains, every job reports success and
         // no trace is ever collected.
         if (answeredCount === 0) {
-            // What the page actually said. "No question was presented" names
-            // the symptom and nothing else, and the cause is almost always on
-            // the screen the worker was looking at: a misconfigured pool, an
-            // engine error, a login that silently failed. Carrying that back
-            // saves the round trip through the browser by hand.
             const diagnosis = await collectZeroQuestionDiagnosis(page, engineAttemptId);
             throw new Error(
                 'No question was presented; the attempt never started. ' + diagnosis
             );
         }
 
-        // The absence of a question is not evidence that the attempt finished.
-        // A failure page, a redirect, or a page that simply has not rendered
-        // yet all look the same from here, and treating them alike turns any of
-        // them into a successful run. Only the activity's own finish page
-        // counts, and anything else is reported with where the browser stood.
+        // Only the activity's own finish page counts as finished.
         if (!(await onFinishPage(page))) {
             const detail = await describePage(page);
             throw new Error(`Attempt did not reach the finish page after ${answeredCount} answer(s). ${detail}`);
         }
-        // A missing engine attempt id is not a failure of the attempt: the
-        // finish page does not always render one, and the server can look it up
-        // from the run and the person. What matters is that questions were
-        // answered, which the check above establishes.
         status = 'finished';
+
+        if (CAPTURE === 'all' && ARTEFACT_DIR) {
+            artefacts = await saveArtefacts(recorder, job, null);
+        }
     } catch (error) {
         failure = error.message;
+        transport = error.transport || null;
         console.error(`Attempt ${job.attemptid} failed: ${error.message}`);
+
+        // Screenshots, DOM and events of the moment it failed, in moodledata
+        // (#107): structured log lines rarely say what the page showed.
+        if (ARTEFACT_DIR) {
+            artefacts = await saveArtefacts(recorder, job, error);
+        }
 
         // The page said what went wrong and not where: a production site shows
         // no debug information, so "Division by zero" arrived without a file
@@ -225,7 +273,14 @@ async function playAttempt(browser, job) {
             status,
             runtimems: Date.now() - started,
             engineattemptid: engineAttemptId,
+            // The browser's record for the attempt history (#100, #107).
+            diagnostics: JSON.stringify({
+                browser: recorder.summary(),
+                transport,
+                artefacts,
+            }).slice(0, 60000),
         });
+        currentAttemptId = 0;
     }
 }
 
@@ -287,25 +342,20 @@ async function login(page, userid, username) {
  * @param {object} page The Puppeteer page.
  * @returns {Promise<void>}
  */
-async function startAttempt(page) {
-    // Only navigate if there is no question yet (the view page shows a start form).
+async function startAttempt(page, recorder) {
+    // Already on a question (a resumed attempt): nothing to start.
     if (await hasQuestion(page)) {
-        return;
+        return nav.STATE.QUESTION;
     }
-    const clicked = await clickFirst(page, START_SELECTORS);
-    if (!clicked) {
+    const result = await nav.clickAndSettle(page, START_SELECTORS, QUESTION_SELECTORS, {
+        label: 'start attempt',
+        timeout: NAV_TIMEOUT,
+        recorder,
+    });
+    if (!result.clicked) {
         throw new Error('No way to start the attempt was found on the activity page.');
     }
-
-    await page.waitForNavigation({waitUntil: 'networkidle2'}).catch(() => {});
-
-    // Waiting for navigation alone is not enough: the catch swallows a timeout,
-    // and on a slow instance the check for a question then runs before the page
-    // has rendered one. The attempt looked as if it had presented nothing, and
-    // the worker moved on with an empty answer loop. Wait for the question
-    // itself, which is the thing the next step actually needs.
-    await page.waitForSelector(QUESTION_SELECTORS.join(', '), {timeout: NAV_TIMEOUT})
-        .catch(() => {});
+    return result.state;
 }
 
 /**
@@ -482,19 +532,6 @@ async function answerQuestion(page, decision) {
 }
 
 /**
- * Submit the current question and advance.
- *
- * @param {object} page The Puppeteer page.
- * @returns {Promise<void>}
- */
-async function submitQuestion(page) {
-    const clicked = await clickFirst(page, SUBMIT_SELECTORS);
-    if (clicked) {
-        await page.waitForNavigation({waitUntil: 'networkidle2'}).catch(() => {});
-    }
-}
-
-/**
  * Read the adaptivequiz_attempt id from the finished attempt page/URL.
  *
  * @param {object} page The Puppeteer page.
@@ -590,6 +627,31 @@ async function clickFirst(page, selectors) {
     }
     await handle.click();
     return true;
+}
+
+/**
+ * Write an execution's artefacts to moodledata (#107).
+ *
+ * @param {object} recorder The attempt's recorder.
+ * @param {object} job The claimed job.
+ * @param {?Error} error What went wrong, or null for a debug capture.
+ * @returns {Promise<?object>} Where they went and what was written.
+ */
+async function saveArtefacts(recorder, job, error) {
+    const relative = artefactPath(job);
+    try {
+        const files = await recorder.save(require('path').join(ARTEFACT_DIR, relative), {
+            experimentid: job.experimentid || 0,
+            runid: job.runid,
+            attemptid: job.attemptid,
+            execution: job.execution || 0,
+            workerid: WORKER_ID,
+        }, error);
+        return {path: relative, files};
+    } catch (saveError) {
+        console.error(`Artefacts of attempt ${job.attemptid} could not be written: ${saveError.message}`);
+        return {path: relative, files: [], error: saveError.message};
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1022,7 +1084,67 @@ if (require.main === module) {
     });
 }
 
+/**
+ * The directory of one execution's artefacts, below the artefact root.
+ *
+ * @param {object} job The claimed job.
+ * @returns {string}
+ */
+function artefactPath(job) {
+    return [
+        `experiment-${job.experimentid || 0}`,
+        `run-${job.runid || 0}`,
+        `attempt-${job.attemptid || 0}`,
+        `execution-${job.execution || 0}`,
+    ].join('/');
+}
+
+/**
+ * What a failed web service call can say about itself, without its token.
+ *
+ * @param {string} wsfunction The function called.
+ * @param {string} url The URL called.
+ * @param {Error} error What fetch threw.
+ * @param {number} elapsedms How long it took.
+ * @param {number} status The HTTP status, 0 when there was no response.
+ * @param {object} who workerid and attemptid.
+ * @returns {{message: string, detail: object}}
+ */
+function describeTransportError(wsfunction, url, error, elapsedms, status, who) {
+    const cause = (error && error.cause) || {};
+    const code = cause.code || (error && error.code) || '';
+    let where = '';
+    try {
+        const parsed = new URL(url);
+        where = `${parsed.origin}${parsed.pathname}`;
+    } catch (parseError) {
+        where = '(unparseable URL)';
+    }
+    const detail = {
+        wsfunction,
+        url: where,
+        status,
+        error: error ? error.message : '',
+        code,
+        cause: cause.message || '',
+        elapsedms,
+        workerid: who.workerid || '',
+        attemptid: who.attemptid || 0,
+    };
+    const parts = [`${wsfunction} failed after ${elapsedms} ms`, `at ${where}`];
+    if (status) {
+        parts.push(`HTTP ${status}`);
+    }
+    if (code) {
+        parts.push(code);
+    }
+    parts.push(`: ${detail.error}${detail.cause ? ` (${detail.cause})` : ''}`);
+    return {message: parts.join(' '), detail};
+}
+
 module.exports = {
+    describeTransportError,
+    artefactPath,
     selfTest,
     parseArgs,
     normaliseBaseUrl,

@@ -59,6 +59,8 @@ use local_catquizlab\local\worker_registry;
     'list-strategies' => false,
     'provisioning-only' => false,
     'case' => '',
+    'concurrency' => 0,
+    'no-navigation-failures' => false,
 ], ['h' => 'help']);
 
 if ($options['help']) {
@@ -325,6 +327,12 @@ $otherwork = $DB->execute(
 );
 step('Other queued work deferred for the duration.');
 
+// For a load test, several workers at once: the race of #100 showed under
+// load, not in a single browser.
+if ((int) $options['concurrency'] > 0) {
+    set_config('worker_concurrency', (int) $options['concurrency'], 'local_catquizlab');
+}
+
 $started = microtime(true);
 worker_registry::reap();
 $launch = worker_launcher::launch_pool(worker_launcher::config_from_settings());
@@ -372,6 +380,43 @@ while (time() < $deadline) {
     }
 }
 step($collected . ' collected, ' . $failed . ' failed.', $started);
+
+// Every execution counts, not only the final state (#100). A navigation failure
+// that a retry covered up is still a navigation failure: under load it is the
+// one that, ten times over, stops a run.
+if (!empty($options['no-navigation-failures'])) {
+    [$insql, $inparams] = $DB->get_in_or_equal(
+        array_keys($DB->get_records('local_catquizlab_run', ['experimentid' => $experimentid], '', 'id')) ?: [0],
+        SQL_PARAMS_NAMED,
+        'run'
+    );
+    $executions = $DB->get_records_select(
+        'local_catquizlab_attemptlog',
+        'runid ' . $insql . ' AND outcome = :failed',
+        $inparams + ['failed' => \local_catquizlab\local\attempt_history::FAILED],
+        'id ASC',
+        'id, attemptid, tryno, detail'
+    );
+    $started = microtime(true);
+    $navigation = 0;
+    foreach ($executions as $execution) {
+        $pattern = '/Execution context was destroyed|did not reach the finish page|No expected state|fetch failed/i';
+        if (preg_match($pattern, (string) $execution->detail)) {
+            $navigation++;
+            cli_writeln('  navigation failure: sitting ' . $execution->attemptid . ' try ' . $execution->tryno
+                . ': ' . substr((string) $execution->detail, 0, 200));
+        }
+    }
+    $total = (int) $DB->count_records_select(
+        'local_catquizlab_attemptlog',
+        'runid ' . $insql . ' AND outcome = :started',
+        $inparams + ['started' => \local_catquizlab\local\attempt_history::STARTED]
+    );
+    step($total . ' executions, ' . count($executions) . ' failed, ' . $navigation . ' of them navigation or transport.', $started);
+    if ($navigation > 0) {
+        cli_error($navigation . ' execution(s) failed on navigation or transport.');
+    }
+}
 
 if ($failed > 0) {
     $errors = $DB->get_records_select(

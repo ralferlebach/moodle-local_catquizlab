@@ -198,4 +198,52 @@ final class attempt_recovery_test extends \advanced_testcase {
         $DB->set_field('local_catquizlab_attempt', 'status', attempt_scheduler::STATUS_COLLECTED, ['id' => $ids[2]]);
         $this->assertTrue(run_lifecycle::is_complete($runid));
     }
+
+    /**
+     * The browser's record reaches the attempt history, without secrets (#100).
+     *
+     * @return void
+     */
+    public function test_the_browser_record_reaches_the_history(): void {
+        global $DB;
+        $this->resetAfterTest();
+        $this->setAdminUser();
+
+        [$runid, $ids] = $this->run_of_three();
+        // Through the web service's own return cleaning, as the worker receives
+        // it: a field the return description lacks is dropped there, and
+        // calling execute() alone does not show that.
+        $claim = \core_external\external_api::clean_returnvalue(
+            job_claim::execute_returns(),
+            job_claim::execute('worker-x')
+        );
+        $this->assertSame(1, (int) $claim['execution']);
+        $this->assertGreaterThan(0, (int) $claim['experimentid']);
+
+        $attemptid = (int) $claim['attemptid'];
+        $DB->set_field('local_catquizlab_attempt', 'tries', attempt_scheduler::MAX_TRIES, ['id' => $attemptid]);
+        job_complete::execute($attemptid, 'failed', 0, 0, 'fetch failed', json_encode([
+            'browser'   => ['events' => [
+                ['at' => 10, 'type' => 'click', 'detail' => 'submit answer 3'],
+                ['at' => 40, 'type' => 'context-lost', 'detail' => 'read question: Execution context was destroyed'],
+                ['at' => 90, 'type' => 'navigated', 'detail' => 'https://x.org/mod/adaptivequiz/attempt.php?sesskey=abc123'],
+            ], 'statuses' => [['status' => 500, 'url' => 'https://x.org/mod/adaptivequiz/attempt.php']]],
+            'transport' => ['wsfunction' => 'local_catquizlab_oracle_answer', 'status' => 0, 'code' => 'ECONNRESET',
+                'elapsedms' => 1234],
+            'artefacts' => ['path' => 'experiment-1/run-2/attempt-3/execution-1', 'files' => ['screenshot-last.jpg']],
+        ]));
+
+        $failure = null;
+        foreach (attempt_history::of_attempt($attemptid) as $row) {
+            if ($row['outcome'] === attempt_history::FAILED) {
+                $failure = $row;
+            }
+        }
+        $this->assertNotNull($failure);
+        $this->assertSame('ECONNRESET', $failure['diagnosis']['transport']['code']);
+        $this->assertSame('context-lost', $failure['diagnosis']['browser']['events'][1]['type']);
+        $this->assertSame('experiment-1/run-2/attempt-3/execution-1', $failure['diagnosis']['artefacts']['path']);
+        // A session key in a recorded URL does not reach the database.
+        $this->assertStringNotContainsString('abc123', json_encode($failure['diagnosis']));
+    }
 }

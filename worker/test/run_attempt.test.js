@@ -96,3 +96,30 @@ test('buildWsUrl escapes parameter values', () => {
     assert.ok(url.includes('wstoken=t+o+k'));
     assert.ok(url.includes('q=a%26b%3Dc'));
 });
+
+test('a failed web service call describes itself without its token (#100)', () => {
+    const cause = new Error('read ECONNRESET');
+    cause.code = 'ECONNRESET';
+    const error = new TypeError('fetch failed', {cause});
+    const url = 'https://moodle.example.org/webservice/rest/server.php?wstoken=SECRET&wsfunction=local_catquizlab_job_claim';
+    const {message, detail} = worker.describeTransportError('local_catquizlab_job_claim', url, error, 1234, 0,
+        {workerid: 'catquizlab-exec-3', attemptid: 17});
+
+    assert.ok(!message.includes('SECRET'), 'the token leaked into the message');
+    assert.ok(!JSON.stringify(detail).includes('SECRET'), 'the token leaked into the detail');
+    assert.strictEqual(detail.code, 'ECONNRESET');
+    assert.strictEqual(detail.url, 'https://moodle.example.org/webservice/rest/server.php');
+    assert.strictEqual(detail.elapsedms, 1234);
+    assert.strictEqual(detail.attemptid, 17);
+    assert.ok(message.includes('local_catquizlab_job_claim') && message.includes('ECONNRESET'));
+
+    const http = worker.describeTransportError('x', url, new Error('HTTP 503'), 50, 503, {workerid: 'w', attemptid: 1});
+    assert.ok(http.message.includes('HTTP 503'));
+});
+
+test('artefacts of an execution have a place of their own (#107)', () => {
+    assert.strictEqual(
+        worker.artefactPath({experimentid: 4, runid: 36, attemptid: 1052, execution: 2}),
+        'experiment-4/run-36/attempt-1052/execution-2'
+    );
+});

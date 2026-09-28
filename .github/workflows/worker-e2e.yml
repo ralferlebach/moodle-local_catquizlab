@@ -226,6 +226,19 @@ jobs:
         run: bash local/catquizlab/cli/smoke_all.sh
 
 
+      - name: Issue 100 — load test, several hundred sittings without a navigation failure
+        working-directory: moodle
+        timeout-minutes: 35
+        env:
+          MOODLE_ROOT: ${{ github.workspace }}/moodle
+        # 300 sittings, four workers, some 6000 question transitions. Every
+        # execution is counted, including ones a retry later covered: a single
+        # "Execution context was destroyed", "did not reach the finish page" or
+        # "fetch failed" fails the step.
+        run: >-
+          php local/catquizlab/cli/smoke.php --strategy=fastest --persons=300
+          --concurrency=4 --minutes=30 --no-navigation-failures
+
       - name: Issue 104 — effective parameters reach the created activities
         working-directory: moodle
         # classic unlimited, allsubs 80, relsubs 40: read back from the engine's

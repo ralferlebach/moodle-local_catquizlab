@@ -766,6 +766,24 @@ if ($runid > 0) {
                 if (isset($entry['diagnosis']['file'])) {
                     $facts[] = s($entry['diagnosis']['file'] . ':' . ($entry['diagnosis']['line'] ?? '?'));
                 }
+                // The transport failure in its fields, and the browser's last
+                // events before the failure (#100).
+                if (!empty($entry['diagnosis']['transport']['wsfunction'])) {
+                    $t = $entry['diagnosis']['transport'];
+                    $facts[] = get_string('diagnosis:transport', $component) . ': ' . s(trim(
+                        $t['wsfunction'] . ' ' . ($t['status'] ? 'HTTP ' . $t['status'] . ' ' : '')
+                        . ($t['code'] ?? '') . ' ' . ($t['elapsedms'] ?? '') . ' ms'
+                    ));
+                }
+                $browserevents = array_slice((array) ($entry['diagnosis']['browser']['events'] ?? []), -6);
+                foreach ($browserevents as $event) {
+                    $facts[] = s(($event['type'] ?? '') . ': ' . \core_text::substr((string) ($event['detail'] ?? ''), 0, 160));
+                }
+                if (!empty($entry['diagnosis']['artefacts']['path'])) {
+                    $facts[] = get_string('diagnosis:artefacts', $component) . ': '
+                        . s($entry['diagnosis']['artefacts']['path']) . ' ('
+                        . s(implode(', ', (array) ($entry['diagnosis']['artefacts']['files'] ?? []))) . ')';
+                }
                 $text = $facts !== []
                     ? implode(' · ', $facts)
                     : s(\core_text::substr($entry['detail'], 0, 400));

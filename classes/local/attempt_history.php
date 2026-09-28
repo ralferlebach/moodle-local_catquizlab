@@ -82,12 +82,31 @@ class attempt_history {
             // not help, and a truncated stack trace is a stack trace nobody
             // can follow.
             'detail'          => isset($detail['detail']) ? self::redact((string) $detail['detail']) : null,
-            'diagnosis'       => isset($detail['detail']) && $detail['detail'] !== ''
-                ? json_encode(self::diagnose((string) $detail['detail']), JSON_UNESCAPED_SLASHES)
-                : null,
+            'diagnosis'       => self::diagnosis_json($detail),
             'correlationid'   => \core_text::substr(debug_trace::correlation_id(), 0, 64),
             'timecreated'     => time(),
         ]);
+    }
+
+    /**
+     * The diagnosis to store: the reported text taken apart, plus what the
+     * browser recorded (events, statuses, transport, artefacts), secrets removed.
+     *
+     * @param array $detail What record() was given.
+     * @return string|null JSON, or null when there is nothing to say.
+     */
+    protected static function diagnosis_json(array $detail): ?string {
+        $diagnosis = isset($detail['detail']) && $detail['detail'] !== ''
+            ? self::diagnose((string) $detail['detail'])
+            : [];
+        $extra = (array) ($detail['extra'] ?? []);
+        foreach (['browser', 'transport', 'artefacts'] as $key) {
+            if (!empty($extra[$key])) {
+                $diagnosis[$key] = json_decode(self::redact(json_encode($extra[$key], JSON_UNESCAPED_SLASHES)), true);
+            }
+        }
+
+        return $diagnosis === [] ? null : json_encode($diagnosis, JSON_UNESCAPED_SLASHES);
     }
 
     /**

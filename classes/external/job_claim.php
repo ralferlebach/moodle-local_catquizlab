@@ -77,6 +77,8 @@ class job_claim extends external_api {
             'quizcmid'  => 0,
             'userid'    => 0,
             'username'  => '',
+            'experimentid' => 0,
+            'execution' => 0,
             'message'   => get_string('job:none', 'local_catquizlab'),
         ];
 
@@ -201,6 +203,10 @@ class job_claim extends external_api {
             'quizcmid'  => $run ? (int) $run->testcmid : 0,
             'userid'    => $userid,
             'username'  => $username,
+            // Where this execution's artefacts belong (#107): experiment, run,
+            // attempt and which try this is.
+            'experimentid' => $run ? (int) $run->experimentid : 0,
+            'execution' => (int) $attempt->tries + 1,
             'message'   => get_string('job:claimed', 'local_catquizlab'),
         ];
     }
@@ -223,6 +229,8 @@ class job_claim extends external_api {
                 VALUE_OPTIONAL,
                 ''
             ),
+            'experimentid' => new external_value(PARAM_INT, 'Experiment of the claimed run (0 when none).', VALUE_OPTIONAL, 0),
+            'execution'    => new external_value(PARAM_INT, 'Which try of the sitting this is (0 when none).', VALUE_OPTIONAL, 0),
             'message'   => new external_value(PARAM_TEXT, 'Human-readable status.'),
         ]);
     }

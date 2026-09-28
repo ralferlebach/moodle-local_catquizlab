@@ -85,9 +85,8 @@ final class effective_parameters_test extends \advanced_testcase {
         global $DB;
         $this->resetAfterTest();
 
-        $available = \core_component::get_component_directory('mod_adaptivequiz')
-            && $DB->get_manager()->table_exists('local_catquiz_tests');
-        if (!$available) {
+        $moduleid = (int) $DB->get_field('modules', 'id', ['name' => 'adaptivequiz']);
+        if (!$moduleid || !$DB->get_manager()->table_exists('local_catquiz_tests')) {
             $this->markTestSkipped('Needs mod_adaptivequiz and local_catquiz.');
         }
 
@@ -96,10 +95,19 @@ final class effective_parameters_test extends \advanced_testcase {
         $definition['budgets']['global'] = ['minitems' => 10, 'maxitems' => 80];
         $definition = (new experiment_definition($definition))->get_normalised();
 
-        // An adaptive quiz, and the engine's record of its test built exactly
-        // as provisioning builds it.
+        // A course module of an adaptive quiz, and the engine's record of its
+        // test built exactly as provisioning builds it. The module is written
+        // directly rather than through mod_adaptivequiz's generator: the check
+        // follows only course module → instance → engine record, and that
+        // generator needs a question category Moodle 5.x no longer provides
+        // the way 4.5 did — it failed the test on 5.0 and 5.2 for a reason
+        // that has nothing to do with what is tested here.
         $course = $this->getDataGenerator()->create_course();
-        $quiz = $this->getDataGenerator()->create_module('adaptivequiz', ['course' => $course->id]);
+        $quiz = (object) ['id' => 424242];
+        $quiz->cmid = (int) $DB->insert_record('course_modules', (object) [
+            'course' => $course->id, 'module' => $moduleid, 'instance' => $quiz->id,
+            'section' => 0, 'added' => time(), 'visible' => 1,
+        ]);
         $settings = test_provisioner::build_quizsettings(
             't',
             (int) $course->id,
