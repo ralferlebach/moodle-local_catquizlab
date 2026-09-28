@@ -138,7 +138,9 @@ class experiment_definition {
      * @return array
      */
     public function get_normalised(): array {
-        return self::apply_defaults($this->definition);
+        // Without what none of its strategies uses (#101): a saved definition
+        // describes the experiment, and a budget nothing reads is not part of it.
+        return strategy_parameters::strip(self::apply_defaults($this->definition));
     }
 
     /**
@@ -162,6 +164,7 @@ class experiment_definition {
         self::validate_schema($this->definition, $errors);
         self::validate_model($def, $errors, $warnings);
         self::validate_strategy($def, $errors);
+        self::validate_pilot($def, $errors);
         self::validate_pool($def, $errors);
         self::validate_persons($def, $errors);
         self::validate_budgets($def, $errors);
@@ -269,6 +272,50 @@ class experiment_definition {
             if ($template === 'truefalse') {
                 $errors[] = self::msg('def:incompatibletemplate', $key . '/' . $template);
             }
+        }
+    }
+
+    /**
+     * The standard-error bounds, where a strategy uses them.
+     *
+     * @param mixed $se The budgets.se block.
+     * @param array $errors Collected errors.
+     * @return void
+     */
+    protected static function validate_se_bounds($se, array &$errors): void {
+        if (!is_array($se)) {
+            $errors[] = self::msg('def:missingblock', 'budgets.se');
+            return;
+        }
+        foreach (['min', 'max'] as $bound) {
+            if (!isset($se[$bound]) || !is_numeric($se[$bound])) {
+                $errors[] = self::msg('def:numeric', 'budgets.se.' . $bound);
+            } else if ((float) $se[$bound] <= 0.0) {
+                $errors[] = self::msg('def:positivefloat', 'budgets.se.' . $bound);
+            }
+        }
+        if (
+            isset($se['min'], $se['max']) && is_numeric($se['min']) && is_numeric($se['max'])
+                && (float) $se['min'] > (float) $se['max']
+        ) {
+            $errors[] = self::msg('def:mingtmax', 'budgets.se');
+        }
+    }
+
+    /**
+     * The pilot-question option, where a definition has one.
+     *
+     * @param array $def The definition.
+     * @param array $errors Collected errors.
+     * @return void
+     */
+    protected static function validate_pilot(array $def, array &$errors): void {
+        if (!isset($def['pilot'])) {
+            return;
+        }
+        $ratio = $def['pilot']['ratio'] ?? 0;
+        if (!is_numeric($ratio) || (float) $ratio < 0 || (float) $ratio > 100) {
+            $errors[] = self::msg('def:pilotratio', 'pilot.ratio');
         }
     }
 
@@ -436,23 +483,13 @@ class experiment_definition {
             }
         }
 
-        $se = $budgets['se'] ?? null;
-        if (!is_array($se)) {
-            $errors[] = self::msg('def:missingblock', 'budgets.se');
-            return;
-        }
-        foreach (['min', 'max'] as $bound) {
-            if (!isset($se[$bound]) || !is_numeric($se[$bound])) {
-                $errors[] = self::msg('def:numeric', 'budgets.se.' . $bound);
-            } else if ((float) $se[$bound] <= 0.0) {
-                $errors[] = self::msg('def:positivefloat', 'budgets.se.' . $bound);
-            }
-        }
-        if (
-            isset($se['min'], $se['max']) && is_numeric($se['min']) && is_numeric($se['max'])
-                && (float) $se['min'] > (float) $se['max']
-        ) {
-            $errors[] = self::msg('def:mingtmax', 'budgets.se');
+        // Standard-error bounds only where a strategy stops or filters by them:
+        // a classical test has none, and asking for them asks for nothing. A
+        // condition, not an early return — the checks after this one apply to
+        // every strategy, and an early return here once skipped them for the
+        // classical test, accepting a minimum above its maximum.
+        if (strategy_parameters::any_uses($def, 'standarderror')) {
+            self::validate_se_bounds($budgets['se'] ?? null, $errors);
         }
 
         // A definition may still carry the flat schema-1 keys. They are part of
@@ -832,22 +869,7 @@ class experiment_definition {
      * @return bool
      */
     public static function uses_subscale_budget(array $def): bool {
-        $keys = [];
-        if (is_string($def['strategy'] ?? null)) {
-            $keys[] = $def['strategy'];
-        }
-        foreach ((array) ($def['sweep']['factors']['strategy'] ?? []) as $level) {
-            if (is_string($level)) {
-                $keys[] = $level;
-            }
-        }
-        foreach ($keys as $key) {
-            if (strategy_catalog::uses_subscales($key)) {
-                return true;
-            }
-        }
-
-        return false;
+        return strategy_parameters::any_uses($def, 'subscalemax');
     }
 
     /** @var string What a definition writes when a maximum is not to apply. */

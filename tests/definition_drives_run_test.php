@@ -366,6 +366,10 @@ final class definition_drives_run_test extends \advanced_testcase {
             'subscale' => ['minitems' => 3, 'maxitems' => 5],
             'se'       => ['min' => 0.30, 'max' => 0.75],
         ];
+        // A strategy that uses subscale budgets and a precision target, set
+        // before normalising: for one that does not, both would be removed and
+        // the engine would receive neutral values instead (#101).
+        $definition['strategy'] = 'allsubs';
         $definition = (new experiment_definition($definition))->get_normalised();
 
         $settings = test_provisioner::build_quizsettings(
@@ -416,6 +420,9 @@ final class definition_drives_run_test extends \advanced_testcase {
     public function test_effective_parameters_document_the_information_target(): void {
         $definition = $this->definition('2pl');
         $definition['budgets']['se'] = ['min' => 0.5, 'max' => 1.0];
+        // A strategy with a precision target: the classical test has none, and
+        // its information target is recorded as neutralised (#101).
+        $definition['strategy'] = 'fastest';
         $definition = (new experiment_definition($definition))->get_normalised();
 
         $effective = test_provisioner::effective_parameters($definition);
@@ -423,6 +430,11 @@ final class definition_drives_run_test extends \advanced_testcase {
         // I = 1 / SE^2, so SE 0.5 needs information 4 and SE 1.0 needs 1.
         $this->assertSame(4.0, $effective['targetinformation']['max']);
         $this->assertSame(1.0, $effective['targetinformation']['min']);
-        $this->assertSame('Fixed-form baseline', $effective['strategy']['label']);
+        $this->assertSame(\local_catquizlab\local\strategy_catalog::label('fastest'), $effective['strategy']['label']);
+        $definition['strategy'] = 'classic';
+        $this->assertSame(
+            \local_catquizlab\local\strategy_parameters::NEUTRALISED,
+            test_provisioner::effective_parameters($definition)['targetinformation']
+        );
     }
 }

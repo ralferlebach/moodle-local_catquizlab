@@ -354,6 +354,12 @@ class sweep {
         // These are applied after the combination, to the cell that matches.
         $definition = self::apply_strategy_budgets($definition);
 
+        // The run's own definition holds exactly what its strategy uses (#101).
+        // The per-strategy budgets have been applied above; left in, they would
+        // describe the other strategies' limits in this run's manifest.
+        unset($definition['budgetsbystrategy']);
+        $definition = strategy_parameters::strip($definition, (string) ($definition['strategy'] ?? ''));
+
         return $definition;
     }
 

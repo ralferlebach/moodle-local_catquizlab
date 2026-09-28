@@ -92,8 +92,12 @@ final class sweep_factors_test extends \advanced_testcase {
     public function test_se_window_is_swept_as_a_pair(): void {
         $this->resetAfterTest();
 
+        // Swept with a strategy that stops by standard error: over the
+        // classical test, which has no precision target, the window would be
+        // removed from every run (#101).
         $expansion = sweep::expand($this->spec([
-            'se' => [['min' => 0.30, 'max' => 0.75], ['min' => 0.45, 'max' => 1.0]],
+            'se'       => [['min' => 0.30, 'max' => 0.75], ['min' => 0.45, 'max' => 1.0]],
+            'strategy' => ['fastest'],
         ]));
 
         $this->assertCount(2, $expansion['cells']);

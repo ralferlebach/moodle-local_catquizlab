@@ -967,13 +967,15 @@ final class audit_test extends \advanced_testcase {
         $seen = [];
         foreach ($plan['runs'] as $run) {
             $def = $run['definition'];
+            // A run keeps only the budgets its strategy uses (#101): the
+            // classical test has no subscale budget at all.
             $seen[$def['strategy']] = [
                 (string) $def['budgets']['global']['maxitems'],
-                (string) $def['budgets']['subscale']['maxitems'],
+                isset($def['budgets']['subscale']) ? (string) $def['budgets']['subscale']['maxitems'] : 'n/a',
             ];
         }
 
-        $this->assertSame(['unlimited', '4'], $seen['classic']);
+        $this->assertSame(['unlimited', 'n/a'], $seen['classic']);
         $this->assertSame(['80', '5'], $seen['allsubs']);
         $this->assertSame(['40', '8'], $seen['relsubs']);
 

@@ -67,22 +67,34 @@ class test_provisioner {
         $se = (array) ($budgets['se'] ?? []);
         $strategy = (string) ($definition['strategy'] ?? 'fastest');
 
+        // Pilot questions are an option of their own, not a strategy (#103):
+        // on where the definition asks for them, off — neutralised — for a
+        // strategy that cannot include them.
+        $engine = strategy_parameters::engine_values($strategy, $budgets);
+
+        $pilot = (array) ($definition['pilot'] ?? []);
+        $pilotwanted = !empty($pilot['include']);
+        $pilotapplies = $pilotwanted && strategy_catalog::uses($strategy, 'pilot');
+
         return $extra + [
             'strategykey'             => $strategy,
             'teststrategy'            => strategy_catalog::engine_id($strategy),
+            'includepilot'            => $pilotapplies,
+            'pilotratio'              => $pilotapplies ? max(0.0, min(100.0, (float) ($pilot['ratio'] ?? 0))) : 0.0,
+            'pilotneutralised'        => $pilotwanted && !$pilotapplies,
             'minquestions'            => (int) ($global['minitems'] ?? 10),
             // Minus one where the definition says unlimited: the engine stops
             // applying the ceiling at that value.
             'maxquestions'            => experiment_definition::engine_maximum($global['maxitems'] ?? null, 15),
-            'minquestionspersubscale' => (int) ($subscale['minitems'] ?? 3),
-            // Zero or nothing only reaches here for a strategy that does not
-            // use subscales (validation requires a number otherwise), and for
-            // it the right ceiling per subscale is none at all.
-            'maxquestionspersubscale' => (int) ($subscale['maxitems'] ?? 0) === 0
-                ? experiment_definition::ENGINE_UNLIMITED
-                : experiment_definition::engine_maximum($subscale['maxitems'], 4),
-            'se_min'                  => (float) ($se['min'] ?? 0.35),
-            'se_max'                  => (float) ($se['max'] ?? 1.0),
+            // What the engine receives for what this strategy does not use is a
+            // neutral stand-in, never the definition's number (#101): a
+            // subscale ceiling handed to "fastest" is a limit the engine could
+            // apply after all.
+            'minquestionspersubscale' => $engine['subscalemin'],
+            'maxquestionspersubscale' => $engine['subscalemax'],
+            'se_min'                  => $engine['semin'],
+            'se_max'                  => $engine['semax'],
+            'na'                      => $engine['na'],
         ];
     }
 
@@ -107,22 +119,39 @@ class test_provisioner {
                 'key'      => $options['strategykey'],
                 'engineid' => $options['teststrategy'],
                 'label'    => strategy_catalog::label($options['strategykey']),
+                'alias'    => strategy_catalog::alias($options['strategykey']),
             ],
+            // What pilot questions did in this run: on, off, or asked for and
+            // neutralised because the strategy cannot include them.
+            'pilot'            => $options['pilotneutralised']
+                ? 'N/A (neutralised)'
+                : ($options['includepilot'] ? ['include' => true, 'ratio' => $options['pilotratio']] : ['include' => false]),
             'budgets'          => [
                 'global'   => [
                     'minitems' => $options['minquestions'],
                     'maxitems' => $options['maxquestions'],
                 ],
-                'subscale' => [
-                    'minitems' => $options['minquestionspersubscale'],
-                    'maxitems' => $options['maxquestionspersubscale'],
+                // Recorded as neutralised where the strategy does not use it:
+                // the run shows what was in force, not what was typed.
+                'subscale' => !empty($options['na']['subscale'])
+                    ? strategy_parameters::NEUTRALISED
+                    : [
+                        'minitems' => $options['minquestionspersubscale'],
+                        'maxitems' => $options['maxquestionspersubscale'],
+                    ],
+            ],
+            'se'               => !empty($options['na']['standarderror'])
+                ? strategy_parameters::NEUTRALISED
+                : ['min' => $semin, 'max' => $semax],
+            'targetinformation' => !empty($options['na']['standarderror'])
+                ? strategy_parameters::NEUTRALISED
+                : [
+                    'min' => $semax > 0 ? round(1.0 / ($semax * $semax), 5) : null,
+                    'max' => $semin > 0 ? round(1.0 / ($semin * $semin), 5) : null,
                 ],
-            ],
-            'se'               => ['min' => $semin, 'max' => $semax],
-            'targetinformation' => [
-                'min' => $semax > 0 ? round(1.0 / ($semax * $semax), 5) : null,
-                'max' => $semin > 0 ? round(1.0 / ($semin * $semin), 5) : null,
-            ],
+            'firstquestion'    => !empty($options['na']['firstquestion'])
+                ? strategy_parameters::NEUTRALISED
+                : (string) ($options['selectfirstquestion'] ?? '0'),
         ];
     }
 
@@ -143,7 +172,8 @@ class test_provisioner {
             'catquiz_selectteststrategy'             => (string) ($options['teststrategy']
                 ?? strategy_catalog::engine_id((string) ($options['strategykey'] ?? 'fastest'))),
             'catquiz_selectfirstquestion'            => (string) ($options['selectfirstquestion'] ?? '0'),
-            'catquiz_includepilotquestions'          => '0',
+            'catquiz_includepilotquestions'          => !empty($options['includepilot']) ? '1' : '0',
+            'catquiz_pilotratio'                     => (string) (float) ($options['pilotratio'] ?? 0),
             'catquiz_firstquestionreuseexistingdata' => '1',
             'catquiz_includetimelimit'               => '0',
             'catquiz_pp_min_inc'                     => $options['pp_min_inc'] ?? 0.01,

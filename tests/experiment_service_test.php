@@ -447,7 +447,7 @@ final class experiment_service_test extends \advanced_testcase {
 
         $this->assertCount(1, $rows);
         $this->assertSame('classic', $rows[0]['strategy']);
-        $this->assertSame('Fixed-form baseline', $rows[0]['strategylabel']);
+        $this->assertSame(\local_catquizlab\local\strategy_catalog::label('classic'), $rows[0]['strategylabel']);
         $this->assertSame('2pl', $rows[0]['model']);
     }
 }

@@ -110,6 +110,48 @@ class results_query {
         return $runs;
     }
 
+    /**
+     * The stop rules in force, per strategy, for the runs of the selection.
+     *
+     * Read from each run's own definition through the same function that
+     * provisioned it, so the results report what the engine was given — and
+     * only what applies: a classical test reports no precision target, a
+     * strategy without subscales no limit per subscale (#101).
+     *
+     * @return array<string, array{label: string, rules: string[], runs: int}> Keyed by strategy and rule set.
+     */
+    public function stop_rules(): array {
+        global $DB;
+
+        $groups = [];
+        $ids = array_keys($this->runs());
+        if ($ids === []) {
+            return $groups;
+        }
+
+        [$insql, $params] = $DB->get_in_or_equal($ids, SQL_PARAMS_NAMED, 'run');
+        $records = $DB->get_records_select('local_catquizlab_run', 'id ' . $insql, $params, 'id ASC');
+        foreach ($records as $record) {
+            $definition = run_registry::definition_for($record);
+            if (!isset($definition['strategy'])) {
+                continue;
+            }
+            $effective = test_provisioner::effective_parameters($definition);
+            $rules = strategy_parameters::stop_rules($effective);
+            $key = $definition['strategy'] . '|' . implode('|', $rules);
+            if (!isset($groups[$key])) {
+                $groups[$key] = [
+                    'label' => strategy_catalog::display_label((string) $definition['strategy']),
+                    'rules' => $rules,
+                    'runs'  => 0,
+                ];
+            }
+            $groups[$key]['runs']++;
+        }
+
+        return $groups;
+    }
+
     /** @var int Observations beyond which an unfiltered selection is refused. */
     public const TOO_MANY = 50000;
 

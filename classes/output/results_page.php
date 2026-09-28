@@ -303,7 +303,7 @@ class results_page {
             );
         }
 
-        return \html_writer::div(
+        $out = \html_writer::div(
             get_string('results:provenance', $component, (object) [
                 'runs'         => $provenance['runs'],
                 'attempts'     => $provenance['attempts'],
@@ -311,8 +311,28 @@ class results_page {
                 'dispersion'   => get_string('dispersion:ci95', $component),
                 'computed'     => userdate($provenance['computed'], get_string('strftimedatetimeshort')),
             ]),
-            'small text-muted mb-3'
+            'small text-muted mb-1'
         );
+
+        // The stop rules the engine applied, per strategy — only those in
+        // force (#101). A result read without them can be read as the effect
+        // of a strategy when it was the effect of a limit.
+        $items = '';
+        foreach ($this->query->stop_rules() as $group) {
+            $items .= \html_writer::tag('li', \html_writer::tag('strong', s($group['label'])) . ': '
+                . s(implode('; ', $group['rules'])));
+        }
+        if ($items !== '') {
+            $out .= \html_writer::div(
+                \html_writer::tag('span', get_string('results:stoprules', $component), [
+                    'title' => get_string('results:stoprulesexplain', $component),
+                ]) . \html_writer::tag('ul', $items, ['class' => 'mb-0']),
+                'small text-muted mb-3',
+                ['data-region' => 'catquizlab-stoprules']
+            );
+        }
+
+        return $out;
     }
 
     /**

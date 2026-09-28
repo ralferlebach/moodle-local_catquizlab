@@ -575,6 +575,14 @@ class setup_wizard {
                 get_string('wizard:task', $component),
                 $task !== false && !$task->get_disabled()
             ),
+            // The engine's strategies against what the form offers (#103): red
+            // when one side offers what the other cannot play.
+            self::step(
+                'enginecatalog',
+                get_string('wizard:enginecatalog', $component),
+                ($catalogue = strategy_catalog::catalogue_check())['ok'],
+                self::catalogue_detail($catalogue)
+            ),
             // The path of every sitting, kept by the engine (catquiz 1.2.1+).
             self::step(
                 'enginetrace',
@@ -601,6 +609,38 @@ class setup_wizard {
                 self::php_cli_detail($php, $component)
             ),
         ], get_string('wizard:pipelinehint', $component));
+    }
+
+    /**
+     * The engine catalogue in words: version, strategies, differences.
+     *
+     * @param array $catalogue What strategy_catalog::catalogue_check() returned.
+     * @return string
+     */
+    protected static function catalogue_detail(array $catalogue): string {
+        $component = 'local_catquizlab';
+        $lines = [get_string('wizard:engineversion', $component, $catalogue['engineversion'])];
+
+        foreach ($catalogue['engine'] as $strategy) {
+            $lines[] = get_string('wizard:enginestrategy', $component, (object) [
+                'id'          => $strategy['id'],
+                'class'       => substr((string) strrchr('\\' . $strategy['class'], '\\'), 1),
+                'description' => $strategy['description'],
+                'key'         => $strategy['key'] ?? '—',
+                'alias'       => $strategy['key'] !== null ? strategy_catalog::alias($strategy['key']) : '—',
+                'state'       => $strategy['active']
+                    ? get_string('wizard:strategyactive', $component)
+                    : get_string('wizard:strategyinactive', $component),
+            ]);
+        }
+        if ($catalogue['unknown'] !== []) {
+            $lines[] = get_string('wizard:strategyunknown', $component, implode(', ', $catalogue['unknown']));
+        }
+        if ($catalogue['phantom'] !== []) {
+            $lines[] = get_string('wizard:strategyphantom', $component, implode(', ', $catalogue['phantom']));
+        }
+
+        return implode("\n", $lines);
     }
 
     /**

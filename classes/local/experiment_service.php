@@ -144,9 +144,10 @@ class experiment_service {
      * The effective budgets of every planned run, one row each.
      *
      * @param array $expansion What sweep::expand() returned.
+     * @param array $overrides The experiment's per-strategy budgets.
      * @return array[]
      */
-    protected static function budget_preview(array $expansion): array {
+    protected static function budget_preview(array $expansion, array $overrides = []): array {
         $rows = [];
         $seen = [];
 
@@ -171,9 +172,17 @@ class experiment_service {
                     : $strategy,
                 'globalmin'    => (string) ($global['minitems'] ?? ''),
                 'globalmax'    => self::budget_text($global['maxitems'] ?? null),
-                'subscalemin'  => (string) ($subscale['minitems'] ?? ''),
-                'subscalemax'  => self::budget_text($subscale['maxitems'] ?? null),
-                'overridden'   => isset($definition['budgetsbystrategy'][$strategy]),
+                // Marked n/a where the strategy has no subscale budget: an empty cell
+                // would read as "not set", which is a different statement.
+                'subscalemin'  => strategy_catalog::uses_subscales($strategy)
+                    ? (string) ($subscale['minitems'] ?? '')
+                    : get_string('form:na_short', 'local_catquizlab'),
+                'subscalemax'  => strategy_catalog::uses_subscales($strategy)
+                    ? self::budget_text($subscale['maxitems'] ?? null)
+                    : get_string('form:na_short', 'local_catquizlab'),
+                // From the experiment: a run's own definition holds the applied
+                // result, not the per-strategy block it came from (#101).
+                'overridden'   => isset($overrides[$strategy]),
             ];
         }
 
@@ -287,7 +296,7 @@ class experiment_service {
             // the per-strategy budgets. A preview that shows only how many
             // runs there will be does not say whether "classic" kept its
             // unlimited ceiling — which is the thing somebody is checking.
-            'budgetrows'   => self::budget_preview($expansion),
+            'budgetrows'   => self::budget_preview($expansion, (array) ($normalised['budgetsbystrategy'] ?? [])),
             'errors'       => [],
             'warnings'     => $warnings,
             'factors'      => (array) ($normalised['sweep']['factors'] ?? []),

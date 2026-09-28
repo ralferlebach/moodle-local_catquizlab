@@ -270,6 +270,12 @@ class experiment_form extends \moodleform {
         $mform->addElement('text', 'subscalemax', get_string('form:subscalemax', $component), ['size' => 8]);
         $mform->setType('subscalemax', PARAM_INT);
         $mform->setDefault('subscalemax', 5);
+        // Said in words where it does not apply (#101), not just greyed out.
+        $mform->addElement('static', 'na_subscalemax', '', \html_writer::span(
+            get_string('form:na_subscale', $component),
+            'text-muted',
+            ['data-catquizlab-na' => 'subscalemax', 'hidden' => 'hidden']
+        ));
 
         // Budgets that belong to one strategy. Left empty, a strategy uses the
         // budgets above; filled, it overrides only what is filled. This is how
@@ -311,9 +317,12 @@ class experiment_form extends \moodleform {
                     'data-catquizlab-perstrategy' => $key,
                     'data-catquizlab-field' => $field,
                 ];
-                // A strategy without subscales has no subscale budget to set.
+                // A strategy without subscales has no subscale budget to set,
+                // and the field says so rather than sitting there empty (#101).
                 if (str_starts_with($field, 'subscale') && !strategy_catalog::uses_subscales($key)) {
                     $attributes['disabled'] = 'disabled';
+                    $attributes['placeholder'] = get_string('form:na_short', $component);
+                    $attributes['title'] = get_string('form:na_forstrategy', $component, strategy_catalog::label($key));
                 }
                 $group[] = $mform->createElement('text', $name, '', $attributes);
                 // Text, not integer: a maximum may be the word "unlimited".
@@ -335,7 +344,17 @@ class experiment_form extends \moodleform {
         global $PAGE;
         $PAGE->requires->js_amd_inline('
             require([], function() {
-                var subscalestrategies = ' . json_encode(strategy_catalog::SUBSCALE_STRATEGIES) . ';
+                var capabilities = ' . json_encode([
+                    'subscalemax'   => strategy_catalog::using('subscalemax'),
+                    'standarderror' => strategy_catalog::using('standarderror'),
+                    'pilot'         => strategy_catalog::using('pilot'),
+                ]) . ';
+                var fields = {
+                    subscalemax: ["id_subscalemin", "id_subscalemax"],
+                    standarderror: ["id_semin", "id_semax"],
+                    pilot: ["id_pilotinclude", "id_pilotratio"]
+                };
+                var na = ' . json_encode(get_string('form:na_short', $component)) . ';
                 var byid = function(id) { return document.getElementById(id); };
                 var inplay = function() {
                     var keys = {};
@@ -351,18 +370,28 @@ class experiment_form extends \moodleform {
                 };
                 var update = function() {
                     var keys = inplay();
-                    var anysub = Object.keys(keys).some(function(k) {
-                        return subscalestrategies.indexOf(k) !== -1;
-                    });
-                    ["id_subscalemin", "id_subscalemax"].forEach(function(id) {
-                        var el = byid(id);
-                        if (el) { el.disabled = !anysub; }
+                    Object.keys(fields).forEach(function(cap) {
+                        var applies = Object.keys(keys).some(function(k) {
+                            return capabilities[cap].indexOf(k) !== -1;
+                        });
+                        fields[cap].forEach(function(id) {
+                            var el = byid(id);
+                            if (el) { el.disabled = !applies; }
+                        });
+                        document.querySelectorAll("[data-catquizlab-na=\\"" + cap + "\\"]").forEach(function(note) {
+                            note.hidden = applies;
+                        });
                     });
                     document.querySelectorAll("[data-catquizlab-perstrategy]").forEach(function(el) {
                         var key = el.getAttribute("data-catquizlab-perstrategy");
                         var field = el.getAttribute("data-catquizlab-field");
-                        var sub = field.indexOf("subscale") === 0;
-                        el.disabled = !keys[key] || (sub && subscalestrategies.indexOf(key) === -1);
+                        var notapplicable = field.indexOf("subscale") === 0
+                            && capabilities.subscalemax.indexOf(key) === -1;
+                        el.disabled = !keys[key] || notapplicable;
+                        if (notapplicable) {
+                            el.placeholder = na;
+                            return;
+                        }
                         var shared = byid("id_" + field);
                         el.placeholder = shared && !shared.disabled ? shared.value : "";
                     });
@@ -373,6 +402,22 @@ class experiment_form extends \moodleform {
             });
         ');
 
+        // Pilot questions: an option of their own, not a strategy (#103). The
+        // engine mixes not-yet-calibrated questions into the sitting at the
+        // given share; a strategy that cannot include them ignores this.
+        $mform->addElement('advcheckbox', 'pilotinclude', get_string('form:pilotinclude', $component));
+        $mform->addHelpButton('pilotinclude', 'form:pilotinclude', $component);
+        $mform->addElement('text', 'pilotratio', get_string('form:pilotratio', $component), ['size' => 5]);
+        $mform->setType('pilotratio', PARAM_LOCALISEDFLOAT);
+        $mform->setDefault('pilotratio', 20);
+        $mform->hideIf('pilotratio', 'pilotinclude', 'notchecked');
+        // Said in words where it does not apply (#101), not just greyed out.
+        $mform->addElement('static', 'na_pilot', '', \html_writer::span(
+            get_string('form:na_pilot', $component),
+            'text-muted',
+            ['data-catquizlab-na' => 'pilot', 'hidden' => 'hidden']
+        ));
+
         $mform->addElement('text', 'semin', get_string('form:semin', $component), ['size' => 8]);
         $mform->setType('semin', PARAM_LOCALISEDFLOAT);
         $mform->setDefault('semin', 0.35);
@@ -381,6 +426,12 @@ class experiment_form extends \moodleform {
         $mform->addElement('text', 'semax', get_string('form:semax', $component), ['size' => 8]);
         $mform->setType('semax', PARAM_LOCALISEDFLOAT);
         $mform->setDefault('semax', 0.75);
+        // Said in words where it does not apply (#101), not just greyed out.
+        $mform->addElement('static', 'na_standarderror', '', \html_writer::span(
+            get_string('form:na_standarderror', $component),
+            'text-muted',
+            ['data-catquizlab-na' => 'standarderror', 'hidden' => 'hidden']
+        ));
 
         // Sweep.
         $mform->addElement('header', 'sweepheader', get_string('form:sweep', $component));
@@ -595,6 +646,10 @@ class experiment_form extends \moodleform {
                 'naming'   => ['pattern' => 'P-{stratum}-{index:04d}'],
             ],
             'budgetsbystrategy' => self::per_strategy_budgets($data),
+            'pilot'         => [
+                'include' => !empty($data['pilotinclude']),
+                'ratio'   => (float) unformat_float((string) ($data['pilotratio'] ?? 0)),
+            ],
             'budgets'       => [
                 'global'   => [
                     'minitems' => (int) ($data['globalmin'] ?? 20),
@@ -896,6 +951,8 @@ class experiment_form extends \moodleform {
             )),
             'poolpreset'         => (int) ($normalised['poolpreset'] ?? 0),
             'personspreset'      => (int) ($normalised['personspreset'] ?? 0),
+            'pilotinclude'       => !empty($normalised['pilot']['include']) ? 1 : 0,
+            'pilotratio'         => self::localised((float) ($normalised['pilot']['ratio'] ?? 20)),
         ] + self::per_strategy_fields($normalised);
     }
 

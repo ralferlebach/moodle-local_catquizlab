@@ -6,6 +6,136 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.7.2] — 2026-09-28 — Issue #101
+
+Parameters apply only where the engine uses them.
+
+A budget a strategy never reads is not a harmless extra: stored, it reads as a
+design decision; provisioned, it can become a limit the engine applies after
+all; reported, it describes a stop rule that did not exist.
+`strategy_parameters` is now the one place that decides, from
+`strategy_catalog::CAPABILITIES`, what is stored, what the engine receives, and
+what a run and its results report.
+
+### Capability matrix
+Accessors named as in the issue: `uses_global_min`, `uses_global_max`,
+`uses_subscale_min`, `uses_subscale_max`, `uses_standard_error`,
+`supports_pilot_items`, `uses_first_question_policy`, `fixed_form`.
+
+### Stored
+A saved definition drops what none of its strategies uses; each run's own
+definition holds exactly what its strategy uses, with per-strategy budgets
+applied and then removed. For a sweep over fastest, classic and allsubs:
+
+    allsubs  subscale and SE kept
+    fastest  no subscale budget; its SE target kept
+    classic  neither
+
+### Sent to the engine
+Neutral stand-ins where a strategy does not use a parameter: 0 / −1 per
+subscale, SE 0.00 / 1.00 for the classical test (whose strategy replaces the
+SE filter with a no-op; the engine's form requires numbers there). The run's
+manifest records each as `N/A (neutralised)`.
+
+### Shown
+In the form, fields a chosen strategy does not use are switched off and say so:
+"Not applicable: none of the chosen strategies works with subscales" — for
+subscale budgets, standard-error bounds and pilot questions, following the
+selection as it changes. The budget preview shows "n/a" instead of an empty cell.
+The results show, per strategy, only the stop rules in force.
+
+### Read back from the engine
+`provisioning_check` reads a run's test from `local_catquiz_tests` and compares
+it field by field with what the run defines. `cli/smoke.php` runs it after
+preparing and fails on any difference; `--provisioning-only` stops there.
+Checked locally against real activities for all six strategies: all match.
+The CI's worker end-to-end job plays all six with the same check before each.
+
+### Found on the way
+- An early `return` in the new SE validation skipped every check after it for
+  the classical test — a definition with a minimum above its maximum passed.
+- The budget preview lost its "own budget" badge once runs stopped carrying
+  their per-strategy block.
+- The stop rules would have looked for the run's definition at the manifest's
+  top level instead of `config.definition`, and shown nothing.
+
+### Tests
+`strategy_parameters_test` (matrix accessors, what a run stores, neutral engine
+values, manifest markers, stop rules in force, a classical test without SE
+bounds); a Behat scenario for the "not applicable" notes. Four existing tests
+pinned the old behaviour — a classical test with a subscale budget, "fastest"
+sending per-subscale limits — and now pin the new one.
+
+PHPUnit 725 tests / 4015 assertions, Behat 36 scenarios / 286 steps, phpcs and
+PHPDoc clean — one run.
+
+---
+
+## [0.7.1] — 2026-09-28 — Issue #103
+
+The strategy catalogue comes from the engine: no phantom strategies, no names of
+our own in their place.
+
+### What the engine says a strategy is called
+`strategy_catalog::label()` returns the engine's `get_description()`: "CAT",
+"Infer all subscales", "Infer lowest skill gap", "Infer greatest strength",
+"Classical test", "Infer relevant subscales". The names this plugin used —
+"Estimate global ability (MFI)", "Fixed-form baseline" and so on — were a second,
+independent source; they remain only as `alias()`, marked as such.
+
+### A stale cache cannot bring a strategy back
+The engine caches its strategy list and keeps it until its own invalidation
+event fires. The catalogue now:
+- computes a fingerprint from the engine version and its strategy classes, and
+  purges the engine's cache when it differs from the one stored;
+- drops any cached object whose class the engine no longer has, even where the
+  fingerprint matches;
+- checks each class's `ACTIVE` flag itself (see the engine finding below).
+
+### Readiness compares the two catalogues
+A new step lists the engine's release and version and every strategy with id,
+class, engine name, key and CatQuizLab alias, and turns red when the engine plays
+a strategy this plugin has no key for, or when the form would offer one the
+engine does not play. It compares against what the form actually offers — the
+place where "balanced" and "pilot" had survived.
+
+### Historic definitions
+A strategy the engine no longer plays is shown as its alias with "not available
+in the installed engine", not renamed and not hidden.
+
+### Pilot questions, separately
+An option of their own — include, and a share of 0–100 % — provisioned as
+`catquiz_includepilotquestions` / `catquiz_pilotratio`. For the classical test,
+which cannot include them, they are switched off and the run records
+"N/A (neutralised)".
+
+### Capability matrix
+`strategy_catalog::CAPABILITIES`: global min/max, subscale min/max, standard
+error, pilot questions, first-question policy, fixed form — per strategy, read
+from the engine's own form code. A test compares it against
+`local_catquiz/classes/teststrategy/info.php`, so it cannot drift unnoticed.
+This is the basis for #101.
+
+### Finding in the engine
+`info::return_available_strategies()` caches under the key `all` whatever
+`$onlyactive` was when the list was built. A first call with `false` puts
+inactive strategies into the cache, and every later call with `true` returns
+them. Handled here by checking `ACTIVE`; in the engine the key should include
+`$onlyactive`.
+
+### Tests
+`strategy_engine_catalog_test`: a stale cache with a changed fingerprint and a
+poisoned cache with a matching one; readiness turning red on an unknown engine
+strategy; names from the engine; the matrix against the engine source; pilot
+questions provisioned, neutralised and validated. Label assertions elsewhere read
+the expected name from the catalogue rather than hard-coding it.
+
+PHPUnit 719 tests / 3978 assertions, Behat 35 scenarios / 270 steps, phpcs and
+PHPDoc clean — one run, freshly built environment (Moodle 4.5.14+, local_catquiz
+aede4c2 / 2026092616).
+
+---
+
 ## [0.7.0] — 2026-09-28
 
 The experiment form, checked in a browser this time.

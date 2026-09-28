@@ -57,6 +57,7 @@ use local_catquizlab\local\worker_registry;
     'minanswers' => 15,
     'keep'     => false,
     'list-strategies' => false,
+    'provisioning-only' => false,
 ], ['h' => 'help']);
 
 if ($options['help']) {
@@ -235,6 +236,33 @@ if (!$prepared['ok']) {
     cli_error('Preparation failed.');
 }
 step('Prepared ' . $prepared['prepared'] . '/' . $prepared['total'] . ' runs.', $started);
+
+// What the engine actually holds for each run's test, read back and compared
+// with what the definition asks for (#101, #104). A parameter this strategy
+// does not use must have reached the engine as its neutral stand-in, and one it
+// does use as the definition's value — anything else is a run that tests
+// something other than what its manifest says.
+$started = microtime(true);
+foreach ($DB->get_records('local_catquizlab_run', ['experimentid' => $experimentid], 'id ASC', 'id') as $run) {
+    $check = \local_catquizlab\local\provisioning_check::compare((int) $run->id);
+    foreach ($check['checked'] as $field => $pair) {
+        cli_writeln(sprintf('  engine %-24s %s', $field, json_encode($pair['actual'])));
+    }
+    if (!$check['ok']) {
+        foreach ($check['differences'] as $difference) {
+            cli_writeln('  DIFFERENCE: ' . $difference);
+        }
+        cli_error('The engine holds different settings than the run defines.');
+    }
+}
+step('Engine settings read back and match the definition.', $started);
+
+if (!empty($options['provisioning-only'])) {
+    \local_catquizlab\local\purger::delete_experiment($experimentid, true, true);
+    cli_writeln('');
+    cli_writeln('PASS (provisioning only): engine settings match for ' . $strategy . '.');
+    exit(0);
+}
 
 $queued = $DB->count_records_select(
     'local_catquizlab_attempt',

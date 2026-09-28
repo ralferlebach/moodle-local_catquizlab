@@ -62,7 +62,7 @@ Feature: Defining and running CAT experiments from the web interface
       | name     | Behat labelled |
       | strategy | lowestsub      |
     When I navigate to "Reports > CAT experiment suite" in site administration
-    Then I should see "Detect weakest subscale"
+    Then I should see "Infer lowest skill gap"
 
   Scenario: Runs can be filtered and opened
     Given the following "local_catquizlab > experiment" exists:
@@ -287,7 +287,7 @@ Feature: Defining and running CAT experiments from the web interface
     And the "CAT strategy" select box should not contain "balanced"
     And the "CAT strategy" select box should not contain "pilot"
     And the "Vary strategy" select box should contain "allsubs"
-    And the "Vary strategy" select box should contain "Cover all subscales (allsubs)"
+    And the "Vary strategy" select box should contain "Infer all subscales (allsubs)"
     And the "Vary strategy" select box should not contain "balanced"
     And the "Vary strategy" select box should not contain "pilot"
     And the "Vary strategy" select box should not contain "Balanced content control (balanced)"
@@ -298,7 +298,7 @@ Feature: Defining and running CAT experiments from the web interface
     When I follow "New experiment"
     And I set the following fields to these values:
       | Name                   | Behat fastest only                       |
-      | CAT strategy           | Estimate global ability (MFI) (fastest)  |
+      | CAT strategy           | CAT (fastest)                            |
       | Minimum items (global) | 15                                       |
       | Maximum items (global) | 35                                       |
     # The subscale budgets mean nothing to "fastest": they are switched off,
@@ -313,7 +313,7 @@ Feature: Defining and running CAT experiments from the web interface
   Scenario: Per-strategy budgets are labelled and follow the chosen strategies
     Given I navigate to "Reports > CAT experiment suite" in site administration
     When I follow "New experiment"
-    And I set the field "CAT strategy" to "Cover all subscales (allsubs)"
+    And I set the field "CAT strategy" to "Infer all subscales (allsubs)"
     And I expand all fieldsets
     Then I should see "Questions per sitting"
     And I should see "per subscale"
@@ -324,6 +324,24 @@ Feature: Defining and running CAT experiments from the web interface
     And the "perstrategy_fastest_globalmax" "field" should be disabled
     And the "perstrategy_fastest_subscalemax" "field" should be disabled
     # Choosing "fastest" as well switches its row on — but never its subscale fields.
-    When I set the field "Vary strategy" to "Estimate global ability (MFI) (fastest),Cover all subscales (allsubs)"
+    When I set the field "Vary strategy" to "CAT (fastest),Infer all subscales (allsubs)"
     Then the "perstrategy_fastest_globalmax" "field" should be enabled
     And the "perstrategy_fastest_subscalemax" "field" should be disabled
+
+  @javascript
+  Scenario: Parameters a strategy does not use say so
+    Given I navigate to "Reports > CAT experiment suite" in site administration
+    When I follow "New experiment"
+    And I expand all fieldsets
+    And I set the field "CAT strategy" to "Classical test (classic)"
+    Then the "Minimum items per subscale" "field" should be disabled
+    And the "SE lower bound" "field" should be disabled
+    And the "Include pilot questions" "field" should be disabled
+    And I should see "Not applicable: none of the chosen strategies works with subscales."
+    And I should see "Not applicable: none of the chosen strategies stops by standard error"
+    And I should see "Not applicable: none of the chosen strategies can include pilot questions."
+    When I set the field "CAT strategy" to "Infer all subscales (allsubs)"
+    Then the "Minimum items per subscale" "field" should be enabled
+    And the "SE lower bound" "field" should be enabled
+    And I should not see "Not applicable: none of the chosen strategies works with subscales."
+    And I should not see "Not applicable: none of the chosen strategies stops by standard error"

@@ -370,7 +370,9 @@ class run_registry {
      */
     public static function group_label(string $factor, string $value): string {
         if ($factor === 'strategy' && strategy_catalog::has($value)) {
-            return strategy_catalog::label($value);
+            // Marked where the engine no longer plays it: a historic run keeps
+            // its strategy and says so, rather than being renamed or hidden.
+            return strategy_catalog::display_label($value);
         }
         if ($factor === 'model' && model_catalog::has($value)) {
             return model_catalog::label($value);
@@ -444,7 +446,7 @@ class run_registry {
      * @param \stdClass $record The run record.
      * @return array
      */
-    protected static function definition_for(\stdClass $record): array {
+    public static function definition_for(\stdClass $record): array {
         global $DB;
 
         // The manifest holds the definition as it was at expansion time, which

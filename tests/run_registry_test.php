@@ -211,8 +211,8 @@ final class run_registry_test extends \advanced_testcase {
 
         $labels = array_column(run_registry::compare($id, 'rmse', 'strategy'), 'label');
 
-        $this->assertContains('Detect weakest subscale', $labels);
-        $this->assertContains('Estimate global ability (MFI)', $labels);
+        $this->assertContains(\local_catquizlab\local\strategy_catalog::label('lowestsub'), $labels);
+        $this->assertContains(\local_catquizlab\local\strategy_catalog::label('fastest'), $labels);
     }
 
     /**
@@ -273,7 +273,7 @@ final class run_registry_test extends \advanced_testcase {
 
         $this->assertArrayHasKey('fastest', $values);
         $this->assertArrayHasKey('lowestsub', $values);
-        $this->assertSame('Detect weakest subscale', $values['lowestsub']);
+        $this->assertSame(\local_catquizlab\local\strategy_catalog::label('lowestsub'), $values['lowestsub']);
     }
 
     /**
