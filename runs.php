@@ -598,6 +598,59 @@ if ($runid > 0) {
     ];
     echo html_writer::table($table);
 
+    // The parameters this run was given, and what the engine holds for its
+    // test (#104): read back from the engine, not repeated from the
+    // definition. Where a strategy does not use a parameter, it says so.
+    $effective = \local_catquizlab\local\test_provisioner::effective_parameters(
+        \local_catquizlab\local\run_registry::definition_for($DB->get_record('local_catquizlab_run', ['id' => $runid]))
+    );
+    $engine = \local_catquizlab\local\provisioning_check::compare($runid);
+    $na = \local_catquizlab\local\strategy_parameters::NEUTRALISED;
+    $fmt = static function ($value): string {
+        if ($value === -1) {
+            return get_string('budget:unlimited', 'local_catquizlab');
+        }
+        return is_scalar($value) ? (string) $value : json_encode($value);
+    };
+    $pair = static function (string $field) use ($engine, $fmt): string {
+        return isset($engine['checked'][$field]) ? $fmt($engine['checked'][$field]['actual']) : '—';
+    };
+    $defined = static function ($value) use ($fmt): string {
+        return \local_catquizlab\local\experiment_definition::is_unlimited($value)
+            ? get_string('budget:unlimited', 'local_catquizlab')
+            : $fmt($value);
+    };
+    $subscale = $effective['budgets']['subscale'];
+    $se = $effective['se'];
+    $paramtable = new html_table();
+    $paramtable->attributes['class'] = 'generaltable table-sm w-auto';
+    $paramtable->attributes['data-region'] = 'catquizlab-effective-parameters';
+    $paramtable->head = [
+        get_string('effective:parameter', $component),
+        get_string('effective:defined', $component),
+        get_string('effective:engine', $component),
+    ];
+    $paramtable->data = [
+        [get_string('form:strategy', $component),
+            s($effective['strategy']['label']) . ' (' . (int) $effective['strategy']['engineid'] . ')', $pair('strategy')],
+        [get_string('form:globalmin', $component), $defined($effective['budgets']['global']['minitems']), $pair('minquestions')],
+        [get_string('form:globalmax', $component), $defined($effective['budgets']['global']['maxitems']), $pair('maxquestions')],
+        [get_string('form:subscalemin', $component), is_array($subscale) ? $defined($subscale['minitems']) : $na,
+            $pair('minquestionspersubscale')],
+        [get_string('form:subscalemax', $component), is_array($subscale) ? $defined($subscale['maxitems']) : $na,
+            $pair('maxquestionspersubscale')],
+        [get_string('form:semin', $component), is_array($se) ? $defined($se['min']) : $na, $pair('se_min')],
+        [get_string('form:semax', $component), is_array($se) ? $defined($se['max']) : $na, $pair('se_max')],
+    ];
+    echo $OUTPUT->heading(get_string('effective:heading', $component), 4);
+    echo html_writer::table($paramtable);
+    if ($engine['checked'] !== []) {
+        echo $OUTPUT->notification(
+            $engine['ok'] ? get_string('effective:match', $component) : implode(' ', $engine['differences']),
+            $engine['ok'] ? \core\output\notification::NOTIFY_SUCCESS : \core\output\notification::NOTIFY_ERROR
+        );
+    }
+
     // One row per sitting that did not simply work: what was tried, by which
     // worker, how it ended, and what to do about it. Only the interesting
     // ones — a run of a thousand collected sittings has nothing to say here.

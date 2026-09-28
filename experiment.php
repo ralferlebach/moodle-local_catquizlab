@@ -292,6 +292,7 @@ if ($form->is_cancelled()) {
 $preview = null;
 $validation = null;
 $notes = [];
+$frozennotice = '';
 
 if ($data = $form->get_data()) {
     require_capability('local/catquizlab:edit', $context);
@@ -315,8 +316,27 @@ if ($data = $form->get_data()) {
 
     // Remarks that are neither defects nor doubts: an experiment with runs is
     // read-only, and a cited building block is worth naming.
-    if (experiment_service::run_count($id) > 0) {
-        $notes[] = get_string('editor:hasruns', $component);
+    // An experiment with runs is read-only, and says so before anything is
+    // typed (#104), with the one action that does what the edit was for: a
+    // copy with the same definition, open for changes, from which a new sweep
+    // is created. The existing runs stay as they are.
+    if (($runcount = experiment_service::run_count($id)) > 0) {
+        $form->freeze_for_runs();
+        // The button beside the notice, not inside it: a notification's text is
+        // cleaned, and cleaning removes forms — the button with them.
+        $frozennotice = $OUTPUT->notification(
+            get_string('editor:frozen', $component, $runcount),
+            \core\output\notification::NOTIFY_WARNING
+        );
+        $duplicatebutton = new \core\output\single_button(
+            new moodle_url('/local/catquizlab/experiment.php', [
+                'id' => $id, 'action' => 'duplicate', 'sesskey' => sesskey(),
+            ]),
+            get_string('editor:duplicateandchange', $component),
+            'post',
+            \core\output\single_button::BUTTON_PRIMARY
+        );
+        $frozennotice .= \html_writer::div($OUTPUT->render($duplicatebutton), 'mb-3');
     }
     $normalisedfornotes = $validation['normalised'];
     foreach (['poolpreset' => 'preset:kindpool', 'personspreset' => 'preset:kindpersons'] as $field => $label) {
@@ -429,7 +449,7 @@ if ($id > 0 && has_capability('local/catquizlab:export', $context)) {
 
 echo $OUTPUT->render_from_template('local_catquizlab/experiment_editor', [
     'sections'   => $sections,
-    'form'       => $form->render(),
+    'form'       => $frozennotice . $form->render(),
     'validation' => $validationcontext,
     'preview'    => $previewcontext,
     'exchange'   => $exchangecontext,

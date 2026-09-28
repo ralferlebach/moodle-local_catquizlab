@@ -320,7 +320,8 @@ class results_page {
         $items = '';
         foreach ($this->query->stop_rules() as $group) {
             $items .= \html_writer::tag('li', \html_writer::tag('strong', s($group['label'])) . ': '
-                . s(implode('; ', $group['rules'])));
+                . s(implode('; ', $group['rules']))
+                . ' (' . get_string('results:stoprulesruns', $component, $group['runs']) . ')', ['data-strategy' => $group['key']]);
         }
         if ($items !== '') {
             $out .= \html_writer::div(

@@ -45,6 +45,9 @@ class run_orchestrator {
     /** @var string The adaptivequiz activity could not be created. */
     public const REASON_NO_TEST = 'test-not-created';
 
+    /** @var string The engine holds different settings than the run defines. */
+    public const REASON_ENGINE_MISMATCH = 'engine-settings-differ';
+
     /** @var string The effective configuration differs from the manifest. */
     public const REASON_MANIFEST_DRIFT = 'manifest-configuration-drift';
 
@@ -699,6 +702,15 @@ class run_orchestrator {
         global $DB;
         $existingcmid = (int) ($context['run']->testcmid ?? 0);
         if ($existingcmid > 0 && $DB->record_exists('course_modules', ['id' => $existingcmid])) {
+            // A reused activity is held to the same postcondition as a new one.
+            $check = provisioning_check::compare($runid);
+            if (!$check['ok']) {
+                return [
+                    'failed'   => true,
+                    'reason'   => self::REASON_ENGINE_MISMATCH . ': ' . implode(' ', $check['differences']),
+                    'testcmid' => $existingcmid,
+                ];
+            }
             return [
                 'failed'   => false,
                 'testcmid' => $existingcmid,
@@ -720,6 +732,20 @@ class run_orchestrator {
         // activity at all ended up scheduled.
         if ($testcmid === null || $testcmid <= 0) {
             return ['failed' => true, 'reason' => self::REASON_NO_TEST, 'testcmid' => 0];
+        }
+
+        // Postcondition (#104): the engine holds what the run defines. Read
+        // back from the engine's own record of the test and compared field by
+        // field; a difference fails the stage and names what differs, rather
+        // than letting a run test something other than its manifest says.
+        $DB->set_field('local_catquizlab_run', 'testcmid', (int) $testcmid, ['id' => $runid]);
+        $check = provisioning_check::compare($runid);
+        if (!$check['ok']) {
+            return [
+                'failed'   => true,
+                'reason'   => self::REASON_ENGINE_MISMATCH . ': ' . implode(' ', $check['differences']),
+                'testcmid' => (int) $testcmid,
+            ];
         }
 
         return ['failed' => false, 'testcmid' => (int) $testcmid, 'section' => $container['sectionnum']];

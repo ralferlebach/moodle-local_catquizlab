@@ -225,6 +225,12 @@ jobs:
           MINUTES: 4
         run: bash local/catquizlab/cli/smoke_all.sh
 
+
+      - name: Issue 104 — effective parameters reach the created activities
+        working-directory: moodle
+        # classic unlimited, allsubs 80, relsubs 40: read back from the engine's
+        # record of each created test, not from the definition.
+        run: php local/catquizlab/cli/smoke.php --case=104 --provisioning-only
       - name: Collect logs on failure
         if: failure()
         run: |

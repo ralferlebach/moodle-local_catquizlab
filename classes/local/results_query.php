@@ -141,6 +141,7 @@ class results_query {
             $key = $definition['strategy'] . '|' . implode('|', $rules);
             if (!isset($groups[$key])) {
                 $groups[$key] = [
+                    'key'   => (string) $definition['strategy'],
                     'label' => strategy_catalog::display_label((string) $definition['strategy']),
                     'rules' => $rules,
                     'runs'  => 0,

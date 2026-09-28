@@ -137,6 +137,33 @@ class strategy_parameters {
     }
 
     /**
+     * A fixed form's global maximum: every item, unless one was set for it.
+     *
+     * The classical test plays a fixed form. A shared maximum of, say, 35 —
+     * meant for the adaptive strategies beside it in a sweep — turned it into
+     * a 35-item test and made the comparison one of lengths, not of
+     * strategies (#104). Its maximum is therefore unlimited by default; a
+     * maximum given for it in its own budgets still applies.
+     *
+     * @param array $definition A run's definition, before its per-strategy
+     *     budgets are removed.
+     * @param array $overrides The experiment's per-strategy budgets.
+     * @return array
+     */
+    public static function fixed_form_default(array $definition, array $overrides): array {
+        $strategy = (string) ($definition['strategy'] ?? '');
+        if (!strategy_catalog::fixed_form($strategy)) {
+            return $definition;
+        }
+        if (isset($overrides[$strategy]['global']['maxitems'])) {
+            return $definition;
+        }
+        $definition['budgets']['global']['maxitems'] = experiment_definition::UNLIMITED;
+
+        return $definition;
+    }
+
+    /**
      * What the engine receives for one strategy, and which of it is a stand-in.
      *
      * @param string $strategy The strategy key.

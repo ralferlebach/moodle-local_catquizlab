@@ -49,6 +49,23 @@ require_once($GLOBALS['CFG']->libdir . '/formslib.php');
  */
 class experiment_form extends \moodleform {
     /**
+     * Make the whole form read-only, for an experiment that has runs.
+     *
+     * An experiment with runs documents what those runs did, and saving was
+     * refused — but only after somebody had edited it, believing the runs
+     * would follow (#104). Frozen, the form cannot be mistaken for one that
+     * changes anything, and the page offers the copy that can.
+     *
+     * @return void
+     */
+    public function freeze_for_runs(): void {
+        $this->_form->hardFreezeAllVisibleExcept([]);
+        if ($this->_form->elementExists('buttonar')) {
+            $this->_form->removeElement('buttonar');
+        }
+    }
+
+    /**
      * Build the form.
      *
      * @return void

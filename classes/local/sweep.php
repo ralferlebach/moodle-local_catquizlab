@@ -354,6 +354,18 @@ class sweep {
         // These are applied after the combination, to the cell that matches.
         $definition = self::apply_strategy_budgets($definition);
 
+        // The classical test plays every item unless given its own maximum —
+        // where its maximum is the shared base one. Where the global budget is
+        // itself a swept factor, it is the variable under study and applies to
+        // every strategy, the classical test included: overriding it would
+        // collapse the swept levels into identical cells.
+        if (!isset($combo['globalbudget'])) {
+            $definition = strategy_parameters::fixed_form_default(
+                $definition,
+                (array) ($definition['budgetsbystrategy'] ?? [])
+            );
+        }
+
         // The run's own definition holds exactly what its strategy uses (#101).
         // The per-strategy budgets have been applied above; left in, they would
         // describe the other strategies' limits in this run's manifest.

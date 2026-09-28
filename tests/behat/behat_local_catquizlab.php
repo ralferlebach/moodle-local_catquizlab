@@ -55,6 +55,65 @@ class behat_local_catquizlab extends behat_base {
     }
 
     /**
+     * Give every run of an experiment collected sittings, as if they had been played.
+     *
+     * The results page shows provenance — and with it the stop rules in force —
+     * only for runs with collected sittings; a scenario cannot wait for a
+     * browser worker to play them.
+     *
+     * @Given /^the runs of "(?P<name_string>(?:[^"]|\\")*)" have (?P<count_number>\d+) collected sittings each$/
+     * @param string $name The experiment name.
+     * @param int $count Sittings per run.
+     * @return void
+     * @throws \coding_exception If no experiment of that name exists.
+     */
+    public function the_runs_have_collected_sittings(string $name, int $count): void {
+        global $DB;
+
+        $id = $DB->get_field('local_catquizlab_experiment', 'id', ['name' => $name]);
+        if (!$id) {
+            throw new \coding_exception('No experiment named "' . $name . '".');
+        }
+
+        /** @var \local_catquizlab_generator $generator */
+        $generator = \testing_util::get_data_generator()->get_plugin_generator('local_catquizlab');
+        foreach ($DB->get_records('local_catquizlab_run', ['experimentid' => $id]) as $run) {
+            $DB->set_field('local_catquizlab_run', 'status', \local_catquizlab\local\registry::STATUS_FINISHED, ['id' => $run->id]);
+            for ($i = 0; $i < $count; $i++) {
+                $person = $generator->create_person(['runid' => $run->id]);
+                $DB->insert_record('local_catquizlab_attempt', (object) [
+                    'runid' => $run->id, 'personid' => $person->id,
+                    'status' => \local_catquizlab\local\attempt_scheduler::STATUS_COLLECTED,
+                    'tries' => 1, 'runtimems' => 4000,
+                    'tracejson' => json_encode([
+                        'finaltheta' => 0.1 * $i, 'finalse' => 0.34, 'items' => range(1, 15),
+                        'nitems' => 15, 'steps' => 15, 'stopreason' => 'se', 'scaleabilities' => [],
+                    ]),
+                    'timecreated' => time(), 'timemodified' => time(),
+                ]);
+            }
+        }
+    }
+
+    /**
+     * Open the results of one experiment.
+     *
+     * @Given /^I open the results of "(?P<name_string>(?:[^"]|\\")*)"$/
+     * @param string $name The experiment name.
+     * @return void
+     * @throws \coding_exception If no experiment of that name exists.
+     */
+    public function i_open_the_results_of(string $name): void {
+        global $DB;
+
+        $id = $DB->get_field('local_catquizlab_experiment', 'id', ['name' => $name]);
+        if (!$id) {
+            throw new \coding_exception('No experiment named "' . $name . '".');
+        }
+        $this->execute('behat_general::i_visit', ['/local/catquizlab/results.php?experimentid=' . $id]);
+    }
+
+    /**
      * Open the detail page of an experiment's first run.
      *
      * Run ids are database ids, so a scenario cannot know them in advance;

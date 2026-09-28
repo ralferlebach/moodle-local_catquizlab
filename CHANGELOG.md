@@ -6,6 +6,71 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.7.3] — 2026-09-28 — Issue #104, with the rest of #101
+
+Effective parameters reach the created activity, provably — and the classical
+test has no artificial ceiling.
+
+### The classical test plays every item (#104, criterion 1)
+A shared maximum of 35 in a sweep over the classical test and adaptive
+strategies turned the fixed form into a 35-item test, and the comparison into
+one of lengths. The classical test's maximum is now unlimited by default; a
+maximum given to it in its own budgets still applies. Where the global budget is
+itself a swept factor, it is the variable under study and applies to the
+classical test too — otherwise its levels would be identical cells (two existing
+tests caught that first version of the rule).
+
+### Postcondition: the engine holds what the run defines (criteria 4, 5)
+After the test stage creates — or reuses — the activity, `provisioning_check`
+reads the engine's record back from `local_catquiz_tests` and compares it field
+by field with the run's definition. A difference fails the stage with the field,
+the expected and the found value:
+
+    stage:test (engine-settings-differ: Engine setting maxquestions:
+    expected 80, found 35.)
+
+### Visible per run (criteria 3, 8)
+The run page shows the run's parameters twice — as defined, and as the CAT
+engine holds them — with "n/a" where the strategy does not use one, and says
+whether the two agree. The results list the stop rules in force per strategy,
+with how many runs each covers.
+
+### An experiment with runs is read-only, visibly (criteria 6, 7)
+The form was editable, and saving was refused only afterwards — the situation
+the issue describes. It is frozen now, with a notice that the settings document
+what the runs did and that changing them would not change the runs, and a
+"Duplicate and change settings" button that opens an editable copy.
+
+The browser test found that the button, first placed inside the notice, was
+never shown: a notification's text is cleaned, and cleaning removes forms. It
+sits under the notice.
+
+### End to end (criterion 9)
+`smoke.php --case=104 --provisioning-only`: a sweep over classic, allsubs and
+relsubs with a shared maximum of 35 and 80 and 40 given to the latter, prepared
+into real activities and read back:
+
+    allsubs  engine maxquestions 80   (expected 80)
+    classic  engine maxquestions -1   (expected -1)
+    relsubs  engine maxquestions 40   (expected 40)
+
+Run as a step of the worker end-to-end workflow.
+
+### #101, criterion 8 in the browser
+A Behat scenario with collected sittings opens the results and checks, line by
+line per strategy, which stop rules are listed. Each line carries its
+strategy's key for that.
+
+### Tooling
+The test runner's lock was held by PostgreSQL, which inherited its file
+descriptor when started by the runner; every later run was refused. Services
+are started with the descriptor closed.
+
+PHPUnit 727 tests / 4029 assertions, Behat 38 scenarios / 311 steps, phpcs and
+PHPDoc clean — one run.
+
+---
+
 ## [0.7.2] — 2026-09-28 — Issue #101
 
 Parameters apply only where the engine uses them.

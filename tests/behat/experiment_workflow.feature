@@ -139,7 +139,7 @@ Feature: Defining and running CAT experiments from the web interface
     And the experiment "Behat locked" has been expanded into runs
     And I navigate to "Reports > CAT experiment suite" in site administration
     When I follow "Behat locked"
-    Then I should see "already has runs"
+    Then I should see "cannot be changed here"
 
   Scenario: The results page offers the filter bar and the tabs
     Given the following "local_catquizlab > experiment" exists:
@@ -345,3 +345,39 @@ Feature: Defining and running CAT experiments from the web interface
     And the "SE lower bound" "field" should be enabled
     And I should not see "Not applicable: none of the chosen strategies works with subscales."
     And I should not see "Not applicable: none of the chosen strategies stops by standard error"
+
+  Scenario: The results report only the stop rules each strategy actually had
+    Given the following "local_catquizlab > experiment" exists:
+      | name            | Behat stop rules         |
+      | sweepstrategies | fastest,classic,allsubs  |
+    And the experiment "Behat stop rules" has been expanded into runs
+    And the runs of "Behat stop rules" have 3 collected sittings each
+    When I open the results of "Behat stop rules"
+    Then I should see "Stop rules in force"
+    # The adaptive strategies stop at the shared maximum; the classical test
+    # plays every item unless given its own maximum (#104).
+    And I should see "no maximum number of questions" in the "[data-strategy='classic']" "css_element"
+    And I should see "stops after at most" in the "[data-strategy='fastest']" "css_element"
+    # The classical test has no precision target and no subscales: neither is listed.
+    And I should not see "standard error" in the "[data-strategy='classic']" "css_element"
+    And I should not see "per subscale" in the "[data-strategy='classic']" "css_element"
+    # "fastest" stops by precision but does not count by subscale.
+    And I should see "standard error" in the "[data-strategy='fastest']" "css_element"
+    And I should not see "per subscale" in the "[data-strategy='fastest']" "css_element"
+    # "allsubs" has both.
+    And I should see "standard error" in the "[data-strategy='allsubs']" "css_element"
+    And I should see "per subscale" in the "[data-strategy='allsubs']" "css_element"
+
+  Scenario: An experiment with runs is read-only and offers a copy to change
+    Given the following "local_catquizlab > experiment" exists:
+      | name | Behat frozen |
+    And the experiment "Behat frozen" has been expanded into runs
+    And I navigate to "Reports > CAT experiment suite" in site administration
+    When I follow "Behat frozen"
+    Then I should see "cannot be changed here"
+    And "Save experiment" "button" should not exist
+    # Frozen fields are shown read-only, not removed: visible, not editable.
+    And the "name" "field" should be disabled
+    When I press "Duplicate and change settings"
+    Then "Save experiment" "button" should exist
+    And the "name" "field" should be enabled

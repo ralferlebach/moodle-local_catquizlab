@@ -58,6 +58,7 @@ use local_catquizlab\local\worker_registry;
     'keep'     => false,
     'list-strategies' => false,
     'provisioning-only' => false,
+    'case' => '',
 ], ['h' => 'help']);
 
 if ($options['help']) {
@@ -222,6 +223,21 @@ $definition['budgets']['subscale'] = [
 // precision no real experiment would.
 $definition['budgets']['se'] = ['min' => 0.35, 'max' => 1.0];
 
+// Issue #104's case: a shared maximum of 35 for a sweep over the classical
+// test and two adaptive strategies, with 80 and 40 given to the latter as their
+// own. The classical test must reach the engine unlimited, the others at 80
+// and 40 — checked against the activities actually created.
+$case104 = ['classic' => -1, 'allsubs' => 80, 'relsubs' => 40];
+if ($options['case'] === '104') {
+    $definition['strategy'] = 'classic';
+    $definition['sweep']['factors']['strategy'] = array_keys($case104);
+    $definition['budgets']['global'] = ['minitems' => 10, 'maxitems' => 35];
+    $definition['budgetsbystrategy'] = [
+        'allsubs' => ['global' => ['maxitems' => 80]],
+        'relsubs' => ['global' => ['maxitems' => 40]],
+    ];
+}
+
 $experimentid = (int) experiment_service::save($definition)['id'];
 step('Defined experiment ' . $experimentid . '.', $started);
 
@@ -245,6 +261,22 @@ step('Prepared ' . $prepared['prepared'] . '/' . $prepared['total'] . ' runs.', 
 $started = microtime(true);
 foreach ($DB->get_records('local_catquizlab_run', ['experimentid' => $experimentid], 'id ASC', 'id') as $run) {
     $check = \local_catquizlab\local\provisioning_check::compare((int) $run->id);
+    if ($options['case'] === '104') {
+        $runstrategy = (string) (\local_catquizlab\local\run_registry::definition_for(
+            $DB->get_record('local_catquizlab_run', ['id' => $run->id])
+        )['strategy'] ?? '');
+        $actualmax = $check['checked']['maxquestions']['actual'] ?? null;
+        cli_writeln(sprintf(
+            '  case 104: %-8s engine maxquestions %s (expected %d)',
+            $runstrategy,
+            json_encode($actualmax),
+            $case104[$runstrategy] ?? 0
+        ));
+        if ($actualmax !== ($case104[$runstrategy] ?? null)) {
+            cli_error('Case 104: ' . $runstrategy . ' reached the engine with maxquestions '
+                . json_encode($actualmax) . ', expected ' . ($case104[$runstrategy] ?? '?') . '.');
+        }
+    }
     foreach ($check['checked'] as $field => $pair) {
         cli_writeln(sprintf('  engine %-24s %s', $field, json_encode($pair['actual'])));
     }
