@@ -6,6 +6,51 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.8.0] — 2026-09-29 — Issue #109
+
+Related tests side by side, and the simulated people behind the numbers.
+
+### Twin families
+A twin family is one simulated person — same replication, same index — in
+several runs, typically under different strategies. The Test flow tab compares
+them: a family (the first with more than one test is chosen by default) or tests
+picked one by one, coloured by twin family, strategy, run or replication, with a
+legend naming each group once, one plot.
+
+### Metrics, globally or for one subscale
+Ability, SE after each step, TI@n, or scales estimated. For a selected subscale:
+its estimate after each step, and its SE and information from the items in its
+subtree at that estimate — checked against the engine: for a leaf the engine's
+scale SE is exactly that from its own items, for a parent from every item below
+it (verified on real sittings for a leaf, a category and the root). Where the
+check fails, SE and information are withheld. The scale's status is the engine's
+at the end of the test, said as such. For a strategy without subscales:
+"Not applicable for this strategy/run".
+
+### Axes
+The comparison follows the plot conventions of #105; x and y ranges can be set by
+hand to put several plots on one scale.
+
+### The simulated people
+The overview shows the true global abilities of the selection — each twin family
+once — as a histogram with the ability bounds as dashed lines: n, mean, SD, min,
+max and the distribution they were drawn from. Read as a stream.
+
+### Export
+Comparison and people: the graphic as SVG and the data as CSV — attempt, twin
+family, run, strategy, replication, metric, scale, step, value.
+
+### Found on the way
+The first version of the Behat step that creates twins changed the wrong line —
+in the step the stop-rule scenario uses — which left the twin unset and a
+variable undefined there. Both scenarios run together now.
+
+### Not done
+Small multiples (optional); saving comparison templates; remaining TI min/max
+and per-step scale status, which the engine does not record.
+
+---
+
 ## [0.7.9] — 2026-09-29 — Issue #105 §3–9, #106 completed
 
 Plots a reader can use: symmetric logit axes, integer counts, a real 45°

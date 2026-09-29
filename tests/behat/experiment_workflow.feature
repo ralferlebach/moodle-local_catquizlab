@@ -460,3 +460,27 @@ Feature: Defining and running CAT experiments from the web interface
     And I should see "TI@n (global)" in the "[data-region='catquizlab-flow-steps']" "css_element"
     And I should see "N/A" in the "[data-region='catquizlab-flow-steps']" "css_element"
     And I should see "on the last step it agrees with the information the CAT engine reports"
+
+  Scenario: Twins of one simulated person are compared in one plot, and the simulated people are shown
+    Given the following "local_catquizlab > experiment" exists:
+      | name            | Behat twins      |
+      | sweepstrategies | fastest,allsubs  |
+    And the experiment "Behat twins" has been expanded into runs
+    And the runs of "Behat twins" share twin "r001-t00007" with full traces
+    When I open the test flow of "Behat twins"
+    Then I should see "Compare related tests"
+    # The twin family is chosen by default, and both of its tests are drawn, one colour per strategy.
+    And the field "Twin family" matches value "r001-t00007 (2 tests)"
+    And "[data-region='catquizlab-comparison'] polyline[data-region='series']" "css_element" should exist
+    And I should see "CAT (fastest)" in the "[data-region='catquizlab-comparison']" "css_element"
+    And I should see "Infer all subscales (allsubs)" in the "[data-region='catquizlab-comparison']" "css_element"
+    And "[data-download='svg']" "css_element" should exist
+    And "[data-download='csv']" "css_element" should exist
+    # Another metric.
+    When I set the field "Metric" to "SE after this step"
+    And I press "Compare"
+    Then "[data-region='catquizlab-comparison'] polyline[data-region='series']" "css_element" should exist
+    # The simulated people, each twin family once.
+    When I follow "Overview"
+    Then I should see "Simulated people"
+    And I should see "1 simulated people in this selection" in the "[data-region='catquizlab-people-stats']" "css_element"

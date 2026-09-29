@@ -172,6 +172,40 @@ class behat_local_catquizlab extends behat_base {
             [$id],
             IGNORE_MULTIPLE
         );
+        $this->add_full_trace_sitting($run, '');
+    }
+
+    /**
+     * Give every run of an experiment one sitting of the same twin family, with a full trace.
+     *
+     * @Given /^the runs of "(?P<name_string>(?:[^"]|\\")*)" share twin "(?P<twin_string>(?:[^"]|\\")*)" with full traces$/
+     * @param string $name The experiment name.
+     * @param string $twin The twin family id.
+     * @return void
+     * @throws \coding_exception If no experiment of that name exists.
+     */
+    public function the_runs_share_a_twin(string $name, string $twin): void {
+        global $DB;
+
+        $id = $DB->get_field('local_catquizlab_experiment', 'id', ['name' => $name]);
+        if (!$id) {
+            throw new \coding_exception('No experiment named "' . $name . '".');
+        }
+        foreach ($DB->get_records('local_catquizlab_run', ['experimentid' => $id], 'id ASC') as $run) {
+            $this->add_full_trace_sitting($run, $twin);
+        }
+    }
+
+    /**
+     * One collected sitting with a trace shaped as the engine keeps it.
+     *
+     * @param \stdClass $run The run.
+     * @param string $twin The twin family, or '' for the generator's own.
+     * @return void
+     */
+    protected function add_full_trace_sitting(\stdClass $run, string $twin): void {
+        global $DB;
+
         $DB->set_field('local_catquizlab_run', 'status', \local_catquizlab\local\registry::STATUS_FINISHED, ['id' => $run->id]);
 
         $played = [];
@@ -187,7 +221,7 @@ class behat_local_catquizlab extends behat_base {
 
         /** @var \local_catquizlab_generator $generator */
         $generator = \testing_util::get_data_generator()->get_plugin_generator('local_catquizlab');
-        $person = $generator->create_person(['runid' => $run->id]);
+        $person = $generator->create_person(['runid' => $run->id] + ($twin !== '' ? ['twinid' => $twin] : []));
         $attemptid = (int) $DB->insert_record('local_catquizlab_attempt', (object) [
             'runid' => $run->id, 'personid' => $person->id,
             'status' => \local_catquizlab\local\attempt_scheduler::STATUS_COLLECTED, 'tries' => 1, 'runtimems' => 4000,

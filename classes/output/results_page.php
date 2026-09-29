@@ -429,6 +429,9 @@ class results_page {
         $out .= \html_writer::tag('h3', get_string('results:celltable', $component), ['class' => 'h5 mt-4']);
         $out .= $this->render_summary_cell_table($overview['cell']);
 
+        // The simulated people behind the numbers (#109, section 4).
+        $out .= $this->render_people();
+
         return $out;
     }
 
@@ -889,6 +892,7 @@ class results_page {
         $out .= \html_writer::tag('h3', get_string('results:singleflow', $component), ['class' => 'h5 mt-4']);
         $out .= $this->render_attempt_picker($observations, (int) $selected['attemptid']);
         $out .= $this->render_single_flow($selected);
+        $out .= $this->render_comparison($observations);
 
         return $out;
     }
@@ -994,6 +998,319 @@ class results_page {
      */
     /** @var string|null The data basis of this page's plots, once built. */
     protected ?string $plotbasis = null;
+
+    /**
+     * Several related traces in one plot (#109).
+     *
+     * A twin family — the same simulated person in several runs, under
+     * different strategies — or sittings picked one by one; coloured by twin
+     * family, strategy, run or replication; by ability, standard error, test
+     * information or scales estimated, globally or for one subscale.
+     *
+     * @param array[] $observations The selection's observations.
+     * @return string
+     */
+    protected function render_comparison(array $observations): string {
+        global $DB;
+        $component = 'local_catquizlab';
+
+        $metric = optional_param('cmp_metric', 'ability', PARAM_ALPHA);
+        $metric = in_array($metric, \local_catquizlab\local\test_flow::METRICS, true) ? $metric : 'ability';
+        $group = optional_param('cmp_group', 'strategy', PARAM_ALPHA);
+        $group = in_array($group, ['twin', 'strategy', 'run', 'replication'], true) ? $group : 'strategy';
+        $scaleid = optional_param('cmp_scale', 0, PARAM_INT);
+        $twin = optional_param('cmp_twin', '', PARAM_ALPHANUMEXT);
+        $picked = optional_param_array('cmp_attempts', [], PARAM_INT);
+        $fixed = [];
+        foreach (['xmin', 'xmax', 'ymin', 'ymax'] as $key) {
+            $raw = optional_param('cmp_' . $key, '', PARAM_RAW_TRIMMED);
+            $fixed[$key] = $raw === '' ? null : unformat_float($raw);
+        }
+
+        // Twin families with more than one sitting: the ones worth comparing.
+        $families = [];
+        foreach ($observations as $observation) {
+            if ((string) $observation['twinid'] !== '') {
+                $families[(string) $observation['twinid']][] = $observation;
+            }
+        }
+        $families = array_filter($families, static fn(array $members): bool => count($members) > 1);
+        ksort($families);
+
+        if ($picked !== []) {
+            $selected = array_values(array_filter($observations, static fn(array $o): bool =>
+                in_array((int) $o['attemptid'], $picked, true)));
+        } else {
+            if ($twin === '' || !isset($families[$twin])) {
+                $twin = (string) (array_key_first($families) ?? '');
+            }
+            $selected = $families[$twin] ?? [];
+        }
+
+        $out = \html_writer::tag('h3', get_string('compare:heading', $component), ['class' => 'h5 mt-4']);
+        $out .= \html_writer::tag('p', get_string('compare:explain', $component), ['class' => 'text-muted small']);
+        $out .= $this->render_comparison_form($observations, $families, $twin, $picked, $group, $metric, $scaleid, $fixed);
+        if ($selected === []) {
+            return $out . \html_writer::div(get_string('compare:none', $component), 'alert alert-info');
+        }
+
+        $labels = [
+            'ability' => get_string('axis:esttheta', $component),
+            'se' => get_string('flow:se', $component),
+            'ti' => get_string('flow:ti', $component),
+            'scales' => get_string('flow:scalesestimated', $component),
+        ];
+        $chart = new scatter_chart(
+            get_string('compare:heading', $component),
+            get_string('axis:step', $component),
+            $labels[$metric]
+        );
+        $chart->set_axes(
+            axis_scale::INTEGER,
+            $metric === 'ability' ? axis_scale::SYMMETRIC : ($metric === 'scales' ? axis_scale::INTEGER : axis_scale::LINEAR),
+            ['yatleast' => $metric === 'ability' ? $this->ability_halfrange() : 0, 'yfromzero' => $metric !== 'ability']
+        );
+        $chart->set_basis($this->plot_basis());
+        $chart->set_fixed_bounds($fixed);
+
+        $rows = [];
+        $notes = [];
+        foreach ($selected as $observation) {
+            $detail = $observation + results_query::detail($observation);
+            $strategy = (string) $observation['strategy'];
+            if ($scaleid > 0 && !\local_catquizlab\local\strategy_catalog::uses_subscales($strategy)) {
+                $notes[] = get_string('compare:notapplicable', $component, (object) [
+                    'attempt' => (int) $observation['attemptid'],
+                    'strategy' => \local_catquizlab\local\strategy_catalog::display_label($strategy),
+                ]);
+                continue;
+            }
+            $flow = \local_catquizlab\local\test_flow::steps($detail);
+            $subtree = $scaleid > 0 ? results_query::scale_subtree((int) $observation['runid'], $scaleid) : [];
+            $trace = (array) ($detail['trace'] ?? []);
+            $series = \local_catquizlab\local\test_flow::series($flow, $trace, $metric, $scaleid, $subtree);
+            $groupvalue = [
+                'twin' => (string) $observation['twinid'],
+                'strategy' => \local_catquizlab\local\strategy_catalog::display_label($strategy) . ' (' . $strategy . ')',
+                'run' => get_string('flow:runid', $component) . ' ' . (int) $observation['runid'],
+                'replication' => get_string('compare:replication', $component, (int) ($observation['replication'] ?? 0)),
+            ][$group];
+            $label = get_string('compare:tracelabel', $component, (object) [
+                'attempt' => (int) $observation['attemptid'],
+                'strategy' => \local_catquizlab\local\strategy_catalog::display_label($strategy),
+                'run' => (int) $observation['runid'],
+            ]);
+            $chart->add_series($label, $groupvalue, $series['points']);
+            if ($scaleid > 0) {
+                $notes[] = get_string('compare:scalestatus', $component, (object) [
+                    'attempt' => (int) $observation['attemptid'],
+                    'status' => $series['status'] !== '' ? $series['status'] : get_string('flow:na', $component),
+                ]) . ($metric !== 'ability' && !$series['consistent']
+                    ? ' ' . get_string('compare:scaleunconfirmed', $component)
+                    : '');
+            }
+            foreach ($series['points'] as $point) {
+                $rows[] = [
+                    'attemptid' => (int) $observation['attemptid'],
+                    'twinid' => (string) $observation['twinid'],
+                    'runid' => (int) $observation['runid'],
+                    'strategy' => $strategy,
+                    'replication' => (int) ($observation['replication'] ?? 0),
+                    'metric' => $metric,
+                    'scaleid' => $scaleid,
+                    'step' => $point['x'],
+                    'value' => $point['y'],
+                ];
+            }
+        }
+
+        $out .= \html_writer::div($chart->render(), '', ['data-region' => 'catquizlab-comparison']);
+        foreach ($notes as $note) {
+            $out .= \html_writer::div(s($note), 'small text-muted');
+        }
+        $out .= $chart->download_links('catquizlab-comparison-' . $metric . ($scaleid ? '-scale' . $scaleid : ''), $rows);
+
+        return $out;
+    }
+
+    /**
+     * The form choosing what to compare.
+     *
+     * @param array[] $observations All observations.
+     * @param array $families Twin families with several sittings.
+     * @param string $twin The chosen family.
+     * @param int[] $picked Sittings picked one by one.
+     * @param string $group Grouping.
+     * @param string $metric Metric.
+     * @param int $scaleid Selected subscale, 0 for global.
+     * @param array $fixed Hand-set axis ranges.
+     * @return string
+     */
+    protected function render_comparison_form(
+        array $observations,
+        array $families,
+        string $twin,
+        array $picked,
+        string $group,
+        string $metric,
+        int $scaleid,
+        array $fixed
+    ): string {
+        global $DB;
+        $component = 'local_catquizlab';
+
+        $out = \html_writer::start_tag('form', [
+            'method' => 'get', 'action' => (new \moodle_url('/local/catquizlab/results.php'))->out(false),
+            'class' => 'mb-3', 'data-region' => 'catquizlab-compare-form',
+        ]);
+        $out .= \html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'tab', 'value' => 'testflow']);
+        foreach ($this->filter as $name => $value) {
+            $out .= \html_writer::empty_tag('input', ['type' => 'hidden', 'name' => $name, 'value' => $value]);
+        }
+        // Every label bound to its control: for screen readers, and for tests
+        // that find a field by what it is called.
+        $field = static fn(string $id, string $label, string $control): string =>
+            \html_writer::div(
+                \html_writer::tag('label', $label, ['class' => 'mr-2', 'for' => $id]) . $control,
+                'form-group mr-3 mb-2'
+            );
+
+        $familyoptions = [];
+        foreach ($families as $id => $members) {
+            $familyoptions[$id] = get_string('compare:family', $component, (object) ['id' => $id, 'n' => count($members)]);
+        }
+        $attemptoptions = [];
+        $scaleids = [];
+        foreach (array_slice($observations, 0, 300) as $observation) {
+            $attemptoptions[(int) $observation['attemptid']] = get_string('compare:tracelabel', $component, (object) [
+                'attempt' => (int) $observation['attemptid'],
+                'strategy' => \local_catquizlab\local\strategy_catalog::display_label((string) $observation['strategy']),
+                'run' => (int) $observation['runid'],
+            ]) . ((string) $observation['twinid'] !== '' ? ' · ' . $observation['twinid'] : '');
+        }
+        foreach (
+            $DB->get_records_select(
+                'local_catquizlab_scalemap',
+                'parentcatscaleid <> 0 AND runid IN (' . implode(',', array_map(
+                    'intval',
+                    array_unique(array_column($observations, 'runid'))
+                ) ?: [0]) . ')',
+                null,
+                'catscaleid ASC',
+                'id, catscaleid'
+            ) as $row
+        ) {
+            $scaleids[(int) $row->catscaleid] = true;
+        }
+        $scaleoptions = [0 => get_string('compare:global', $component)];
+        if ($scaleids !== [] && $DB->get_manager()->table_exists('local_catquiz_catscales')) {
+            [$in, $params] = $DB->get_in_or_equal(array_keys($scaleids));
+            foreach ($DB->get_records_select('local_catquiz_catscales', 'id ' . $in, $params, 'name ASC', 'id, name') as $scale) {
+                $scaleoptions[(int) $scale->id] = $scale->name;
+            }
+        }
+
+        $out .= \html_writer::start_div('d-flex flex-wrap align-items-end');
+        $out .= $field(
+            'cmp_twin',
+            get_string('compare:twinfamily', $component),
+            \html_writer::select(
+                $familyoptions,
+                'cmp_twin',
+                $twin,
+                ['' => get_string('compare:nofamily', $component)],
+                ['class' => 'custom-select', 'id' => 'cmp_twin']
+            )
+        );
+        $out .= $field(
+            'cmp_attempts',
+            get_string('compare:orattempts', $component),
+            \html_writer::select(
+                $attemptoptions,
+                'cmp_attempts[]',
+                $picked,
+                false,
+                ['class' => 'custom-select', 'multiple' => 'multiple', 'size' => 4, 'id' => 'cmp_attempts']
+            )
+        );
+        $out .= $field('cmp_group', get_string('compare:group', $component), \html_writer::select([
+            'twin' => get_string('compare:bytwin', $component), 'strategy' => get_string('form:strategy', $component),
+            'run' => get_string('flow:runid', $component), 'replication' => get_string('compare:byreplication', $component),
+        ], 'cmp_group', $group, false, ['class' => 'custom-select', 'id' => 'cmp_group']));
+        $out .= $field('cmp_metric', get_string('compare:metric', $component), \html_writer::select([
+            'ability' => get_string('axis:esttheta', $component), 'se' => get_string('flow:se', $component),
+            'ti' => get_string('flow:ti', $component), 'scales' => get_string('flow:scalesestimated', $component),
+        ], 'cmp_metric', $metric, false, ['class' => 'custom-select', 'id' => 'cmp_metric']));
+        $out .= $field(
+            'cmp_scale',
+            get_string('compare:selectedscale', $component),
+            \html_writer::select($scaleoptions, 'cmp_scale', $scaleid, false, ['class' => 'custom-select', 'id' => 'cmp_scale'])
+        );
+        foreach (['xmin', 'xmax', 'ymin', 'ymax'] as $key) {
+            $out .= $field('cmp_' . $key, get_string('compare:' . $key, $component), \html_writer::empty_tag('input', [
+                'type' => 'text', 'name' => 'cmp_' . $key, 'id' => 'cmp_' . $key, 'size' => 4, 'class' => 'form-control',
+                'value' => $fixed[$key] === null ? '' : format_float((float) $fixed[$key], 2),
+            ]));
+        }
+        $out .= \html_writer::empty_tag('input', ['type' => 'submit', 'class' => 'btn btn-secondary mb-2',
+            'value' => get_string('compare:show', $component)]);
+        $out .= \html_writer::end_div() . \html_writer::end_tag('form');
+
+        return $out;
+    }
+
+    /**
+     * The simulated people of the selection: how their abilities are distributed (#109, section 4).
+     *
+     * Read as a stream, each person once — twins in other runs share their
+     * ability and are the same simulated person.
+     *
+     * @return string
+     */
+    protected function render_people(): string {
+        $component = 'local_catquizlab';
+        $values = [];
+        foreach ($this->query->each_observation() as $observation) {
+            $key = (string) $observation['twinid'] !== '' ? 'twin:' . $observation['twinid'] : 'person:' . $observation['personid'];
+            $values[$key] = (float) $observation['truetheta'];
+        }
+        $out = \html_writer::tag('h3', get_string('people:heading', $component), ['class' => 'h5 mt-4']);
+        if ($values === []) {
+            return $out . \html_writer::div(get_string('chart:nodata', $component), 'alert alert-info');
+        }
+        $values = array_values($values);
+        $n = count($values);
+        $mean = array_sum($values) / $n;
+        $sd = $n > 1 ? sqrt(array_sum(array_map(static fn(float $v): float => ($v - $mean) ** 2, $values)) / ($n - 1)) : 0.0;
+        $half = $this->ability_halfrange();
+
+        $out .= \html_writer::tag('p', get_string('people:explain', $component, (object) [
+            'n' => $n,
+            'mean' => format_float($mean, 3), 'sd' => format_float($sd, 3),
+            'min' => format_float(min($values), 3), 'max' => format_float(max($values), 3),
+            'distributions' => implode('; ', array_keys($this->query->ability_distributions())),
+        ]), ['class' => 'small', 'data-region' => 'catquizlab-people-stats']);
+
+        $chart = new histogram_chart(get_string('people:heading', $component), get_string('axis:truetheta', $component), $values);
+        if ($half > 0) {
+            $chart->set_marks([-$half, $half]);
+        }
+        $svg = $chart->render();
+        $csv = "truetheta\n" . implode("\n", array_map(static fn(float $v): string => (string) round($v, 5), $values)) . "\n";
+        $links = \html_writer::link(
+            'data:image/svg+xml;base64,' . base64_encode($svg),
+            get_string('chart:downloadsvg', $component),
+            ['download' => 'catquizlab-people.svg', 'class' => 'btn btn-sm btn-outline-secondary mr-2', 'data-download' => 'svg']
+        )
+            . \html_writer::link(
+                'data:text/csv;charset=utf-8;base64,' . base64_encode($csv),
+                get_string('chart:downloadcsv', $component),
+                ['download' => 'catquizlab-people.csv', 'class' => 'btn btn-sm btn-outline-secondary', 'data-download' => 'csv']
+            );
+
+        return $out . \html_writer::div($svg, '', ['data-region' => 'catquizlab-people'])
+            . \html_writer::div(s($this->plot_basis()), 'small text-muted mt-1') . \html_writer::div($links, 'mb-3');
+    }
 
     /**
      * What every plot on this page is based on (#105, section 9).

@@ -175,6 +175,33 @@ class results_query {
         return $out;
     }
 
+    /**
+     * A scale and every scale below it, in a run's provisioned tree (#109).
+     *
+     * @param int $runid The run.
+     * @param int $scaleid The catscale.
+     * @return int[]
+     */
+    public static function scale_subtree(int $runid, int $scaleid): array {
+        global $DB;
+
+        $children = [];
+        $rows = $DB->get_records('local_catquizlab_scalemap', ['runid' => $runid], 'id ASC', 'id, catscaleid, parentcatscaleid');
+        foreach ($rows as $row) {
+            $children[(int) $row->parentcatscaleid][] = (int) $row->catscaleid;
+        }
+        $subtree = [$scaleid];
+        for ($i = 0; $i < count($subtree); $i++) {
+            foreach ($children[$subtree[$i]] ?? [] as $child) {
+                if (!in_array($child, $subtree, true)) {
+                    $subtree[] = $child;
+                }
+            }
+        }
+
+        return $subtree;
+    }
+
     /** @var array<int, string> End reason codes of the batch being read, by sitting. */
     protected array $endreasons = [];
 

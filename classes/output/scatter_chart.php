@@ -86,6 +86,49 @@ class scatter_chart {
     /** @var array Axis options: xatleast, yatleast, xfromzero, yfromzero, jitter. */
     protected array $axisoptions = [];
 
+    /** @var array[] Several traces in one plot: label, group, points (#109). */
+    protected array $series = [];
+
+    /** @var array|null Fixed axis ranges: xmin, xmax, ymin, ymax, any of them. */
+    protected ?array $fixed = null;
+
+    /** @var string[] Colours by group, distinguishable in print as on screen. */
+    protected const PALETTE = ['#1b9e77', '#d95f02', '#7570b3', '#e7298a', '#66a61e', '#e6ab02', '#a6761d', '#666666'];
+
+    /**
+     * Add one trace, drawn as a joined line (#109).
+     *
+     * Traces of the same group share a colour and one legend entry.
+     *
+     * @param string $label What the trace is (sitting, strategy, run …).
+     * @param string $group What colours and names it in the legend.
+     * @param array[] $points Its points in order; points without a value are skipped.
+     * @return self
+     */
+    public function add_series(string $label, string $group, array $points): self {
+        $clean = [];
+        foreach ($points as $point) {
+            if (isset($point['x'], $point['y']) && is_numeric($point['x']) && is_numeric($point['y'])) {
+                $clean[] = ['x' => (float) $point['x'], 'y' => (float) $point['y']];
+            }
+        }
+        $this->series[] = ['label' => $label, 'group' => $group, 'points' => $clean];
+
+        return $this;
+    }
+
+    /**
+     * Fix the axis ranges by hand; unset ones follow the data.
+     *
+     * @param array $fixed xmin, xmax, ymin, ymax — numbers or null.
+     * @return self
+     */
+    public function set_fixed_bounds(array $fixed): self {
+        $this->fixed = array_filter($fixed, static fn($v): bool => $v !== null && $v !== '' && is_numeric($v));
+
+        return $this;
+    }
+
     /** @var string What the plot is based on, shown beneath it (#105, section 9). */
     protected string $basis = '';
 
@@ -237,7 +280,11 @@ class scatter_chart {
      * @return string The SVG markup, or an empty-state notice when there is nothing to plot.
      */
     public function render(): string {
-        if ($this->points === []) {
+        $seriespoints = [];
+        foreach ($this->series as $trace) {
+            $seriespoints = array_merge($seriespoints, $trace['points']);
+        }
+        if ($this->points === [] && $seriespoints === []) {
             return \html_writer::div(
                 get_string('chart:nodata', 'local_catquizlab'),
                 'alert alert-info'
@@ -327,6 +374,36 @@ class scatter_chart {
 
         // Points. Semi-transparent, because overplotting is the norm with a
         // few hundred replications and solid dots would hide the density.
+        // Several traces (#109): one colour per group, joined in order, and a
+        // legend naming each group once.
+        $groups = [];
+        foreach ($this->series as $trace) {
+            if (!isset($groups[$trace['group']])) {
+                $groups[$trace['group']] = self::PALETTE[count($groups) % count(self::PALETTE)];
+            }
+            $colour = $groups[$trace['group']];
+            $coords = [];
+            foreach ($trace['points'] as $point) {
+                $coords[] = round($sx($point['x']), 2) . ',' . round($sy($point['y']), 2);
+            }
+            if (count($coords) >= 2) {
+                $svg .= '<polyline points="' . implode(' ', $coords) . '" fill="none" stroke="' . $colour
+                    . '" stroke-width="1.6" stroke-opacity="0.85" data-region="series"><title>' . s($trace['label'])
+                    . '</title></polyline>';
+            }
+            foreach ($trace['points'] as $point) {
+                $svg .= '<circle cx="' . round($sx($point['x']), 2) . '" cy="' . round($sy($point['y']), 2)
+                    . '" r="2.5" fill="' . $colour . '"><title>' . s($trace['label']) . '</title></circle>';
+            }
+        }
+        $row = 0;
+        foreach ($groups as $group => $colour) {
+            $ly = self::MARGIN_TOP + 12 + 16 * $row++;
+            $svg .= '<rect x="' . (self::MARGIN_LEFT + 10) . '" y="' . ($ly - 8) . '" width="12" height="3"'
+                . ' fill="' . $colour . '"/>';
+            $svg .= $this->text(self::MARGIN_LEFT + 27, $ly - 3, (string) $group, 'start', $colour);
+        }
+
         // The band first, then the line, then the points on top.
         if (count($this->band) >= 2) {
             $upper = [];
@@ -380,6 +457,51 @@ class scatter_chart {
     }
 
     /**
+     * The plot as a downloadable SVG and its data as CSV (#109, #108).
+     *
+     * @param string $basename File name without extension.
+     * @param array[] $rows The data behind the plot, one array per row.
+     * @return string Links, or '' when there is nothing drawn.
+     */
+    public function download_links(string $basename, array $rows): string {
+        $svg = $this->render();
+        if (strpos($svg, '<svg') === false) {
+            return '';
+        }
+        $drawing = substr($svg, strpos($svg, '<svg'));
+        $drawing = substr($drawing, 0, strpos($drawing, '</svg>') + 6);
+        if (strpos($drawing, 'xmlns=') === false) {
+            $drawing = str_replace('<svg ', '<svg xmlns="http://www.w3.org/2000/svg" ', $drawing);
+        }
+        $csv = '';
+        if ($rows !== []) {
+            $handle = fopen('php://temp', 'r+');
+            fputcsv($handle, array_keys(reset($rows)));
+            foreach ($rows as $row) {
+                fputcsv($handle, array_values($row));
+            }
+            rewind($handle);
+            $csv = (string) stream_get_contents($handle);
+            fclose($handle);
+        }
+        $name = clean_filename($basename);
+        $links = \html_writer::link(
+            'data:image/svg+xml;base64,' . base64_encode($drawing),
+            get_string('chart:downloadsvg', 'local_catquizlab'),
+            ['download' => $name . '.svg', 'class' => 'btn btn-sm btn-outline-secondary mr-2', 'data-download' => 'svg']
+        );
+        if ($csv !== '') {
+            $links .= \html_writer::link(
+                'data:text/csv;charset=utf-8;base64,' . base64_encode($csv),
+                get_string('chart:downloadcsv', 'local_catquizlab'),
+                ['download' => $name . '.csv', 'class' => 'btn btn-sm btn-outline-secondary', 'data-download' => 'csv']
+            );
+        }
+
+        return \html_writer::div($links, 'mb-3');
+    }
+
+    /**
      * The plot with its accessible summary table underneath.
      *
      * @param array $summary Label => value pairs describing the plotted data.
@@ -425,8 +547,12 @@ class scatter_chart {
      * @return array{xmin: float, xmax: float, ymin: float, ymax: float, xticks: float[], yticks: float[]}
      */
     protected function bounds(): array {
-        $xs = array_map('floatval', array_column($this->points, 'x'));
-        $ys = array_map('floatval', array_column($this->points, 'y'));
+        $all = $this->points;
+        foreach ($this->series as $trace) {
+            $all = array_merge($all, $trace['points']);
+        }
+        $xs = array_map('floatval', array_column($all, 'x'));
+        $ys = array_map('floatval', array_column($all, 'y'));
         foreach ($this->references as $reference) {
             if ($reference['kind'] === 'horizontal') {
                 $ys[] = (float) $reference['value'];
@@ -448,6 +574,14 @@ class scatter_chart {
 
         $x = $this->axis($this->xmode, $xs, 'x');
         $y = $this->axis($this->ymode, $ys, 'y');
+
+        // Ranges set by hand (#109): the same scale across compared plots.
+        if ($this->fixed) {
+            $fx = axis_scale::linear([(float) ($this->fixed['xmin'] ?? $x['min']), (float) ($this->fixed['xmax'] ?? $x['max'])]);
+            $fy = axis_scale::linear([(float) ($this->fixed['ymin'] ?? $y['min']), (float) ($this->fixed['ymax'] ?? $y['max'])]);
+            $x = isset($this->fixed['xmin']) || isset($this->fixed['xmax']) ? $fx : $x;
+            $y = isset($this->fixed['ymin']) || isset($this->fixed['ymax']) ? $fy : $y;
+        }
 
         return ['xmin' => $x['min'], 'xmax' => $x['max'], 'ymin' => $y['min'], 'ymax' => $y['max'],
             'xticks' => $x['ticks'], 'yticks' => $y['ticks']];

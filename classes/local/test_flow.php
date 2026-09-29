@@ -149,6 +149,92 @@ class test_flow {
         ];
     }
 
+    /** @var string[] The metrics a trace can be compared by (#109). */
+    public const METRICS = ['ability', 'se', 'ti', 'scales'];
+
+    /**
+     * One metric of one sitting, step by step, globally or for one scale (#109).
+     *
+     * For a scale: its estimate after each step from the ability path, and
+     * its test information from the items in its subtree at that estimate —
+     * the engine's own arithmetic, checked on the last step against the
+     * standard error the engine reports for the scale (a leaf from its own
+     * items, a parent from all items below it). Where the check fails the
+     * scale's SE and information are null. Which scales were active at a given
+     * step the engine does not record: that metric has no per-step values for
+     * a scale.
+     *
+     * @param array $flow What steps() returned.
+     * @param array $trace The collected trace.
+     * @param string $metric One of METRICS.
+     * @param int $scaleid 0 for the global ability, else a catscale id.
+     * @param int[] $subtree The scale and every scale below it.
+     * @return array{points: array[], consistent: bool, status: string}
+     */
+    public static function series(array $flow, array $trace, string $metric, int $scaleid = 0, array $subtree = []): array {
+        $points = [];
+        if ($scaleid === 0) {
+            $field = ['ability' => 'ability', 'se' => 'se', 'ti' => 'ti', 'scales' => 'scalesestimated'][$metric] ?? 'ability';
+            foreach ($flow['steps'] as $step) {
+                $points[] = ['x' => $step['step'], 'y' => $step[$field]];
+            }
+            return ['points' => $points, 'consistent' => (bool) ($flow['final']['consistent'] ?? false), 'status' => ''];
+        }
+
+        $path = array_values((array) ($trace['abilitypath'] ?? []));
+        $played = array_values((array) ($trace['progress']['playedquestions'] ?? []));
+        $subtree = array_map('intval', $subtree === [] ? [$scaleid] : $subtree);
+        $values = [];
+        foreach ($flow['steps'] as $index => $step) {
+            $abilities = (array) ($path[$index]['abilities'] ?? []);
+            $theta = isset($abilities[$scaleid]) ? (float) $abilities[$scaleid] : null;
+            $ti = null;
+            if ($theta !== null) {
+                $ti = 0.0;
+                for ($j = 0; $j <= $index && $j < count($played); $j++) {
+                    if (!in_array((int) ($played[$j]['catscaleid'] ?? 0), $subtree, true)) {
+                        continue;
+                    }
+                    $information = self::item_information((array) $played[$j], $theta);
+                    if ($information === null) {
+                        $ti = null;
+                        break;
+                    }
+                    $ti += $information;
+                }
+            }
+            $values[] = ['step' => $step['step'], 'theta' => $theta, 'ti' => $ti,
+                'se' => ($ti !== null && $ti > 0) ? 1.0 / sqrt($ti) : null];
+        }
+
+        $engine = $trace['scalestandarderrors'][$scaleid] ?? null;
+        $last = $values === [] ? null : $values[count($values) - 1];
+        $consistent = is_numeric($engine) && $last !== null && $last['se'] !== null
+            && abs($last['se'] - (float) $engine) / max((float) $engine, 1e-9) < 0.01;
+
+        foreach ($values as $value) {
+            $y = null;
+            if ($metric === 'ability') {
+                $y = $value['theta'];
+            } else if ($metric === 'se' && $consistent) {
+                $y = $value['se'];
+            } else if ($metric === 'ti' && $consistent) {
+                $y = $value['ti'];
+            }
+            $points[] = ['x' => $value['step'], 'y' => $y];
+        }
+
+        $progress = (array) ($trace['progress'] ?? []);
+        $status = '';
+        foreach (['active' => 'activescales', 'dropped' => 'droppedscales', 'locked' => 'lockedscales'] as $label => $key) {
+            if (in_array($scaleid, array_map('intval', (array) ($progress[$key] ?? [])), true)) {
+                $status = $label;
+            }
+        }
+
+        return ['points' => $points, 'consistent' => $consistent, 'status' => $status];
+    }
+
     /**
      * The score of a played question, from wherever the engine kept it.
      *
