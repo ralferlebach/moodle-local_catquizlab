@@ -69,6 +69,9 @@ class pipeline_tick extends \core\task\scheduled_task {
             return;
         }
 
+        // Execution artefacts past their retention (#107).
+        \local_catquizlab\local\artefact_store::cleanup();
+
         // Old lifecycle entries go by the same retention as the debug log. They
         // were kept for ever: a year of runs is a table nobody reads and every
         // log page has to filter through.

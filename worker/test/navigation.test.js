@@ -116,6 +116,17 @@ test('pure helpers: lost contexts and secrets in URLs', () => {
     );
 });
 
+test('a page snapshot leaves the session key behind (#107)', () => {
+    const html = '<script>M.cfg = {"wwwroot":"x","sesskey":"Ab12Cd34"};</script>'
+        + '<input type="hidden" name="sesskey" value="Ab12Cd34">'
+        + '<input value="Ab12Cd34" type="hidden" name="sesskey">'
+        + '<a href="/login/logout.php?sesskey=Ab12Cd34">out</a>'
+        + '<input type="password" name="password" value="secret">';
+    const clean = nav.sanitiseHtml(html);
+    assert.ok(!clean.includes('Ab12Cd34'), clean);
+    assert.ok(!clean.includes('secret'), clean);
+});
+
 test('the new pattern plays every question under random delays', async(t) => {
     const browser = await browserOrNull();
     if (!browser) {

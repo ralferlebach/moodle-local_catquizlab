@@ -65,6 +65,20 @@ function sanitiseUrl(url) {
 }
 
 /**
+ * A page snapshot without the secrets Moodle embeds in every page.
+ *
+ * @param {string} html The snapshot.
+ * @returns {string}
+ */
+function sanitiseHtml(html) {
+    return sanitiseUrl(html)
+        .replace(/("sesskey"\s*:\s*")[^"]*(")/gi, '$1[redacted]$2')
+        .replace(/(name=["']sesskey["'][^>]*value=["'])[^"']*(["'])/gi, '$1[redacted]$2')
+        .replace(/(value=["'])[^"']*(["'][^>]*name=["']sesskey["'])/gi, '$1[redacted]$2')
+        .replace(/(name=["'](?:password|logintoken)["'][^>]*value=["'])[^"']*(["'])/gi, '$1[redacted]$2');
+}
+
+/**
  * The state of the page, from inside the page.
  *
  * Error first — a Moodle error page may still contain a question's markup —
@@ -328,7 +342,7 @@ class Recorder {
             this.event('screenshot-failed', shotError.message);
         }
         try {
-            write('dom.html', await this.page.content());
+            write('dom.html', sanitiseHtml(await this.page.content()));
         } catch (domError) {
             this.event('dom-failed', domError.message);
         }
@@ -353,4 +367,4 @@ class Recorder {
     }
 }
 
-module.exports = {STATE, isContextLost, sanitiseUrl, stateInPage, waitForState, clickAndSettle, withContextRetry, Recorder};
+module.exports = {STATE, isContextLost, sanitiseUrl, sanitiseHtml, stateInPage, waitForState, clickAndSettle, withContextRetry, Recorder};

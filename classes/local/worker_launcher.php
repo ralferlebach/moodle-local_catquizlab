@@ -58,6 +58,9 @@ class worker_launcher {
         if (!empty($config['artefactdir'])) {
             $argv[] = '--artefact-dir=' . $config['artefactdir'];
         }
+        if (!empty($config['captureall'])) {
+            $argv[] = '--capture=all';
+        }
         $maxjobs = (int) ($config['maxjobs'] ?? 0);
         if ($maxjobs > 0) {
             $argv[] = '--max-jobs=' . $maxjobs;
@@ -90,7 +93,8 @@ class worker_launcher {
             'token'   => (string) get_config('local_catquizlab', 'worker_token'),
             'maxjobs' => (int) get_config('local_catquizlab', 'worker_max_jobs'),
             'workerid' => 'catquizlab-exec',
-            'artefactdir' => $GLOBALS['CFG']->dataroot . '/local_catquizlab/artefacts',
+            'artefactdir' => artefact_store::root(),
+            'captureall'  => (bool) get_config('local_catquizlab', 'artefacts_capture_all'),
             'loginmode' => (string) get_config('local_catquizlab', 'worker_login_mode'),
             'loginurltemplate' => (string) get_config('local_catquizlab', 'worker_login_url_template'),
             'loginsuffix' => (string) get_config('local_catquizlab', 'worker_login_suffix'),

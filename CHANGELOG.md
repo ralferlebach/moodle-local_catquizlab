@@ -6,6 +6,73 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.7.5] — 2026-09-28 — Issue #107
+
+Debug artefacts: why every execution ended, kept in moodledata, downloadable.
+
+### Normalised reason codes
+`reason_catalog`: one code per kind of end, for failures and for the ends a test
+is designed to reach — `target_se_reached`, `max_items_reached`,
+`pool_exhausted`, `execution_context_destroyed`, `navigation_error`,
+`fetch_failed`, `http_error`, `login_failed`, `engine_exception`,
+`worker_timeout`, `circuit_breaker_pause`, `manual_stop`. Each execution in the
+history carries its code: a failure when it is reported, a finished sitting once
+the collector knows its stop reason. The run page filters by code, with how
+often each occurs, and shows it on every history line. Classified from the real
+reports of the live installation; a test holds them.
+
+### In moodledata
+Beside the worker's screenshots, DOM and events, every failed execution gets a
+`reason.json`: sitting, run, strategy, model, variant, stratum, reason code and
+label, the raw message, the correlation id and a lifecycle log excerpt. Every
+execution — failed or finished — adds a line to its run's `reasons.jsonl`.
+
+### As a ZIP
+"Download debug ZIP" for one sitting, a whole run, or a run's failed sittings,
+for the debug capability only:
+
+    manifest.json
+    attempt-<id>/attempt.json     metadata and history
+    attempt-<id>/logs.json        history and run log excerpt
+    attempt-<id>/screenshots/     execution-<n>-screenshot-previous.jpg, -last.jpg
+    attempt-<id>/html/            execution-<n>-dom.html
+    attempt-<id>/network/         execution-<n>-events.json, -error.json, -reason.json
+
+The run page lists which artefacts exist per try and when they were written.
+
+### Redaction
+Every text in a download passes through redaction; session keys are removed from
+HTML as well — Moodle embeds the sesskey in `M.cfg`, in hidden form fields and in
+logout links — and the worker already writes the page snapshot that way. HTML
+snapshots can be left out of downloads by a setting.
+
+### Retention
+A setting, 14 days by default, 0 to keep; the pipeline tick removes older
+executions. A second setting captures successful executions too, for debugging.
+
+### CI: the engine set follows the Moodle release
+The PHPUnit and Behat jobs fetched the engine from `ALiSe-v-1.2.0-legacy` for
+every Moodle release. On 5.0 and 5.2 they therefore ran local_catquiz 1.2.1 and
+its host activity — the set built for Moodle 4.5, never deployed on 5.x. The
+failure of 0.7.3's test on 5.x was that mix, not the plugin.
+
+`.github/scripts/fetch-engine.sh` now picks the set by release:
+
+    Moodle 4.5   local_catquiz 1.2.1   ALiSe-v-1.2.0-legacy (all three)
+    Moodle 5.0   none — the 1.3 set requires Moodle 5.1; the plugin is tested stand-alone
+    Moodle 5.2   local_catquiz 1.3.0   migration-zu-moodle-5.x; mod_adaptivequiz and catmodel v-3.0
+
+Run for all three releases against the real repositories. The release table in
+the script also had Moodle 5.1's version (2025100600) under 5.2; corrected.
+
+The 5.2 job now tests this plugin against local_catquiz 1.3 for the first time.
+A failure there is a real finding about 1.3 — the CI could not show one before.
+
+PHPUnit 741 tests / 4098 assertions, worker 18 tests, Behat 39 scenarios / 324
+steps, phpcs and PHPDoc clean — one run.
+
+---
+
 ## [0.7.4] — 2026-09-28 — Issue #100, Issue #107 (capture), CI fix
 
 The worker no longer races the page it is driving.

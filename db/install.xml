@@ -380,6 +380,7 @@
         <FIELD NAME="timecreated" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="false"/>
         <FIELD NAME="diagnosis" TYPE="text" NOTNULL="false" SEQUENCE="false" COMMENT="The reported error taken apart: phase, url, errorcode, exception, file, line, answers, slot. JSON."/>
         <FIELD NAME="correlationid" TYPE="char" LENGTH="64" NOTNULL="false" SEQUENCE="false" COMMENT="The request this execution was reported in, to find it in the log."/>
+        <FIELD NAME="reasoncode" TYPE="char" LENGTH="40" NOTNULL="false" SEQUENCE="false" COMMENT="Normalised reason the execution ended: a technical failure or the test's own end."/>
       </FIELDS>
       <KEYS>
         <KEY NAME="primary" TYPE="primary" FIELDS="id"/>
@@ -387,6 +388,7 @@
       <INDEXES>
         <INDEX NAME="attemptid-id" UNIQUE="false" FIELDS="attemptid, id"/>
         <INDEX NAME="runid-outcome" UNIQUE="false" FIELDS="runid, outcome"/>
+        <INDEX NAME="runid-reasoncode" UNIQUE="false" FIELDS="runid, reasoncode"/>
       </INDEXES>
     </TABLE>
   </TABLES>

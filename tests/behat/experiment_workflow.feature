@@ -381,3 +381,21 @@ Feature: Defining and running CAT experiments from the web interface
     When I press "Duplicate and change settings"
     Then "Save experiment" "button" should exist
     And the "name" "field" should be enabled
+
+  Scenario: A failed sitting shows its reason, its artefacts and a way to download them
+    Given the following "local_catquizlab > experiment" exists:
+      | name | Behat artefacts |
+    And the experiment "Behat artefacts" has been expanded into runs
+    And the first run of "Behat artefacts" has a failed sitting with artefacts
+    When I open the first run of "Behat artefacts"
+    # The normalised reason, as a filter and on the history line.
+    Then I should see "Browser: page replaced during a read (1)" in the "[data-region='catquizlab-reasons']" "css_element"
+    And "[data-reason='execution_context_destroyed']" "css_element" should exist
+    # Which artefacts exist and when they were written.
+    And I should see "Artefacts of try 1: dom.html, screenshot-last.jpg" in the "[data-region='catquizlab-artefacts']" "css_element"
+    # The downloads, for the run, its failed sittings, and the one sitting.
+    And "Download debug ZIP (run)" "button" should exist
+    And "Download debug ZIP (failed sittings)" "button" should exist
+    And "Download debug ZIP" "button" should exist
+    When I follow "Browser: page replaced during a read (1)"
+    Then I should see "Execution context was destroyed"

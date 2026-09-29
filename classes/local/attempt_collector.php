@@ -211,6 +211,12 @@ class attempt_collector {
             );
         }
 
+        // Why it ended, as a code, now that the stop reason is known — and in
+        // the run's record of ends in moodledata (#107). The ends a test was
+        // designed to reach are results as much as failures are faults.
+        $code = attempt_history::record_outcome_reason($attemptid, (string) ($trace['stopreason'] ?? ''));
+        artefact_store::document($attemptid, attempt_history::COLLECTED, $code);
+
         return $trace;
     }
 

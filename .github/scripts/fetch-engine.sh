@@ -31,10 +31,12 @@ MOODLE_BRANCH="${MOODLE_BRANCH:-${1:-}}"
 # derived, because the mapping is not computable from the branch name.
 branch_version() {
     case "$1" in
+        # Release versions as Moodle reports them. 2025100600 is Moodle 5.1 —
+        # this table had it as 5.2. For 5.2 only "above that" matters here.
         MOODLE_405_STABLE) echo 2024100700 ;;
         MOODLE_500_STABLE) echo 2025041400 ;;
-        MOODLE_501_STABLE) echo 2025100000 ;;
-        MOODLE_502_STABLE) echo 2025100600 ;;
+        MOODLE_501_STABLE) echo 2025100600 ;;
+        MOODLE_502_STABLE) echo 2026041300 ;;
         *)                 echo 0 ;;
     esac
 }
@@ -63,13 +65,42 @@ max_required() {
 # 2024100700, local_catquiz's declared dependencies on the other two are
 # satisfied within the set, and it carries the fixes for catquiz#59, #62 and the
 # #64 stage counts.
-ENGINE_BRANCH="${ENGINE_BRANCH:-ALiSe-v-1.2.0-legacy}"
+# The engine set follows the Moodle release. The 5.x jobs used to run the 4.5
+# set, so they tested an engine that is never deployed on 5.x.
+#
+#   Moodle 4.5          local_catquiz 1.2.1   ALiSe-v-1.2.0-legacy (all three)
+#   Moodle 5.1 and up   local_catquiz 1.3.0   migration-zu-moodle-5.x,
+#                       mod_adaptivequiz and its catmodel   v-3.0
+#
+# The 1.3 set requires 2025100600 (Moodle 5.1). There is no set for Moodle 5.0:
+# there the requirement check below skips the engine and the plugin is tested
+# stand-alone, which is what its runtime detection is for.
+#
+# ENGINE_BRANCH, when set, overrides all three at once, for an experiment.
+case "${MOODLE_BRANCH}" in
+    MOODLE_405_STABLE|MOODLE_404_STABLE|"")
+        CATQUIZ_REF="ALiSe-v-1.2.0-legacy"
+        ADAPTIVEQUIZ_REF="ALiSe-v-1.2.0-legacy"
+        CATMODEL_REF="ALiSe-v-1.2.0-legacy"
+        ;;
+    *)
+        CATQUIZ_REF="migration-zu-moodle-5.x"
+        ADAPTIVEQUIZ_REF="v-3.0"
+        CATMODEL_REF="v-3.0"
+        ;;
+esac
+if [ -n "${ENGINE_BRANCH:-}" ]; then
+    CATQUIZ_REF="${ENGINE_BRANCH}"
+    ADAPTIVEQUIZ_REF="${ENGINE_BRANCH}"
+    CATMODEL_REF="${ENGINE_BRANCH}"
+fi
+echo "== engine set for ${MOODLE_BRANCH:-unknown}: local_catquiz@${CATQUIZ_REF}, mod_adaptivequiz@${ADAPTIVEQUIZ_REF}, catmodel@${CATMODEL_REF}"
 
 declare -A PLUGINS=(
     ["local_wunderbyte_table"]="https://github.com/Wunderbyte-GmbH/moodle-local_wunderbyte_table.git|main"
-    ["local_catquiz"]="https://github.com/ralferlebach/moodle-local_catquiz.git|${ENGINE_BRANCH}"
-    ["mod_adaptivequiz"]="https://github.com/ralferlebach/moodle-mod_adaptivequiz.git|${ENGINE_BRANCH}"
-    ["adaptivequizcatmodel_catquiz"]="https://github.com/ralferlebach/moodle-adaptivequizcatmodel_catquiz.git|${ENGINE_BRANCH}"
+    ["local_catquiz"]="https://github.com/ralferlebach/moodle-local_catquiz.git|${CATQUIZ_REF}"
+    ["mod_adaptivequiz"]="https://github.com/ralferlebach/moodle-mod_adaptivequiz.git|${ADAPTIVEQUIZ_REF}"
+    ["adaptivequizcatmodel_catquiz"]="https://github.com/ralferlebach/moodle-adaptivequizcatmodel_catquiz.git|${CATMODEL_REF}"
 )
 
 mkdir -p "${ENGINE_DIR}"

@@ -84,6 +84,14 @@ class attempt_history {
             'detail'          => isset($detail['detail']) ? self::redact((string) $detail['detail']) : null,
             'diagnosis'       => self::diagnosis_json($detail),
             'correlationid'   => \core_text::substr(debug_trace::correlation_id(), 0, 64),
+            // Why it ended, as a code (#107): for a failure now; for a sitting
+            // that finished, once the collector knows its stop reason.
+            'reasoncode'      => $outcome === self::FAILED
+                ? reason_catalog::failure(
+                    (string) ($detail['detail'] ?? ''),
+                    (array) (json_decode((string) self::diagnosis_json($detail), true) ?: [])
+                )
+                : null,
             'timecreated'     => time(),
         ]);
     }
@@ -227,6 +235,8 @@ class attempt_history {
                 'detail'          => (string) ($row->detail ?? ''),
                 'diagnosis'       => json_decode((string) ($row->diagnosis ?? ''), true) ?: [],
                 'correlationid'   => (string) ($row->correlationid ?? ''),
+                'reasoncode'      => (string) ($row->reasoncode ?? ''),
+                'reasonlabel'     => ($row->reasoncode ?? '') !== '' ? reason_catalog::label((string) $row->reasoncode) : '',
                 'when'            => userdate((int) $row->timecreated),
                 'time'            => (int) $row->timecreated,
             ];
@@ -261,6 +271,36 @@ class attempt_history {
         }
 
         return $counts;
+    }
+
+    /**
+     * Record why a finished sitting ended, once its stop reason is known.
+     *
+     * @param int $attemptid The sitting.
+     * @param string $stopreason The stop reason from its trace.
+     * @return string The code recorded.
+     */
+    public static function record_outcome_reason(int $attemptid, string $stopreason): string {
+        global $DB;
+
+        $code = reason_catalog::outcome($stopreason);
+        if (!$DB->get_manager()->table_exists('local_catquizlab_attemptlog')) {
+            return $code;
+        }
+        $rows = $DB->get_records(
+            'local_catquizlab_attemptlog',
+            ['attemptid' => $attemptid, 'outcome' => self::COLLECTED],
+            'id DESC',
+            'id',
+            0,
+            1
+        );
+        $row = reset($rows);
+        if ($row) {
+            $DB->set_field('local_catquizlab_attemptlog', 'reasoncode', $code, ['id' => $row->id]);
+        }
+
+        return $code;
     }
 
     /**

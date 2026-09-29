@@ -187,7 +187,7 @@ class job_complete extends external_api {
         }
 
         // What this execution did, kept where a retry cannot erase it.
-        \local_catquizlab\local\attempt_history::record(
+        $logid = \local_catquizlab\local\attempt_history::record(
             $attemptid,
             $finished
                 ? \local_catquizlab\local\attempt_history::COLLECTED
@@ -204,6 +204,18 @@ class job_complete extends external_api {
                 'extra'           => (array) (json_decode((string) ($params['diagnostics'] ?? ''), true) ?: []),
             ]
         );
+
+        // A failure documented in moodledata beside the worker's artefacts,
+        // with the run's design, the reason code and a log excerpt (#107). A
+        // finished sitting is documented once its stop reason is collected.
+        if (!$finished && $logid > 0) {
+            \local_catquizlab\local\artefact_store::document(
+                $attemptid,
+                \local_catquizlab\local\attempt_history::FAILED,
+                (string) $DB->get_field('local_catquizlab_attemptlog', 'reasoncode', ['id' => $logid]),
+                (string) ($params['message'] ?? '')
+            );
+        }
 
         // The lease is over either way: the attempt is no longer being played.
         $DB->set_field('local_catquizlab_attempt', 'leaseowner', null, ['id' => $attemptid]);

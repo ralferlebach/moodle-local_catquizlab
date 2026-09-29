@@ -177,6 +177,27 @@ if ($action === 'requeuetask' && optional_param('taskid', 0, PARAM_INT) > 0) {
     redirect(new moodle_url('/local/catquizlab/runs.php'), $message, null, $level);
 }
 
+// Debug artefacts as a ZIP (#107): one sitting, a whole run, or a run's failed
+// sittings. Only for those allowed to see debug material: screenshots and page
+// snapshots show what a simulated person saw, and a run's design.
+if ($action === 'artefactzip' && $runid > 0) {
+    require_sesskey();
+    require_capability('local/catquizlab:debug', $context);
+
+    $scope = optional_param('scope', \local_catquizlab\local\artefact_store::SCOPE_RUN, PARAM_ALPHA);
+    $zip = \local_catquizlab\local\artefact_store::zip($scope, $runid, optional_param('attemptid', 0, PARAM_INT));
+    if ($zip === null) {
+        redirect(
+            new moodle_url('/local/catquizlab/runs.php', ['runid' => $runid]),
+            get_string('artefacts:none', $component),
+            null,
+            \core\output\notification::NOTIFY_INFO
+        );
+    }
+    send_file($zip, basename($zip), 0, 0, false, true, 'application/zip');
+    die();
+}
+
 // One sitting, not the whole run. The recovery a person actually wants when
 // they are looking at the row that failed.
 if ($action === 'requeueattempt' && optional_param('attemptid', 0, PARAM_INT) > 0) {
@@ -657,6 +678,7 @@ if ($runid > 0) {
     // Which sittings, by what is wrong with them (#98). "problems" is the
     // default: failed, retried, or with an error on record.
     $show = optional_param('show', 'problems', PARAM_ALPHA);
+    $reason = optional_param('reason', '', PARAM_ALPHANUMEXT);
     $scheduler = \local_catquizlab\local\attempt_scheduler::class;
     $filters = [
         // Ever failed or put back, read from the history: the sitting's own
@@ -702,9 +724,33 @@ if ($runid > 0) {
             );
     }
 
+    // Or by the normalised reason an execution ended with (#107).
+    $where = $filters[$show][0];
+    if ($reason !== '') {
+        $where = 'runid = :runid AND id IN (SELECT attemptid FROM {local_catquizlab_attemptlog}'
+            . ' WHERE runid = :reasonrunid AND reasoncode = :reason)';
+        $filterparams = ['runid' => $runid, 'reasonrunid' => $runid, 'reason' => $reason];
+    }
+    $codes = $DB->get_records_sql(
+        'SELECT reasoncode, COUNT(1) AS n FROM {local_catquizlab_attemptlog}
+          WHERE runid = :runid AND reasoncode IS NOT NULL GROUP BY reasoncode ORDER BY reasoncode',
+        ['runid' => $runid]
+    );
+    $reasonchoices = [];
+    foreach ($codes as $code) {
+        $label = \local_catquizlab\local\reason_catalog::label((string) $code->reasoncode) . ' (' . (int) $code->n . ')';
+        $reasonchoices[] = $code->reasoncode === $reason
+            ? html_writer::tag('strong', s($label))
+            : html_writer::link(
+                new moodle_url('/local/catquizlab/runs.php', ['runid' => $runid, 'reason' => $code->reasoncode]),
+                s($label),
+                ['data-reason' => $code->reasoncode]
+            );
+    }
+
     $troubled = $DB->get_records_select(
         'local_catquizlab_attempt',
-        $filters[$show][0],
+        $where,
         $filterparams,
         'id ASC',
         'id, personid, status, tries, engineattemptid, leaseowner, lasterror, timemodified',
@@ -715,6 +761,28 @@ if ($runid > 0) {
     echo $OUTPUT->heading(get_string('attempt:diagnostics', $component), 4);
     echo html_writer::tag('p', get_string('attempt:diagnosticsexplain', $component), ['class' => 'text-muted']);
     echo html_writer::tag('p', implode(' · ', $choices), ['class' => 'small']);
+    if ($reasonchoices !== []) {
+        echo html_writer::tag(
+            'p',
+            get_string('reason:filter', $component) . ': ' . implode(' · ', $reasonchoices),
+            ['class' => 'small', 'data-region' => 'catquizlab-reasons']
+        );
+    }
+    $candebug = has_capability('local/catquizlab:debug', $context);
+    if ($candebug) {
+        $zipbutton = static function (string $scope, string $label, int $attemptid = 0) use ($runid): string {
+            global $OUTPUT;
+            return $OUTPUT->single_button(new moodle_url('/local/catquizlab/runs.php', [
+                'runid' => $runid, 'action' => 'artefactzip', 'scope' => $scope,
+                'attemptid' => $attemptid, 'sesskey' => sesskey(),
+            ]), $label, 'post');
+        };
+        echo html_writer::div(
+            $zipbutton(\local_catquizlab\local\artefact_store::SCOPE_RUN, get_string('artefacts:ziprun', $component))
+            . $zipbutton(\local_catquizlab\local\artefact_store::SCOPE_FAILED, get_string('artefacts:zipfailed', $component)),
+            'd-flex flex-wrap mb-2'
+        );
+    }
 
     echo html_writer::tag(
         'form',
@@ -805,15 +873,41 @@ if ($runid > 0) {
                         'try'     => $entry['tryno'],
                         'outcome' => $entry['outcomelabel'],
                         'when'    => $entry['when'],
-                    ]) . $link
+                    ]) . ($entry['reasonlabel'] !== ''
+                        ? ' ' . html_writer::tag('span', s($entry['reasonlabel']), [
+                            'class' => 'badge badge-secondary', 'data-reason' => $entry['reasoncode'],
+                        ])
+                        : '') . $link
                     . ($text !== '' ? html_writer::tag('div', $text, ['class' => 'text-muted']) : ''),
                     ['class' => $entry['failed'] ? 'text-danger' : '']
                 );
             }
 
+            // Which artefacts exist for this sitting, and when they were written.
+            $artefacts = '';
+            foreach (\local_catquizlab\local\artefact_store::list_for_attempt((int) $row->id) as $execution) {
+                $names = array_map(static fn(array $f): string => $f['name'], $execution['files']);
+                $written = max(array_map(static fn(array $f): int => (int) $f['time'], $execution['files']) ?: [0]);
+                $artefacts .= html_writer::div(get_string('artefacts:line', $component, (object) [
+                    'execution' => $execution['execution'],
+                    'files'     => implode(', ', $names),
+                    'written'   => $written > 0 ? userdate($written) : '—',
+                ]), 'small text-muted', ['data-region' => 'catquizlab-artefacts']);
+            }
+            if ($artefacts !== '') {
+                $lines .= html_writer::tag('li', $artefacts);
+            }
+
             $action = '';
+            if ($artefacts !== '' && has_capability('local/catquizlab:debug', $context)) {
+                $action .= $OUTPUT->single_button(new moodle_url('/local/catquizlab/runs.php', [
+                    'runid' => $runid, 'action' => 'artefactzip',
+                    'scope' => \local_catquizlab\local\artefact_store::SCOPE_ATTEMPT,
+                    'attemptid' => (int) $row->id, 'sesskey' => sesskey(),
+                ]), get_string('artefacts:zipattempt', $component), 'post');
+            }
             if ((int) $row->status === \local_catquizlab\local\attempt_scheduler::STATUS_FAILED) {
-                $action = html_writer::tag(
+                $action .= html_writer::tag(
                     'form',
                     html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'sesskey', 'value' => sesskey()])
                     . html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'action', 'value' => 'requeueattempt'])

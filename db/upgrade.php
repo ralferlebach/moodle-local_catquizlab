@@ -548,6 +548,22 @@ function xmldb_local_catquizlab_upgrade($oldversion): bool {
         upgrade_plugin_savepoint(true, 2026092706, 'local', 'catquizlab');
     }
 
+    if ($oldversion < 2026092806) {
+        // A normalised reason per execution (#107): countable and filterable
+        // where the reported text is neither.
+        $table = new xmldb_table('local_catquizlab_attemptlog');
+        $field = new xmldb_field('reasoncode', XMLDB_TYPE_CHAR, '40');
+        if (!$dbman->field_exists($table, $field)) {
+            $dbman->add_field($table, $field);
+        }
+        $index = new xmldb_index('runid-reasoncode', XMLDB_INDEX_NOTUNIQUE, ['runid', 'reasoncode']);
+        if (!$dbman->index_exists($table, $index)) {
+            $dbman->add_index($table, $index);
+        }
+
+        upgrade_plugin_savepoint(true, 2026092806, 'local', 'catquizlab');
+    }
+
     return true;
 }
 

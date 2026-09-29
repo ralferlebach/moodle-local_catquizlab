@@ -114,6 +114,41 @@ class behat_local_catquizlab extends behat_base {
     }
 
     /**
+     * Give the first run of an experiment a failed sitting with artefacts, as a worker leaves them.
+     *
+     * @Given /^the first run of "(?P<name_string>(?:[^"]|\\")*)" has a failed sitting with artefacts$/
+     * @param string $name The experiment name.
+     * @return void
+     * @throws \coding_exception If no experiment of that name exists.
+     */
+    public function the_first_run_has_a_failed_sitting_with_artefacts(string $name): void {
+        global $DB;
+
+        $id = $DB->get_field('local_catquizlab_experiment', 'id', ['name' => $name]);
+        if (!$id) {
+            throw new \coding_exception('No experiment named "' . $name . '".');
+        }
+        $run = $DB->get_record_sql(
+            'SELECT * FROM {local_catquizlab_run} WHERE experimentid = ? ORDER BY id ASC',
+            [$id],
+            IGNORE_MULTIPLE
+        );
+        $attemptid = (int) $DB->insert_record('local_catquizlab_attempt', (object) [
+            'runid' => $run->id, 'personid' => 0,
+            'status' => \local_catquizlab\local\attempt_scheduler::STATUS_FAILED, 'tries' => 1,
+            'lasterror' => 'Execution context was destroyed, most likely because of a navigation.',
+            'timecreated' => time(), 'timemodified' => time(),
+        ]);
+        $dir = \local_catquizlab\local\artefact_store::execution_dir((int) $run->experimentid, (int) $run->id, $attemptid, 1);
+        check_dir_exists($dir, true, true);
+        file_put_contents($dir . '/screenshot-last.jpg', 'jpeg');
+        file_put_contents($dir . '/dom.html', '<p>page</p>');
+        \local_catquizlab\local\attempt_history::record($attemptid, \local_catquizlab\local\attempt_history::FAILED, [
+            'tryno' => 1, 'detail' => 'Execution context was destroyed, most likely because of a navigation.',
+        ]);
+    }
+
+    /**
      * Open the detail page of an experiment's first run.
      *
      * Run ids are database ids, so a scenario cannot know them in advance;
