@@ -6,6 +6,42 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.7.6] — 2026-09-29 — CI: the plugin without an engine
+
+The CI's Moodle 5.0 jobs, which since 0.7.5 run without an engine (the 1.3 set
+requires Moodle 5.1), were red: ten PHPUnit tests and five Behat scenarios. The
+Moodle 5.2 jobs against local_catquiz 1.3.0 were green.
+
+### A regression of #103, found by it
+Since 0.7.1 the strategy catalogue asks the engine what it can play. Without an
+engine the answer was "nothing": the experiment editor offered no strategy at
+all, every historic strategy was labelled "not available", and an installation
+without the engine — which the plugin explicitly supports — could not define an
+experiment. Without an engine there is nobody to ask, so the catalogue now falls
+back to the reference set: strategies 1, 3, 4, 5, 7, 8 with the names both
+local_catquiz 1.2.1 and 1.3.0 give them. With an engine, the engine answers, as
+before.
+
+### Readiness: the definition before the engine
+Without an engine the readiness check answered "fine" before it had looked at
+the run's definition. A missing definition is a verdict with or without an
+engine; it is checked first now.
+
+### Tests that need an engine say so
+Five tests created an adaptive quiz through mod_adaptivequiz's generator, one
+read an engine table, one expected the setup to switch the pipeline on — none of
+which exists or applies without an engine. They skip there, by name.
+
+### Reproduced before delivery
+The 5.0 condition locally: engine, mod_adaptivequiz, its catmodel and
+wunderbyte_table set aside, PHPUnit and Behat initialised and run without them,
+then restored.
+
+    without engine   PHPUnit 741 tests (40 skipped), Behat 39 / 324 — green
+    with engine      PHPUnit 741 tests, Behat 39 / 324 — green
+
+---
+
 ## [0.7.5] — 2026-09-28 — Issue #107
 
 Debug artefacts: why every execution ended, kept in moodledata, downloadable.

@@ -53,6 +53,9 @@ final class access_readiness_test extends \advanced_testcase {
         // Moodle 5.x that column is NOT NULL. Leaving it to a default worked on
         // 4.5 and failed everywhere else, which is the kind of difference a
         // one-version local environment cannot see.
+        if (!\core_component::get_component_directory('mod_adaptivequiz')) {
+            $this->markTestSkipped('Needs mod_adaptivequiz, which this job does not install.');
+        }
         $category = $this->getDataGenerator()
             ->get_plugin_generator('core_question')
             ->create_question_category(['contextid' => \context_course::instance($course->id)->id]);

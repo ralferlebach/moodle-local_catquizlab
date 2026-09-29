@@ -295,6 +295,11 @@ final class audit_test extends \advanced_testcase {
         );
         $this->assertContains('worker_exec_enabled', $before);
 
+        if (!\local_catquizlab\local\environment::engine_available()) {
+            // Without an engine the setup rightly switches nothing on: there
+            // would be nothing to play.
+            $this->markTestSkipped('Needs local_catquiz, which this job does not install.');
+        }
         \local_catquizlab\local\setup_wizard::run(true);
 
         // The switch nothing used to flip: an installation could pass every
@@ -1272,6 +1277,9 @@ final class audit_test extends \advanced_testcase {
      */
     public function test_the_collector_reads_the_engine_summary(): void {
         $this->resetAfterTest();
+        if (!$GLOBALS['DB']->get_manager()->table_exists('local_catquiz_attempts')) {
+            $this->markTestSkipped('Needs local_catquiz, which this job does not install.');
+        }
 
         // What catquiz 1.2.1 (ALiSe-v-1.2.0-legacy, 2026092612) stores: no
         // debug_info, no progress row once the attempt is over, and a

@@ -64,12 +64,6 @@ class cat_readiness {
             return self::verdict(false, [get_string('readiness:norun', $component)]);
         }
 
-        if (!environment::catquiz_available()) {
-            // Nothing to check against, and nothing to run either — the
-            // preflight already refuses this, so it is not reported twice.
-            return self::verdict(true, [], ['skipped' => 'engine-absent']);
-        }
-
         $definition = json_decode((string) ($run->manifestjson ?? ''), true)['config']['definition'] ?? null;
         if (!is_array($definition)) {
             // Falling back to the experiment, and saying so if that is gone
@@ -90,6 +84,14 @@ class cat_readiness {
                     get_string('readiness:nodefinition', 'local_catquizlab'),
                 ], ['leaves' => 0, 'items' => 0, 'usable' => 0, 'perleaf' => []]);
             }
+        }
+
+        // Only now the engine: a missing definition is a verdict whether or not
+        // there is an engine to check a pool against. Without one there is
+        // nothing to check the pool against and nothing to run either — the
+        // preflight refuses that already, so it is not reported twice.
+        if (!environment::catquiz_available()) {
+            return self::verdict(true, [], ['skipped' => 'engine-absent']);
         }
 
         $facts = self::pool_facts($runid);

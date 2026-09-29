@@ -419,6 +419,9 @@ class strategy_catalog {
         if ($engine !== null && $engine['description'] !== '') {
             return $engine['description'];
         }
+        if (!environment::engine_available() && isset(self::REFERENCE_ENGINE[self::engine_id($key)])) {
+            return self::REFERENCE_ENGINE[self::engine_id($key)];
+        }
 
         return self::CATALOG[$key]['label'];
     }
@@ -520,10 +523,36 @@ class strategy_catalog {
      * @return int[]
      */
     public static function runnable_engine_ids(): array {
+        // Without an engine there is no one to ask. The editor must still
+        // work — definitions are written, imported and exported on
+        // installations without the engine — and "nothing is runnable" left it
+        // with an empty strategy menu. The reference set stands in: what
+        // local_catquiz 1.2.1 and 1.3.0 both play.
+        if (!environment::engine_available()) {
+            return array_keys(self::REFERENCE_ENGINE);
+        }
+
         return array_keys(array_filter(self::engine_strategies(), static function (array $strategy): bool {
             return $strategy['active'];
         }));
     }
+
+    /**
+     * The strategies of the reference engine, for installations without one.
+     *
+     * Identical in local_catquiz 1.2.1 (ALiSe-v-1.2.0-legacy) and 1.3.0
+     * (migration-zu-moodle-5.x): the ids of their strategy classes and what
+     * get_description() returns. Used only where no engine is installed to
+     * answer; with an engine, the engine answers.
+     */
+    public const REFERENCE_ENGINE = [
+        1 => 'CAT',
+        3 => 'Infer all subscales',
+        4 => 'Infer lowest skill gap',
+        5 => 'Infer greatest strength',
+        7 => 'Classical test',
+        8 => 'Infer relevant subscales',
+    ];
 
     /** @var array|null The engine's strategies as read in this request. */
     protected static ?array $enginestrategies = null;
