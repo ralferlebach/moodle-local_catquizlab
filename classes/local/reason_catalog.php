@@ -39,7 +39,16 @@ namespace local_catquizlab\local;
  */
 class reason_catalog {
     /** @var string[] Codes of a sitting that ended as the test intended. */
-    public const OUTCOMES = ['target_se_reached', 'max_items_reached', 'pool_exhausted', 'finished_other'];
+    public const OUTCOMES = [
+        'target_se_reached',
+        'max_items_reached',
+        'fixed_form_complete',
+        'subscale_rule_satisfied',
+        'pool_exhausted',
+        'no_eligible_item_remaining',
+        'timeout',
+        'finished_other',
+    ];
 
     /** @var string[] Codes of a technical failure, most specific first. */
     public const FAILURES = [
@@ -121,20 +130,48 @@ class reason_catalog {
     }
 
     /**
-     * The code of a sitting that ended as intended, from its stop reason.
+     * The code of a sitting that ended as intended — from facts, not from wording (#106).
      *
-     * @param string $stopreason What the engine or the trace reports.
+     * The engine reports "maximum reached", "time exceeded", or "no remaining
+     * questions"; the last covers several ends it does not tell apart. They are
+     * told apart here from what is known about the sitting, in this order: the
+     * engine's own statement; the classical test, which plays its form to the
+     * end; the precision target, met when the final SE is at or below the
+     * run's lower SE bound; a subscale strategy that dropped scales; every item
+     * of the pool played; and otherwise no item left that the strategy would
+     * choose. Whether a subscale rule blocked the test the engine does not
+     * record, so that end is not claimed.
+     *
+     * @param string $stopreason The engine's stop reason.
+     * @param array $facts strategy, finalse, semin, dropped (count), played (count), poolsize.
      * @return string One of OUTCOMES.
      */
-    public static function outcome(string $stopreason): string {
-        if (preg_match('/standard error|\bse\b|precision/i', $stopreason)) {
-            return 'target_se_reached';
-        }
-        if (preg_match('/maximum number of questions|max(imum)? ?items/i', $stopreason)) {
+    public static function outcome(string $stopreason, array $facts = []): string {
+        if (preg_match('/maximum number of questions|reachedmaximumquestions|max\.? number of questions/i', $stopreason)) {
             return 'max_items_reached';
         }
-        if (preg_match('/no (more )?(questions|items)|pool|exhausted/i', $stopreason)) {
+        // The engine spells it "Time exeeded" (attemptstatus_8); the correct
+        // spelling and its status code are accepted as well.
+        if (preg_match('/time exc?eeded|exceededmaxattempttime|timelimit/i', $stopreason)) {
+            return 'timeout';
+        }
+        $strategy = (string) ($facts['strategy'] ?? '');
+        if ($strategy !== '' && strategy_catalog::fixed_form($strategy)) {
+            return 'fixed_form_complete';
+        }
+        $finalse = $facts['finalse'] ?? null;
+        $semin = $facts['semin'] ?? null;
+        if (is_numeric($finalse) && is_numeric($semin) && (float) $finalse <= (float) $semin) {
+            return 'target_se_reached';
+        }
+        if ($strategy !== '' && strategy_catalog::uses_subscales($strategy) && (int) ($facts['dropped'] ?? 0) > 0) {
+            return 'subscale_rule_satisfied';
+        }
+        if ((int) ($facts['poolsize'] ?? 0) > 0 && (int) ($facts['played'] ?? 0) >= (int) $facts['poolsize']) {
             return 'pool_exhausted';
+        }
+        if (preg_match('/noremainingquestions|no (more |remaining )?(questions|items)|pool/i', $stopreason)) {
+            return 'no_eligible_item_remaining';
         }
 
         return 'finished_other';

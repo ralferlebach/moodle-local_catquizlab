@@ -103,7 +103,10 @@ class person_generator {
         mt_srand($seed);
         $globals = [];
         for ($i = 1; $i <= $params['count']; $i++) {
-            $globals[$i] = self::normal($params['abilitymean'], $params['abilitysd']);
+            // The experiment's distribution and range (#102): truncated draws
+            // are drawn again, never clamped; a normal distribution may leave
+            // the range, and that is counted and reported.
+            $globals[$i] = ability_distribution::draw($params['distribution']);
         }
 
         mt_srand($deviationseed);
@@ -176,7 +179,27 @@ class person_generator {
      * @return int The number of persons written.
      */
     public static function generate_and_persist(int $runid, array $definition, int $seed, array $options = []): int {
-        return self::persist($runid, self::generate($definition, $seed, $options));
+        $persons = self::generate($definition, $seed, $options);
+
+        // Not generated unnoticed (#102): a normal distribution may leave the
+        // range the scales are provisioned with, and the run says how often.
+        $distribution = ability_distribution::of($definition);
+        $outside = 0;
+        foreach ($persons as $person) {
+            if (!ability_distribution::inside($distribution, (float) $person['abilityglobal'])) {
+                $outside++;
+            }
+        }
+        if ($outside > 0) {
+            run_log::record($runid, run_log::ABILITIES_OUTSIDE, [
+                'count'        => $outside,
+                'of'           => count($persons),
+                'range'        => ability_distribution::range_text($distribution),
+                'distribution' => ability_distribution::describe($distribution),
+            ]);
+        }
+
+        return self::persist($runid, $persons);
     }
 
     /**
@@ -251,6 +274,7 @@ class person_generator {
         $subsd = isset($variation['subscale']) ? (float) $variation['subscale'] : $base[1] * $factor;
 
         return [
+            'distribution'  => ability_distribution::of($definition),
             'count'       => (int) $persons['count'],
             'stratum'     => $stratum,
             'severity'    => $severity,
@@ -279,7 +303,7 @@ class person_generator {
 
         $categories = [];
         for ($c = 1; $c <= $params['categories']; $c++) {
-            $ctheta = $global + ($params['catsd'] > 0 ? self::normal(0.0, $params['catsd']) : 0.0);
+            $ctheta = ability_distribution::deviate($params['distribution'], $global, (float) $params['catsd']);
             $subscales = [];
             for ($s = 1; $s <= $params['subscales']; $s++) {
                 // The chaotic stratum is a stress condition, not just a noisier
@@ -289,7 +313,7 @@ class person_generator {
                 // hierarchical sigma, as before, kept the structure intact and
                 // so never actually stressed that assumption.
                 $anchor = $independent ? $global : $ctheta;
-                $stheta = $anchor + ($params['subsd'] > 0 ? self::normal(0.0, $params['subsd']) : 0.0);
+                $stheta = ability_distribution::deviate($params['distribution'], $anchor, (float) $params['subsd']);
                 $subscales[] = ['index' => $s, 'theta' => round($stheta, 5)];
             }
             $categories[] = ['index' => $c, 'theta' => round($ctheta, 5), 'subscales' => $subscales];

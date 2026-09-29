@@ -4,7 +4,7 @@
 # Triggered on push / PR to any branch EXCEPT main — i.e. the integration
 # branch "development" and all feature branches (dev workflow).
 #
-# Matrix: Moodle 4.5 · 5.0 · 5.2  ×  PHP 8.1–8.3  ×  mariadb · pgsql
+# Matrix: Moodle 4.5 · 5.2  ×  PHP 8.1–8.3  ×  mariadb · pgsql
 #
 # The plugin declares NO hard plugin dependencies: local_catquiz and
 # mod_adaptivequiz are detected at runtime (classes/local/environment.php), so
@@ -188,14 +188,13 @@ jobs:
       fail-fast: false
       matrix:
         # MOODLE_503_STABLE is not yet cut upstream; re-add it once the branch exists.
-        moodle: [MOODLE_405_STABLE, MOODLE_500_STABLE, MOODLE_502_STABLE]
+        # Moodle 5.0 is out of support upstream and was dropped from the matrix.
+        moodle: [MOODLE_405_STABLE, MOODLE_502_STABLE]
         php: ['8.1', '8.2', '8.3']
         db:
           - { engine: mariadb, type: mariadb, port: 3306, user: root,   pass: root   }
           - { engine: pgsql,   type: pgsql,   port: 5432, user: moodle, pass: moodle }
         exclude:
-          # Moodle 5.0 requires PHP 8.2+.
-          - { moodle: MOODLE_500_STABLE, php: '8.1' }
           # Moodle 5.2 requires PHP 8.3+.
           - { moodle: MOODLE_502_STABLE, php: '8.1' }
           - { moodle: MOODLE_502_STABLE, php: '8.2' }
@@ -276,12 +275,11 @@ jobs:
     needs: [lint-php, lint-structure]
     strategy:
       fail-fast: false
-      # PHP must satisfy each Moodle core's minimum: 4.5/5.0 run on 8.2,
+      # PHP must satisfy each Moodle core's minimum: 4.5 runs on 8.2,
       # 5.2 requires PHP 8.3+.
       matrix:
         include:
           - { moodle: MOODLE_405_STABLE, php: '8.2' }
-          - { moodle: MOODLE_500_STABLE, php: '8.2' }
           - { moodle: MOODLE_502_STABLE, php: '8.3' }
           # MOODLE_503_STABLE: re-add once the branch is cut upstream.
 

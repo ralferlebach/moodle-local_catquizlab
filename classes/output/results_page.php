@@ -314,6 +314,20 @@ class results_page {
             'small text-muted mb-1'
         );
 
+        // What the ground truth was drawn from, named (#105): mean and
+        // standard deviation, distribution and range of the selected runs.
+        $abilities = [];
+        foreach ($this->query->ability_distributions() as $text => $runs) {
+            $abilities[] = s($text) . ' (' . get_string('results:stoprulesruns', $component, $runs) . ')';
+        }
+        if ($abilities !== []) {
+            $out .= \html_writer::div(
+                get_string('results:abilities', $component) . ': ' . implode('; ', $abilities),
+                'small text-muted mb-1',
+                ['data-region' => 'catquizlab-abilities']
+            );
+        }
+
         // The stop rules the engine applied, per strategy — only those in
         // force (#101). A result read without them can be read as the effect
         // of a strategy when it was the effect of a limit.
@@ -394,6 +408,8 @@ class results_page {
             get_string('axis:testlength', $component),
             get_string('axis:finalse', $component)
         );
+        $chart->set_axes(axis_scale::INTEGER, axis_scale::LINEAR, ['yfromzero' => true, 'jitter' => 0.15]);
+        $chart->set_basis($this->plot_basis());
         $chart->set_points($overview['points'])
             ->set_description(get_string('chart:pointisattempt', $component));
         $semin = $this->target_se();
@@ -584,6 +600,8 @@ class results_page {
             get_string('axis:truetheta', $component),
             get_string('axis:esttheta', $component)
         );
+        $recovery->set_axes(axis_scale::SYMMETRIC, axis_scale::SYMMETRIC, ['xatleast' => $this->ability_halfrange()]);
+        $recovery->set_basis($this->plot_basis());
         $recovery->set_points(array_map(
             static fn(array $row): array => ['x' => $row['truetheta'], 'y' => $row['esttheta']],
             $rows
@@ -607,6 +625,8 @@ class results_page {
             get_string('axis:truetheta', $component),
             get_string('axis:error', $component)
         );
+        $errorchart->set_axes(axis_scale::SYMMETRIC, axis_scale::SYMMETRIC, ['xatleast' => $this->ability_halfrange()]);
+        $errorchart->set_basis($this->plot_basis());
         $errorchart->set_points(array_map(
             static fn(array $row): array => ['x' => $row['truetheta'], 'y' => $row['error']],
             $rows
@@ -972,6 +992,155 @@ class results_page {
      * @param array $observation The attempt.
      * @return string
      */
+    /** @var string|null The data basis of this page's plots, once built. */
+    protected ?string $plotbasis = null;
+
+    /**
+     * What every plot on this page is based on (#105, section 9).
+     *
+     * Experiment, runs, strategies, models, sittings, the simulated abilities
+     * (distribution, mean, SD, range), the filter, and the stop rules in force
+     * — the effective item budget and SE rule per strategy.
+     *
+     * @return string
+     */
+    protected function plot_basis(): string {
+        if ($this->plotbasis !== null) {
+            return $this->plotbasis;
+        }
+        $component = 'local_catquizlab';
+        $runs = $this->query->runs();
+        $unique = static fn(string $key): string => implode(', ', array_unique(array_filter(array_map(
+            static fn(array $run): string => (string) ($run[$key] ?? ''),
+            $runs
+        ))));
+        $filter = [];
+        foreach ($this->query->get_filter() as $key => $value) {
+            if ($value !== '' && $value !== null && $value !== [] && $key !== 'experimentid') {
+                $filter[] = $key . ' = ' . (is_array($value) ? implode('/', $value) : $value);
+            }
+        }
+        $rules = [];
+        foreach ($this->query->stop_rules() as $group) {
+            $rules[] = $group['label'] . ': ' . implode('; ', $group['rules']);
+        }
+
+        $this->plotbasis = get_string('chart:basis', $component, (object) [
+            'experiment' => $unique('experiment'),
+            'runs'       => count($runs),
+            'strategies' => $unique('strategylabel'),
+            'models'     => $unique('model'),
+            'attempts'   => (int) ($this->query->size_check()['count'] ?? 0),
+            'abilities'  => implode('; ', array_keys($this->query->ability_distributions())),
+            'filter'     => $filter === [] ? get_string('chart:nofilter', $component) : implode(', ', $filter),
+            'rules'      => implode(' | ', $rules),
+        ]);
+
+        return $this->plotbasis;
+    }
+
+    /**
+     * Half the ability range of the selected runs, for symmetric ability axes.
+     *
+     * The configured bounds are part of the picture (#102): an axis that
+     * stops short of them hides where the engine could not go.
+     *
+     * @return float
+     */
+    protected function ability_halfrange(): float {
+        $half = 0.0;
+        foreach ($this->query->runs() as $run) {
+            $record = $GLOBALS['DB']->get_record('local_catquizlab_run', ['id' => $run['id']]);
+            if ($record) {
+                $definition = \local_catquizlab\local\run_registry::definition_for($record);
+                $d = \local_catquizlab\local\ability_distribution::of($definition);
+                $half = max($half, abs($d['min']), abs($d['max']));
+            }
+        }
+
+        return $half;
+    }
+
+    /**
+     * The head of a single test's view: who, what, how it ended.
+     *
+     * @param array $observation The observation.
+     * @param array $flow What test_flow::steps() returned.
+     * @return string
+     */
+    protected function render_single_head(array $observation, array $flow): string {
+        $component = 'local_catquizlab';
+        $na = get_string('flow:na', $component);
+
+        // How the sitting ended, and every execution on the way (#106): a
+        // test that finished for a reason the design intended, or one that
+        // failed for a technical one — never the one taken for the other.
+        $history = \local_catquizlab\local\attempt_history::of_attempt((int) $observation['attemptid']);
+        $end = null;
+        $retries = 0;
+        foreach ($history as $entry) {
+            if ($entry['outcome'] === \local_catquizlab\local\attempt_history::FAILED) {
+                $retries++;
+            }
+            if ($entry['reasoncode'] !== '') {
+                $end = $entry;
+            }
+        }
+        $endtext = $na;
+        if ($end !== null) {
+            $finished = in_array($end['reasoncode'], \local_catquizlab\local\reason_catalog::OUTCOMES, true);
+            $key = $finished ? 'flow:finishedbecause' : 'flow:failedbecause';
+            $endtext = get_string($key, $component, s($end['reasonlabel']))
+                . ' ' . \html_writer::tag('code', s($end['reasoncode']), ['data-reason' => $end['reasoncode']]);
+        }
+        $final = (array) ($flow['final'] ?? []);
+        $scales = (array) ($flow['scales'] ?? []);
+        $rows = [
+            [get_string('flow:attemptid', $component), (int) $observation['attemptid']],
+            [
+                get_string('flow:twin', $component),
+                s((string) ($observation['twinid'] ?? '')) . ' / ' . (int) $observation['personid'],
+            ],
+            [get_string('flow:runid', $component), (int) $observation['runid']],
+            [get_string('form:strategy', $component),
+                s(\local_catquizlab\local\strategy_catalog::display_label((string) $observation['strategy']))],
+            [get_string('form:model', $component), s((string) $observation['model'])],
+            [get_string('flow:length', $component), (int) ($observation['nitems'] ?? count($flow['steps']))],
+            [
+                get_string('axis:esttheta', $component),
+                isset($observation['esttheta']) ? format_float((float) $observation['esttheta'], 3) : $na,
+            ],
+            [get_string('flow:finalse', $component), isset($final['se']) ? format_float((float) $final['se'], 3) : $na],
+            [get_string('flow:finalti', $component), isset($final['ti']) ? format_float((float) $final['ti'], 3) : $na],
+            [get_string('flow:endreason', $component), $endtext],
+            [get_string('flow:activeatend', $component), isset($scales['active']) ? count((array) $scales['active']) : $na],
+            [get_string('flow:retries', $component), $retries],
+        ];
+        $table = new \html_table();
+        $table->attributes['class'] = 'generaltable table-sm w-auto';
+        $table->attributes['data-region'] = 'catquizlab-flow-head';
+        $table->data = $rows;
+
+        $lines = '';
+        foreach ($history as $entry) {
+            $lines .= \html_writer::tag('li', get_string('attempt:historyline', $component, (object) [
+                'try' => $entry['tryno'], 'outcome' => $entry['outcomelabel'], 'when' => $entry['when'],
+            ]) . ($entry['reasoncode'] !== '' ? ' · ' . s($entry['reasonlabel']) . ' (' . s($entry['reasoncode']) . ')' : ''));
+        }
+
+        $historylist = $lines !== ''
+            ? \html_writer::tag('ul', $lines, ['class' => 'small mb-3', 'data-region' => 'catquizlab-flow-history'])
+            : '';
+
+        return \html_writer::table($table) . $historylist;
+    }
+
+    /**
+     * One test's flow, step by step.
+     *
+     * @param array $observation The observation.
+     * @return string
+     */
     protected function render_single_flow(array $observation): string {
         $component = 'local_catquizlab';
         $flow = test_flow::steps($observation + results_query::detail($observation));
@@ -996,25 +1165,57 @@ class results_page {
         }
 
         if ($abilities !== []) {
+            // A trajectory (#105, section 8): the estimate after each item,
+            // joined in order, with estimate ± SE where the standard error per
+            // step is known (#106), and the simulated truth as a line.
+            $band = [];
+            foreach ($flow['steps'] as $step) {
+                if ($step['ability'] !== null && $step['se'] !== null) {
+                    $band[] = [
+                        'x' => $step['step'],
+                        'lo' => $step['ability'] - $step['se'],
+                        'hi' => $step['ability'] + $step['se'],
+                    ];
+                }
+            }
             $chart = new scatter_chart(
                 get_string('chart:abilitypath', $component),
                 get_string('axis:step', $component),
                 get_string('axis:esttheta', $component)
             );
+            $chart->set_axes(axis_scale::INTEGER, axis_scale::SYMMETRIC, ['yatleast' => $this->ability_halfrange()]);
+            $chart->set_basis($this->plot_basis());
             $chart->set_points($abilities)
+                ->set_connected()
                 ->set_description(get_string('chart:pointisstep', $component))
                 ->add_horizontal_line((float) $observation['truetheta'], get_string('chart:trueability', $component));
+            if (count($band) >= 2) {
+                $chart->add_band($band, get_string('chart:seband', $component));
+            }
+            $out .= \html_writer::tag('p', get_string('chart:abilitypathexplain', $component), ['class' => 'small text-muted']);
             $out .= $chart->render();
         }
 
+        $out = $this->render_single_head($observation, $flow) . $out;
+
+        // Per step: the estimate, its standard error and the test information
+        // at it (#106). "N/A" where a value is not known — never left out:
+        // which scales were dropped or locked at a given step the engine does
+        // not record, only at the end.
+        $na = get_string('flow:na', $component);
         $table = new \html_table();
         $table->attributes['class'] = 'generaltable table-sm';
+        $table->attributes['data-region'] = 'catquizlab-flow-steps';
         $table->head = [
             get_string('flow:step', $component),
             get_string('flow:question', $component),
             get_string('results:subscale', $component),
             get_string('flow:response', $component),
             get_string('axis:esttheta', $component),
+            get_string('flow:se', $component),
+            get_string('flow:ti', $component),
+            get_string('flow:scalesestimated', $component),
+            get_string('flow:droppedlocked', $component),
         ];
         foreach ($flow['steps'] as $step) {
             $table->data[] = [
@@ -1023,9 +1224,19 @@ class results_page {
                 $step['scaleid'] > 0 ? $step['scaleid'] : '—',
                 $step['fraction'] === null ? '—' : format_float($step['fraction'], 2),
                 $step['ability'] === null ? '—' : format_float($step['ability'], 3),
+                $step['se'] === null ? $na : format_float($step['se'], 3),
+                $step['ti'] === null ? $na : format_float($step['ti'], 3),
+                $step['scalesestimated'] === null ? $na : (string) $step['scalesestimated'],
+                $na,
             ];
         }
         $out .= \html_writer::table($table);
+        $out .= \html_writer::div(
+            $flow['final']['consistent'] ?? false
+                ? get_string('flow:tiexplained', $component)
+                : get_string('flow:tiunavailable', $component),
+            'small text-muted mb-3'
+        );
 
         // The scale lifecycle only exists in the richer source.
         if (!empty($flow['scales']['active']) || !empty($flow['scales']['dropped'])) {
@@ -1197,6 +1408,8 @@ class results_page {
             get_string('axis:strength' . (run_registry::strength_unit($variant) ?: 'share'), $component),
             get_string('axis:deltarmse', $component)
         );
+        $chart->set_axes(axis_scale::LINEAR, axis_scale::LINEAR);
+        $chart->set_basis($this->plot_basis());
         $points = [];
         foreach ($series as $cell) {
             if (($cell['deltas']['rmse'] ?? null) !== null) {
@@ -1314,13 +1527,39 @@ class results_page {
             get_string('axis:truedelta', $component),
             get_string('axis:estdelta', $component)
         );
+        $chart->set_axes(axis_scale::SYMMETRIC, axis_scale::SYMMETRIC);
+        $chart->set_basis($this->plot_basis());
         $chart->set_points(array_map(
-            static fn(array $row): array => ['x' => $row['truedelta'], 'y' => $row['estdelta']],
+            static fn(array $row): array => [
+                'x' => $row['truedelta'],
+                'y' => $row['estdelta'],
+                'label' => get_string('chart:deltapoint', $component, (object) [
+                    'person' => (int) $row['personid'],
+                    'subscale' => (string) $row['subscale'],
+                    'truedelta' => format_float((float) $row['truedelta'], 3),
+                    'estdelta' => format_float((float) $row['estdelta'], 3),
+                ]),
+            ],
             $rows
         ))->set_description(get_string('chart:pointissubscale', $component))
             ->add_identity_line(get_string('chart:identity', $component));
 
-        $out .= $chart->render_with_summary([
+        // Only where the true deviation varies (#105, section 7). In the
+        // conforming stratum it is 0 by design — no category or subscale
+        // variation — and every point sat on the vertical line x = 0: data
+        // read correctly, a comparison with nothing to compare.
+        $truedeltas = array_map(static fn(array $row): float => (float) $row['truedelta'], $rows);
+        $spread = $truedeltas === [] ? 0.0 : max($truedeltas) - min($truedeltas);
+        if ($spread < 1e-6) {
+            $out .= \html_writer::div(
+                get_string('chart:novariation', $component),
+                'alert alert-info',
+                ['data-region' => 'catquizlab-novariation']
+            );
+            $chart = null;
+        }
+
+        $out .= $chart === null ? '' : $chart->render_with_summary([
             get_string('metric:localbias', $component) => $this->format_number($summary['bias']),
             get_string('metric:localrmse', $component) => $this->format_number($summary['rmse']),
             get_string('metric:localcorrelation', $component) => $this->format_number($summary['correlation']),
@@ -1768,6 +2007,8 @@ class results_page {
             get_string('axis:itemrank', $component),
             get_string('axis:exposurerate', $component)
         );
+        $chart->set_axes(axis_scale::INTEGER, axis_scale::LINEAR, ['yfromzero' => true]);
+        $chart->set_basis($this->plot_basis());
         $chart->set_points($points)
             ->set_description(get_string('chart:pointisitem', $component));
 

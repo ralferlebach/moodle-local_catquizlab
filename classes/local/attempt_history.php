@@ -278,12 +278,13 @@ class attempt_history {
      *
      * @param int $attemptid The sitting.
      * @param string $stopreason The stop reason from its trace.
+     * @param array $facts What reason_catalog::outcome() tells the ends apart by.
      * @return string The code recorded.
      */
-    public static function record_outcome_reason(int $attemptid, string $stopreason): string {
+    public static function record_outcome_reason(int $attemptid, string $stopreason, array $facts = []): string {
         global $DB;
 
-        $code = reason_catalog::outcome($stopreason);
+        $code = reason_catalog::outcome($stopreason, $facts);
         if (!$DB->get_manager()->table_exists('local_catquizlab_attemptlog')) {
             return $code;
         }

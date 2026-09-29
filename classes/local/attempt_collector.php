@@ -214,7 +214,17 @@ class attempt_collector {
         // Why it ended, as a code, now that the stop reason is known — and in
         // the run's record of ends in moodledata (#107). The ends a test was
         // designed to reach are results as much as failures are faults.
-        $code = attempt_history::record_outcome_reason($attemptid, (string) ($trace['stopreason'] ?? ''));
+        $runid = (int) $DB->get_field('local_catquizlab_attempt', 'runid', ['id' => $attemptid]);
+        $runrecord = $DB->get_record('local_catquizlab_run', ['id' => $runid]);
+        $rundefinition = $runrecord ? run_registry::definition_for($runrecord) : [];
+        $code = attempt_history::record_outcome_reason($attemptid, (string) ($trace['stopreason'] ?? ''), [
+            'strategy' => (string) ($rundefinition['strategy'] ?? ''),
+            'finalse'  => $trace['finalse'] ?? null,
+            'semin'    => $rundefinition['budgets']['se']['min'] ?? null,
+            'dropped'  => count((array) ($trace['progress']['droppedscales'] ?? [])),
+            'played'   => (int) ($trace['nitems'] ?? count((array) ($trace['items'] ?? []))),
+            'poolsize' => $DB->count_records('local_catquizlab_item', ['runid' => $runid]),
+        ]);
         artefact_store::document($attemptid, attempt_history::COLLECTED, $code);
 
         return $trace;

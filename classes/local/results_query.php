@@ -153,6 +153,31 @@ class results_query {
         return $groups;
     }
 
+    /**
+     * The ability distributions of the selection's runs, in words (#105).
+     *
+     * @return array<string, int> Description => number of runs.
+     */
+    public function ability_distributions(): array {
+        global $DB;
+
+        $out = [];
+        $ids = array_keys($this->runs());
+        if ($ids === []) {
+            return $out;
+        }
+        [$insql, $params] = $DB->get_in_or_equal($ids, SQL_PARAMS_NAMED, 'run');
+        foreach ($DB->get_records_select('local_catquizlab_run', 'id ' . $insql, $params) as $record) {
+            $text = ability_distribution::describe(ability_distribution::of(run_registry::definition_for($record)));
+            $out[$text] = ($out[$text] ?? 0) + 1;
+        }
+
+        return $out;
+    }
+
+    /** @var array<int, string> End reason codes of the batch being read, by sitting. */
+    protected array $endreasons = [];
+
     /** @var int Observations beyond which an unfiltered selection is refused. */
     public const TOO_MANY = 50000;
 
@@ -339,6 +364,22 @@ class results_query {
                     self::BATCH
                 );
 
+                // The end reason of every sitting in the batch, in one query
+                // (#106): the latest code each one's history carries.
+                $this->endreasons = [];
+                if ($batch !== [] && $DB->get_manager()->table_exists('local_catquizlab_attemptlog')) {
+                    [$inreason, $reasonparams] = $DB->get_in_or_equal(array_keys($batch), SQL_PARAMS_NAMED, 'att');
+                    $codes = $DB->get_records_select(
+                        'local_catquizlab_attemptlog',
+                        'attemptid ' . $inreason . ' AND reasoncode IS NOT NULL',
+                        $reasonparams,
+                        'id ASC',
+                        'id, attemptid, reasoncode'
+                    );
+                    foreach ($codes as $code) {
+                        $this->endreasons[(int) $code->attemptid] = (string) $code->reasoncode;
+                    }
+                }
                 foreach ($batch as $attempt) {
                     $lastid = (int) $attempt->id;
                     yield from $this->observation_row($attempt, $runs, $persons, $personfields);
@@ -415,6 +456,17 @@ class results_query {
             // criterion of its own rather than running out of items.
             'stopreached' => self::stop_reached((string) ($trace['stopreason'] ?? '')),
             'runtimems'   => (int) ($attempt->runtimems ?? 0),
+            // How it ended, as a code and in words, and where it ended (#106).
+            'endreasoncode'  => $this->endreasons[(int) $attempt->id] ?? '',
+            'endreasonlabel' => isset($this->endreasons[(int) $attempt->id])
+                ? reason_catalog::label($this->endreasons[(int) $attempt->id])
+                : '',
+            'finalti'        => isset($trace['information']) && is_numeric($trace['information'])
+                ? (float) $trace['information']
+                : null,
+            'activescalesatend' => isset($trace['progress']['activescales'])
+                ? count((array) $trace['progress']['activescales'])
+                : null,
             'items'       => (array) ($trace['items'] ?? []),
         ];
     }

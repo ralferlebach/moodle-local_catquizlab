@@ -77,6 +77,87 @@ class scatter_chart {
     /** @var string The accessible description: what one point is. */
     protected string $description = '';
 
+    /** @var string How the x axis is scaled: one of axis_scale's modes. */
+    protected string $xmode = axis_scale::LINEAR;
+
+    /** @var string How the y axis is scaled. */
+    protected string $ymode = axis_scale::LINEAR;
+
+    /** @var array Axis options: xatleast, yatleast, xfromzero, yfromzero, jitter. */
+    protected array $axisoptions = [];
+
+    /** @var string What the plot is based on, shown beneath it (#105, section 9). */
+    protected string $basis = '';
+
+    /**
+     * Say what the plot is based on: experiment, runs, strategy, model, n, range, filter.
+     *
+     * @param string $basis The text.
+     * @return self
+     */
+    public function set_basis(string $basis): self {
+        $this->basis = $basis;
+
+        return $this;
+    }
+
+    /** @var bool Whether the points form a sequence to be joined by a line. */
+    protected bool $connected = false;
+
+    /** @var array[] An uncertainty band: x, lower and upper y per point. */
+    protected array $band = [];
+
+    /** @var string What the band shows, for its legend. */
+    protected string $bandlabel = '';
+
+    /**
+     * Join the points by a line, in the order given: a trajectory, not a cloud.
+     *
+     * @param bool $connected Whether to.
+     * @return self
+     */
+    public function set_connected(bool $connected = true): self {
+        $this->connected = $connected;
+
+        return $this;
+    }
+
+    /**
+     * Shade a band around the points, such as estimate ± standard error.
+     *
+     * @param array[] $band Per point: x, lo, hi.
+     * @param string $label What it shows.
+     * @return self
+     */
+    public function add_band(array $band, string $label): self {
+        $this->band = array_values(array_filter($band, static fn(array $b): bool =>
+            isset($b['x'], $b['lo'], $b['hi']) && is_numeric($b['lo']) && is_numeric($b['hi'])));
+        $this->bandlabel = $label;
+
+        return $this;
+    }
+
+    /**
+     * How the axes are scaled (#105).
+     *
+     * Logit quantities (ability, error, deviation) symmetric around 0; counts
+     * (test length, step) as integers; anything else linear with round ticks.
+     *
+     * @param string $x Mode of the x axis.
+     * @param string $y Mode of the y axis.
+     * @param array $options xatleast / yatleast: a half-range a symmetric axis
+     *     covers at least; xfromzero / yfromzero: include 0; jitter: a spread
+     *     for points on an integer x axis, in units of that axis.
+     * @return self
+     */
+    public function set_axes(string $x, string $y, array $options = []): self {
+        $this->xmode = $x;
+        $this->ymode = $y;
+        $this->axisoptions = $options;
+
+        return $this;
+    }
+
     /**
      * Construct a plot.
      *
@@ -100,7 +181,12 @@ class scatter_chart {
         $this->points = [];
         foreach ($points as $point) {
             if (isset($point['x'], $point['y']) && is_numeric($point['x']) && is_numeric($point['y'])) {
-                $this->points[] = ['x' => (float) $point['x'], 'y' => (float) $point['y']];
+                $this->points[] = [
+                    'x' => (float) $point['x'],
+                    'y' => (float) $point['y'],
+                    // What the point is, as a tooltip (#105): person, scale, values.
+                    'label' => (string) ($point['label'] ?? ''),
+                ];
             }
         }
 
@@ -161,6 +247,12 @@ class scatter_chart {
         $bounds = $this->bounds();
         $plotwidth = self::WIDTH - self::MARGIN_LEFT - self::MARGIN_RIGHT;
         $plotheight = self::HEIGHT - self::MARGIN_TOP - self::MARGIN_BOTTOM;
+        // With an identity line the plotting area is square: the same range on
+        // both axes only makes y = x a 45° line if a unit is as long on one
+        // axis as on the other (AXIS-003). 560 × 310 had it at about 29°.
+        if ($this->has_identity()) {
+            $plotwidth = $plotheight;
+        }
 
         $sx = static function (float $x) use ($bounds, $plotwidth): float {
             $span = $bounds['xmax'] - $bounds['xmin'];
@@ -202,12 +294,12 @@ class scatter_chart {
         );
 
         // Ticks with their values, so a reader can put numbers on the points.
-        foreach ($this->ticks($bounds['xmin'], $bounds['xmax']) as $value) {
+        foreach ($bounds['xticks'] as $value) {
             $x = $sx($value);
             $svg .= $this->line($x, self::MARGIN_TOP + $plotheight, $x, self::MARGIN_TOP + $plotheight + 5, '#666', 1);
             $svg .= $this->text($x, self::MARGIN_TOP + $plotheight + 18, self::format($value), 'middle');
         }
-        foreach ($this->ticks($bounds['ymin'], $bounds['ymax']) as $value) {
+        foreach ($bounds['yticks'] as $value) {
             $y = $sy($value);
             $svg .= $this->line(self::MARGIN_LEFT - 5, $y, self::MARGIN_LEFT, $y, '#666', 1);
             $svg .= $this->text(self::MARGIN_LEFT - 9, $y + 4, self::format($value), 'end');
@@ -235,9 +327,36 @@ class scatter_chart {
 
         // Points. Semi-transparent, because overplotting is the norm with a
         // few hundred replications and solid dots would hide the density.
-        foreach ($this->points as $point) {
-            $svg .= '<circle cx="' . round($sx($point['x']), 2) . '" cy="' . round($sy($point['y']), 2)
-                . '" r="3" fill="#2c3e50" fill-opacity="0.45"/>';
+        // The band first, then the line, then the points on top.
+        if (count($this->band) >= 2) {
+            $upper = [];
+            $lower = [];
+            foreach ($this->band as $b) {
+                $upper[] = round($sx((float) $b['x']), 2) . ',' . round($sy((float) $b['hi']), 2);
+                $lower[] = round($sx((float) $b['x']), 2) . ',' . round($sy((float) $b['lo']), 2);
+            }
+            $svg .= '<polygon points="' . implode(' ', array_merge($upper, array_reverse($lower)))
+                . '" fill="#2c7fb8" fill-opacity="0.15" stroke="none" data-region="band"><title>'
+                . s($this->bandlabel) . '</title></polygon>';
+        }
+        if ($this->connected && count($this->points) >= 2) {
+            $coords = [];
+            foreach ($this->points as $point) {
+                $coords[] = round($sx($point['x']), 2) . ',' . round($sy($point['y']), 2);
+            }
+            $svg .= '<polyline points="' . implode(' ', $coords) . '" fill="none" stroke="#2c3e50" stroke-width="1.5"'
+                . ' stroke-opacity="0.8" data-region="trajectory"/>';
+        }
+
+        $jitter = (float) ($this->axisoptions['jitter'] ?? 0.0);
+        foreach ($this->points as $index => $point) {
+            // A small, reproducible spread on an integer axis, so that tests
+            // of equal length do not hide behind each other; the value itself
+            // is unchanged.
+            $dx = $jitter > 0 ? ((crc32((string) $index) % 1000) / 999 - 0.5) * 2 * $jitter : 0.0;
+            $title = $point['label'] !== '' ? '<title>' . s($point['label']) . '</title>' : '';
+            $svg .= '<circle cx="' . round($sx($point['x'] + $dx), 2) . '" cy="' . round($sy($point['y']), 2)
+                . '" r="3" fill="#2c3e50" fill-opacity="0.45">' . $title . '</circle>';
         }
 
         // Axis labels.
@@ -252,6 +371,10 @@ class scatter_chart {
             . (self::MARGIN_TOP + $plotheight / 2) . ')">' . s($this->ylabel) . '</text>';
 
         $svg .= '</svg>';
+
+        if ($this->basis !== '') {
+            $svg .= \html_writer::div(s($this->basis), 'small text-muted mt-1', ['data-region' => 'catquizlab-plot-basis']);
+        }
 
         return $svg;
     }
@@ -282,53 +405,72 @@ class scatter_chart {
     }
 
     /**
-     * The data bounds, padded so points do not sit on the axes.
+     * Whether the chart has an identity line.
      *
-     * @return array{xmin: float, xmax: float, ymin: float, ymax: float}
+     * @return bool
      */
-    protected function bounds(): array {
-        $xs = array_column($this->points, 'x');
-        $ys = array_column($this->points, 'y');
-
-        $pad = static function (float $min, float $max): array {
-            if ($min === $max) {
-                // A single distinct value still needs a visible range.
-                return [$min - 0.5, $max + 0.5];
-            }
-            $margin = ($max - $min) * 0.05;
-            return [$min - $margin, $max + $margin];
-        };
-
-        [$xmin, $xmax] = $pad(min($xs), max($xs));
-        [$ymin, $ymax] = $pad(min($ys), max($ys));
-
-        // With an identity line the two axes must share a scale, or the line no
-        // longer means "estimate equals truth".
+    protected function has_identity(): bool {
         foreach ($this->references as $reference) {
             if ($reference['kind'] === 'identity') {
-                $lo = min($xmin, $ymin);
-                $hi = max($xmax, $ymax);
-                return ['xmin' => $lo, 'xmax' => $hi, 'ymin' => $lo, 'ymax' => $hi];
+                return true;
             }
         }
 
-        return ['xmin' => $xmin, 'xmax' => $xmax, 'ymin' => $ymin, 'ymax' => $ymax];
+        return false;
     }
 
     /**
-     * Five evenly spaced tick values across a range.
+     * The ranges and ticks of both axes (#105).
      *
-     * @param float $min The lower bound.
-     * @param float $max The upper bound.
-     * @return float[]
+     * @return array{xmin: float, xmax: float, ymin: float, ymax: float, xticks: float[], yticks: float[]}
      */
-    protected function ticks(float $min, float $max): array {
-        $ticks = [];
-        for ($i = 0; $i <= 4; $i++) {
-            $ticks[] = $min + ($max - $min) * $i / 4;
+    protected function bounds(): array {
+        $xs = array_map('floatval', array_column($this->points, 'x'));
+        $ys = array_map('floatval', array_column($this->points, 'y'));
+        foreach ($this->references as $reference) {
+            if ($reference['kind'] === 'horizontal') {
+                $ys[] = (float) $reference['value'];
+            }
+        }
+        foreach ($this->band as $b) {
+            $ys[] = (float) $b['lo'];
+            $ys[] = (float) $b['hi'];
         }
 
-        return $ticks;
+        // A comparison plot: one symmetric range for both axes, so that the
+        // identity line is the diagonal (AXIS-003).
+        if ($this->has_identity()) {
+            $atleast = max((float) ($this->axisoptions['xatleast'] ?? 0), (float) ($this->axisoptions['yatleast'] ?? 0));
+            $axis = axis_scale::symmetric(array_merge($xs, $ys), $atleast);
+            return ['xmin' => $axis['min'], 'xmax' => $axis['max'], 'ymin' => $axis['min'], 'ymax' => $axis['max'],
+                'xticks' => $axis['ticks'], 'yticks' => $axis['ticks']];
+        }
+
+        $x = $this->axis($this->xmode, $xs, 'x');
+        $y = $this->axis($this->ymode, $ys, 'y');
+
+        return ['xmin' => $x['min'], 'xmax' => $x['max'], 'ymin' => $y['min'], 'ymax' => $y['max'],
+            'xticks' => $x['ticks'], 'yticks' => $y['ticks']];
+    }
+
+    /**
+     * One axis by its mode.
+     *
+     * @param string $mode One of axis_scale's modes.
+     * @param float[] $values The values on this axis.
+     * @param string $which 'x' or 'y', for the options.
+     * @return array{min: float, max: float, ticks: float[]}
+     */
+    protected function axis(string $mode, array $values, string $which): array {
+        $fromzero = !empty($this->axisoptions[$which . 'fromzero']);
+        switch ($mode) {
+            case axis_scale::SYMMETRIC:
+                return axis_scale::symmetric($values, (float) ($this->axisoptions[$which . 'atleast'] ?? 0));
+            case axis_scale::INTEGER:
+                return axis_scale::integer($values, $fromzero);
+            default:
+                return axis_scale::linear($values, $fromzero);
+        }
     }
 
     /**

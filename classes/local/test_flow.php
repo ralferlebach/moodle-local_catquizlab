@@ -115,12 +115,17 @@ class test_flow {
                     ? (int) ($question['id'] ?? $question['questionid'] ?? 0)
                     : (int) ($items[$index] ?? 0),
                 'scaleid'    => $question !== null ? (int) ($question['catscaleid'] ?? 0) : 0,
-                'fraction'   => ($question !== null && isset($question['fraction']))
-                    ? (float) $question['fraction']
-                    : null,
+                // The score is kept with the responses, not with the question:
+                // read from the question alone, it was always empty (#106).
+                'fraction'   => self::score_of($question, $progress),
                 'ability'    => self::ability_at($path, $index),
+                // How many scales had an estimate after this step: what the
+                // engine's ability path records. Which were active, dropped or
+                // locked at that moment it does not record — only at the end.
+                'scalesestimated' => isset($path[$index]['abilities']) ? count((array) $path[$index]['abilities']) : null,
             ];
         }
+        $metrics = self::information_path($steps, $played, $trace);
 
         $scales = [];
         if ($progress !== []) {
@@ -138,9 +143,127 @@ class test_flow {
             // The trajectory is what distinguishes a full flow from a bare item
             // list, so it decides which source the view reports.
             'source' => $path !== [] ? self::SOURCE_PROGRESS : self::SOURCE_DEBUG,
-            'steps'  => $steps,
+            'steps'  => $metrics['steps'],
             'scales' => $scales,
+            'final'  => $metrics['final'],
         ];
+    }
+
+    /**
+     * The score of a played question, from wherever the engine kept it.
+     *
+     * @param array|null $question The played question.
+     * @param array $progress The progress snapshot.
+     * @return float|null
+     */
+    protected static function score_of(?array $question, array $progress): ?float {
+        if ($question === null) {
+            return null;
+        }
+        if (isset($question['fraction']) && is_numeric($question['fraction'])) {
+            return (float) $question['fraction'];
+        }
+        $id = (string) ($question['id'] ?? $question['questionid'] ?? '');
+        foreach ((array) ($progress['responses'] ?? []) as $key => $response) {
+            if ((string) $key === $id || (string) ($response['questionid'] ?? '') === $id) {
+                return isset($response['fraction']) && is_numeric($response['fraction']) ? (float) $response['fraction'] : null;
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * Test information and standard error after every step (#106).
+     *
+     * The engine keeps the item parameters of every question played and the
+     * estimate after every step, but neither the information nor the standard
+     * error per step. Both follow from those: TI@n is the sum of the item
+     * informations at the estimate after step n, and SE = 1/√TI@n. Whether this
+     * is the engine's own arithmetic is checked on the last step against the
+     * information and standard error the engine does report; where they do not
+     * agree — a model whose information is not computed here, a missing
+     * estimate — every computed value is withheld (null, shown as N/A) rather
+     * than shown unconfirmed.
+     *
+     * @param array[] $steps The steps built so far.
+     * @param array[] $played The played questions, in order, with their parameters.
+     * @param array $trace The collected trace.
+     * @return array{steps: array[], final: array}
+     */
+    public static function information_path(array $steps, array $played, array $trace): array {
+        $enginetime = isset($trace['information']) && is_numeric($trace['information']) ? (float) $trace['information'] : null;
+        $enginese = isset($trace['finalse']) && is_numeric($trace['finalse']) ? (float) $trace['finalse'] : null;
+
+        foreach ($steps as $index => $step) {
+            $ti = null;
+            if ($step['ability'] !== null && count($played) > $index) {
+                $ti = 0.0;
+                for ($j = 0; $j <= $index; $j++) {
+                    $information = self::item_information((array) $played[$j], (float) $step['ability']);
+                    if ($information === null) {
+                        $ti = null;
+                        break;
+                    }
+                    $ti += $information;
+                }
+            }
+            $steps[$index]['ti'] = $ti;
+            $steps[$index]['se'] = ($ti !== null && $ti > 0) ? 1.0 / sqrt($ti) : null;
+        }
+
+        $last = $steps === [] ? null : $steps[count($steps) - 1];
+        $computed = $last['ti'] ?? null;
+        $consistent = $computed !== null && $enginetime !== null && $enginetime > 0
+            && abs($computed - $enginetime) / $enginetime < 0.001;
+
+        if (!$consistent) {
+            foreach ($steps as $index => $step) {
+                $steps[$index]['ti'] = null;
+                $steps[$index]['se'] = null;
+            }
+        }
+
+        return [
+            'steps' => $steps,
+            'final' => [
+                'ti'         => $consistent ? $computed : $enginetime,
+                'se'         => $enginese ?? ($consistent ? 1.0 / sqrt((float) $computed) : null),
+                'engine_ti'  => $enginetime,
+                'engine_se'  => $enginese,
+                'consistent' => $consistent,
+            ],
+        ];
+    }
+
+    /**
+     * Fisher information of a dichotomous logistic item at an ability.
+     *
+     * For the models whose parameters are a, b and c — Rasch, Birnbaum (2PL)
+     * and their three-parameter form: I = a² · ((P − c)² / (1 − c)²) · (1 − P) / P.
+     * Anything else returns null and is not guessed at.
+     *
+     * @param array $question A played question with model, discrimination, difficulty, guessing.
+     * @param float $theta The ability.
+     * @return float|null
+     */
+    public static function item_information(array $question, float $theta): ?float {
+        $model = (string) ($question['model'] ?? '');
+        if (!in_array($model, ['rasch', 'raschbirnbaum', 'mixedraschbirnbaum'], true)) {
+            return null;
+        }
+        $a = $model === 'rasch' ? 1.0 : (float) ($question['discrimination'] ?? 1.0);
+        $b = (float) ($question['difficulty'] ?? 0.0);
+        $c = $model === 'mixedraschbirnbaum' ? (float) ($question['guessing'] ?? 0.0) : 0.0;
+        if ($c < 0.0 || $c >= 1.0) {
+            return null;
+        }
+        $p = $c + (1.0 - $c) / (1.0 + exp(-$a * ($theta - $b)));
+        if ($p <= 0.0 || $p >= 1.0) {
+            return 0.0;
+        }
+
+        return $a * $a * (($p - $c) ** 2 / (1.0 - $c) ** 2) * ((1.0 - $p) / $p);
     }
 
     /**

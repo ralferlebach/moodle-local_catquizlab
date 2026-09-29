@@ -72,9 +72,9 @@ max_required() {
 #   Moodle 5.1 and up   local_catquiz 1.3.0   migration-zu-moodle-5.x,
 #                       mod_adaptivequiz and its catmodel   v-3.0
 #
-# The 1.3 set requires 2025100600 (Moodle 5.1). There is no set for Moodle 5.0:
-# there the requirement check below skips the engine and the plugin is tested
-# stand-alone, which is what its runtime detection is for.
+# The 1.3 set requires 2025100600 (Moodle 5.1). Moodle 5.0 is no longer in the
+# CI matrix; were it run, the requirement check below would skip the engine and
+# test the plugin stand-alone, which is what its runtime detection is for.
 #
 # ENGINE_BRANCH, when set, overrides all three at once, for an experiment.
 case "${MOODLE_BRANCH}" in

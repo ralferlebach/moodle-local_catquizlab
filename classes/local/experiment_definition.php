@@ -166,7 +166,7 @@ class experiment_definition {
         self::validate_strategy($def, $errors);
         self::validate_pilot($def, $errors);
         self::validate_pool($def, $errors);
-        self::validate_persons($def, $errors);
+        self::validate_persons($def, $errors, $warnings);
         self::validate_budgets($def, $errors);
 
         // Courses and CAT tests are specifiable per run (2.6.C): at least one each.
@@ -412,9 +412,10 @@ class experiment_definition {
      *
      * @param array $def The normalised definition.
      * @param string[] $errors Error accumulator (by reference).
+     * @param string[] $warnings Warning accumulator (by reference).
      * @return void
      */
-    protected static function validate_persons(array $def, array &$errors): void {
+    protected static function validate_persons(array $def, array &$errors, array &$warnings = []): void {
         if (!isset($def['persons']) || !is_array($def['persons'])) {
             $errors[] = self::msg('def:missingblock', 'persons');
             return;
@@ -430,6 +431,9 @@ class experiment_definition {
         if (($persons['stratum'] ?? null) === 'conforming' && ($persons['severity'] ?? 'none') !== 'none') {
             $errors[] = self::msg('def:severitynotapplicable', 'persons.severity');
         }
+
+        // Distribution, parameters and range of the simulated abilities (#102).
+        ability_distribution::validate($persons, $errors, $warnings);
 
         foreach (['mild', 'medium', 'strong'] as $level) {
             $scale = $persons['severityscale'][$level] ?? null;

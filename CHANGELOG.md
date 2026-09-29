@@ -6,6 +6,162 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.7.9] — 2026-09-29 — Issue #105 §3–9, #106 completed
+
+Plots a reader can use: symmetric logit axes, integer counts, a real 45°
+diagonal, and what each plot is based on.
+
+### Axis conventions (§3, §4) — `axis_scale`
+Axes used to run from the data's minimum to its maximum plus 5 %, with five
+evenly spaced ticks: "−6.65 −2.99 0.66 4.32 7.98" for an ability, "4.55 12.53
+20.5 28.48 36.45" for a number of items. Now:
+
+    ability −6.65 … 7.98        −8 −6 −4 −2 0 2 4 6 8
+    error −0.8 … 0.6            −1 −0.5 0 0.5 1
+    test length 4.55 … 36.45    0 10 20 30 40
+
+Logit quantities symmetric around 0 with 0 as the middle tick, ticks integers
+or halves, counts integers only (with a slight reproducible jitter on the test
+length axis). Ability axes cover at least the configured ability range (#102).
+"Test length (number of items)".
+
+### Comparison plots (§5, AXIS-003)
+Estimated against true ability, and estimated against true local deviation: one
+symmetric range for both axes and a square plotting area. The area had been
+560 × 310, so y = x stood at about 29°; it is 45.0° now (tested).
+
+### Local deviation (§7) — the vertical line explained
+Verified against the data: in the conforming stratum the simulated people have
+no local deviation by design (category and subscale variation 0), so Δs,true is 0
+on every subscale and every point sat on x = 0. The values were read correctly.
+The plot is shown only where Δs,true varies; otherwise the page says so and why.
+Every point carries a tooltip: person, subscale, true and estimated deviation.
+
+### A single test in detail (§8, and #106's optional plot)
+"Step (items administered)" as an integer axis, the estimates joined in order,
+the simulated truth as a labelled line, the estimate ± its standard error as a
+shaded band where the SE per step is known (#106), and a sentence above the plot
+saying what it shows.
+
+### What each plot is based on (§9)
+Beneath every plot: experiment, runs, strategy, model, sittings, the simulated
+abilities (distribution, μ, σ, range), the filter, and the stop rules in force —
+effective item budget and SE rule per strategy.
+
+### #106 completed
+A Behat scenario opens a single test with a full engine-shaped trace and checks
+the end reason with its code, final SE and test information, the SE and TI@n
+columns, the N/A column, and the statement that the computation agrees with
+the engine.
+
+### Not done in #105
+§6's optional robust range for outliers; §5's optional note on values outside
+the engine's range (the validation and the run log carry it since 0.7.7); §10's
+Playwright checks.
+
+---
+
+## [0.7.8] — 2026-09-29 — Issue #106
+
+A single test in detail: standard error, test information and why it ended.
+
+### SE and TI@n per step — computed, and checked against the engine
+The engine keeps the parameters of every item played and the estimate after
+every step, but neither the information nor the standard error per step. Both
+follow from those: TI@n = Σ Iᵢ(θ̂ₙ) over the items so far, SE = 1/√TI@n, with
+the Fisher information of the logistic models (Rasch, 2PL, 3PL). Checked against
+six real sittings from two runs: the computed final information agrees with the
+engine's to within 0.0003 %. Every sitting is checked the same way; where the
+last step does not agree — a model not computed here, a missing estimate — no
+computed value is shown, only "N/A" and the engine's own final numbers.
+
+### The view
+A diagnostic head: sitting, digital twin and person, run, strategy, model, items
+administered, final ability, final SE, final test information, active scales at
+the end, technical retries, and the end reason — "Test finished because …" or
+"Test failed because …", with its code — followed by every execution in the
+history. The step table adds "SE after this step", "TI@n (global)", "Scales
+estimated after this step", and "Dropped / locked after this step" as N/A: the
+engine records that only at the end, and the column says so rather than being
+left out. The response column was always empty — the score is kept with the
+responses, not with the question; it is read from there now.
+
+### End reasons from facts
+The engine reports "maximum reached", "time exceeded" — spelt "Time exeeded" —
+or "no remaining questions", which covers several ends. They are told apart from
+what is known: the classical test → `fixed_form_complete`; final SE at or below
+the run's lower SE bound → `target_se_reached`; a subscale strategy that dropped
+scales → `subscale_rule_satisfied`; every pool item played → `pool_exhausted`;
+otherwise `no_eligible_item_remaining`. `subscale_rule_blocked` is not claimed:
+the engine does not record it.
+
+### Export
+Attempt level: `endreasoncode`, `endreasonlabel`, `finalti`, `activescalesatend`
+(final ability and SE were there). New step level, CSV and JSON: attempt, run,
+strategy, step, question, subscale, score, estimate, SE, TI@n, scales estimated
+— streamed row by row. The attempt level had two column lists, one per path; the
+second drifted at once and the rectangular-export test caught it. One list now.
+
+### Not done
+A second line for SE or TI@n in the ability plot (optional in the issue); the
+values are in the table and the export. Information of a selected scale
+(`ti_scale`) and remaining TI min/max: not recorded by the engine, not computed.
+
+PHPUnit 750 tests, worker 18, Behat 42 scenarios / 354 steps, phpcs and PHPDoc
+clean — one run.
+
+---
+
+## [0.7.7] — 2026-09-29 — Issue #102, Issue #105 §1–2, #107 completed, CI without Moodle 5.0
+
+### The finding (#102, #105)
+The simulated abilities came from N(μ = 0, σ = 2), unbounded, while every CAT
+scale this plugin provisioned was hard-wired to [−3, +3]. Measured with 5000
+people: 13.4 % of the global abilities — and 73,590 category and subscale
+abilities — lay outside what the engine could estimate. The results' saturation
+of estimates at about ±3 is that, not a property of any strategy.
+
+### The distribution is part of the experiment
+`ability_distribution`, one place for: the distribution (truncated normal,
+normal, uniform), mean (μ), standard deviation (σ), and one ability range used
+twice — the simulated abilities are drawn within it, and every provisioned CAT
+scale gets it as its minimum and maximum scale value.
+
+- Truncated means drawn again, never clamped: no value lies on a bound.
+  Category and subscale abilities stay within the range too.
+- σ is the parameter before truncation: a truncated N(0, 2) within ±3 has a
+  realised standard deviation of about 1.48.
+- A normal distribution may leave the range. Validation names the expected share
+  before anything is generated ("About 13.4 % … outside [−3, 3]"), and the run's
+  log records the actual count as a warning.
+- New experiments start with truncated normal, μ = 0, σ = 1, within [−3, 3].
+  Definitions saved before keep what they did — normal, μ = 0, σ = 2, ±3 — so
+  their results stay reproducible, now recorded explicitly and warned about. The
+  first person of such a definition is drawn exactly as before (tested).
+
+### Visible and recorded
+The experiment form has the fields, named "Mean (μ)" and "Standard deviation
+(σ)" — never "N(0, 2)". The manifest records distribution, mean, standard
+deviation, both bounds, the engine scale range and the expected share outside.
+The results name the distribution of the selected runs beside the stop rules.
+
+### End to end
+`provisioning_check` reads the root scale's range back from
+`local_catquiz_catscales`. `smoke.php --case=102` provisions a truncated
+N(0, 1.5) within [−4, 4]; the engine's root scale is [−4, 4]. A step of the
+worker end-to-end workflow.
+
+### #107 completed
+The ZIP download is built through one method that requires the debug
+capability. Tested both ways: a manager with debugging prohibited gets an
+exception from the method, and no download button on the run page.
+
+### CI
+Moodle 5.0 is out of the matrix: out of support upstream. It was the only job
+running the plugin without an engine; that condition is no longer covered by CI.
+
+---
+
 ## [0.7.6] — 2026-09-29 — CI: the plugin without an engine
 
 The CI's Moodle 5.0 jobs, which since 0.7.5 run without an engine (the 1.3 set

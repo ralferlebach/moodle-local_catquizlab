@@ -240,6 +240,16 @@ if ($options['case'] === '104') {
     ];
 }
 
+// Issue #102's case: a range other than the ±3 that used to be hard-wired,
+// with a truncated normal distribution. The root scale the engine holds must
+// have exactly this range — read back, not assumed.
+if ($options['case'] === '102') {
+    $definition['persons']['distribution'] = 'truncated_normal';
+    $definition['persons']['abilitymean'] = 0.0;
+    $definition['persons']['abilitysd'] = 1.5;
+    $definition['persons']['abilityrange'] = ['min' => -4.0, 'max' => 4.0];
+}
+
 $experimentid = (int) experiment_service::save($definition)['id'];
 step('Defined experiment ' . $experimentid . '.', $started);
 
@@ -281,6 +291,19 @@ foreach ($DB->get_records('local_catquizlab_run', ['experimentid' => $experiment
     }
     foreach ($check['checked'] as $field => $pair) {
         cli_writeln(sprintf('  engine %-24s %s', $field, json_encode($pair['actual'])));
+    }
+    if ($options['case'] === '102') {
+        $scalemin = $check['checked']['scale_min']['actual'] ?? null;
+        $scalemax = $check['checked']['scale_max']['actual'] ?? null;
+        cli_writeln(sprintf(
+            '  case 102: engine root scale [%s, %s] (expected [-4, 4])',
+            json_encode($scalemin),
+            json_encode($scalemax)
+        ));
+        if ($scalemin !== -4.0 || $scalemax !== 4.0) {
+            cli_error('Case 102: the root scale reached the engine as [' . json_encode($scalemin) . ', '
+                . json_encode($scalemax) . '], expected [-4, 4].');
+        }
     }
     if (!$check['ok']) {
         foreach ($check['differences'] as $difference) {

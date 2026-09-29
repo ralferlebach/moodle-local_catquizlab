@@ -149,6 +149,94 @@ class behat_local_catquizlab extends behat_base {
     }
 
     /**
+     * Give the first run of an experiment one collected sitting with a full trace, as the engine keeps it.
+     *
+     * Items with their parameters, responses and the ability path, and an
+     * information the engine would report for them — so that the single-test
+     * view has standard errors and test information to show.
+     *
+     * @Given /^the first run of "(?P<name_string>(?:[^"]|\\")*)" has a collected sitting with a full trace$/
+     * @param string $name The experiment name.
+     * @return void
+     * @throws \coding_exception If no experiment of that name exists.
+     */
+    public function the_first_run_has_a_sitting_with_a_full_trace(string $name): void {
+        global $DB;
+
+        $id = $DB->get_field('local_catquizlab_experiment', 'id', ['name' => $name]);
+        if (!$id) {
+            throw new \coding_exception('No experiment named "' . $name . '".');
+        }
+        $run = $DB->get_record_sql(
+            'SELECT * FROM {local_catquizlab_run} WHERE experimentid = ? ORDER BY id ASC',
+            [$id],
+            IGNORE_MULTIPLE
+        );
+        $DB->set_field('local_catquizlab_run', 'status', \local_catquizlab\local\registry::STATUS_FINISHED, ['id' => $run->id]);
+
+        $played = [];
+        $parameters = [['11', '1.2', '-0.5'], ['12', '0.8', '0.3'], ['13', '1.5', '1.1']];
+        foreach ($parameters as [$qid, $a, $b]) {
+            $played[$qid] = ['id' => $qid, 'catscaleid' => '5', 'model' => 'raschbirnbaum',
+                'discrimination' => $a, 'difficulty' => $b, 'guessing' => '0'];
+        }
+        $information = 0.0;
+        foreach ($played as $item) {
+            $information += \local_catquizlab\local\test_flow::item_information($item, 0.2);
+        }
+
+        /** @var \local_catquizlab_generator $generator */
+        $generator = \testing_util::get_data_generator()->get_plugin_generator('local_catquizlab');
+        $person = $generator->create_person(['runid' => $run->id]);
+        $attemptid = (int) $DB->insert_record('local_catquizlab_attempt', (object) [
+            'runid' => $run->id, 'personid' => $person->id,
+            'status' => \local_catquizlab\local\attempt_scheduler::STATUS_COLLECTED, 'tries' => 1, 'runtimems' => 4000,
+            'tracejson' => json_encode([
+                'finaltheta' => 0.2, 'finalse' => 1 / sqrt($information), 'information' => $information,
+                'items' => [11, 12, 13], 'nitems' => 3, 'stopreason' => 'Reached maximum number of questions',
+                'scaleabilities' => [],
+                'abilitypath' => [
+                    ['step' => 1, 'abilities' => ['1' => 0.4, '5' => 0.4]],
+                    ['step' => 2, 'abilities' => ['1' => -0.1, '5' => -0.1]],
+                    ['step' => 3, 'abilities' => ['1' => 0.2, '5' => 0.2]],
+                ],
+                'progress' => [
+                    'playedquestions' => $played,
+                    'responses' => [
+                        '11' => ['questionid' => '11', 'fraction' => '1.000'],
+                        '12' => ['questionid' => '12', 'fraction' => '0.000'],
+                        '13' => ['questionid' => '13', 'fraction' => '1.000'],
+                    ],
+                    'activescales' => [5], 'droppedscales' => [], 'lockedscales' => [],
+                ],
+            ]),
+            'timecreated' => time(), 'timemodified' => time(),
+        ]);
+        \local_catquizlab\local\attempt_history::record($attemptid, \local_catquizlab\local\attempt_history::COLLECTED, [
+            'tryno' => 1,
+        ]);
+        \local_catquizlab\local\attempt_history::record_outcome_reason($attemptid, 'Reached maximum number of questions');
+    }
+
+    /**
+     * Open the test-flow tab of an experiment's results.
+     *
+     * @Given /^I open the test flow of "(?P<name_string>(?:[^"]|\\")*)"$/
+     * @param string $name The experiment name.
+     * @return void
+     * @throws \coding_exception If no experiment of that name exists.
+     */
+    public function i_open_the_test_flow_of(string $name): void {
+        global $DB;
+
+        $id = $DB->get_field('local_catquizlab_experiment', 'id', ['name' => $name]);
+        if (!$id) {
+            throw new \coding_exception('No experiment named "' . $name . '".');
+        }
+        $this->execute('behat_general::i_visit', ['/local/catquizlab/results.php?experimentid=' . $id . '&tab=testflow']);
+    }
+
+    /**
      * Open the detail page of an experiment's first run.
      *
      * Run ids are database ids, so a scenario cannot know them in advance;

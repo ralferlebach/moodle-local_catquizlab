@@ -214,7 +214,7 @@ class log_view {
                 'failed'        => $row->event === run_log::STAGE_FAILED || $row->event === run_log::RUN_FAILED,
                 'severity'      => in_array($row->event, [run_log::STAGE_FAILED, run_log::RUN_FAILED], true)
                     ? self::ERROR
-                    : ($row->event === run_log::RUN_AUTOPAUSED
+                    : (in_array($row->event, [run_log::RUN_AUTOPAUSED, run_log::ABILITIES_OUTSIDE], true)
                         ? self::WARNING : self::INFO),
                 'action'        => (string) $row->event,
                 'attemptno'     => (int) ($row->attemptno ?? 0),

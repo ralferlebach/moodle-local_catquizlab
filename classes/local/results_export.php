@@ -52,6 +52,15 @@ class results_export {
     /** @var string One row per materialised item. */
     public const LEVEL_ITEM = 'item';
 
+    /** @var string One row per step of every sitting (#106). */
+    public const LEVEL_STEP = 'step';
+
+    /** @var string[] The columns of the step level. */
+    public const STEP_COLUMNS = [
+        'attemptid', 'runid', 'strategy', 'step', 'questionid', 'subscaleid', 'score',
+        'esttheta', 'se', 'ti_global', 'scales_estimated',
+    ];
+
     /**
      * The levels an export can be taken at.
      *
@@ -63,6 +72,7 @@ class results_export {
             self::LEVEL_ATTEMPT  => 'export:levelattempt',
             self::LEVEL_SUBSCALE => 'export:levelsubscale',
             self::LEVEL_ITEM     => 'export:levelitem',
+            self::LEVEL_STEP     => 'export:levelstep',
         ];
     }
 
@@ -93,6 +103,15 @@ class results_export {
 
             case self::LEVEL_ATTEMPT:
                 return (int) $query->size_check()['count'];
+
+            case self::LEVEL_STEP:
+                // One row per question each sitting was asked.
+                $total = 0;
+                foreach ($observations as $row) {
+                    $total += (int) ($row['nitems'] ?? 0);
+                }
+
+                return $total;
 
             case self::LEVEL_SUBSCALE:
             case self::LEVEL_ITEM:
@@ -128,6 +147,8 @@ class results_export {
      */
     public static function iterate(results_query $query, string $level): array {
         switch ($level) {
+            case self::LEVEL_STEP:
+                return ['columns' => self::STEP_COLUMNS, 'rows' => self::step_rows($query)];
             case self::LEVEL_ATTEMPT:
                 return ['columns' => self::ATTEMPT_COLUMNS, 'rows' => self::attempt_rows($query->each_observation())];
             case self::LEVEL_SUBSCALE:
@@ -143,7 +164,38 @@ class results_export {
         'strategy', 'model', 'variant', 'strength', 'stratum', 'severity',
         'truetheta', 'esttheta', 'error', 'nitems', 'se', 'stopreason',
         'stopreached', 'runtimems',
+        // How and where each sitting ended (#106).
+        'endreasoncode', 'endreasonlabel', 'finalti', 'activescalesatend',
     ];
+
+    /**
+     * One row per step, with SE and TI@n where they agree with the engine (#106).
+     *
+     * Row by row: a step level of fifty thousand sittings is a million rows.
+     *
+     * @param results_query $query The selection.
+     * @return \Generator
+     */
+    protected static function step_rows(results_query $query): \Generator {
+        foreach ($query->each_observation() as $observation) {
+            $flow = test_flow::steps($observation + results_query::detail($observation));
+            foreach ($flow['steps'] as $step) {
+                yield [
+                    'attemptid'        => (int) $observation['attemptid'],
+                    'runid'            => (int) $observation['runid'],
+                    'strategy'         => (string) $observation['strategy'],
+                    'step'             => (int) $step['step'],
+                    'questionid'       => (int) $step['questionid'],
+                    'subscaleid'       => (int) $step['scaleid'],
+                    'score'            => $step['fraction'],
+                    'esttheta'         => $step['ability'],
+                    'se'               => $step['se'],
+                    'ti_global'        => $step['ti'],
+                    'scales_estimated' => $step['scalesestimated'],
+                ];
+            }
+        }
+    }
 
     /**
      * Sitting-level export rows from observations.
@@ -182,6 +234,8 @@ class results_export {
                 return self::subscales($query);
             case self::LEVEL_ITEM:
                 return self::items($query);
+            case self::LEVEL_STEP:
+                return ['columns' => self::STEP_COLUMNS, 'rows' => iterator_to_array(self::step_rows($query), false)];
             default:
                 throw new \coding_exception('Unknown export level: ' . $level);
         }
@@ -244,15 +298,10 @@ class results_export {
      * @return array{columns: string[], rows: array[]}
      */
     protected static function attempts(results_query $query): array {
-        $columns = [
-            'attemptid', 'runid', 'personid', 'twinid', 'replication', 'tier',
-            'strategy', 'model', 'variant', 'strength', 'stratum', 'severity',
-            'truetheta', 'esttheta', 'error', 'nitems', 'se', 'stopreason',
-            'stopreached', 'runtimems',
-        ];
-
+        // One column list for both paths, streamed and built: a second copy of
+        // it drifted the first time a column was added (#106).
         return [
-            'columns' => $columns,
+            'columns' => self::ATTEMPT_COLUMNS,
             'rows'    => iterator_to_array(self::attempt_rows($query->each_observation()), false),
         ];
     }

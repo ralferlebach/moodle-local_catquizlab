@@ -260,6 +260,33 @@ class experiment_form extends \moodleform {
         $mform->setType('personcount', PARAM_INT);
         $mform->setDefault('personcount', 50);
 
+        // The simulated abilities: distribution, parameters and range, named
+        // explicitly (#102, #105) — "N(0, 2)" left open whether 2 was a
+        // variance or a standard deviation. The range is also the range of
+        // every provisioned CAT scale.
+        $recommended = \local_catquizlab\local\ability_distribution::RECOMMENDED;
+        $mform->addElement('select', 'abilitydistribution', get_string('form:abilitydistribution', $component), [
+            'truncated_normal' => get_string('distribution:truncated_normal', $component),
+            'normal'           => get_string('distribution:normal', $component),
+            'uniform'          => get_string('distribution:uniform', $component),
+        ]);
+        $mform->setDefault('abilitydistribution', $recommended['distribution']);
+        $mform->addHelpButton('abilitydistribution', 'form:abilitydistribution', $component);
+        $mform->addElement('text', 'abilitymean', get_string('form:abilitymean', $component), ['size' => 6]);
+        $mform->setType('abilitymean', PARAM_LOCALISEDFLOAT);
+        $mform->setDefault('abilitymean', $recommended['mean']);
+        $mform->addElement('text', 'abilitysd', get_string('form:abilitysd', $component), ['size' => 6]);
+        $mform->setType('abilitysd', PARAM_LOCALISEDFLOAT);
+        $mform->setDefault('abilitysd', $recommended['sd']);
+        $mform->hideIf('abilitysd', 'abilitydistribution', 'eq', 'uniform');
+        $mform->addElement('text', 'abilitymin', get_string('form:abilitymin', $component), ['size' => 6]);
+        $mform->setType('abilitymin', PARAM_LOCALISEDFLOAT);
+        $mform->setDefault('abilitymin', $recommended['min']);
+        $mform->addElement('text', 'abilitymax', get_string('form:abilitymax', $component), ['size' => 6]);
+        $mform->setType('abilitymax', PARAM_LOCALISEDFLOAT);
+        $mform->setDefault('abilitymax', $recommended['max']);
+        $mform->addHelpButton('abilitymin', 'form:abilitymin', $component);
+
         $mform->addElement('advcheckbox', 'twins', get_string('form:twins', $component));
         $mform->setDefault('twins', 1);
         $mform->addHelpButton('twins', 'form:twins', $component);
@@ -659,6 +686,14 @@ class experiment_form extends \moodleform {
                 'stratum'  => (string) ($data['stratum'] ?? 'conforming'),
                 'severity' => (string) ($data['severity'] ?? 'none'),
                 'count'    => (int) ($data['personcount'] ?? 50),
+                'distribution' => (string) ($data['abilitydistribution']
+                    ?? \local_catquizlab\local\ability_distribution::RECOMMENDED['distribution']),
+                'abilitymean'  => (float) unformat_float((string) ($data['abilitymean'] ?? 0)),
+                'abilitysd'    => (float) unformat_float((string) ($data['abilitysd'] ?? 1)),
+                'abilityrange' => [
+                    'min' => (float) unformat_float((string) ($data['abilitymin'] ?? -3)),
+                    'max' => (float) unformat_float((string) ($data['abilitymax'] ?? 3)),
+                ],
                 'twins'    => ['enabled' => !empty($data['twins'])],
                 'naming'   => ['pattern' => 'P-{stratum}-{index:04d}'],
             ],
@@ -934,6 +969,13 @@ class experiment_form extends \moodleform {
             'stratum'            => (string) ($normalised['persons']['stratum'] ?? 'conforming'),
             'severity'           => (string) ($normalised['persons']['severity'] ?? 'none'),
             'personcount'        => (int) ($normalised['persons']['count'] ?? 50),
+            // What the experiment really does — for one saved before these
+            // fields existed, the unbounded N(μ = 0, σ = 2) within ±3.
+            'abilitydistribution' => \local_catquizlab\local\ability_distribution::of($normalised)['distribution'],
+            'abilitymean'        => self::localised(\local_catquizlab\local\ability_distribution::of($normalised)['mean']),
+            'abilitysd'          => self::localised(\local_catquizlab\local\ability_distribution::of($normalised)['sd']),
+            'abilitymin'         => self::localised(\local_catquizlab\local\ability_distribution::of($normalised)['min']),
+            'abilitymax'         => self::localised(\local_catquizlab\local\ability_distribution::of($normalised)['max']),
             'twins'              => !empty($normalised['persons']['twins']['enabled']) ? 1 : 0,
             'strategy'           => (string) ($normalised['strategy'] ?? 'fastest'),
             'globalmin'          => (int) ($normalised['budgets']['global']['minitems'] ?? 20),

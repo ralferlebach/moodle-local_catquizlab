@@ -120,6 +120,28 @@ class provisioning_check {
             'includepilot'           => !empty($settings['catquiz_includepilotquestions']) ? 1 : 0,
         ];
 
+        // The root scale as the engine holds it (#102): its range is what the
+        // engine can estimate within, and must be the range the simulated
+        // abilities were drawn from.
+        $range = ability_distribution::of($definition);
+        $root = $DB->get_records_select(
+            'local_catquizlab_scalemap',
+            'runid = :runid AND parentcatscaleid = 0',
+            ['runid' => $runid],
+            'generation DESC, id DESC',
+            'id, catscaleid',
+            0,
+            1
+        );
+        $root = reset($root);
+        if ($root && $DB->get_manager()->table_exists('local_catquiz_catscales')) {
+            $scale = $DB->get_record('local_catquiz_catscales', ['id' => $root->catscaleid], 'id, minscalevalue, maxscalevalue');
+            $expected['scale_min'] = round($range['min'], 4);
+            $expected['scale_max'] = round($range['max'], 4);
+            $actual['scale_min'] = $scale ? round((float) $scale->minscalevalue, 4) : null;
+            $actual['scale_max'] = $scale ? round((float) $scale->maxscalevalue, 4) : null;
+        }
+
         $differences = [];
         $checked = [];
         foreach ($expected as $field => $value) {

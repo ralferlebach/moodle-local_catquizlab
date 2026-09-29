@@ -75,9 +75,18 @@ final class artefact_store_test extends \advanced_testcase {
      * @return void
      */
     public function test_a_finished_sitting_gets_its_end(): void {
-        $this->assertSame('max_items_reached', reason_catalog::outcome('Reached maximum number of questions.'));
-        $this->assertSame('target_se_reached', reason_catalog::outcome('se'));
-        $this->assertSame('pool_exhausted', reason_catalog::outcome('No more questions available'));
+        // From the engine's statement first, then from facts (#106).
+        $this->assertSame('max_items_reached', reason_catalog::outcome('Reached maximum number of questions'));
+        $this->assertSame('timeout', reason_catalog::outcome('Time exeeded'));
+        $this->assertSame('fixed_form_complete', reason_catalog::outcome('', ['strategy' => 'classic']));
+        $this->assertSame('target_se_reached', reason_catalog::outcome('', ['strategy' => 'fastest',
+            'finalse' => 0.31, 'semin' => 0.35]));
+        $this->assertSame('subscale_rule_satisfied', reason_catalog::outcome('', ['strategy' => 'allsubs',
+            'finalse' => 0.5, 'semin' => 0.35, 'dropped' => 2]));
+        $this->assertSame('pool_exhausted', reason_catalog::outcome('', ['strategy' => 'fastest',
+            'played' => 40, 'poolsize' => 40]));
+        $this->assertSame('no_eligible_item_remaining', reason_catalog::outcome('noremainingquestions', [
+            'strategy' => 'fastest', 'played' => 12, 'poolsize' => 40]));
         $this->assertSame('finished_other', reason_catalog::outcome(''));
     }
 
@@ -231,5 +240,33 @@ final class artefact_store_test extends \advanced_testcase {
         // Zero keeps everything.
         set_config('artefact_retention_days', 0, 'local_catquizlab');
         $this->assertSame(0, artefact_store::cleanup(time() + 365 * DAYSECS));
+    }
+
+    /**
+     * Without the debug capability there is no download, whatever the request.
+     *
+     * @return void
+     */
+    public function test_the_download_needs_the_debug_capability(): void {
+        global $DB;
+        $this->resetAfterTest();
+        $this->setAdminUser();
+
+        [$runid, $attemptid] = $this->failed_sitting();
+
+        // A manager — who may see the plugin — with debugging taken away.
+        $user = $this->getDataGenerator()->create_user();
+        $manager = (int) $DB->get_field('role', 'id', ['shortname' => 'manager']);
+        $system = \context_system::instance();
+        role_assign($manager, $user->id, $system->id);
+        assign_capability('local/catquizlab:debug', CAP_PROHIBIT, $manager, $system->id, true);
+        accesslib_clear_all_caches_for_unit_testing();
+
+        $this->setUser($user);
+        $this->assertTrue(has_capability('local/catquizlab:view', $system));
+        $this->assertFalse(has_capability('local/catquizlab:debug', $system));
+
+        $this->expectException(\required_capability_exception::class);
+        artefact_store::zip_for_download(artefact_store::SCOPE_RUN, $runid, $attemptid, $system);
     }
 }

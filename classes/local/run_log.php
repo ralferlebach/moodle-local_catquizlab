@@ -74,6 +74,9 @@ class run_log {
     /** @var string Held automatically after failing the same way repeatedly. */
     public const RUN_AUTOPAUSED = 'run_autopaused';
 
+    /** @var string Simulated abilities were generated outside the scale range (#102). */
+    public const ABILITIES_OUTSIDE = 'abilities_outside';
+
     /** @var string Let go again by a person who dealt with the cause. */
     public const RUN_RESUMED = 'run_resumed';
 

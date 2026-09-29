@@ -76,7 +76,7 @@ trace collection) are so far exercised only with the engine absent.
 
 ## Requirements
 
-- Moodle **4.5+** (developed and CI-tested against 4.5, 5.0 and 5.2 on
+- Moodle **4.5+** (developed and CI-tested against 4.5 and 5.2 on
   PHP 8.1–8.3 with MariaDB and PostgreSQL).
 - For actual experiment runs (not needed to install the plugin):
   [`local_catquiz`](https://github.com/Wunderbyte-GmbH/moodle-local_catquiz)

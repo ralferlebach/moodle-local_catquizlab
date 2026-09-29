@@ -399,3 +399,64 @@ Feature: Defining and running CAT experiments from the web interface
     And "Download debug ZIP" "button" should exist
     When I follow "Browser: page replaced during a read (1)"
     Then I should see "Execution context was destroyed"
+
+  Scenario: Without the debug capability there is no download of debug artefacts
+    Given the following "users" exist:
+      | username | firstname | lastname | email               |
+      | nodebug  | No        | Debug    | nodebug@example.com |
+    And the following "role assigns" exist:
+      | user    | role    | contextlevel | reference |
+      | nodebug | manager | System       |           |
+    And the following "permission overrides" exist:
+      | capability              | permission | role    | contextlevel | reference |
+      | local/catquizlab:debug  | Prohibit   | manager | System       |           |
+    And the following "local_catquizlab > experiment" exists:
+      | name | Behat no debug |
+    And the experiment "Behat no debug" has been expanded into runs
+    And the first run of "Behat no debug" has a failed sitting with artefacts
+    And I log out
+    And I log in as "nodebug"
+    When I open the first run of "Behat no debug"
+    # The sitting and its reason are there; the screenshots and page snapshots are not to be had.
+    Then I should see "Execution context was destroyed"
+    And "Download debug ZIP (run)" "button" should not exist
+    And "Download debug ZIP (failed sittings)" "button" should not exist
+    And "Download debug ZIP" "button" should not exist
+
+  @javascript
+  Scenario: The simulated abilities are set explicitly, and an unbounded distribution is warned about
+    Given I navigate to "Reports > CAT experiment suite" in site administration
+    When I follow "New experiment"
+    And I expand all fieldsets
+    Then the field "Distribution of simulated abilities" matches value "Truncated normal"
+    And the field "Mean (μ)" matches value "0"
+    And the field "Standard deviation (σ)" matches value "1"
+    And the field "Ability lower bound" matches value "-3"
+    And the field "Ability upper bound" matches value "3"
+    # The standard deviation means nothing for a uniform distribution.
+    When I set the field "Distribution of simulated abilities" to "Uniform"
+    Then "Standard deviation (σ)" "field" should not be visible
+
+  Scenario: An experiment from before shows what it really draws, and says how much falls outside
+    Given the following "local_catquizlab > experiment" exists:
+      | name | Behat legacy abilities |
+    And I navigate to "Reports > CAT experiment suite" in site administration
+    When I follow "Behat legacy abilities"
+    Then I should see "About 13.4 % of simulated abilities will lie outside [-3.00, 3.00]"
+
+  Scenario: A single test in detail shows its standard error, test information and why it ended
+    Given the following "local_catquizlab > experiment" exists:
+      | name | Behat single test |
+    And the experiment "Behat single test" has been expanded into runs
+    And the first run of "Behat single test" has a collected sitting with a full trace
+    When I open the test flow of "Behat single test"
+    # The head: how the test ended, as words and as a code.
+    Then I should see "Test finished because: Maximum number of questions reached" in the "[data-region='catquizlab-flow-head']" "css_element"
+    And "[data-region='catquizlab-flow-head'] [data-reason='max_items_reached']" "css_element" should exist
+    And I should see "Final SE" in the "[data-region='catquizlab-flow-head']" "css_element"
+    And I should see "Final test information" in the "[data-region='catquizlab-flow-head']" "css_element"
+    # The steps: standard error and information per step, and what the engine does not record, marked.
+    And I should see "SE after this step" in the "[data-region='catquizlab-flow-steps']" "css_element"
+    And I should see "TI@n (global)" in the "[data-region='catquizlab-flow-steps']" "css_element"
+    And I should see "N/A" in the "[data-region='catquizlab-flow-steps']" "css_element"
+    And I should see "on the last step it agrees with the information the CAT engine reports"

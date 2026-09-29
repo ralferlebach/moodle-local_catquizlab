@@ -239,6 +239,12 @@ jobs:
           php local/catquizlab/cli/smoke.php --strategy=fastest --persons=300
           --concurrency=4 --minutes=30 --no-navigation-failures
 
+      - name: Issue 102 — the ability range reaches the engine's root scale
+        working-directory: moodle
+        # A truncated N(0, 1.5) within [-4, 4]: the root scale the engine holds
+        # must have exactly that range, read back from local_catquiz_catscales.
+        run: php local/catquizlab/cli/smoke.php --strategy=fastest --case=102 --provisioning-only
+
       - name: Issue 104 — effective parameters reach the created activities
         working-directory: moodle
         # classic unlimited, allsubs 80, relsubs 40: read back from the engine's

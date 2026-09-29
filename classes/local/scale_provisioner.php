@@ -118,6 +118,11 @@ class scale_provisioner {
         }
 
         $plan = self::plan_scales($blueprint);
+        // The range every provisioned scale gets: the run's own (#102).
+        $runrecord = $DB->get_record('local_catquizlab_run', ['id' => $runid]);
+        $distribution = ability_distribution::of($runrecord ? run_registry::definition_for($runrecord) : []);
+        $range = ['min' => $distribution['min'], 'max' => $distribution['max']];
+
         $now = time();
         $contextid = self::create_context($plan[0]['name'], $now, (int) ($USER->id ?? 0));
 
@@ -125,7 +130,7 @@ class scale_provisioner {
         $rootscaleid = 0;
         foreach ($plan as $node) {
             $parentcatscaleid = self::resolve_parent($node, $catscaleids);
-            $catscaleid = self::create_scale($node['name'], $parentcatscaleid, $contextid, $now);
+            $catscaleid = self::create_scale($node['name'], $parentcatscaleid, $contextid, $now, $range);
             $catscaleids[self::node_key($node)] = $catscaleid;
             if ($node['level'] === self::LEVEL_ROOT) {
                 $rootscaleid = $catscaleid;
@@ -213,16 +218,20 @@ class scale_provisioner {
      * @param int $parentid The parent catscale id (0 for root).
      * @param int $contextid The engine context id.
      * @param int $now Timestamp.
+     * @param array $range The ability range, min and max.
      * @return int The new catscale id.
      */
-    protected static function create_scale(string $name, int $parentid, int $contextid, int $now): int {
+    protected static function create_scale(string $name, int $parentid, int $contextid, int $now, array $range): int {
         global $DB;
 
         return (int) $DB->insert_record('local_catquiz_catscales', (object) [
             'name'          => $name,
             'description'   => '',
-            'minscalevalue' => -3,
-            'maxscalevalue' => 3,
+            // The experiment's range (#102), the same one the simulated
+            // abilities are drawn within: until 0.7.6 this was a fixed
+            // [-3, 3] beside an unbounded N(0, 2).
+            'minscalevalue' => $range['min'],
+            'maxscalevalue' => $range['max'],
             'parentid'      => $parentid,
             'contextid'     => $contextid,
             'timecreated'   => $now,

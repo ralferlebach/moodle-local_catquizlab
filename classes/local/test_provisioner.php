@@ -149,6 +149,20 @@ class test_provisioner {
                     'min' => $semax > 0 ? round(1.0 / ($semax * $semax), 5) : null,
                     'max' => $semin > 0 ? round(1.0 / ($semin * $semin), 5) : null,
                 ],
+            // The ground truth and the scale range, named (#102, #105): not
+            // "N(0, 2)", which leaves open whether 2 is a variance or an SD.
+            'ability'          => (static function (array $d): array {
+                return [
+                    'distribution'       => $d['distribution'],
+                    'mean'               => $d['mean'],
+                    'standard_deviation' => $d['distribution'] === ability_distribution::UNIFORM ? null : $d['sd'],
+                    'lower_bound'        => $d['min'],
+                    'upper_bound'        => $d['max'],
+                    'engine_scale_range' => ['min' => $d['min'], 'max' => $d['max']],
+                    'expected_share_outside' => round(ability_distribution::share_outside($d), 5),
+                    'explicit'           => $d['explicit'],
+                ];
+            })(ability_distribution::of($definition)),
             'firstquestion'    => !empty($options['na']['firstquestion'])
                 ? strategy_parameters::NEUTRALISED
                 : (string) ($options['selectfirstquestion'] ?? '0'),

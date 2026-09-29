@@ -182,10 +182,14 @@ if ($action === 'requeuetask' && optional_param('taskid', 0, PARAM_INT) > 0) {
 // snapshots show what a simulated person saw, and a run's design.
 if ($action === 'artefactzip' && $runid > 0) {
     require_sesskey();
-    require_capability('local/catquizlab:debug', $context);
 
     $scope = optional_param('scope', \local_catquizlab\local\artefact_store::SCOPE_RUN, PARAM_ALPHA);
-    $zip = \local_catquizlab\local\artefact_store::zip($scope, $runid, optional_param('attemptid', 0, PARAM_INT));
+    $zip = \local_catquizlab\local\artefact_store::zip_for_download(
+        $scope,
+        $runid,
+        optional_param('attemptid', 0, PARAM_INT),
+        $context
+    );
     if ($zip === null) {
         redirect(
             new moodle_url('/local/catquizlab/runs.php', ['runid' => $runid]),

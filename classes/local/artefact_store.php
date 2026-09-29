@@ -312,6 +312,27 @@ class artefact_store {
     }
 
     /**
+     * A ZIP for the current user, if they may have it.
+     *
+     * The one way a download is built for a person: screenshots and page
+     * snapshots show what a simulated person saw and how a run is designed, so
+     * they are for the debug capability only — checked here, where the ZIP is
+     * made, not only where the button is drawn.
+     *
+     * @param string $scope One of the SCOPE_ constants.
+     * @param int $runid The run.
+     * @param int $attemptid The sitting, for SCOPE_ATTEMPT.
+     * @param \context $context Where the capability is checked.
+     * @return string|null The path of the ZIP, or null when there is nothing to pack.
+     * @throws \required_capability_exception Without the debug capability.
+     */
+    public static function zip_for_download(string $scope, int $runid, int $attemptid, \context $context): ?string {
+        require_capability('local/catquizlab:debug', $context);
+
+        return self::zip($scope, $runid, $attemptid);
+    }
+
+    /**
      * JSON of a structure, redacted.
      *
      * @param array $data The data.
