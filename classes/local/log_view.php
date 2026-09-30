@@ -48,6 +48,7 @@ class log_view {
         $lines = array_merge(
             self::from_debug($filter),
             self::from_runlog($filter),
+            self::from_attemptlog($filter),
             self::from_tasks($filter),
             self::from_dispatch($filter)
         );
@@ -112,11 +113,20 @@ class log_view {
 
         self::apply_time($filter, $where, $params);
 
-        foreach (['channel' => 'channel', 'runid' => 'runid'] as $key => $column) {
+        // Channel, run, sitting — and the experiment, which the debug log
+        // records too and which used to be ignored here: filtering by an
+        // experiment dropped its worker and debug lines (#90).
+        foreach (['channel' => 'channel', 'runid' => 'runid', 'attemptid' => 'attemptid'] as $key => $column) {
             if (!empty($filter[$key])) {
                 $where[] = $column . ' = :' . $key;
                 $params[$key] = $filter[$key];
             }
+        }
+        if (!empty($filter['experimentid'])) {
+            $where[] = '(experimentid = :experimentid OR runid IN (SELECT id FROM {local_catquizlab_run}'
+                . ' WHERE experimentid = :experimentid2))';
+            $params['experimentid'] = $filter['experimentid'];
+            $params['experimentid2'] = $filter['experimentid'];
         }
 
         $rows = $DB->get_records_select(
@@ -148,7 +158,72 @@ class log_view {
                 'userid'        => (int) ($row->userid ?? 0),
                 'ms'            => (int) ($row->timecreatedms ?? 0),
                 'workerid'      => (string) ($row->workerid ?? ''),
-                'attemptno'     => (int) ($row->attemptid ?? 0),
+                // The sitting, under its own name: it used to be filed as
+                // "attemptno", the lifecycle attempt of a run — another thing.
+                'attemptid'     => (int) ($row->attemptid ?? 0),
+            ]);
+        }
+
+        return $lines;
+    }
+
+    /**
+     * Lines from the sittings' histories: every execution, started, failed,
+     * collected, put back — in the same chronology as the worker and the run
+     * lifecycle (#90).
+     *
+     * @param array $filter The filter.
+     * @return array[]
+     */
+    protected static function from_attemptlog(array $filter): array {
+        global $DB;
+
+        if (!$DB->get_manager()->table_exists('local_catquizlab_attemptlog')) {
+            return [];
+        }
+        if (!empty($filter['channel']) && $filter['channel'] !== 'attempt') {
+            return [];
+        }
+
+        $where = ['1=1'];
+        $params = [];
+        self::apply_time($filter, $where, $params);
+        foreach (['runid' => 'runid', 'attemptid' => 'attemptid'] as $key => $column) {
+            if (!empty($filter[$key])) {
+                $where[] = $column . ' = :' . $key;
+                $params[$key] = $filter[$key];
+            }
+        }
+        if (!empty($filter['experimentid'])) {
+            $where[] = 'runid IN (SELECT id FROM {local_catquizlab_run} WHERE experimentid = :experimentid)';
+            $params['experimentid'] = $filter['experimentid'];
+        }
+
+        $rows = $DB->get_records_select(
+            'local_catquizlab_attemptlog',
+            implode(' AND ', $where),
+            $params,
+            'timecreated ASC, id ASC',
+            '*',
+            0,
+            2000
+        );
+
+        $lines = [];
+        foreach ($rows as $row) {
+            $failed = $row->outcome === attempt_history::FAILED;
+            $text = 'sitting=' . $row->attemptid . ' run=' . $row->runid . ' try=' . $row->tryno . ' ' . $row->outcome
+                . (!empty($row->reasoncode) ? ' reason=' . $row->reasoncode : '')
+                . (!empty($row->workerid) ? ' worker=' . $row->workerid : '')
+                . (!empty($row->detail) ? ' ' . attempt_history::redact((string) $row->detail) : '');
+            $lines[] = self::line((int) $row->timecreated, (int) $row->id, 'attempt', $text, [
+                'runid'         => (int) $row->runid,
+                'attemptid'     => (int) $row->attemptid,
+                'correlationid' => (string) ($row->correlationid ?? ''),
+                'failed'        => $failed,
+                'severity'      => $failed ? self::ERROR : self::INFO,
+                'action'        => 'attempt_' . $row->outcome,
+                'workerid'      => (string) ($row->workerid ?? ''),
             ]);
         }
 
@@ -404,6 +479,7 @@ class log_view {
             'severity' => (string) ($meta['severity'] ?? (!empty($meta['failed']) ? self::ERROR : self::INFO)),
             'action'   => (string) ($meta['action'] ?? ''),
             'attemptno' => (int) ($meta['attemptno'] ?? 0),
+            'attemptid' => (int) ($meta['attemptid'] ?? 0),
             'userid'   => (int) ($meta['userid'] ?? 0),
         ];
     }
@@ -457,8 +533,10 @@ class log_view {
         $until = (int) ($filter['until'] ?? 0);
         $worker = trim((string) ($filter['workerid'] ?? ''));
         $task = (int) ($filter['taskid'] ?? 0);
+        $sitting = (int) ($filter['attemptid'] ?? 0);
 
         return array_values(array_filter($lines, static function (array $line) use (
+            $sitting,
             $severity,
             $action,
             $correlation,
@@ -475,6 +553,9 @@ class log_view {
                 return false;
             }
             if ($correlation !== '' && stripos((string) $line['correlationid'], $correlation) === false) {
+                return false;
+            }
+            if ($sitting > 0 && (int) $line['attemptid'] !== $sitting) {
                 return false;
             }
             if ($attempt > 0 && (int) $line['attemptno'] !== $attempt) {

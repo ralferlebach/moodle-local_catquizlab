@@ -435,6 +435,14 @@ class experiment_definition {
         // Distribution, parameters and range of the simulated abilities (#102).
         ability_distribution::validate($persons, $errors, $warnings);
 
+        // Category and subscale SD, where set explicitly (#102).
+        foreach (['category', 'subscale'] as $level) {
+            $value = $persons['variation'][$level] ?? null;
+            if ($value !== null && (!is_numeric($value) || (float) $value < 0)) {
+                $errors[] = self::msg('def:negative', 'persons.variation.' . $level);
+            }
+        }
+
         foreach (['mild', 'medium', 'strong'] as $level) {
             $scale = $persons['severityscale'][$level] ?? null;
             if ($scale !== null && (!is_numeric($scale) || (float) $scale < 0)) {

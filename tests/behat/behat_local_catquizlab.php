@@ -271,6 +271,24 @@ class behat_local_catquizlab extends behat_base {
     }
 
     /**
+     * Check the raw content of the last response, for answers that are not HTML (JSON).
+     *
+     * @Then /^the raw response should contain "(?P<text_string>(?:[^"]|\\")*)"$/
+     * @param string $text What it must contain.
+     * @return void
+     * @throws \Behat\Mink\Exception\ExpectationException If it does not.
+     */
+    public function the_raw_response_should_contain(string $text): void {
+        $content = $this->getSession()->getPage()->getContent();
+        if (strpos($content, $text) === false) {
+            throw new \Behat\Mink\Exception\ExpectationException(
+                'The response does not contain "' . $text . '": ' . substr($content, 0, 300),
+                $this->getSession()
+            );
+        }
+    }
+
+    /**
      * Open the detail page of an experiment's first run.
      *
      * Run ids are database ids, so a scenario cannot know them in advance;

@@ -287,6 +287,26 @@ class experiment_form extends \moodleform {
         $mform->setDefault('abilitymax', $recommended['max']);
         $mform->addHelpButton('abilitymin', 'form:abilitymin', $component);
 
+        // Local deviations (#102): the SD of each category around the global
+        // ability and of each subscale around its category. Empty follows
+        // the stratum and the severity; a number sets it outright.
+        foreach (['catsd', 'subsd'] as $field) {
+            $mform->addElement('text', $field, get_string('form:' . $field, $component), ['size' => 6]);
+            $mform->setType($field, PARAM_RAW_TRIMMED);
+            $mform->addHelpButton($field, 'form:' . $field, $component);
+        }
+        // What mild, medium and strong multiply the stratum's deviation by.
+        foreach (['mild' => 0.5, 'medium' => 1.0, 'strong' => 2.0] as $level => $default) {
+            $mform->addElement('text', 'severity' . $level, get_string(
+                'form:severityfactor',
+                $component,
+                get_string('severity:' . $level, $component)
+            ), ['size' => 5]);
+            $mform->setType('severity' . $level, PARAM_LOCALISEDFLOAT);
+            $mform->setDefault('severity' . $level, $default);
+        }
+        $mform->addHelpButton('severitymild', 'form:severityfactor', $component);
+
         $mform->addElement('advcheckbox', 'twins', get_string('form:twins', $component));
         $mform->setDefault('twins', 1);
         $mform->addHelpButton('twins', 'form:twins', $component);
@@ -694,6 +714,17 @@ class experiment_form extends \moodleform {
                     'min' => (float) unformat_float((string) ($data['abilitymin'] ?? -3)),
                     'max' => (float) unformat_float((string) ($data['abilitymax'] ?? 3)),
                 ],
+                'variation'    => array_filter([
+                    'category' => trim((string) ($data['catsd'] ?? '')) === '' ? null
+                        : unformat_float((string) $data['catsd']),
+                    'subscale' => trim((string) ($data['subsd'] ?? '')) === '' ? null
+                        : unformat_float((string) $data['subsd']),
+                ], static fn($v): bool => $v !== null),
+                'severityscale' => [
+                    'mild'   => (float) unformat_float((string) ($data['severitymild'] ?? 0.5)),
+                    'medium' => (float) unformat_float((string) ($data['severitymedium'] ?? 1.0)),
+                    'strong' => (float) unformat_float((string) ($data['severitystrong'] ?? 2.0)),
+                ],
                 'twins'    => ['enabled' => !empty($data['twins'])],
                 'naming'   => ['pattern' => 'P-{stratum}-{index:04d}'],
             ],
@@ -976,6 +1007,13 @@ class experiment_form extends \moodleform {
             'abilitysd'          => self::localised(\local_catquizlab\local\ability_distribution::of($normalised)['sd']),
             'abilitymin'         => self::localised(\local_catquizlab\local\ability_distribution::of($normalised)['min']),
             'abilitymax'         => self::localised(\local_catquizlab\local\ability_distribution::of($normalised)['max']),
+            'catsd'              => isset($normalised['persons']['variation']['category'])
+                ? self::localised((float) $normalised['persons']['variation']['category']) : '',
+            'subsd'              => isset($normalised['persons']['variation']['subscale'])
+                ? self::localised((float) $normalised['persons']['variation']['subscale']) : '',
+            'severitymild'       => self::localised((float) ($normalised['persons']['severityscale']['mild'] ?? 0.5)),
+            'severitymedium'     => self::localised((float) ($normalised['persons']['severityscale']['medium'] ?? 1.0)),
+            'severitystrong'     => self::localised((float) ($normalised['persons']['severityscale']['strong'] ?? 2.0)),
             'twins'              => !empty($normalised['persons']['twins']['enabled']) ? 1 : 0,
             'strategy'           => (string) ($normalised['strategy'] ?? 'fastest'),
             'globalmin'          => (int) ($normalised['budgets']['global']['minitems'] ?? 20),

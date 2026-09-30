@@ -58,7 +58,7 @@ class results_export {
     /** @var string[] The columns of the step level. */
     public const STEP_COLUMNS = [
         'attemptid', 'runid', 'strategy', 'step', 'questionid', 'subscaleid', 'score',
-        'esttheta', 'se', 'ti_global', 'scales_estimated',
+        'esttheta', 'se', 'ti_played', 'ti_at_n', 'ti_remaining_max', 'scales_estimated',
     ];
 
     /**
@@ -178,7 +178,13 @@ class results_export {
      */
     protected static function step_rows(results_query $query): \Generator {
         foreach ($query->each_observation() as $observation) {
-            $flow = test_flow::steps($observation + results_query::detail($observation));
+            $detail = $observation + results_query::detail($observation);
+            $flow = test_flow::with_engine_information(
+                test_flow::steps($detail),
+                (array) ($detail['trace'] ?? []),
+                (int) $observation['runid'],
+                results_query::run_maxitems((int) $observation['runid'])
+            );
             foreach ($flow['steps'] as $step) {
                 yield [
                     'attemptid'        => (int) $observation['attemptid'],
@@ -190,7 +196,11 @@ class results_export {
                     'score'            => $step['fraction'],
                     'esttheta'         => $step['ability'],
                     'se'               => $step['se'],
-                    'ti_global'        => $step['ti'],
+                    // The information of the items played, and TI@n — the n most
+                    // informative items of the pool — as the engine computes it.
+                    'ti_played'        => $step['ti'],
+                    'ti_at_n'          => $step['tiatn'],
+                    'ti_remaining_max' => $step['tiremaining'],
                     'scales_estimated' => $step['scalesestimated'],
                 ];
             }

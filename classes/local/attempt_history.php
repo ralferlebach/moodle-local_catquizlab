@@ -130,7 +130,15 @@ class attempt_history {
      * @return string
      */
     public static function redact(string $text): string {
-        return (string) preg_replace('/([?&](?:sesskey|wstoken|token)=)[^&\s"\'|]+/i', '$1[redacted]', $text);
+        // In a URL and in free text alike — "sesskey=…" reaches the logs as a
+        // parameter list as well as inside a link (#90) — and as a JSON field.
+        $text = (string) preg_replace(
+            '/((?<![a-z_])(?:sesskey|wstoken|token|password)=)[^&\s"\'|,;]+/i',
+            '$1[redacted]',
+            $text
+        );
+
+        return (string) preg_replace('/("(?:sesskey|wstoken|token|password)"\s*:\s*")[^"]*(")/i', '$1[redacted]$2', $text);
     }
 
     /**

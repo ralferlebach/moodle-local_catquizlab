@@ -151,7 +151,7 @@ class test_provisioner {
                 ],
             // The ground truth and the scale range, named (#102, #105): not
             // "N(0, 2)", which leaves open whether 2 is a variance or an SD.
-            'ability'          => (static function (array $d): array {
+            'ability'          => (static function (array $d) use ($definition): array {
                 return [
                     'distribution'       => $d['distribution'],
                     'mean'               => $d['mean'],
@@ -160,6 +160,8 @@ class test_provisioner {
                     'upper_bound'        => $d['max'],
                     'engine_scale_range' => ['min' => $d['min'], 'max' => $d['max']],
                     'expected_share_outside' => round(ability_distribution::share_outside($d), 5),
+                    'category_sd'        => person_generator::deviation_sds($definition)['category'],
+                    'subscale_sd'        => person_generator::deviation_sds($definition)['subscale'],
                     'explicit'           => $d['explicit'],
                 ];
             })(ability_distribution::of($definition)),

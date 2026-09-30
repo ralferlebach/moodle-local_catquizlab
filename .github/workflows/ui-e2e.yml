@@ -165,6 +165,10 @@ jobs:
         working-directory: moodle
         run: php local/catquizlab/cli/seed_failed_attempt.php | grep -E '^RECOVERY_RUNID=' >> "$GITHUB_ENV"
 
+      - name: Seed results for the plot checks (#105)
+        working-directory: moodle
+        run: php local/catquizlab/cli/seed_results.php | grep -E '^PLOTS_EXPERIMENTID=' >> "$GITHUB_ENV"
+
       - name: Play one experiment through the interface
         working-directory: moodle/local/catquizlab/tests/playwright
         env:

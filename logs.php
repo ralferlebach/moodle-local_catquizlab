@@ -57,6 +57,7 @@ $filter = [
     'newestfirst'   => optional_param('newestfirst', 0, PARAM_BOOL),
     'workerid'      => optional_param('workerid', '', PARAM_ALPHANUMEXT),
     'taskid'        => optional_param('taskid', 0, PARAM_INT),
+    'attemptid'     => optional_param('attemptid', 0, PARAM_INT),
 ];
 
 // An explicit window wins over "the last N hours": somebody who knows when it
@@ -76,6 +77,25 @@ if ($from > 0) {
 // The filtered selection as a file, for when it is too long to select by hand.
 // The same filtered lines as JSON, for a ticket, a script or a spreadsheet.
 // Text is for reading; this is for anything that has to process it.
+// Live tail (#90): the lines newer than the last one shown, for the page to
+// append without a reload. The same filter, the same redaction.
+if (optional_param('tail', 0, PARAM_BOOL)) {
+    $after = optional_param('after', 0, PARAM_INT);
+    $new = [];
+    foreach (log_view::lines(['newestfirst' => 0] + $filter, 500) as $line) {
+        if ((int) $line['ms'] > $after) {
+            $new[] = [
+                'ms' => (int) $line['ms'],
+                'stamp' => $line['stamp'],
+                'text' => $line['stamp'] . '  ' . str_pad($line['source'], 9) . '  ' . $line['text'],
+            ];
+        }
+    }
+    header('Content-Type: application/json; charset=utf-8');
+    echo json_encode(['lines' => $new]);
+    die();
+}
+
 if (optional_param('downloadjson', 0, PARAM_BOOL)) {
     require_sesskey();
 
@@ -141,6 +161,7 @@ echo html_writer::select(
         'task'      => 'task',
         'service'   => 'service',
         'worker'    => 'worker',
+        'attempt'   => 'attempt',
     ],
     'channel',
     $filter['channel'],
@@ -174,17 +195,18 @@ $fields = [
     'workerid'      => ['logs:workerid', 'text'],
     'taskid'        => ['logs:taskid', 'number'],
     'attemptno'     => ['logs:attemptno', 'number'],
+    'attemptid'     => ['logs:attemptid', 'number'],
 ];
 foreach ($fields as $name => [$label, $type]) {
     $value = $name === 'logaction' ? $filter['action'] : ($filter[$name] ?? '');
-    if (in_array($name, ['taskid', 'attemptno'], true) && (int) $value === 0) {
+    if (in_array($name, ['taskid', 'attemptno', 'attemptid'], true) && (int) $value === 0) {
         $value = '';
     }
     echo html_writer::label(get_string($label, $component), 'catquizlab-' . $name, true, ['class' => 'mr-2']);
     echo html_writer::empty_tag('input', [
         'type' => $type, 'name' => $name, 'id' => 'catquizlab-' . $name,
         'value' => $value, 'class' => 'form-control mr-3',
-    ]);
+    ] + ($type === 'datetime-local' ? ['step' => 1] : []));
 }
 
 $levels = [];
@@ -236,9 +258,34 @@ if ($lines === []) {
     // One <pre> holding the whole selection. Selecting a table gives somebody
     // the markup around the text; this gives them the text, which is what they
     // are about to paste into a support thread.
+    // Each line its own span, carrying its time, so that it can be picked
+    // as the start or end of the time filter — the text copied stays the text.
+    $spans = [];
+    foreach ($lines as $line) {
+        $spans[] = html_writer::tag(
+            'span',
+            s($line['stamp'] . '  ' . str_pad($line['source'], 9) . '  ' . $line['text']),
+            ['data-ms' => (int) $line['ms'], 'data-stamp' => $line['stamp'], 'class' => 'catquizlab-logline']
+        );
+    }
+    echo html_writer::div(
+        html_writer::tag('span', get_string('logs:pickline', $component), ['data-region' => 'catquizlab-log-picked'])
+        . html_writer::tag('button', get_string('logs:asfrom', $component), [
+            'type' => 'button', 'class' => 'btn btn-sm btn-outline-secondary ml-2', 'data-action' => 'catquizlab-log-from',
+            'disabled' => 'disabled',
+        ])
+        . html_writer::tag('button', get_string('logs:asto', $component), [
+            'type' => 'button', 'class' => 'btn btn-sm btn-outline-secondary ml-1', 'data-action' => 'catquizlab-log-to',
+            'disabled' => 'disabled',
+        ])
+        . html_writer::label(get_string('logs:live', $component), 'catquizlab-live', true, ['class' => 'ml-4 mr-1'])
+        . html_writer::checkbox('live', 1, false, '', ['id' => 'catquizlab-live', 'data-action' => 'catquizlab-log-live'])
+        . html_writer::tag('span', '', ['class' => 'small text-muted ml-2', 'data-region' => 'catquizlab-live-status']),
+        'd-flex flex-wrap align-items-center small mb-1'
+    );
     echo html_writer::tag(
         'pre',
-        s(log_view::as_text($filter)),
+        implode("\n", $spans),
         [
             'class' => 'border rounded p-3 small',
             'style' => 'max-height: 34rem; overflow: auto; white-space: pre;',
@@ -271,6 +318,91 @@ if ($lines === []) {
 
     // Selecting thirty screens of text with a mouse is not a reasonable ask of
     // somebody who is already having a bad day.
+    $tailurl = (new moodle_url($pageurl, array_filter($filter, static function ($v): bool {
+        return $v !== '' && $v !== 0 && $v !== null;
+    }) + ['tail' => 1, 'logaction' => $filter['action']]))->out(false);
+    $PAGE->requires->js_amd_inline('
+        require([], function() {
+            var log = document.querySelector("[data-region=\\"catquizlab-log\\"]");
+            var picked = document.querySelector("[data-region=\\"catquizlab-log-picked\\"]");
+            var asfrom = document.querySelector("[data-action=\\"catquizlab-log-from\\"]");
+            var asto = document.querySelector("[data-action=\\"catquizlab-log-to\\"]");
+            var live = document.querySelector("[data-action=\\"catquizlab-log-live\\"]");
+            var status = document.querySelector("[data-region=\\"catquizlab-live-status\\"]");
+            if (!log) {
+                return;
+            }
+            var chosen = null;
+            var local = function(ms) {
+                var d = new Date(ms);
+                var pad = function(n) { return (n < 10 ? "0" : "") + n; };
+                return d.getFullYear() + "-" + pad(d.getMonth() + 1) + "-" + pad(d.getDate()) + "T"
+                    + pad(d.getHours()) + ":" + pad(d.getMinutes()) + ":" + pad(d.getSeconds());
+            };
+            log.addEventListener("click", function(e) {
+                var line = e.target.closest(".catquizlab-logline");
+                if (!line) {
+                    return;
+                }
+                log.querySelectorAll(".catquizlab-logline").forEach(function(l) { l.style.background = ""; });
+                line.style.background = "rgba(44, 127, 184, 0.15)";
+                chosen = parseInt(line.getAttribute("data-ms"), 10);
+                picked.textContent = line.getAttribute("data-stamp");
+                asfrom.disabled = false;
+                asto.disabled = false;
+            });
+            var apply = function(field, ms) {
+                var input = document.getElementById("catquizlab-" + field);
+                if (!input || ms === null) {
+                    return;
+                }
+                input.value = local(ms);
+                if (input.form) {
+                    input.form.submit();
+                }
+            };
+            asfrom.addEventListener("click", function() { apply("from", chosen); });
+            asto.addEventListener("click", function() { apply("to", chosen); });
+
+            var last = 0;
+            log.querySelectorAll(".catquizlab-logline").forEach(function(l) {
+                last = Math.max(last, parseInt(l.getAttribute("data-ms"), 10) || 0);
+            });
+            var timer = null;
+            var poll = function() {
+                fetch(' . json_encode($tailurl) . ' + "&after=" + last, {credentials: "same-origin"})
+                    .then(function(r) { return r.json(); })
+                    .then(function(data) {
+                        var atbottom = log.scrollTop + log.clientHeight >= log.scrollHeight - 8;
+                        (data.lines || []).forEach(function(line) {
+                            var span = document.createElement("span");
+                            span.className = "catquizlab-logline";
+                            span.setAttribute("data-ms", line.ms);
+                            span.setAttribute("data-stamp", line.stamp);
+                            span.textContent = line.text;
+                            log.appendChild(document.createTextNode("\\n"));
+                            log.appendChild(span);
+                            last = Math.max(last, line.ms);
+                        });
+                        if (atbottom) {
+                            log.scrollTop = log.scrollHeight;
+                        }
+                        status.textContent = new Date().toLocaleTimeString();
+                    })
+                    .catch(function(error) { status.textContent = String(error); });
+            };
+            live.addEventListener("change", function() {
+                if (live.checked) {
+                    poll();
+                    timer = setInterval(poll, 3000);
+                } else if (timer) {
+                    clearInterval(timer);
+                    timer = null;
+                }
+            });
+        });
+    ');
+
     $PAGE->requires->js_amd_inline(<<<'JS'
         require(['core/notification'], function(notification) {
             var button = document.querySelector('[data-action="catquizlab-copy-log"]');

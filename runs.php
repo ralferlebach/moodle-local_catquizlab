@@ -927,7 +927,9 @@ if ($runid > 0) {
             // from "this failed" to everything that was recorded about it.
             $logurl = new moodle_url('/local/catquizlab/logs.php', [
                 'runid'     => $runid,
-                'attemptno' => (int) $row->id,
+                // The sitting, under its own name since 0.7.13: "attemptno" is
+                // the lifecycle attempt of a run, and would find nothing here.
+                'attemptid' => (int) $row->id,
                 'hours'     => 0,
             ]);
 

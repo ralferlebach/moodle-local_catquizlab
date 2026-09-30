@@ -36,6 +36,8 @@ module.exports = {
     use: {
         baseURL: process.env.MOODLE_URL || 'http://127.0.0.1:8000',
         headless: true,
+        // A browser already installed, where the job provides one.
+        launchOptions: process.env.PW_CHROMIUM_PATH ? {executablePath: process.env.PW_CHROMIUM_PATH} : {},
         video: 'on',
         trace: 'on',
         screenshot: 'on',

@@ -153,6 +153,26 @@ class person_generator {
     }
 
     /**
+     * The category and subscale deviation SDs in force for a definition (#102).
+     *
+     * Set explicitly in persons.variation, or the stratum's base scaled by the
+     * severity factor — the same rule the generator draws with.
+     *
+     * @param array $definition The definition.
+     * @return array{category: float, subscale: float, explicit: bool}
+     */
+    public static function deviation_sds(array $definition): array {
+        $params = self::read_params($definition);
+        $variation = (array) ($definition['persons']['variation'] ?? []);
+
+        return [
+            'category' => (float) $params['catsd'],
+            'subscale' => (float) $params['subsd'],
+            'explicit' => isset($variation['category']) || isset($variation['subscale']),
+        ];
+    }
+
+    /**
      * The multiplier a severity level applies to the stratum's base deviation.
      *
      * @param string $severity One of none, mild, medium, strong.

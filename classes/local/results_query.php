@@ -175,6 +175,29 @@ class results_query {
         return $out;
     }
 
+    /** @var array<int, int> Effective maximum number of questions by run. */
+    protected static array $maxitems = [];
+
+    /**
+     * A run's effective maximum number of questions, as provisioned; -1 for none.
+     *
+     * @param int $runid The run.
+     * @return int
+     */
+    public static function run_maxitems(int $runid): int {
+        global $DB;
+
+        if (!isset(self::$maxitems[$runid])) {
+            $record = $DB->get_record('local_catquizlab_run', ['id' => $runid]);
+            $definition = $record ? run_registry::definition_for($record) : [];
+            self::$maxitems[$runid] = $definition === []
+                ? -1
+                : (int) test_provisioner::options_from_definition($definition)['maxquestions'];
+        }
+
+        return self::$maxitems[$runid];
+    }
+
     /**
      * A scale and every scale below it, in a run's provisioned tree (#109).
      *

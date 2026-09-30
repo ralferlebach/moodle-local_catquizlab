@@ -454,12 +454,15 @@ Feature: Defining and running CAT experiments from the web interface
     Then I should see "Test finished because: Maximum number of questions reached" in the "[data-region='catquizlab-flow-head']" "css_element"
     And "[data-region='catquizlab-flow-head'] [data-reason='max_items_reached']" "css_element" should exist
     And I should see "Final SE" in the "[data-region='catquizlab-flow-head']" "css_element"
-    And I should see "Final test information" in the "[data-region='catquizlab-flow-head']" "css_element"
+    And I should see "Final information of the items played" in the "[data-region='catquizlab-flow-head']" "css_element"
+    And I should see "Final TI@n" in the "[data-region='catquizlab-flow-head']" "css_element"
     # The steps: standard error and information per step, and what the engine does not record, marked.
     And I should see "SE after this step" in the "[data-region='catquizlab-flow-steps']" "css_element"
+    And I should see "Information of the items played" in the "[data-region='catquizlab-flow-steps']" "css_element"
     And I should see "TI@n (global)" in the "[data-region='catquizlab-flow-steps']" "css_element"
+    And I should see "Remaining TI (max)" in the "[data-region='catquizlab-flow-steps']" "css_element"
     And I should see "N/A" in the "[data-region='catquizlab-flow-steps']" "css_element"
-    And I should see "on the last step it agrees with the information the CAT engine reports"
+    And I should see "the test information of the n most informative items of the item pool"
 
   Scenario: Twins of one simulated person are compared in one plot, and the simulated people are shown
     Given the following "local_catquizlab > experiment" exists:
@@ -484,3 +487,69 @@ Feature: Defining and running CAT experiments from the web interface
     When I follow "Overview"
     Then I should see "Simulated people"
     And I should see "1 simulated people in this selection" in the "[data-region='catquizlab-people-stats']" "css_element"
+
+  Scenario: Every plot exports as SVG with its settings, and its axes follow a profile
+    Given the following "local_catquizlab > experiment" exists:
+      | name | Behat axes |
+    And the experiment "Behat axes" has been expanded into runs
+    And the runs of "Behat axes" have 3 collected sittings each
+    When I open the results of "Behat axes"
+    # Every plot can be exported: the drawing, its data, its settings.
+    Then "[data-region='catquizlab-plot-export'] [data-download='svg']" "css_element" should exist
+    And "[data-region='catquizlab-plot-export'] [data-download='csv']" "css_element" should exist
+    And "[data-region='catquizlab-plot-export'] [data-download='json']" "css_element" should exist
+    # A built-in profile, loaded onto one plot.
+    When I follow "Global metrics"
+    And I set the field "ax_recovery[profile]" to "Ability symmetric [-4, 4]"
+    And I click on "Apply" "button" in the "[data-plot='recovery']" "css_element"
+    Then the field "ax_recovery[profile]" matches value "Ability symmetric [-4, 4]"
+    And the field "ax_recovery[xmin]" matches value "-4"
+    And the field "ax_recovery[sym]" matches value "1"
+
+  Scenario: The logs read sittings in the same chronology, pick a line as a time bound, and tail live
+    Given the following "local_catquizlab > experiment" exists:
+      | name | Behat logs |
+    And the experiment "Behat logs" has been expanded into runs
+    And the first run of "Behat logs" has a failed sitting with artefacts
+    When I visit "/local/catquizlab/logs.php?hours=0&channel=attempt"
+    Then I should see "failed reason=execution_context_destroyed" in the "[data-region='catquizlab-log']" "css_element"
+    And "Sitting" "field" should exist
+    And "Use as from" "button" should exist
+    And "Use as to" "button" should exist
+    And "Live" "field" should exist
+    # From the failed sitting on the run page straight into the log, filtered to it.
+    When I open the first run of "Behat logs"
+    And I click on "a[title='Everything recorded about this sitting']" "css_element"
+    Then I should see "failed reason=execution_context_destroyed" in the "[data-region='catquizlab-log']" "css_element"
+    And the field "Sitting" does not match value ""
+    # What the live tail asks for: the lines after a moment, as JSON.
+    When I visit "/local/catquizlab/logs.php?hours=0&channel=attempt&tail=1&after=0"
+    Then the raw response should contain "{\"lines\":["
+    And the raw response should contain "execution_context_destroyed"
+
+  Scenario: Small multiples on shared axes, saved comparisons, local deviations, and PNG and PDF export
+    Given the following "local_catquizlab > experiment" exists:
+      | name            | Behat multiples  |
+      | sweepstrategies | fastest,allsubs  |
+    And the experiment "Behat multiples" has been expanded into runs
+    And the runs of "Behat multiples" share twin "r001-t00008" with full traces
+    When I open the test flow of "Behat multiples"
+    And I set the field "Layout" to "Small multiples (one plot per test, same axes)"
+    And I set the field "Save comparison as" to "Twins by strategy"
+    And I press "Compare"
+    # One plot per test of the family.
+    Then "[data-region='catquizlab-comparison'] [data-region='catquizlab-multiple']" "css_element" should exist
+    And the field "Load comparison" matches value "Twins by strategy"
+    # The saved comparison comes back after switching away from it.
+    When I set the field "Layout" to "One plot"
+    And I set the field "Load comparison" to "Twins by strategy"
+    And I press "Compare"
+    Then "[data-region='catquizlab-multiple']" "css_element" should exist
+    # Every plot: PNG in the browser, PDF from the server.
+    And "[data-download='png']" "css_element" should exist
+    And "[data-download='pdf']" "css_element" should exist
+    # The simulated people, and their local deviations.
+    When I follow "Overview"
+    Then I should see "Simulated local deviations"
+    When I click on "[data-region='catquizlab-people'] ~ div [data-download='pdf']" "css_element"
+    Then the raw response should contain "%PDF"

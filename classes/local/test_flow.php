@@ -150,7 +150,64 @@ class test_flow {
     }
 
     /** @var string[] The metrics a trace can be compared by (#109). */
-    public const METRICS = ['ability', 'se', 'ti', 'scales'];
+    public const METRICS = ['ability', 'se', 'ti', 'tiatn', 'scales'];
+
+    /**
+     * TI@n and the remaining potential per step, from the engine.
+     *
+     * TI@n: the information of the n most informative items of the run's pool
+     * at the estimate after step n — the most n items could contribute there.
+     * Beside the information of the n items actually played ('ti'), it says
+     * how close the item selection came to that. Remaining TI (max): what the
+     * items not yet played could still add, as the engine's own
+     * test-information filter computes it. Both null where the engine or the
+     * pool is not there.
+     *
+     * @param array $flow What steps() returned.
+     * @param array $trace The collected trace.
+     * @param int $runid The run.
+     * @param int $maxitems The run's maximum number of questions, -1 for none.
+     * @return array The flow, its steps with tiatn and tiremaining.
+     */
+    public static function with_engine_information(array $flow, array $trace, int $runid, int $maxitems = -1): array {
+        global $DB;
+
+        $played = array_values((array) ($trace['progress']['playedquestions'] ?? []));
+        $model = (string) ($played[0]['model'] ?? '');
+        $root = (int) $DB->get_field_sql(
+            'SELECT catscaleid FROM {local_catquizlab_scalemap} WHERE runid = ? AND parentcatscaleid = 0 ORDER BY generation DESC',
+            [$runid],
+            IGNORE_MULTIPLE
+        );
+        $pool = engine_information::pool($runid, $root, $model);
+        $poolsize = $pool === null ? 0 : count($pool);
+
+        foreach ($flow['steps'] as $index => $step) {
+            $flow['steps'][$index]['tiatn'] = null;
+            $flow['steps'][$index]['tiremaining'] = null;
+            if ($pool === null || $step['ability'] === null) {
+                continue;
+            }
+            $n = (int) $step['step'];
+            $flow['steps'][$index]['tiatn'] = engine_information::ti_at_n((float) $step['ability'], $pool, $n);
+            $ids = [];
+            for ($j = 0; $j <= $index && $j < count($played); $j++) {
+                $ids[] = (int) ($played[$j]['componentid'] ?? $played[$j]['id'] ?? 0);
+            }
+            $allowed = $maxitems < 0 ? $poolsize - $n : $maxitems - $n;
+            $flow['steps'][$index]['tiremaining'] = engine_information::remaining_max(
+                (float) $step['ability'],
+                $pool,
+                $ids,
+                $allowed
+            );
+        }
+        $last = $flow['steps'] === [] ? [] : $flow['steps'][count($flow['steps']) - 1];
+        $flow['final']['tiatn'] = $last['tiatn'] ?? null;
+        $flow['final']['poolsize'] = $poolsize;
+
+        return $flow;
+    }
 
     /**
      * One metric of one sitting, step by step, globally or for one scale (#109).
@@ -169,14 +226,23 @@ class test_flow {
      * @param string $metric One of METRICS.
      * @param int $scaleid 0 for the global ability, else a catscale id.
      * @param int[] $subtree The scale and every scale below it.
+     * @param int $runid The run, for the engine's item pool (TI@n of a scale).
      * @return array{points: array[], consistent: bool, status: string}
      */
-    public static function series(array $flow, array $trace, string $metric, int $scaleid = 0, array $subtree = []): array {
+    public static function series(
+        array $flow,
+        array $trace,
+        string $metric,
+        int $scaleid = 0,
+        array $subtree = [],
+        int $runid = 0
+    ): array {
         $points = [];
         if ($scaleid === 0) {
-            $field = ['ability' => 'ability', 'se' => 'se', 'ti' => 'ti', 'scales' => 'scalesestimated'][$metric] ?? 'ability';
+            $field = ['ability' => 'ability', 'se' => 'se', 'ti' => 'ti', 'tiatn' => 'tiatn',
+                'scales' => 'scalesestimated'][$metric] ?? 'ability';
             foreach ($flow['steps'] as $step) {
-                $points[] = ['x' => $step['step'], 'y' => $step[$field]];
+                $points[] = ['x' => $step['step'], 'y' => $step[$field] ?? null];
             }
             return ['points' => $points, 'consistent' => (bool) ($flow['final']['consistent'] ?? false), 'status' => ''];
         }
@@ -212,9 +278,24 @@ class test_flow {
         $consistent = is_numeric($engine) && $last !== null && $last['se'] !== null
             && abs($last['se'] - (float) $engine) / max((float) $engine, 1e-9) < 0.01;
 
+        $scalepool = ($metric === 'tiatn' && $runid > 0 && $played !== [])
+            ? engine_information::pool($runid, $scaleid, (string) ($played[0]['model'] ?? ''))
+            : null;
+        $inscale = 0;
+        foreach ($values as $index => $value) {
+            if (isset($played[$index]) && in_array((int) ($played[$index]['catscaleid'] ?? 0), $subtree, true)) {
+                $inscale++;
+            }
+            $values[$index]['tiatn'] = ($scalepool !== null && $value['theta'] !== null && $inscale > 0)
+                ? engine_information::ti_at_n((float) $value['theta'], $scalepool, $inscale)
+                : null;
+        }
+
         foreach ($values as $value) {
             $y = null;
-            if ($metric === 'ability') {
+            if ($metric === 'tiatn') {
+                $y = $value['tiatn'];
+            } else if ($metric === 'ability') {
                 $y = $value['theta'];
             } else if ($metric === 'se' && $consistent) {
                 $y = $value['se'];

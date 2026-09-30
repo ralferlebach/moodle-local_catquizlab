@@ -1252,7 +1252,10 @@ final class audit_test extends \advanced_testcase {
         $this->assertMatchesRegularExpression('/\\.\\d{3}$/', $lines[0]['stamp']);
 
         $this->assertCount(1, $view::lines(['hours' => 1, 'channel' => 'worker', 'workerid' => 'exec-7']));
-        $this->assertCount(1, $view::lines(['hours' => 1, 'channel' => 'worker', 'attemptno' => 4712]));
+        // The sitting is filtered as the sitting; "attemptno" is the lifecycle
+        // attempt of a run and does not find it.
+        $this->assertCount(1, $view::lines(['hours' => 1, 'channel' => 'worker', 'attemptid' => 4712]));
+        $this->assertCount(0, $view::lines(['hours' => 1, 'channel' => 'worker', 'attemptno' => 4712]));
 
         // A channel filter is a filter: "worker" does not bring the run
         // lifecycle along.

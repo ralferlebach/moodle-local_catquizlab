@@ -198,4 +198,40 @@ echo $page->render_tabs();
 echo $page->render_provenance();
 echo $page->render_tab();
 
+// PNG downloads (#108): drawn in the browser from each plot's own SVG, at twice
+// the size, so that the file is sharp on a slide.
+$PAGE->requires->js_amd_inline('
+    require([], function() {
+        document.addEventListener("click", function(e) {
+            var button = e.target.closest("[data-download=\\"png\\"]");
+            if (!button) {
+                return;
+            }
+            var link = button.parentNode.querySelector("[data-download=\\"svg\\"]");
+            if (!link) {
+                return;
+            }
+            var image = new Image();
+            image.onload = function() {
+                var canvas = document.createElement("canvas");
+                canvas.width = image.naturalWidth * 2;
+                canvas.height = image.naturalHeight * 2;
+                var ctx = canvas.getContext("2d");
+                ctx.fillStyle = "#ffffff";
+                ctx.fillRect(0, 0, canvas.width, canvas.height);
+                ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
+                canvas.toBlob(function(blob) {
+                    var a = document.createElement("a");
+                    a.href = URL.createObjectURL(blob);
+                    a.download = button.getAttribute("data-filename") || "plot.png";
+                    document.body.appendChild(a);
+                    a.click();
+                    a.remove();
+                }, "image/png");
+            };
+            image.src = link.getAttribute("href");
+        });
+    });
+');
+
 echo $OUTPUT->footer();

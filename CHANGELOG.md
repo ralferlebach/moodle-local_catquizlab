@@ -6,7 +6,173 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
-## [0.8.0] — 2026-09-29 — Issue #109
+## [0.7.14] — 2026-09-30 — The optional parts of #102, #105, #108, #109
+
+### #102 — local deviations set by the experiment
+"Category SD" and "Subscale SD": empty follows the stratum and the severity, a
+number sets it outright. The severity factors for mild, medium and strong are
+editable (0.5 / 1 / 2 by default). The manifest records the SDs in force, whether
+set or derived. Measured: an explicit category SD of 0.8 is drawn as 0.8 ± 0.03
+over 2000 people.
+
+### #105 §5 — values outside the scale range, said in the plot
+Beneath estimated-against-true: how many tests have a true ability outside the
+scale range of their own run — each run with its own range.
+
+### #105 §6 — a robust range
+"Robust range (1st–99th percentile)" in every plot's axis settings. Points outside
+the displayed range — robust or set by hand — are not drawn at the edge, where
+they would read as values there; they are counted beneath the plot ("2 of 202
+points lie outside the displayed range"). Recorded in the metadata.
+
+### #105 §10 — Playwright
+`tests/playwright/plots.spec.js`, on data from `cli/seed_results.php`: symmetric
+axes with 0 as the middle tick, the same ticks on x and y, integers or halves,
+the identity line at 45° measured on the drawing, an integer step axis, all five
+exports, small multiples on the same axes. Passed locally against real pages;
+seeded and run by the interface workflow, which stays manual.
+
+### #108 — PNG and PDF, profiles per experiment
+PNG: drawn in the browser from the plot's own SVG, at twice the size. PDF: on the
+server with Moodle's TCPDF, the drawing as vectors (tested: no embedded image).
+The PDF endpoint renders only drawings the plugin made for the user in this
+session, kept under a key — never SVG sent by a browser. Axis profiles can be
+saved for an experiment ("for this experiment"), for everyone working on it;
+built-in profiles stay untouched.
+
+### #109 — small multiples, saved comparisons, local deviations
+Small multiples: one plot per test, every one on the axes the overlay of all of
+them would have. A comparison — metric, colouring, subscale, layout, axes — can be
+saved by name and loaded again. The overview shows the simulated local deviations
+(true subscale − true global ability, the quantity the local-deviation plot
+compares) with n, mean, SD, min, max, or says that there are none by design.
+
+---
+
+## [0.7.13] — 2026-09-29 — Issue #90, the remaining criteria
+
+### Sittings in the same chronology
+The sittings' histories (#98) are a fourth source of the Logs tab, channel
+`attempt`: every execution — started, failed with its reason code, collected,
+put back — beside worker, task and lifecycle lines, in one order.
+
+### Filter by sitting
+A "Sitting" filter. The sitting id used to be filed under `attemptno`, which is
+the lifecycle attempt of a run — another thing, now kept apart. The link on the run
+page that opens the log filtered to a failed sitting passed the sitting as
+`attemptno`; it passes `attemptid` now — an existing test caught that it would
+otherwise have found nothing, and a Behat step now follows the link.
+
+### Filter by experiment, for worker and debug lines too
+Filtering by an experiment used to drop its worker and debug lines: the debug
+log records the experiment, but it was not asked. It is now, directly or through
+the run.
+
+### A line as the start or end of the time filter
+Click a line; "Use as from" or "Use as to" sets the filter to its time and
+applies it. The log stays one block of text: what is copied is the text.
+
+### Live tail without a reload
+"Live" polls every three seconds for lines newer than the last one shown — same
+filters, same redaction — appends them, and scrolls along while the reader is at
+the end.
+
+### Redaction in free text
+`sesskey=…` was removed only after `?` or `&`, as in a URL. In a parameter list
+or free text it went through; so did JSON fields like `"sesskey":"…"`. Both are
+redacted now — and `mysesskey=` is left alone.
+
+### CI: the end-to-end job has never run for these releases
+The worker end-to-end job of `worker-e2e.yml` runs only when started by hand
+with `run_e2e` — on every push it is skipped. Its steps for #100 (load test),
+#101, #102 and #104 were therefore not run in CI, contrary to what the notes of
+0.7.2 to 0.7.11 said; they were checked locally against real activities only.
+The token used here may not start workflows (HTTP 403): Actions → "Worker CI" →
+"Run workflow", branch `development`, with `run_e2e`.
+
+---
+
+## [0.7.12] — 2026-09-29 — TI@n corrected (#106, #109)
+
+### What TI@n is
+TI@n is the test information of the n most informative items of the item pool
+at the current ability estimate — what n items could at most contribute there.
+Since 0.7.8 this plugin showed under that name something else: the information
+of the n items actually played. That quantity was computed correctly and agrees
+with the engine; its name was wrong.
+
+### Now, from the engine
+`engine_information` uses the engine's own methods: the run's item pool through
+`model_item_param_list::get()` (the scale and its subscales), and
+`catscale::get_testpotential()` — the same method the engine's
+test-information filter uses — with the Fisher information of each item's own
+model:
+
+- TI@n (global): the n most informative items of the pool at θ̂ₙ.
+- Remaining TI (max): the most the items not yet played could still add, up to
+  the number still allowed — as the engine's filter computes it.
+- Information of the items played: the former "TI@n", correctly named.
+
+Checked on real sittings: TI@n is at or above the information of the items
+played on every step (80 of 80 rows); the ratio shows how close the item
+selection came to the best possible (80–98 % in the local runs). With a maximum
+of 20 items the remaining potential is 0 after item 20.
+
+### Where
+The single-test view (columns and head: "Final TI@n"), the comparison (TI@n as a
+metric, globally and for a subscale — n being the items of that subscale), and
+the step export: `ti_global` is renamed `ti_played`, and `ti_at_n` and
+`ti_remaining_max` are added. Anyone reading step exports of 0.7.8–0.7.11:
+their `ti_global` is the information of the items played, not TI@n.
+
+---
+
+## [0.7.11] — 2026-09-29 — Issue #108
+
+Every plot exportable as SVG, and axes under the reader's control.
+
+### SVG export — every plot
+All eight plots — test length against precision, recovery, error over truth,
+a single test, strength, local deviation, item exposure, comparison — and the
+people histogram: "Download graphic (SVG)", "Download data (CSV)" and
+"Download plot settings (JSON)" beneath each. The SVG is a file of its own
+(xmlns set), text as text, points and lines as vectors, nothing rasterised. Its
+settings are embedded as `<metadata>`: plot type, data source, filters, and per
+axis the mode, range, ticks and tick spacing, the manual ranges and the profile.
+File names: `catquizlab-<plot type>-<context>-<YYYYMMDD-HHMMSS>`, e.g.
+`catquizlab-recovery-exp12-20260929-163012.svg`.
+
+### Axis control, per plot
+"Axis settings and export" beneath each plot: auto scale (the conventions of
+#105), manual scale (x/y min and max, tick spacing), or the shared scale for
+compared plots — one scale saved once and used by every plot set to it, so plots
+of different strategies, runs or experiments share their axes. "Force symmetry
+around 0" makes y — and x, unless it counts items — symmetric. Settings of the
+other plots on the page are kept when one is changed. On a comparison plot a
+manual range applies to both axes at once, keeping y = x the diagonal (tested).
+
+### Axis profiles
+Saved per user; the four from the issue built in: "Ability symmetric [-4, 4]",
+"Error symmetric [-2, 2]", "Integer test length", "Shared comparison axes".
+Built-in profiles cannot be overwritten.
+
+### Found on the way
+A manual tick spacing was ignored whenever a manual range was also set: the
+range recomputed the ticks afterwards. The spacing is applied last. The
+comparison plot of #109 would have shown its downloads twice; it now passes its
+richer data to the common export instead.
+
+### Not done
+PNG and PDF (optional in the issue); profiles per experiment (optional; per user
+is done).
+
+### Release names
+From here on counting 0.7.10, 0.7.11 … 0.7.99. The release delivered as 0.8.0
+(#109) is listed as 0.7.10.
+
+---
+
+## [0.7.10] — 2026-09-29 — Issue #109 (delivered as "0.8.0"; the release names count on as 0.7.x)
 
 Related tests side by side, and the simulated people behind the numbers.
 
