@@ -52,6 +52,46 @@ class results_export {
     /** @var string One row per materialised item. */
     public const LEVEL_ITEM = 'item';
 
+    /** @var float Seconds per pool item and step for TI@n, measured on the engine (0.6 µs) with headroom. */
+    public const SECONDS_PER_ITEM_STEP = 0.8e-6;
+
+    /** @var int Above this estimate, TI@n is left out of a step export unless asked for (#99). */
+    public const ENGINE_INFO_SOFT_LIMIT = 60;
+
+    /** @var int Above this estimate, TI@n is not offered at all: the download would outrun its time limit. */
+    public const ENGINE_INFO_HARD_LIMIT = 540;
+
+    /** @var bool Whether the step level computes TI@n and the remaining potential. */
+    public static bool $engineinfo = true;
+
+    /**
+     * What TI@n in a step export would cost for this selection, before it is started (#99).
+     *
+     * Steps times the size of each run's item pool times the measured cost of
+     * one item's information: the engine computes the information of every
+     * pool item at every step.
+     *
+     * @param results_query $query The selection.
+     * @return array{steps: int, items: int, seconds: float}
+     */
+    public static function engine_info_cost(results_query $query): array {
+        global $DB;
+
+        $steps = [];
+        foreach ($query->each_observation() as $row) {
+            $steps[(int) $row['runid']] = ($steps[(int) $row['runid']] ?? 0) + (int) ($row['nitems'] ?? 0);
+        }
+        $work = 0.0;
+        $items = 0;
+        foreach ($steps as $runid => $count) {
+            $pool = $DB->count_records('local_catquizlab_item', ['runid' => $runid]);
+            $items = max($items, $pool);
+            $work += $count * $pool;
+        }
+
+        return ['steps' => array_sum($steps), 'items' => $items, 'seconds' => $work * self::SECONDS_PER_ITEM_STEP];
+    }
+
     /** @var string One row per step of every sitting (#106). */
     public const LEVEL_STEP = 'step';
 
@@ -179,12 +219,15 @@ class results_export {
     protected static function step_rows(results_query $query): \Generator {
         foreach ($query->each_observation() as $observation) {
             $detail = $observation + results_query::detail($observation);
-            $flow = test_flow::with_engine_information(
-                test_flow::steps($detail),
-                (array) ($detail['trace'] ?? []),
-                (int) $observation['runid'],
-                results_query::run_maxitems((int) $observation['runid'])
-            );
+            $flow = test_flow::steps($detail);
+            if (self::$engineinfo) {
+                $flow = test_flow::with_engine_information(
+                    $flow,
+                    (array) ($detail['trace'] ?? []),
+                    (int) $observation['runid'],
+                    results_query::run_maxitems((int) $observation['runid'])
+                );
+            }
             foreach ($flow['steps'] as $step) {
                 yield [
                     'attemptid'        => (int) $observation['attemptid'],
@@ -199,8 +242,8 @@ class results_export {
                     // The information of the items played, and TI@n — the n most
                     // informative items of the pool — as the engine computes it.
                     'ti_played'        => $step['ti'],
-                    'ti_at_n'          => $step['tiatn'],
-                    'ti_remaining_max' => $step['tiremaining'],
+                    'ti_at_n'          => $step['tiatn'] ?? null,
+                    'ti_remaining_max' => $step['tiremaining'] ?? null,
                     'scales_estimated' => $step['scalesestimated'],
                 ];
             }

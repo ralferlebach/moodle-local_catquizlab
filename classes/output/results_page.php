@@ -584,7 +584,6 @@ class results_page {
         return $out;
     }
 
-
     /**
      * The global metrics tab: the full global picture and its cost.
      *
@@ -592,10 +591,15 @@ class results_page {
      */
     protected function render_global(): string {
         $component = 'local_catquizlab';
-        $rows = $this->query->observations();
-        if ($rows === []) {
+        // One pass, as the overview (#99): the figures from every sitting,
+        // streamed; the plots from a random sample of at most MAX_POINTS. It
+        // used to hold every sitting — 230 MB for 50,000.
+        $overview = $this->query->overview(self::MAX_POINTS);
+        if ($overview['n'] === 0) {
             return '';
         }
+        $all = $overview['all'];
+        $rows = $overview['sample'];
 
         // Estimate against ground truth. The identity line is what makes bias
         // and spread readable at a glance.
@@ -616,21 +620,25 @@ class results_page {
         // True abilities outside the scale range of their own run (#105,
         // section 5): the engine cannot estimate beyond the range, and those
         // points bend the cloud at its ends for that reason alone.
-        $outside = $this->outside_scale_range($rows);
+        $outside = (int) $overview['outside'];
         if ($outside > 0) {
             $recovery->add_note(get_string('chart:outsiderange', $component, (object) [
-                'n' => $outside, 'total' => count($rows),
+                'n' => $outside, 'total' => $overview['n'],
             ]));
         }
+        if ($overview['sampled'] > count($rows)) {
+            $sampletext = get_string('chart:sampled', $component, (object) [
+                'shown' => count($rows), 'total' => $overview['sampled'],
+            ]);
+            $recovery->add_note($sampletext);
+        }
 
-        $errors = results_query::summarise($rows, 'error');
+        $errors = $all->describe('error');
         $out = \html_writer::tag('h3', get_string('chart:estimatevstruth', $component), ['class' => 'h5']);
         $out .= $recovery->render_with_summary([
             get_string('metric:bias', $component)  => $this->format_stat($errors),
-            get_string('metric:rmse', $component)  => format_float($this->rmse($rows), 4),
-            get_string('metric:correlation', $component) => $this->format_number(
-                metrics::ability_recovery($rows)['correlation']
-            ),
+            get_string('metric:rmse', $component)  => format_float($all->rmse(), 4),
+            get_string('metric:correlation', $component) => $this->format_number($all->correlation()),
         ]);
 
         // The error against ground truth: a bias that only appears at the ends
@@ -648,6 +656,9 @@ class results_page {
             $rows
         ))->set_description(get_string('chart:pointisattempt', $component))
             ->add_horizontal_line(0.0, get_string('chart:zeroline', $component));
+        if (isset($sampletext)) {
+            $errorchart->add_note($sampletext);
+        }
 
         $out .= \html_writer::tag('h3', get_string('chart:errorvstruth', $component), ['class' => 'h5 mt-4']);
         $out .= $errorchart->render_with_summary([
@@ -658,7 +669,7 @@ class results_page {
         $out .= $this->render_exposure();
 
         $out .= \html_writer::tag('h3', get_string('results:celltable', $component), ['class' => 'h5 mt-4']);
-        $out .= $this->render_cell_table($rows);
+        $out .= $this->render_summary_cell_table($overview['cell']);
 
         return $out;
     }
@@ -769,7 +780,10 @@ class results_page {
             // The size, not the contents. Building four full datasets to print
             // four numbers is how opening this tab cost as much as four
             // downloads.
-            $rowcount = results_export::row_count($this->query, $level);
+            // The step level counts its rows in the same pass that estimates
+            // what TI@n would cost: one pass over the traces, not two.
+            $stepcost = $level === results_export::LEVEL_STEP ? results_export::engine_info_cost($this->query) : null;
+            $rowcount = $stepcost !== null ? $stepcost['steps'] : results_export::row_count($this->query, $level);
             $links = \html_writer::link(
                 new \moodle_url('/local/catquizlab/results.php', $this->filter + [
                     'tab' => 'export', 'level' => $level, 'action' => 'csv',
@@ -784,6 +798,31 @@ class results_page {
                 get_string('export:json', $component),
                 ['class' => 'btn btn-sm btn-outline-secondary']
             );
+
+            // The step level: what TI@n would cost, said before it is asked for (#99).
+            if ($stepcost !== null) {
+                $cost = $stepcost;
+                $minutes = format_float($cost['seconds'] / 60, 1);
+                if ($cost['seconds'] > results_export::ENGINE_INFO_HARD_LIMIT) {
+                    $links .= \html_writer::div(
+                        get_string('export:tiatntoolong', $component, $minutes),
+                        'small text-muted mt-1',
+                        ['data-region' => 'catquizlab-tiatn-cost']
+                    );
+                } else if ($cost['seconds'] > results_export::ENGINE_INFO_SOFT_LIMIT) {
+                    $with = '';
+                    foreach (['csv', 'json'] as $format) {
+                        $with .= \html_writer::link(new \moodle_url('/local/catquizlab/results.php', $this->filter + [
+                            'tab' => 'export', 'level' => $level, 'action' => $format, 'engineinfo' => 1,
+                        ]), get_string('export:' . $format, $component), ['class' => 'btn btn-sm btn-outline-secondary mr-2']);
+                    }
+                    $links .= \html_writer::div(
+                        get_string('export:tiatnslow', $component, $minutes) . ' ' . $with,
+                        'small text-muted mt-1',
+                        ['data-region' => 'catquizlab-tiatn-cost']
+                    );
+                }
+            }
 
             $table->data[] = [
                 get_string($stringkey, $component),
@@ -869,43 +908,63 @@ class results_page {
         $out = \html_writer::tag('h3', get_string('results:flowgroup', $component), ['class' => 'h5']);
         $out .= \html_writer::tag('p', get_string('results:flowexplain', $component), ['class' => 'text-muted']);
 
-        $observations = $this->query->observations();
-        if ($observations === []) {
+        // One pass over the sittings (#99), keeping what each part needs and
+        // nothing else: the feasibility as counts, the first few hundred for
+        // the pickers, the chosen and the first sitting, the twin families as
+        // sitting ids. It used to hold every sitting — 152 MB for 50,000.
+        $counts = test_flow::summarise_feasibility([]);
+        $targets = [];
+        $sample = [];
+        $selected = null;
+        $first = null;
+        $families = [];
+        $runids = [];
+        foreach ($this->query->each_observation() as $observation) {
+            // The trace and the profile for this one row; see
+            // results_query::detail() for why they are not in the row.
+            $verdict = test_flow::feasibility(
+                $observation + results_query::detail($observation),
+                $this->cat_parameters($observation['runid'])
+            );
+            $key = $verdict['verdict'] ?? 'unknown';
+            $counts[$key] = ($counts[$key] ?? 0) + 1;
+            $counts['n']++;
+            if ($verdict['setarget'] !== null && $verdict['required'] !== null) {
+                $targets[(string) $verdict['setarget']] = $verdict['required'];
+            }
+            if (count($sample) < 300) {
+                $sample[] = $observation;
+            }
+            $first = $first ?? $observation;
+            if ($attemptid > 0 && (int) $observation['attemptid'] === $attemptid) {
+                $selected = $observation;
+            }
+            if ((string) $observation['twinid'] !== '') {
+                $families[(string) $observation['twinid']][] = (int) $observation['attemptid'];
+            }
+            $runids[(int) $observation['runid']] = true;
+        }
+        if ($first === null) {
             return $out . \html_writer::div(
                 get_string('results:noobservations', $component),
                 'alert alert-info'
             );
         }
+        $families = array_filter($families, static fn(array $members): bool => count($members) > 1);
 
         // Feasibility first: it is the context in which a stop-rule failure has
         // to be read, so it belongs above the individual flows.
-        $verdicts = [];
-        foreach ($observations as $observation) {
-            // The trace and the profile for this one row; see
-            // results_query::detail() for why they are not in the row.
-            $verdicts[] = test_flow::feasibility(
-                $observation + results_query::detail($observation),
-                $this->cat_parameters($observation['runid'])
-            );
-        }
         $out .= \html_writer::tag('h3', get_string('results:feasibility', $component), ['class' => 'h5 mt-4']);
-        $out .= $this->render_feasibility($verdicts);
+        $out .= $this->render_feasibility($counts, $targets);
 
         // One attempt in detail. Without a choice the first one stands in, so
         // the tab is never empty when data exist.
-        $selected = null;
-        foreach ($observations as $observation) {
-            if ($attemptid > 0 && (int) $observation['attemptid'] === $attemptid) {
-                $selected = $observation;
-                break;
-            }
-        }
-        $selected = $selected ?? $observations[0];
+        $selected = $selected ?? $first;
 
         $out .= \html_writer::tag('h3', get_string('results:singleflow', $component), ['class' => 'h5 mt-4']);
-        $out .= $this->render_attempt_picker($observations, (int) $selected['attemptid']);
+        $out .= $this->render_attempt_picker($sample, (int) $selected['attemptid']);
         $out .= $this->render_single_flow($selected);
-        $out .= $this->render_comparison($observations);
+        $out .= $this->render_comparison($sample, $families, array_keys($runids));
 
         return $out;
     }
@@ -913,12 +972,12 @@ class results_page {
     /**
      * The feasibility summary across the filtered attempts.
      *
-     * @param array $verdicts Results of {@see test_flow::feasibility()}.
+     * @param array $counts Verdict => count, and n, as test_flow::summarise_feasibility() counts.
+     * @param array $targets SE target => the number of items it requires.
      * @return string
      */
-    protected function render_feasibility(array $verdicts): string {
+    protected function render_feasibility(array $counts, array $targets): string {
         $component = 'local_catquizlab';
-        $counts = test_flow::summarise_feasibility($verdicts);
         $n = max(1, (int) $counts['n']);
 
         $table = new \html_table();
@@ -937,12 +996,6 @@ class results_page {
         }
 
         // The arithmetic behind the verdict, stated rather than implied.
-        $targets = [];
-        foreach ($verdicts as $verdict) {
-            if ($verdict['setarget'] !== null && $verdict['required'] !== null) {
-                $targets[(string) $verdict['setarget']] = $verdict['required'];
-            }
-        }
         $explain = '';
         foreach ($targets as $se => $required) {
             $explain .= \html_writer::tag('li', get_string('flow:targetmath', $component, (object) [
@@ -1187,10 +1240,12 @@ class results_page {
      * family, strategy, run or replication; by ability, standard error, test
      * information or scales estimated, globally or for one subscale.
      *
-     * @param array[] $observations The selection's observations.
+     * @param array[] $sample The first few hundred observations, for picking tests.
+     * @param array $families Twin families with more than one test: twin id => sitting ids.
+     * @param int[] $runids The runs of the selection.
      * @return string
      */
-    protected function render_comparison(array $observations): string {
+    protected function render_comparison(array $sample, array $families, array $runids): string {
         global $DB;
         $component = 'local_catquizlab';
 
@@ -1231,31 +1286,25 @@ class results_page {
             $template = $savename;
         }
 
-        // Twin families with more than one sitting: the ones worth comparing.
-        $families = [];
-        foreach ($observations as $observation) {
-            if ((string) $observation['twinid'] !== '') {
-                $families[(string) $observation['twinid']][] = $observation;
-            }
-        }
-        $families = array_filter($families, static fn(array $members): bool => count($members) > 1);
+        // Twin families with more than one sitting, as sitting ids: the tests
+        // compared are fetched as themselves, not found among all of them.
         ksort($families);
 
         if ($picked !== []) {
-            $selected = array_values(array_filter($observations, static fn(array $o): bool =>
-                in_array((int) $o['attemptid'], $picked, true)));
+            $selected = $this->query->observations_of($picked);
         } else {
             if ($twin === '' || !isset($families[$twin])) {
                 $twin = (string) (array_key_first($families) ?? '');
             }
-            $selected = $families[$twin] ?? [];
+            $selected = $twin === '' ? [] : $this->query->observations_of($families[$twin]);
         }
 
         $out = \html_writer::tag('h3', get_string('compare:heading', $component), ['class' => 'h5 mt-4']);
         $out .= \html_writer::tag('p', get_string('compare:explain', $component), ['class' => 'text-muted small']);
         $out .= $this->render_comparison_form(
-            $observations,
+            $sample,
             $families,
+            $runids,
             $twin,
             $picked,
             $group,
@@ -1407,8 +1456,9 @@ class results_page {
     /**
      * The form choosing what to compare.
      *
-     * @param array[] $observations All observations.
-     * @param array $families Twin families with several sittings.
+     * @param array[] $observations The first few hundred observations, for picking tests.
+     * @param array $families Twin families with several sittings, as sitting ids.
+     * @param int[] $runids The runs of the selection.
      * @param string $twin The chosen family.
      * @param int[] $picked Sittings picked one by one.
      * @param string $group Grouping.
@@ -1422,6 +1472,7 @@ class results_page {
     protected function render_comparison_form(
         array $observations,
         array $families,
+        array $runids,
         string $twin,
         array $picked,
         string $group,
@@ -1468,7 +1519,7 @@ class results_page {
                 'local_catquizlab_scalemap',
                 'parentcatscaleid <> 0 AND runid IN (' . implode(',', array_map(
                     'intval',
-                    array_unique(array_column($observations, 'runid'))
+                    $runids
                 ) ?: [0]) . ')',
                 null,
                 'catscaleid ASC',
@@ -1731,33 +1782,6 @@ class results_page {
      */
     protected function run_maxitems(int $runid): int {
         return results_query::run_maxitems($runid);
-    }
-
-    /**
-     * How many observations have a true ability outside their own run's scale range.
-     *
-     * @param array[] $rows Observations, with runid and truetheta.
-     * @return int
-     */
-    protected function outside_scale_range(array $rows): int {
-        global $DB;
-
-        $ranges = [];
-        $outside = 0;
-        foreach ($rows as $row) {
-            $runid = (int) ($row['runid'] ?? 0);
-            if (!isset($ranges[$runid])) {
-                $record = $DB->get_record('local_catquizlab_run', ['id' => $runid]);
-                $ranges[$runid] = \local_catquizlab\local\ability_distribution::of(
-                    $record ? \local_catquizlab\local\run_registry::definition_for($record) : []
-                );
-            }
-            if (!\local_catquizlab\local\ability_distribution::inside($ranges[$runid], (float) $row['truetheta'])) {
-                $outside++;
-            }
-        }
-
-        return $outside;
     }
 
     /**

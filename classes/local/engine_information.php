@@ -60,6 +60,7 @@ class engine_information {
      */
     public static function reset(): void {
         self::$pools = [];
+        self::$prepared = [];
     }
 
     /**
@@ -98,6 +99,80 @@ class engine_information {
         }
 
         return self::$pools[$key];
+    }
+
+    /** @var array<string, array> Per pool: item id => [model instance, parameters], fetched once. */
+    protected static array $prepared = [];
+
+    /**
+     * The pool's items with their model and parameters, fetched once per pool.
+     *
+     * The engine fetches the model instance and the parameter array for every
+     * item on every call; for thousands of steps over hundreds of items that
+     * is most of the cost. The values are the same; they are only fetched once.
+     *
+     * @param mixed $pool A model_item_param_list.
+     * @return array<int, array{0: object, 1: array}>
+     */
+    protected static function prepared($pool): array {
+        $key = spl_object_hash($pool);
+        if (!isset(self::$prepared[$key])) {
+            $items = [];
+            foreach ($pool as $id => $item) {
+                $items[(int) $id] = [
+                    \local_catquiz\local\model\model_model::get_instance($item->get_model_name()),
+                    $item->get_params_array(),
+                ];
+            }
+            self::$prepared[$key] = $items;
+        }
+
+        return self::$prepared[$key];
+    }
+
+    /**
+     * TI@n and the remaining potential of one step, from one pass over the pool.
+     *
+     * The engine's arithmetic exactly — each item's own model and
+     * fisher_info(), sorted in descending order, the first n summed — as
+     * catscale::get_testpotential() does it; only computed once for both
+     * values instead of twice, and without copying the pool to leave out the
+     * items played.
+     *
+     * @param float $theta The ability.
+     * @param mixed $pool A model_item_param_list.
+     * @param int $n How many items TI@n takes.
+     * @param int[] $played Component ids of the items played so far.
+     * @param int $remaining How many items may still be played.
+     * @return array{tiatn: ?float, remaining: ?float}
+     */
+    public static function step(float $theta, $pool, int $n, array $played, int $remaining): array {
+        if ($pool === null) {
+            return ['tiatn' => null, 'remaining' => null];
+        }
+        try {
+            $information = [];
+            foreach (self::prepared($pool) as $id => [$model, $params]) {
+                $information[$id] = $model->fisher_info(['ability' => $theta], $params);
+            }
+        } catch (\Throwable $e) {
+            return ['tiatn' => null, 'remaining' => null];
+        }
+
+        $all = array_values($information);
+        rsort($all, SORT_NUMERIC);
+        $tiatn = $n < 1 ? null : (float) array_sum(array_slice($all, 0, $n));
+
+        if ($remaining < 1) {
+            return ['tiatn' => $tiatn, 'remaining' => 0.0];
+        }
+        foreach ($played as $id) {
+            unset($information[(int) $id]);
+        }
+        $rest = array_values($information);
+        rsort($rest, SORT_NUMERIC);
+
+        return ['tiatn' => $tiatn, 'remaining' => (float) array_sum(array_slice($rest, 0, $remaining))];
     }
 
     /**

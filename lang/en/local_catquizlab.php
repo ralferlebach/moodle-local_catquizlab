@@ -197,6 +197,7 @@ $string['chart:pointisstep'] = 'One point is one step of this single attempt.';
 $string['chart:pointissubscale'] = 'One point is one subscale of one attempt.';
 $string['chart:quantity'] = 'Quantity';
 $string['chart:robustrange'] = 'robust range: 1st to 99th percentile';
+$string['chart:sampled'] = '{$a->shown} of {$a->total} tests drawn, a random sample; the figures beside the plot are computed from all of them.';
 $string['chart:seband'] = 'Estimate ± standard error after each step';
 $string['chart:setarget'] = 'Target SE = {$a}';
 $string['chart:strategycomparison'] = 'Global metrics by strategy';
@@ -414,6 +415,8 @@ $string['export:metadataexplain'] = 'A results file outlives the screen it came 
 $string['export:rowmeaning'] = 'One row is';
 $string['export:rows'] = 'Rows';
 $string['export:sizeunknown'] = 'known when exported';
+$string['export:tiatnslow'] = 'Without TI@n: computing it for this selection takes about {$a} min (the engine computes every pool item\'s information at every step). With TI@n:';
+$string['export:tiatntoolong'] = 'Without TI@n: computing it for this selection would take about {$a} min, longer than a download may run. Narrow the selection — fewer runs, one strategy — to include it.';
 $string['filter:allexperiments'] = 'All experiments';
 $string['filter:anybudget'] = 'Any budget';
 $string['filter:anycellkey'] = 'Any cell';

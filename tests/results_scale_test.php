@@ -162,6 +162,27 @@ final class results_scale_test extends \advanced_testcase {
                 ob_end_clean();
                 $this->assertSame(12 * $n + 1, $lines, 'twelve subscale rows per sitting and a header');
             },
+            // The paths added since 0.7.7 (#99): the export tab with its
+            // estimate of TI@n, the step export, and the tabs with the new plots.
+            'export tab' => function () use ($filter): void {
+                (new \local_catquizlab\output\results_page(new results_query($filter), 'export', $filter))->render_tab();
+            },
+            'step csv' => function () use ($filter, $n): void {
+                $lines = 0;
+                ob_start(static function (string $chunk) use (&$lines): string {
+                    $lines += substr_count($chunk, "\n");
+                    return '';
+                }, 8192);
+                results_export::stream(new results_query($filter), results_export::LEVEL_STEP, 'csv');
+                ob_end_clean();
+                $this->assertSame(35 * $n + 1, $lines, 'thirty-five step rows per sitting and a header');
+            },
+            'global tab' => function () use ($filter): void {
+                (new \local_catquizlab\output\results_page(new results_query($filter), 'global', $filter))->render_tab();
+            },
+            'test flow tab' => function () use ($filter): void {
+                (new \local_catquizlab\output\results_page(new results_query($filter), 'testflow', $filter))->render_tab();
+            },
             'csv download' => function () use ($filter): void {
                 // Discarded as it is written, as a browser would take it.
                 ob_start(static fn(string $chunk): string => '', 8192);
@@ -181,6 +202,8 @@ final class results_scale_test extends \advanced_testcase {
             $used = (memory_get_peak_usage() - $before) / 1048576;
             $took = microtime(true) - $started;
 
+            // The measurements themselves, not only "below the bound".
+            fwrite(STDERR, sprintf("  benchmark %6d sittings  %-15s %6.1f MB  %5.1f s\n", $n, $label, $used, $took));
             $this->assertLessThan($megabytes, $used, sprintf('%s on %d sittings used %.1f MB', $label, $n, $used));
             $this->assertLessThan($seconds, $took, sprintf('%s on %d sittings took %.1f s', $label, $n, $took));
         }

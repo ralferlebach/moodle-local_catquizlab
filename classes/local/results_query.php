@@ -225,6 +225,24 @@ class results_query {
         return $subtree;
     }
 
+    /** @var int[]|null Restrict the observations to these sittings, or null for all. */
+    protected ?array $onlyattempts = null;
+
+    /**
+     * The observations of some sittings only, fetched as themselves.
+     *
+     * @param int[] $attemptids The sittings.
+     * @return array[]
+     */
+    public function observations_of(array $attemptids): array {
+        $this->onlyattempts = array_values(array_unique(array_map('intval', $attemptids)));
+        try {
+            return iterator_to_array($this->each_observation(), false);
+        } finally {
+            $this->onlyattempts = null;
+        }
+    }
+
     /** @var array<int, string> End reason codes of the batch being read, by sitting. */
     protected array $endreasons = [];
 
@@ -301,8 +319,42 @@ class results_query {
         $itemcounts = [];
         $points = [];
         $seen = 0;
+        // A second reservoir for the ability plots of the global tab (#99):
+        // true and estimated ability, error and run, never more than
+        // $maxpoints kept — and, in the same pass, how many true abilities lie
+        // outside the scale range of their run (#105).
+        $sample = [];
+        $sampled = 0;
+        $outside = 0;
+        $ranges = [];
 
         foreach ($this->each_observation() as $observation) {
+            if ($observation['esttheta'] !== null && $observation['truetheta'] !== null) {
+                $sampled++;
+                $row = [
+                    'truetheta' => (float) $observation['truetheta'],
+                    'esttheta'  => (float) $observation['esttheta'],
+                    'error'     => (float) $observation['error'],
+                    'runid'     => (int) $observation['runid'],
+                ];
+                if (count($sample) < $maxpoints) {
+                    $sample[] = $row;
+                } else {
+                    $slot = random_int(0, $sampled - 1);
+                    if ($slot < $maxpoints) {
+                        $sample[$slot] = $row;
+                    }
+                }
+                $runid = (int) $observation['runid'];
+                if (!isset($ranges[$runid])) {
+                    $record = $GLOBALS['DB']->get_record('local_catquizlab_run', ['id' => $runid]);
+                    $ranges[$runid] = ability_distribution::of($record ? run_registry::definition_for($record) : []);
+                }
+                if (!ability_distribution::inside($ranges[$runid], (float) $observation['truetheta'])) {
+                    $outside++;
+                }
+            }
+
             foreach ((array) ($observation['items'] ?? []) as $item) {
                 $key = (string) $item;
                 $itemcounts[$key] = ($itemcounts[$key] ?? 0) + 1;
@@ -343,6 +395,9 @@ class results_query {
             'cell'       => $bycell,
             'itemcounts' => $itemcounts,
             'points'     => $points,
+            'sample'     => $sample,
+            'sampled'    => $sampled,
+            'outside'    => $outside,
             'n'          => $all->count(),
         ];
     }
@@ -399,15 +454,24 @@ class results_query {
             $lastid = 0;
 
             do {
+                // Restricted to given sittings where asked (#99): a twin family
+                // of a few tests is fetched as itself, not found by reading all.
+                $where = 'runid = :runid AND id > :lastid AND status IN (:collected, :validated) AND tracejson IS NOT NULL';
+                $batchparams = [
+                    'runid'     => $runid,
+                    'lastid'    => $lastid,
+                    'collected' => attempt_scheduler::STATUS_COLLECTED,
+                    'validated' => attempt_scheduler::STATUS_VALIDATED,
+                ];
+                if ($this->onlyattempts !== null) {
+                    [$onlyin, $onlyparams] = $DB->get_in_or_equal($this->onlyattempts ?: [0], SQL_PARAMS_NAMED, 'only');
+                    $where .= ' AND id ' . $onlyin;
+                    $batchparams += $onlyparams;
+                }
                 $batch = $DB->get_records_select(
                     'local_catquizlab_attempt',
-                    'runid = :runid AND id > :lastid AND status IN (:collected, :validated) AND tracejson IS NOT NULL',
-                    [
-                        'runid'     => $runid,
-                        'lastid'    => $lastid,
-                        'collected' => attempt_scheduler::STATUS_COLLECTED,
-                        'validated' => attempt_scheduler::STATUS_VALIDATED,
-                    ],
+                    $where,
+                    $batchparams,
                     'id ASC',
                     'id, runid, personid, runtimems, tracejson',
                     0,
@@ -666,13 +730,20 @@ class results_query {
      * @return array The exposure statistics, including the concentration block.
      */
     public function exposure(): array {
-        $rows = $this->observations();
-        $attempts = [];
-        foreach ($rows as $row) {
-            $attempts[] = ['items' => $row['items']];
+        // Counted as the sittings pass (#99): what metrics::exposure() does,
+        // without holding every sitting and a copy of every item list — that
+        // was most of the global tab's 230 MB for 50,000 sittings.
+        $counts = [];
+        $n = 0;
+        foreach ($this->each_observation() as $row) {
+            $n++;
+            foreach ((array) ($row['items'] ?? []) as $item) {
+                $key = (string) $item;
+                $counts[$key] = ($counts[$key] ?? 0) + 1;
+            }
         }
 
-        return metrics::exposure($attempts, $this->pool_size());
+        return metrics::exposure_from_counts($counts, $n, $this->pool_size());
     }
 
     /**

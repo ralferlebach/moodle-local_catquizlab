@@ -6,6 +6,58 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.7.15] — 2026-09-30 — #99 for everything added since: memory and time at 50,000 sittings
+
+The scale benchmark (#99) covered the overview, raw data and exports; the paths
+added since 0.7.7 had never been measured. Added to it: the export tab, the step
+export, the global tab and the test-flow tab. Two of them failed.
+
+### The global tab held every sitting — 230 MB for 50,000
+One pass now, as the overview: figures (bias, RMSE, correlation, cell table) from
+every sitting, streamed; the two ability plots from a random sample of at most
+2,000 tests, said beneath them; values outside the scale range counted in the
+same pass. Item exposure is counted as the sittings pass instead of holding them
+and a copy of every item list. Same numbers — the same pairs, the same function.
+
+### The test-flow tab held every sitting — 152 MB for 50,000
+One pass: feasibility as counts, the first 300 sittings for the pickers, the
+chosen and the first sitting, twin families as sitting ids. The comparison fetches
+the members of the chosen family — or the tests picked — as themselves
+(`results_query::observations_of()`, restricted in SQL), not by reading all.
+
+### TI@n: the same values, at less than half the cost
+`engine_information::step()` computes TI@n and the remaining potential from one
+pass over the pool per step — each item's own model and `fisher_info()`, sorted
+descending, summed — instead of two engine calls, a copy of the pool and a linear
+search per played item. Identical to `catscale::get_testpotential()` (800
+comparisons, largest difference 0), 2.4 times faster. The items played are
+carried from step to step, not rebuilt at each: that was quadratic in the test
+length.
+
+### What a step export with TI@n would take, said before it starts
+TI@n means every pool item's information at every step: for 50,000 tests with a
+pool of 500 items about nine minutes. The export tab estimates it from the
+selection — steps × pool size × the measured cost per item — and above one minute
+offers the step export without TI@n by default and with TI@n explicitly, with
+the estimate; above the download's time limit it does not offer it and says to
+narrow the selection, rather than ending in half a file.
+
+### Measured, 50,000 sittings (35 items, 12 subscales each)
+
+    overview          12.1 MB  10.7 s
+    raw data           2.0 MB   2.0 s
+    subscale csv       1.2 MB  13.2 s
+    export tab         1.8 MB   3.4 s     new
+    step csv           1.3 MB  19.7 s     new
+    global tab        13.3 MB   8.0 s     was 230 MB
+    test flow tab      2.0 MB   8.9 s     was 152 MB
+    csv download       1.2 MB   0.7 s
+
+The benchmark prints these per step now, not only whether they stay below the
+bound.
+
+---
+
 ## [0.7.14] — 2026-09-30 — The optional parts of #102, #105, #108, #109
 
 ### #102 — local deviations set by the experiment

@@ -197,6 +197,7 @@ $string['chart:pointisstep'] = 'Ein Punkt ist ein Schritt dieser einzelnen Testb
 $string['chart:pointissubscale'] = 'Ein Punkt ist eine Subskala einer Testbearbeitung.';
 $string['chart:quantity'] = 'Größe';
 $string['chart:robustrange'] = 'robuster Bereich: 1. bis 99. Perzentil';
+$string['chart:sampled'] = '{$a->shown} von {$a->total} Tests gezeichnet, eine Zufallsstichprobe; die Kennwerte neben der Grafik sind aus allen berechnet.';
 $string['chart:seband'] = 'Schätzung ± Standardfehler nach jedem Schritt';
 $string['chart:setarget'] = 'Ziel-SE = {$a}';
 $string['chart:strategycomparison'] = 'Globale Kennwerte nach Strategie';
@@ -414,6 +415,8 @@ $string['export:metadataexplain'] = 'Eine Ergebnisdatei überdauert die Ansicht,
 $string['export:rowmeaning'] = 'Eine Zeile ist';
 $string['export:rows'] = 'Zeilen';
 $string['export:sizeunknown'] = 'beim Export bekannt';
+$string['export:tiatnslow'] = 'Ohne TI@n: Die Berechnung für diese Auswahl dauert etwa {$a} Min. (die Engine berechnet in jedem Schritt die Information jedes Pool-Items). Mit TI@n:';
+$string['export:tiatntoolong'] = 'Ohne TI@n: Die Berechnung für diese Auswahl würde etwa {$a} Min. dauern, länger als ein Download laufen darf. Zum Einbeziehen die Auswahl eingrenzen — weniger Versuchsdurchläufe, eine Strategie.';
 $string['filter:allexperiments'] = 'Alle Experimente';
 $string['filter:anybudget'] = 'Beliebiges Budget';
 $string['filter:anycellkey'] = 'Beliebige Teilversuch';

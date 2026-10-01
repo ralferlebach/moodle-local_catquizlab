@@ -113,6 +113,16 @@ if ($action === 'csv' || $action === 'json') {
     // the dataset and the formatted export were held at the same time.
     core_php_time_limit::raise(600);
 
+    // TI@n in a step export only where it fits the time limit (#99): asked
+    // for explicitly above the soft limit, never above the hard one — a
+    // download cut off by its time limit is half a file.
+    if ($level === results_export::LEVEL_STEP) {
+        $cost = results_export::engine_info_cost($query);
+        $asked = optional_param('engineinfo', -1, PARAM_INT);
+        results_export::$engineinfo = $cost['seconds'] <= results_export::ENGINE_INFO_HARD_LIMIT
+            && ($asked === 1 || ($asked === -1 && $cost['seconds'] <= results_export::ENGINE_INFO_SOFT_LIMIT));
+    }
+
     $format = $action === 'csv' ? 'csv' : 'json';
     header('Content-Type: ' . ($format === 'csv' ? 'text/csv' : 'application/json') . '; charset=utf-8');
     header('Content-Disposition: attachment; filename="'

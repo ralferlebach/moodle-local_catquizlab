@@ -182,25 +182,25 @@ class test_flow {
         $pool = engine_information::pool($runid, $root, $model);
         $poolsize = $pool === null ? 0 : count($pool);
 
+        // The items played so far, carried from step to step rather than
+        // rebuilt at each one: rebuilding is quadratic in the test length.
+        $ids = [];
         foreach ($flow['steps'] as $index => $step) {
             $flow['steps'][$index]['tiatn'] = null;
             $flow['steps'][$index]['tiremaining'] = null;
+            if (isset($played[$index])) {
+                $ids[] = (int) ($played[$index]['componentid'] ?? $played[$index]['id'] ?? 0);
+            }
             if ($pool === null || $step['ability'] === null) {
                 continue;
             }
             $n = (int) $step['step'];
-            $flow['steps'][$index]['tiatn'] = engine_information::ti_at_n((float) $step['ability'], $pool, $n);
-            $ids = [];
-            for ($j = 0; $j <= $index && $j < count($played); $j++) {
-                $ids[] = (int) ($played[$j]['componentid'] ?? $played[$j]['id'] ?? 0);
-            }
             $allowed = $maxitems < 0 ? $poolsize - $n : $maxitems - $n;
-            $flow['steps'][$index]['tiremaining'] = engine_information::remaining_max(
-                (float) $step['ability'],
-                $pool,
-                $ids,
-                $allowed
-            );
+            // One pass over the pool for both values: the engine's arithmetic,
+            // computed once per step (#99).
+            $metrics = engine_information::step((float) $step['ability'], $pool, $n, $ids, $allowed);
+            $flow['steps'][$index]['tiatn'] = $metrics['tiatn'];
+            $flow['steps'][$index]['tiremaining'] = $metrics['remaining'];
         }
         $last = $flow['steps'] === [] ? [] : $flow['steps'][count($flow['steps']) - 1];
         $flow['final']['tiatn'] = $last['tiatn'] ?? null;
