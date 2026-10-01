@@ -498,6 +498,11 @@ class experiment_form extends \moodleform {
         ));
 
         // Sweep.
+        // Budgets of single cells (#96): for an experiment already saved, one
+        // row per concrete cell of its sweep, empty fields following the
+        // strategy's budgets, a number setting it for that cell alone.
+        $this->add_cell_budgets($mform);
+
         $mform->addElement('header', 'sweepheader', get_string('form:sweep', $component));
 
         $strategies = $mform->addElement(
@@ -729,6 +734,7 @@ class experiment_form extends \moodleform {
                 'naming'   => ['pattern' => 'P-{stratum}-{index:04d}'],
             ],
             'budgetsbystrategy' => self::per_strategy_budgets($data),
+            'budgetsbycell' => self::per_cell_budgets($data),
             'pilot'         => [
                 'include' => !empty($data['pilotinclude']),
                 'ratio'   => (float) unformat_float((string) ($data['pilotratio'] ?? 0)),
@@ -868,6 +874,148 @@ class experiment_form extends \moodleform {
         return array_values(array_unique(array_filter($keys, static function (string $key): bool {
             return strategy_catalog::has($key);
         })));
+    }
+
+    /** @var string[] The fields of a cell's budget, with their level and key in the definition. */
+    protected const CELL_FIELDS = [
+        'globalmin' => ['global', 'minitems'], 'globalmax' => ['global', 'maxitems'],
+        'subscalemin' => ['subscale', 'minitems'], 'subscalemax' => ['subscale', 'maxitems'],
+        'semin' => ['se', 'min'], 'semax' => ['se', 'max'],
+    ];
+
+    /**
+     * The form field prefix of one cell: a short hash of its key.
+     *
+     * @param string $cellkey The sweep cell key.
+     * @return string
+     */
+    public static function cell_prefix(string $cellkey): string {
+        return 'cb_' . substr(sha1($cellkey), 0, 10) . '_';
+    }
+
+    /**
+     * One row of fields per cell of the saved experiment's sweep (#96).
+     *
+     * @param \MoodleQuickForm $mform The form.
+     * @return void
+     */
+    protected function add_cell_budgets(\MoodleQuickForm $mform): void {
+        $component = 'local_catquizlab';
+        $existing = $this->_customdata['existing'] ?? null;
+        if (!$existing || empty($existing->configjson)) {
+            return;
+        }
+        try {
+            $definition = \local_catquizlab\local\experiment_definition::from_json((string) $existing->configjson)
+                ->get_normalised();
+            $expansion = \local_catquizlab\local\sweep::expand(
+                \local_catquizlab\local\experiment_service::sweep_spec($definition)
+            );
+        } catch (\Throwable $e) {
+            return;
+        }
+        $cells = [];
+        foreach ((array) ($expansion['runs'] ?? []) as $run) {
+            $cells[(string) $run['cellkey']] = (array) $run['definition'];
+        }
+        if (count($cells) < 1 || count($cells) > 60) {
+            return;
+        }
+        $factors = [];
+        foreach ((array) ($expansion['cells'] ?? []) as $cell) {
+            $factors[(string) $cell['cellkey']] = (array) ($cell['factors'] ?? []);
+        }
+
+        $mform->addElement('header', 'cellbudgets', get_string('form:cellbudgets', $component));
+        $mform->addElement('static', 'cellbudgetsexplain', '', get_string('form:cellbudgets_help', $component));
+        $na = get_string('form:na_short', $component);
+        foreach ($cells as $cellkey => $applied) {
+            $prefix = self::cell_prefix($cellkey);
+            $strategy = (string) ($applied['strategy'] ?? '');
+            $mform->addElement('hidden', $prefix . 'key', $cellkey);
+            $mform->setType($prefix . 'key', PARAM_RAW);
+            $group = [];
+            foreach (self::CELL_FIELDS as $field => [$level, $key]) {
+                $applies = $level === 'global'
+                    || ($level === 'subscale' && \local_catquizlab\local\strategy_catalog::uses_subscales($strategy))
+                    || ($level === 'se' && \local_catquizlab\local\strategy_catalog::uses_standard_error($strategy));
+                $current = $applied['budgets'][$level][$key] ?? null;
+                $attributes = ['size' => 5, 'title' => get_string('form:cell_' . $field, $component),
+                    'placeholder' => $applies
+                        ? ($current === null ? '' : (\local_catquizlab\local\experiment_definition::is_unlimited($current)
+                            ? get_string('budget:unlimited', $component) : (string) $current))
+                        : $na];
+                if (!$applies) {
+                    $attributes['disabled'] = 'disabled';
+                }
+                $group[] = $mform->createElement(
+                    'text',
+                    $prefix . $field,
+                    get_string('form:cell_' . $field, $component),
+                    $attributes
+                );
+            }
+            $mform->addGroup(
+                $group,
+                $prefix . 'group',
+                s(\local_catquizlab\local\experiment_service::factor_text($factors[$cellkey] ?? [])),
+                ' ',
+                false
+            );
+            foreach (array_keys(self::CELL_FIELDS) as $field) {
+                $mform->setType($prefix . $field, PARAM_RAW_TRIMMED);
+            }
+        }
+    }
+
+    /**
+     * The per-cell budgets from the submitted data (#96).
+     *
+     * @param array $data Submitted data.
+     * @return array cellkey => budgets
+     */
+    protected static function per_cell_budgets(array $data): array {
+        $budgets = [];
+        foreach ($data as $name => $cellkey) {
+            if (!preg_match('/^(cb_[0-9a-f]{10}_)key$/', (string) $name, $m)) {
+                continue;
+            }
+            foreach (self::CELL_FIELDS as $field => [$level, $key]) {
+                $raw = trim((string) ($data[$m[1] . $field] ?? ''));
+                if ($raw === '') {
+                    continue;
+                }
+                $budgets[(string) $cellkey][$level][$key] = \local_catquizlab\local\experiment_definition::is_unlimited($raw)
+                    || \core_text::strtolower($raw) === \core_text::strtolower(get_string('budget:unlimited', 'local_catquizlab'))
+                    ? \local_catquizlab\local\experiment_definition::UNLIMITED
+                    : (is_numeric(unformat_float($raw)) ? unformat_float($raw) : $raw);
+            }
+        }
+
+        return $budgets;
+    }
+
+    /**
+     * The form fields of the per-cell budgets of a definition.
+     *
+     * @param array $normalised The definition.
+     * @return array
+     */
+    protected static function per_cell_fields(array $normalised): array {
+        $fields = [];
+        foreach ((array) ($normalised['budgetsbycell'] ?? []) as $cellkey => $levels) {
+            $prefix = self::cell_prefix((string) $cellkey);
+            foreach (self::CELL_FIELDS as $field => [$level, $key]) {
+                if (isset($levels[$level][$key])) {
+                    $value = $levels[$level][$key];
+                    $fields[$prefix . $field] = \local_catquizlab\local\experiment_definition::is_unlimited($value)
+                        ? get_string('budget:unlimited', 'local_catquizlab')
+                        : self::localised((float) $value);
+                }
+            }
+        }
+
+        return $fields;
     }
 
     /**
@@ -1050,7 +1198,7 @@ class experiment_form extends \moodleform {
             'personspreset'      => (int) ($normalised['personspreset'] ?? 0),
             'pilotinclude'       => !empty($normalised['pilot']['include']) ? 1 : 0,
             'pilotratio'         => self::localised((float) ($normalised['pilot']['ratio'] ?? 20)),
-        ] + self::per_strategy_fields($normalised);
+        ] + self::per_strategy_fields($normalised) + self::per_cell_fields($normalised);
     }
 
     /**

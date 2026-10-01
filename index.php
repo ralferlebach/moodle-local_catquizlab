@@ -312,6 +312,14 @@ if ($tab === 'settings') {
     );
 
     if ($data = $settingsform->get_data()) {
+        // Every submission of a form is recorded with what was entered (#90),
+        // without the session key and anything that is a password or a token.
+        \local_catquizlab\local\debug_trace::record(
+            \local_catquizlab\local\debug_trace::UI,
+            'settings_form_submitted',
+            \local_catquizlab\local\debug_trace::submitted((array) $data),
+            'ok'
+        );
         require_capability('local/catquizlab:execute', $context);
         // Every field the form offers. The list was written by hand and
         // debuglevel was left out of it, so the form showed the setting, read

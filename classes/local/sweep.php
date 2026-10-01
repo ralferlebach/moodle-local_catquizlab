@@ -354,12 +354,25 @@ class sweep {
         // These are applied after the combination, to the cell that matches.
         $definition = self::apply_strategy_budgets($definition);
 
+        // A cell's own budgets, last (#96): what one concrete run of the sweep
+        // is given, over its strategy's budgets and the shared ones.
+        $cellbudget = (array) ($definition['budgetsbycell'][self::cellkey($combo)] ?? []);
+        $levelfields = ['global' => ['minitems', 'maxitems'], 'subscale' => ['minitems', 'maxitems'], 'se' => ['min', 'max']];
+        foreach ($levelfields as $level => $fields) {
+            foreach ($fields as $field) {
+                if (isset($cellbudget[$level][$field]) && $cellbudget[$level][$field] !== '') {
+                    $definition['budgets'][$level][$field] = $cellbudget[$level][$field];
+                }
+            }
+        }
+        unset($definition['budgetsbycell']);
+
         // The classical test plays every item unless given its own maximum —
         // where its maximum is the shared base one. Where the global budget is
         // itself a swept factor, it is the variable under study and applies to
         // every strategy, the classical test included: overriding it would
         // collapse the swept levels into identical cells.
-        if (!isset($combo['globalbudget'])) {
+        if (!isset($combo['globalbudget']) && !isset($cellbudget['global']['maxitems'])) {
             $definition = strategy_parameters::fixed_form_default(
                 $definition,
                 (array) ($definition['budgetsbystrategy'] ?? [])

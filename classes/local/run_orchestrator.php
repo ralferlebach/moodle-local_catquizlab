@@ -514,6 +514,7 @@ class run_orchestrator {
             $result = self::dispatch_stage($stage, $context);
         } catch (\Throwable $e) {
             run_log::finish_step($token, false, ['reason' => $e->getMessage()]);
+            debug_trace::exception(debug_trace::LIFECYCLE, 'stage_exception', $e, (int) ($context['runid'] ?? 0));
             throw $e;
         }
 

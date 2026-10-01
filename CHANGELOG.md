@@ -6,6 +6,105 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.7.17] — 2026-10-01 — #100 and #102, found while ticking
+
+### #100 — a navigation after the login is no longer swallowed
+"Navigation timeouts are not swallowed wholesale" (#100, criterion 4): the
+login still caught the navigation after submitting with `.catch(() => {})` — the
+one place left in the worker. Click and navigation are now settled together as
+everywhere else; a navigation that does not come is recorded
+(`navigation-failed`) and named in the error should the login fail.
+
+### #90 — exceptions with their root cause; form submissions recorded
+`debug_trace::exception()` existed but was called nowhere. It now records the
+whole chain — the outer exception and the innermost cause — and for Moodle's
+own exceptions the errorcode and debug information. It is called where an
+exception is turned into a state: a provisioning stage that throws, an
+aggregation that fails, and the oracle's question lookup, which fell back to 0
+without a trace. Saving the experiment form, the import form and the settings
+was not recorded — only actions with an `action` parameter were; every
+submission now is, with what was entered, the session key, passwords and
+tokens redacted.
+
+Not yet: "every status change is recorded" (#90, criterion 18). A run's status
+is written in more than a dozen places, and only some of them record it; that
+needs one place all of them go through, and comes next.
+
+### #102 — the export says how the true abilities were drawn
+"Manifest and export contain the distribution and the effective scale bounds"
+(#102, criterion 8): the manifest did, the export did not. Every sitting row now
+carries its run's `abilitydistribution`, `abilitymean`, `abilitysd`,
+`abilitymin`, `abilitymax` — so that a CSV without metadata says it — appended
+after the existing columns, none of which moves. The JSON metadata carries each
+run's full ability block as in its manifest, with the engine's scale range.
+
+---
+
+## [0.7.16] — 2026-09-30 — #96 completed, #97 test, #99 JSON measured
+
+Found while checking the issues' criteria against the code, before ticking them.
+
+### #96 — budgets per concrete cell, editable in the preview
+The effective CAT parameters could be set per strategy, not per cell of a sweep,
+and the run preview could not be edited; it also lacked the model and the SE
+bounds. Now:
+
+- "Budgets per cell" in the experiment form: one row per cell of the saved
+  experiment's sweep, named by its factors (strategy, model, …), with fields for
+  questions min/max, per subscale min/max and SE min/max. Empty follows the
+  strategy's and the shared budgets, shown as placeholders; a value applies to
+  that cell alone — over its strategy's budget, and over the classical test's
+  "unlimited". "n/a" where the cell's strategy does not use a parameter.
+- The preview lists every cell with its factors, strategy, model, question and
+  subscale budgets and SE bounds, marking a cell's own budget.
+- Validated: numbers, "unlimited" for a maximum, no minimum above its maximum.
+- Reproduction moved from the page into `run_lifecycle::reproduce()`, and tested:
+  a reproduction is provisioned with exactly its original's effective
+  parameters, however the experiment was changed afterwards.
+
+### #97 — a historic strategy refused by name, tested
+The code refused a definition naming a strategy the engine no longer plays; no
+test said so. `test_a_historic_strategy_is_refused_by_name`: as the strategy and
+as a sweep level, with the strategy's name in the error.
+
+### CI: the interface end-to-end test, red since 0.7.2
+`experiment.spec.js` filled the subscale budget fields, which #101 switched off
+when no strategy in play counts by subscale — the test's strategy, "fastest",
+does not. It waited 60 s on a disabled field. The workflow runs only when
+started by hand, so this surfaced only now. The test now checks what #101
+intends — subscale fields disabled and marked not applicable, SE fields enabled —
+and fills the SE bounds. Run locally against real pages from the form to the
+results: passed (11.6 min, no failed execution). The plot checks of #105 passed
+in CI already.
+
+### Worker: a transient "Invalid login" is retried once
+A sitting's first execution failed with "Invalid login" while its password was
+correct — verified against the account — and the same credentials succeeded on
+the retried execution minutes later. Moodle logs reason 3 (AUTH_LOGIN_FAILED),
+which it gives for a wrong password and for a login token the session no longer
+holds; the second is transient. The worker now:
+
+- retries the login once with a freshly loaded login page (a fresh token); a
+  second refusal is reported as before, so a wrong password is not hidden;
+- sets the username and password fields instead of typing into them — typing
+  appends to a value the page put there (Moodle refills the username after a
+  failure) and follows the focus, which the page's own script may move;
+- records the retry as a browser event (`login-retried`).
+
+Tested against a login page that refuses once, and one that refuses always.
+
+### Load test: every failed execution by reason
+The CI load test of #100 passed — 264 of 300 sittings collected in 30 min, 305
+executions — with 37 failed executions, none of them navigation or transport.
+What they were, it did not say: it only counted navigation failures. It now
+lists every failed execution by reason code, with examples.
+
+### #99 — JSON export measured
+Attempt and subscale level as JSON in the scale benchmark, checked to be one valid
+document with every row: 1.2 MB at 50,000 sittings for both.
+
+---
+
 ## [0.7.15] — 2026-09-30 — #99 for everything added since: memory and time at 50,000 sittings
 
 The scale benchmark (#99) covered the overview, raw data and exports; the paths

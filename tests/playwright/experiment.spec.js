@@ -181,11 +181,16 @@ test.describe('CatQuizLab, through the interface', () => {
         await page.fill('#id_globalmin', '15');
         await page.fill('#id_globalmax', '20');
 
-        // Questions per scale: 3 to 5.
-        await page.fill('#id_subscalemin', '3');
-        await page.fill('#id_subscalemax', '5');
+        // Questions per scale: not for this test's strategy. "fastest" (the
+        // default) does not count by subscale, so since #101 the fields are
+        // switched off and say why — the test used to fill them, and has failed
+        // on a disabled field ever since.
+        await expect(page.locator('#id_subscalemin')).toBeDisabled();
+        await expect(page.locator('#id_subscalemax')).toBeDisabled();
+        await expect(page.locator('[data-catquizlab-na="subscalemax"]')).toBeVisible();
 
-        // Standard error per scale: 0.3 to 2.5.
+        // Standard error: 0.3 to 2.5 — "fastest" does stop by it.
+        await expect(page.locator('#id_semin')).toBeEnabled();
         await page.fill('#id_semin', '0.3');
         await page.fill('#id_semax', '2.5');
 

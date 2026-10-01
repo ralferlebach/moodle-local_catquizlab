@@ -300,6 +300,27 @@ class debug_trace {
     }
 
     /**
+     * Submitted form data as it may be logged: no session key, no password, no token.
+     *
+     * @param array $data The submitted data.
+     * @return array
+     */
+    public static function submitted(array $data): array {
+        $out = [];
+        foreach ($data as $key => $value) {
+            if (preg_match('/sesskey|password|passwd|secret|token/i', (string) $key)) {
+                $out[$key] = '[redacted]';
+            } else if (is_array($value) || is_object($value)) {
+                $out[$key] = self::submitted((array) $value);
+            } else {
+                $out[$key] = $value;
+            }
+        }
+
+        return $out;
+    }
+
+    /**
      * Record an exception, with where it came from.
      *
      * @param string $channel One of the class constants.
@@ -309,13 +330,30 @@ class debug_trace {
      * @return void
      */
     public static function exception(string $channel, string $action, \Throwable $e, int $runid = 0): void {
-        self::record($channel, $action, [], 'error', [
+        // The root cause (#90): the innermost of the chain, which is what was
+        // actually wrong — the outer one is often only a wrapper saying so.
+        $root = $e;
+        $depth = 0;
+        while ($root->getPrevious() !== null && $depth < 10) {
+            $root = $root->getPrevious();
+            $depth++;
+        }
+        $details = [
             'exception' => get_class($e),
             'message'   => $e->getMessage(),
             // One frame, not the whole trace: the line that threw is the
             // question, and a hundred frames in a table cell is not an answer.
             'where'     => basename($e->getFile()) . ':' . $e->getLine(),
-        ], $runid);
+        ];
+        if ($e instanceof \moodle_exception) {
+            $details['errorcode'] = $e->errorcode;
+            $details['debuginfo'] = \core_text::substr((string) $e->debuginfo, 0, 500);
+        }
+        if ($root !== $e) {
+            $details['rootcause'] = get_class($root) . ': ' . $root->getMessage()
+                . ' at ' . basename($root->getFile()) . ':' . $root->getLine();
+        }
+        self::record($channel, $action, [], 'error', $details, $runid);
     }
 
     /**

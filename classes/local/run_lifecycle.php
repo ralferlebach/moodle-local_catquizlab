@@ -1159,4 +1159,37 @@ class run_lifecycle {
             'timemodified' => time(),
         ]);
     }
+
+    /**
+     * A new run with exactly the configuration of an existing one (#96).
+     *
+     * The run's manifest, with the definition that was in force for it —
+     * strategy, model, every effective budget — is copied as it is: the new
+     * run is provisioned from that, not from the experiment as it reads now,
+     * which may have changed since. Same seeds; a new id; it says which run it
+     * reproduces.
+     *
+     * @param int $runid The run to reproduce.
+     * @return int The new run's id.
+     */
+    public static function reproduce(int $runid): int {
+        global $DB;
+
+        $run = $DB->get_record('local_catquizlab_run', ['id' => $runid], '*', MUST_EXIST);
+        $now = time();
+        $copy = clone $run;
+        unset($copy->id);
+        $copy->status = registry::STATUS_DRAFT;
+        // The new run says which run it came from, so a reproduction can be
+        // told from an original without comparing seeds by hand.
+        $manifest = json_decode((string) $run->manifestjson, true) ?: [];
+        $manifest['config']['reproducedfrom'] = (int) $run->id;
+        $copy->manifestjson = json_encode($manifest, JSON_UNESCAPED_SLASHES);
+        $copy->courseid = null;
+        $copy->testcmid = null;
+        $copy->timecreated = $now;
+        $copy->timemodified = $now;
+
+        return (int) $DB->insert_record('local_catquizlab_run', $copy);
+    }
 }

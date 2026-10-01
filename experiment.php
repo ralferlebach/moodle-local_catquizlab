@@ -295,6 +295,14 @@ $notes = [];
 $frozennotice = '';
 
 if ($data = $form->get_data()) {
+    // Every submission of a form is recorded with what was entered (#90),
+    // without the session key and anything that is a password or a token.
+    \local_catquizlab\local\debug_trace::record(
+        \local_catquizlab\local\debug_trace::UI,
+        'experiment_form_submitted',
+        \local_catquizlab\local\debug_trace::submitted((array) $data),
+        'ok'
+    );
     require_capability('local/catquizlab:edit', $context);
 
     $submitted = experiment_form::to_definition((array) $data);

@@ -179,6 +179,16 @@ class results_query {
     protected static array $maxitems = [];
 
     /**
+     * Forget the per-run lookups of this request — for tests, which reuse run ids.
+     *
+     * @return void
+     */
+    public static function reset_caches(): void {
+        self::$maxitems = [];
+        self::$detail = [];
+    }
+
+    /**
      * A run's effective maximum number of questions, as provisioned; -1 for none.
      *
      * @param int $runid The run.

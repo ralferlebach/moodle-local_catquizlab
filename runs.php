@@ -527,7 +527,6 @@ if ($action !== '' && $runid > 0) {
         // A reproduction is a new run with the original configuration: a new
         // id, the same seeds. Rewriting the original would destroy the record
         // of what it did.
-        $now = time();
         if (!registry::allowed_actions((int) $run->status)['reproduce']) {
             redirect(
                 $returnurl,
@@ -537,19 +536,7 @@ if ($action !== '' && $runid > 0) {
             );
         }
 
-        $copy = clone $run;
-        unset($copy->id);
-        $copy->status = registry::STATUS_DRAFT;
-        // The new run says which run it came from, so a reproduction can be
-        // told from an original without comparing seeds by hand.
-        $manifest = json_decode((string) $run->manifestjson, true) ?: [];
-        $manifest['config']['reproducedfrom'] = (int) $run->id;
-        $copy->manifestjson = json_encode($manifest, JSON_UNESCAPED_SLASHES);
-        $copy->courseid = null;
-        $copy->testcmid = null;
-        $copy->timecreated = $now;
-        $copy->timemodified = $now;
-        $newid = (int) $DB->insert_record('local_catquizlab_run', $copy);
+        $newid = \local_catquizlab\local\run_lifecycle::reproduce((int) $run->id);
         redirect(
             new moodle_url('/local/catquizlab/runs.php', ['runid' => $newid]),
             get_string('notice:runreproduced', $component),

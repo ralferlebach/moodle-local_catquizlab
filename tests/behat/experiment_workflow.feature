@@ -553,3 +553,19 @@ Feature: Defining and running CAT experiments from the web interface
     Then I should see "Simulated local deviations"
     When I click on "[data-region='catquizlab-people'] ~ div [data-download='pdf']" "css_element"
     Then the raw response should contain "%PDF"
+
+  Scenario: Budgets are set per cell of the sweep, and the preview shows every parameter of each cell
+    Given the following "local_catquizlab > experiment" exists:
+      | name            | Behat cells      |
+      | sweepstrategies | fastest,allsubs  |
+    And I navigate to "Reports > CAT experiment suite" in site administration
+    When I follow "Behat cells"
+    And I expand all fieldsets
+    Then I should see "Budgets per cell"
+    When I set cell budget "globalmax" of "allsubs" in "Behat cells" to "25"
+    And I set cell budget "semin" of "allsubs" in "Behat cells" to "0.3"
+    And I press "Save experiment"
+    # The preview: the cell, its model and SE bounds, and its own budget marked.
+    Then I should see "own cell budget"
+    And I should see "strategy allsubs"
+    And I should see "SE lower bound"

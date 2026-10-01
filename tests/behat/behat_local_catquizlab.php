@@ -289,6 +289,38 @@ class behat_local_catquizlab extends behat_base {
     }
 
     /**
+     * Set one budget field of the sweep cell of a strategy, in the experiment form (#96).
+     *
+     * @When /^I set cell budget "(?P<f_string>[^"]*)" of "(?P<s_string>[^"]*)" in "(?P<n_string>[^"]*)" to "(?P<v_string>[^"]*)"$/
+     * @param string $field globalmin, globalmax, subscalemin, subscalemax, semin or semax.
+     * @param string $strategy The strategy key.
+     * @param string $name The experiment name.
+     * @param string $value The value.
+     * @return void
+     * @throws \coding_exception If the experiment or the cell does not exist.
+     */
+    public function i_set_the_cell_budget(string $field, string $strategy, string $name, string $value): void {
+        global $DB;
+
+        $configjson = $DB->get_field('local_catquizlab_experiment', 'configjson', ['name' => $name]);
+        if ($configjson === false) {
+            throw new \coding_exception('No experiment named "' . $name . '".');
+        }
+        $definition = \local_catquizlab\local\experiment_definition::from_json((string) $configjson)->get_normalised();
+        $expansion = \local_catquizlab\local\sweep::expand(\local_catquizlab\local\experiment_service::sweep_spec($definition));
+        foreach ($expansion['runs'] as $run) {
+            if (($run['definition']['strategy'] ?? '') === $strategy) {
+                $this->execute('behat_forms::i_set_the_field_to', [
+                    \local_catquizlab\form\experiment_form::cell_prefix((string) $run['cellkey']) . $field,
+                    $value,
+                ]);
+                return;
+            }
+        }
+        throw new \coding_exception('No cell of strategy "' . $strategy . '" in "' . $name . '".');
+    }
+
+    /**
      * Open the detail page of an experiment's first run.
      *
      * Run ids are database ids, so a scenario cannot know them in advance;

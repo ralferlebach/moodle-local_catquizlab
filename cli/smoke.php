@@ -436,6 +436,32 @@ if (!empty($options['no-navigation-failures'])) {
         $inparams + ['started' => \local_catquizlab\local\attempt_history::STARTED]
     );
     step($total . ' executions, ' . count($executions) . ' failed, ' . $navigation . ' of them navigation or transport.', $started);
+    // Every failed execution by its reason (#107), not only the navigation
+    // ones: a load test that passes on navigation can still hide failures of
+    // another kind, retried until they succeeded.
+    $reasons = $DB->get_records_sql(
+        "SELECT COALESCE(reasoncode, 'none') AS reason, COUNT(1) AS n
+           FROM {local_catquizlab_attemptlog}
+          WHERE runid $insql AND outcome = :failed
+       GROUP BY COALESCE(reasoncode, 'none')
+       ORDER BY COUNT(1) DESC",
+        $inparams + ['failed' => \local_catquizlab\local\attempt_history::FAILED]
+    );
+    foreach ($reasons as $reason) {
+        cli_writeln(sprintf('    %-28s %d', $reason->reason, $reason->n));
+    }
+    $samples = $DB->get_records_select(
+        'local_catquizlab_attemptlog',
+        'runid ' . $insql . ' AND outcome = :failed',
+        $inparams + ['failed' => \local_catquizlab\local\attempt_history::FAILED],
+        'id ASC',
+        'id, reasoncode, detail',
+        0,
+        3
+    );
+    foreach ($samples as $sample) {
+        cli_writeln('    e.g. ' . ($sample->reasoncode ?? 'none') . ': ' . substr((string) $sample->detail, 0, 220));
+    }
     if ($navigation > 0) {
         cli_error($navigation . ' execution(s) failed on navigation or transport.');
     }

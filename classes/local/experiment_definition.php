@@ -165,6 +165,7 @@ class experiment_definition {
         self::validate_model($def, $errors, $warnings);
         self::validate_strategy($def, $errors);
         self::validate_pilot($def, $errors);
+        self::validate_cell_budgets($def, $errors);
         self::validate_pool($def, $errors);
         self::validate_persons($def, $errors, $warnings);
         self::validate_budgets($def, $errors);
@@ -299,6 +300,39 @@ class experiment_definition {
                 && (float) $se['min'] > (float) $se['max']
         ) {
             $errors[] = self::msg('def:mingtmax', 'budgets.se');
+        }
+    }
+
+    /**
+     * Budgets given to single cells of a sweep (#96): numbers, unlimited where
+     * a maximum is meant, and no minimum above its maximum.
+     *
+     * @param array $def The definition.
+     * @param array $errors Collected errors.
+     * @return void
+     */
+    protected static function validate_cell_budgets(array $def, array &$errors): void {
+        foreach ((array) ($def['budgetsbycell'] ?? []) as $cellkey => $levels) {
+            $levelfields = ['global' => ['minitems', 'maxitems'], 'subscale' => ['minitems', 'maxitems'], 'se' => ['min', 'max']];
+            foreach ($levelfields as $level => [$minfield, $maxfield]) {
+                $min = $levels[$level][$minfield] ?? null;
+                $max = $levels[$level][$maxfield] ?? null;
+                $path = 'budgetsbycell.' . $cellkey . '.' . $level;
+                foreach ([$minfield => $min, $maxfield => $max] as $field => $value) {
+                    if ($value === null || $value === '') {
+                        continue;
+                    }
+                    if ($field === 'maxitems' && self::is_unlimited($value)) {
+                        continue;
+                    }
+                    if (!is_numeric($value) || (float) $value < 0) {
+                        $errors[] = self::msg('def:negative', $path . '.' . $field);
+                    }
+                }
+                if (is_numeric($min) && is_numeric($max) && (float) $min > (float) $max) {
+                    $errors[] = self::msg('def:mingtmax', $path);
+                }
+            }
         }
     }
 

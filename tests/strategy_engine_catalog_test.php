@@ -212,4 +212,31 @@ final class strategy_engine_catalog_test extends \advanced_testcase {
         $result = (new \local_catquizlab\local\experiment_definition($definition))->validate();
         $this->assertFalse($result['valid']);
     }
+
+    /**
+     * A historic definition naming a strategy the engine does not play is refused by name (#97).
+     *
+     * @return void
+     */
+    public function test_a_historic_strategy_is_refused_by_name(): void {
+        $this->resetAfterTest();
+        $this->require_engine();
+
+        $definition = \local_catquizlab\local\experiment_definition::example_baseline();
+        $definition['strategy'] = 'balanced';
+        $result = (new \local_catquizlab\local\experiment_definition($definition))->validate();
+        $this->assertFalse($result['valid']);
+        $this->assertStringContainsString(strategy_catalog::label('balanced'), implode(' ', $result['errors']));
+
+        // In a sweep, too: every level is checked.
+        $definition['strategy'] = 'fastest';
+        $definition['sweep']['factors']['strategy'] = ['fastest', 'pilot'];
+        $result = (new \local_catquizlab\local\experiment_definition($definition))->validate();
+        $this->assertFalse($result['valid']);
+        $this->assertStringContainsString(strategy_catalog::label('pilot'), implode(' ', $result['errors']));
+
+        // A playable sweep passes.
+        $definition['sweep']['factors']['strategy'] = ['fastest', 'allsubs'];
+        $this->assertTrue((new \local_catquizlab\local\experiment_definition($definition))->validate()['valid']);
+    }
 }

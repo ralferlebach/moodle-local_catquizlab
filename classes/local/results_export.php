@@ -206,7 +206,47 @@ class results_export {
         'stopreached', 'runtimems',
         // How and where each sitting ended (#106).
         'endreasoncode', 'endreasonlabel', 'finalti', 'activescalesatend',
+        // How the true abilities were drawn, and the scale range they and the
+        // engine's estimates live in (#102) — on every row, so that a CSV
+        // without metadata still says it. Appended: no column moves.
+        'abilitydistribution', 'abilitymean', 'abilitysd', 'abilitymin', 'abilitymax',
     ];
+
+    /** @var array<int, array> Ability distribution and range by run, for this request. */
+    protected static array $abilities = [];
+
+    /**
+     * Forget what this request has looked up — for tests, which reuse run ids.
+     *
+     * @return void
+     */
+    public static function reset_caches(): void {
+        self::$abilities = [];
+    }
+
+    /**
+     * A run's ability distribution and scale range, as its definition sets them (#102).
+     *
+     * @param int $runid The run.
+     * @return array{distribution: string, mean: float, sd: ?float, min: float, max: float}
+     */
+    public static function run_ability(int $runid): array {
+        global $DB;
+
+        if (!isset(self::$abilities[$runid])) {
+            $record = $DB->get_record('local_catquizlab_run', ['id' => $runid]);
+            $d = ability_distribution::of($record ? run_registry::definition_for($record) : []);
+            self::$abilities[$runid] = [
+                'distribution' => (string) $d['distribution'],
+                'mean' => (float) $d['mean'],
+                'sd' => $d['distribution'] === ability_distribution::UNIFORM ? null : (float) $d['sd'],
+                'min' => (float) $d['min'],
+                'max' => (float) $d['max'],
+            ];
+        }
+
+        return self::$abilities[$runid];
+    }
 
     /**
      * One row per step, with SE and TI@n where they agree with the engine (#106).
@@ -265,6 +305,12 @@ class results_export {
                 // those, and "true"/"" would silently become a factor level.
                 $row[$column] = is_bool($value) ? (int) $value : $value;
             }
+            $ability = self::run_ability((int) $observation['runid']);
+            $row['abilitydistribution'] = $ability['distribution'];
+            $row['abilitymean'] = $ability['mean'];
+            $row['abilitysd'] = $ability['sd'];
+            $row['abilitymin'] = $ability['min'];
+            $row['abilitymax'] = $ability['max'];
             yield $row;
         }
     }
@@ -441,6 +487,10 @@ class results_export {
             'rows'          => $count,
             'columns'       => $dataset['columns'],
             'dispersion'    => $provenance['dispersion'],
+            // Per run: the distribution of the true abilities, its parameters,
+            // the share expected outside the range, and the range written to
+            // the engine's root scale (#102) — as the manifest records them.
+            'ability'       => self::ability_by_run($query),
             'exported'      => date('c'),
             'exportedby'    => (int) ($USER->id ?? 0),
             'plugin'        => [
@@ -457,6 +507,26 @@ class results_export {
             // rather than duplicating a lookup.
             'engine'        => ['available' => environment::engine_available()],
         ];
+    }
+
+    /**
+     * The ability block of every run in the selection, as in its manifest (#102).
+     *
+     * @param results_query $query The selection.
+     * @return array<int, array>
+     */
+    protected static function ability_by_run(results_query $query): array {
+        global $DB;
+
+        $out = [];
+        foreach (array_keys($query->runs()) as $runid) {
+            $record = $DB->get_record('local_catquizlab_run', ['id' => $runid]);
+            if ($record) {
+                $out[(int) $runid] = test_provisioner::effective_parameters(run_registry::definition_for($record))['ability'];
+            }
+        }
+
+        return $out;
     }
 
     /**

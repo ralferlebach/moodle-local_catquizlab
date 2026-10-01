@@ -60,6 +60,11 @@ final class results_scale_test extends \advanced_testcase {
      * @return void
      */
     public function test_the_evaluation_is_bounded(int $n, int $megabytes, int $seconds): void {
+        // Run ids are reused between the data sets; lookups cached by id must not carry over.
+        results_query::reset_caches();
+        results_export::reset_caches();
+        \local_catquizlab\local\engine_information::reset();
+
         global $DB, $PAGE;
         $this->resetAfterTest();
         $this->setAdminUser();
@@ -182,6 +187,37 @@ final class results_scale_test extends \advanced_testcase {
             },
             'test flow tab' => function () use ($filter): void {
                 (new \local_catquizlab\output\results_page(new results_query($filter), 'testflow', $filter))->render_tab();
+            },
+            // JSON, the one export #99 asked to be streamed that was not
+            // measured: kept only as a running count and a hash, then checked
+            // to be one valid document with every row.
+            'json download' => function () use ($filter, $n): void {
+                $size = 0;
+                $hash = hash_init('sha1');
+                $head = '';
+                $tail = '';
+                ob_start(static function (string $chunk) use (&$size, $hash, &$head, &$tail): string {
+                    $size += strlen($chunk);
+                    hash_update($hash, $chunk);
+                    $head = $head === '' ? substr($chunk, 0, 200) : $head;
+                    $tail = substr($tail . $chunk, -200);
+                    return '';
+                }, 8192);
+                results_export::stream(new results_query($filter), results_export::LEVEL_ATTEMPT, 'json');
+                ob_end_clean();
+                $this->assertStringStartsWith('{"metadata":', $head);
+                $this->assertStringEndsWith(']}', $tail);
+                $this->assertGreaterThan($n * 100, $size, 'every sitting written');
+            },
+            'subscale json' => function () use ($filter, $n): void {
+                $rows = 0;
+                ob_start(static function (string $chunk) use (&$rows): string {
+                    $rows += substr_count($chunk, '{"attemptid":');
+                    return '';
+                }, 8192);
+                results_export::stream(new results_query($filter), results_export::LEVEL_SUBSCALE, 'json');
+                ob_end_clean();
+                $this->assertSame(12 * $n, $rows, 'twelve subscale rows per sitting');
             },
             'csv download' => function () use ($filter): void {
                 // Discarded as it is written, as a browser would take it.

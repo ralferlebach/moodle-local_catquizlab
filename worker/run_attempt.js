@@ -159,7 +159,7 @@ async function playAttempt(browser, job) {
     currentAttemptId = job.attemptid;
 
     try {
-        await login(page, job.userid, job.username);
+        await login(page, job.userid, job.username, recorder);
         await gotoSettle(page, `${BASE_URL}/mod/adaptivequiz/view.php?id=${job.quizcmid}`);
         let state = await startAttempt(page, recorder);
 
@@ -297,42 +297,72 @@ async function playAttempt(browser, job) {
  * @param {string} username The username the server supplied for this job.
  * @returns {Promise<void>}
  */
-async function login(page, userid, username) {
+async function login(page, userid, username, recorder = null, base = BASE_URL) {
     if (LOGIN_MODE === 'urltemplate' && LOGIN_URL_TEMPLATE) {
         await gotoSettle(page, loginUrlFor(LOGIN_URL_TEMPLATE, userid));
         return;
     }
 
-    await gotoSettle(page, `${BASE_URL}/login/index.php`);
+    const name = username || usernameFor(userid);
+    const password = passwordFor(userid, LOGIN_SUFFIX);
 
-    // No username field means a session is already open. With an isolated
-    // context that should not happen, so it is reported rather than worked
-    // around: silently continuing would run the test as whoever is logged in.
-    if (!(await page.$('#username'))) {
-        throw new Error('The login page offered no username field; a session is already open.');
-    }
+    // Twice at most. Moodle answers "Invalid login" for a wrong password and
+    // for a login token its session no longer holds — and the latter is
+    // transient: the same credentials succeeded minutes later on a retried
+    // execution, which cost a whole execution and its retry delay. A fresh
+    // login page brings a fresh token. A second refusal is real and reported.
+    for (let round = 1; round <= 2; round++) {
+        await gotoSettle(page, `${base}/login/index.php`);
 
-    // The server supplies the username, because the provisioner chooses it and
-    // makes it unique per run. Deriving it here produced catlab_user_<id> and
-    // no such account ever existed. The fallback keeps this working against an
-    // older server that does not send one yet.
-    await page.type('#username', username || usernameFor(userid));
-    await page.type('#password', passwordFor(userid, LOGIN_SUFFIX));
-    await Promise.all([
-        clickFirst(page, ['#loginbtn', 'button[type="submit"]', 'input[type="submit"]']),
-        page.waitForNavigation({waitUntil: 'networkidle2'}).catch(() => {}),
-    ]);
+        // No username field means a session is already open. With an isolated
+        // context that should not happen, so it is reported rather than worked
+        // around: silently continuing would run the test as whoever is logged in.
+        if (!(await page.$('#username'))) {
+            throw new Error('The login page offered no username field; a session is already open.');
+        }
 
-    // A failed login left the worker on the login page, where its start-attempt
-    // selectors then matched the login button itself: it clicked away, found no
-    // question and reported that the attempt never started. The real cause —
-    // wrong credentials — never appeared anywhere.
-    if (page.url().includes('/login/')) {
+        // Set, not typed: typing appends to whatever the field holds — Moodle
+        // refills the username after a failed login — and keystrokes follow
+        // the focus, which the page's own script may move while they arrive.
+        await page.$eval('#username', (el, value) => {
+            el.value = value;
+        }, name);
+        await page.$eval('#password', (el, value) => {
+            el.value = value;
+        }, password);
+        // Click and navigation together, and a navigation that does not come
+        // is said, not swallowed (#100): it is recorded, and named in the
+        // error should the login fail.
+        const [navigation] = await Promise.allSettled([
+            page.waitForNavigation({waitUntil: 'networkidle2', timeout: 30000}),
+            clickFirst(page, ['#loginbtn', 'button[type="submit"]', 'input[type="submit"]']),
+        ]);
+        const stalled = navigation.status === 'rejected'
+            ? (navigation.reason && navigation.reason.message) || 'no navigation'
+            : '';
+        if (stalled && recorder) {
+            recorder.event('navigation-failed', `login: ${stalled}`);
+        }
+
+        // A failed login left the worker on the login page, where its start-attempt
+        // selectors then matched the login button itself: it clicked away, found no
+        // question and reported that the attempt never started. The real cause —
+        // wrong credentials — never appeared anywhere.
+        if (!page.url().includes('/login/')) {
+            return;
+        }
         const notice = await page.evaluate(() => {
             const el = document.querySelector('.loginerrors, .alert-danger, #loginerrormessage');
             return el ? el.innerText.trim() : '';
         });
-        throw new Error(`Login as ${username || usernameFor(userid)} failed${notice ? ': ' + notice : '.'}`);
+        if (round === 1) {
+            if (recorder) {
+                recorder.event('login-retried', `${name}: ${notice || 'still on the login page'}`);
+            }
+            continue;
+        }
+        throw new Error(`Login as ${name} failed${notice ? ': ' + notice : '.'}`
+            + (stalled ? ` (navigation after submit: ${stalled})` : ''));
     }
 }
 
@@ -1143,6 +1173,7 @@ function describeTransportError(wsfunction, url, error, elapsedms, status, who) 
 }
 
 module.exports = {
+    login,
     describeTransportError,
     artefactPath,
     selfTest,

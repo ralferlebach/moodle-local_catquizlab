@@ -207,21 +207,29 @@
             <table class="table table-sm small">
                 <thead>
                     <tr>
+                        <th scope="col">{{#str}}preview:cell, local_catquizlab{{/str}}</th>
                         <th scope="col">{{#str}}form:strategy, local_catquizlab{{/str}}</th>
+                        <th scope="col">{{#str}}form:model, local_catquizlab{{/str}}</th>
                         <th scope="col">{{#str}}form:globalmin, local_catquizlab{{/str}}</th>
                         <th scope="col">{{#str}}form:globalmax, local_catquizlab{{/str}}</th>
                         <th scope="col">{{#str}}form:subscalemin, local_catquizlab{{/str}}</th>
                         <th scope="col">{{#str}}form:subscalemax, local_catquizlab{{/str}}</th>
+                        <th scope="col">{{#str}}form:semin, local_catquizlab{{/str}}</th>
+                        <th scope="col">{{#str}}form:semax, local_catquizlab{{/str}}</th>
                     </tr>
                 </thead>
                 <tbody>
                     {{#budgetrows}}
                         <tr>
+                            <td class="small">{{factors}}{{#cellbudget}} <span class="badge badge-warning" data-region="catquizlab-cellbudget">{{#str}}preview:cellbudget, local_catquizlab{{/str}}</span>{{/cellbudget}}</td>
                             <td>{{strategy}}{{#overridden}} <span class="badge badge-info">{{#str}}preview:ownbudget, local_catquizlab{{/str}}</span>{{/overridden}}</td>
+                            <td>{{model}}</td>
                             <td>{{globalmin}}</td>
                             <td>{{globalmax}}</td>
                             <td>{{subscalemin}}</td>
                             <td>{{subscalemax}}</td>
+                            <td>{{semin}}</td>
+                            <td>{{semax}}</td>
                         </tr>
                     {{/budgetrows}}
                 </tbody>
