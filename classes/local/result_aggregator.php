@@ -96,38 +96,28 @@ class result_aggregator {
      * @return array Attempts with truetheta, esttheta, se, nitems, items and stratum.
      */
     protected static function collect_attempts(int $runid): array {
-        global $DB;
-
-        $sql = "SELECT a.id, a.tracejson, a.runtimems, p.profilejson, p.stratum
-                  FROM {local_catquizlab_attempt} a
-                  JOIN {local_catquizlab_person} p ON p.id = a.personid
-                 WHERE a.runid = :runid AND a.tracejson IS NOT NULL";
-        $rows = $DB->get_records_sql($sql, ['runid' => $runid]);
-
+        // From the one place every view reads (#118): the same end, the same
+        // validity, from the engine's code and the run's design — not from a
+        // list of English stop texts, which "You ran out of questions" and
+        // "Keine weiteren Fragen" both passed by.
+        $query = new results_query(['runid' => $runid, 'validity' => result_validity::ALL]);
         $attempts = [];
-        foreach ($rows as $row) {
-            $trace = json_decode((string) $row->tracejson, true);
-            if (!is_array($trace)) {
-                continue;
-            }
-            $profile = json_decode((string) $row->profilejson, true);
-            $items = (isset($trace['items']) && is_array($trace['items'])) ? $trace['items'] : [];
-
+        foreach ($query->each_observation() as $row) {
             $attempts[] = [
-                'truetheta'   => (float) (is_array($profile) ? ($profile['global'] ?? 0.0) : 0.0),
-                'esttheta'    => (float) ($trace['finaltheta'] ?? 0.0),
-                'se'          => isset($trace['finalse']) ? (float) $trace['finalse'] : null,
-                'nitems'      => count($items),
-                'items'       => $items,
-                'stratum'     => (string) $row->stratum,
-                // The three outcomes the article requires that were computed
-                // for the screen but never persisted, so nothing downstream
-                // could aggregate them.
-                'stopreason'  => (string) ($trace['stopreason'] ?? ''),
-                'stopreached' => results_query::stop_reached((string) ($trace['stopreason'] ?? '')),
-                'runtimems'   => (int) ($row->runtimems ?? 0),
+                'truetheta'   => (float) $row['truetheta'],
+                'esttheta'    => (float) $row['esttheta'],
+                'se'          => $row['se'],
+                'nitems'      => (int) $row['nitems'],
+                'items'       => (array) ($row['items'] ?? []),
+                // The person's stratum, as before: a run's people need not share one.
+                'stratum'     => (string) ($row['personstratum'] !== '' ? $row['personstratum'] : $row['stratum']),
+                'stopreason'  => (string) $row['endreasoncode'],
+                'stopreached' => (bool) $row['stopreached'],
+                'valid'       => (bool) $row['valid'],
+                'runtimems'   => (int) ($row['runtimems'] ?? 0),
             ];
         }
+
         return $attempts;
     }
 
@@ -145,7 +135,10 @@ class result_aggregator {
         $now = time();
         $DB->delete_records('local_catquizlab_result', ['runid' => $runid]);
 
-        $count = self::write_scope($runid, 'run', metrics::summarise($attempts, $poolsize), $now);
+        // Figures from valid sittings only; the process — how many stopped as
+        // planned, why the others ended, how many were valid — from all (#118).
+        $valid = array_values(array_filter($attempts, static fn(array $a): bool => !empty($a['valid'])));
+        $count = self::write_scope($runid, 'run', metrics::summarise($valid, $poolsize), $now);
         $count += self::write_process_metrics($runid, 'run', $attempts, $now);
 
         $bystratum = [];
@@ -153,7 +146,8 @@ class result_aggregator {
             $bystratum[$attempt['stratum'] ?? 'unknown'][] = $attempt;
         }
         foreach ($bystratum as $stratum => $group) {
-            $count += self::write_scope($runid, 'stratum:' . $stratum, metrics::summarise($group, $poolsize), $now);
+            $validgroup = array_values(array_filter($group, static fn(array $a): bool => !empty($a['valid'])));
+            $count += self::write_scope($runid, 'stratum:' . $stratum, metrics::summarise($validgroup, $poolsize), $now);
             $count += self::write_process_metrics($runid, 'stratum:' . $stratum, $group, $now);
         }
 
@@ -210,7 +204,24 @@ class result_aggregator {
         $mean = $runtimes === [] ? null : round(array_sum($runtimes) / count($runtimes), 3);
         self::write_result($runid, 'runtimems', $scope, $mean, null, $now);
 
-        return 2;
+        // The share of valid sittings, and why the others are not (#118).
+        $validcount = count(array_filter($attempts, static fn(array $a): bool => !empty($a['valid'])));
+        $excluded = [];
+        foreach ($attempts as $attempt) {
+            if (empty($attempt['valid'])) {
+                $excluded[$attempt['stopreason']] = ($excluded[$attempt['stopreason']] ?? 0) + 1;
+            }
+        }
+        self::write_result(
+            $runid,
+            'validshare',
+            $scope,
+            round($validcount / $n, 6),
+            json_encode(['valid' => $validcount, 'total' => $n, 'excluded' => $excluded], JSON_UNESCAPED_SLASHES),
+            $now
+        );
+
+        return 3;
     }
 
     /**

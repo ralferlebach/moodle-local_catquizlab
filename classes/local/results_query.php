@@ -41,6 +41,10 @@ class results_query {
     public const FILTERS = [
         'experimentid', 'tier', 'model', 'strategy', 'variant', 'stratum', 'severity',
         'replication', 'cellkey', 'budget',
+        // One run, and which sittings by validity (#118). Both were dropped here
+        // without a word: a query for one run read every run, and "all" read
+        // only the valid ones.
+        'runid', 'validity',
     ];
 
     /** @var string Dispersion reported as the standard deviation over replications. */
@@ -93,6 +97,11 @@ class results_query {
         $conditions = [];
         if (!empty($this->filter['experimentid'])) {
             $conditions['experimentid'] = (int) $this->filter['experimentid'];
+        }
+        // One run: asked for by the aggregator and by the export's context, and
+        // ignored until 0.7.28 — a query for one run read every run (#118).
+        if (!empty($this->filter['runid'])) {
+            $conditions['id'] = (int) $this->filter['runid'];
         }
         if (!empty($this->filter['replication'])) {
             $conditions['replication'] = (int) $this->filter['replication'];
@@ -249,6 +258,96 @@ class results_query {
         }
 
         return $subtree;
+    }
+
+    /** @var array The counts of a pass before it has read anything. */
+    protected const EMPTY_COUNTS = [
+        'total' => 0, 'valid' => 0, 'invalid' => 0, 'designstops' => 0, 'reasons' => [], 'bystrategy' => [], 'bycell' => [],
+    ];
+
+    /** @var array<int, ?int> The engine's status number by engine attempt, for the batch being read. */
+    protected array $enginestatus = [];
+
+    /** @var array<int, array> What each run's design says about its end: min, max, SE target, strategy, pool. */
+    protected array $runfacts = [];
+
+    /** @var array Every collected sitting the last whole pass read, by validity and end — before any filter. */
+    protected array $validitycounts = self::EMPTY_COUNTS;
+
+    /**
+     * The facts of a run's design that decide whether an end is a regular one (#118).
+     *
+     * A run without a definition — from before definitions were kept — has no
+     * minimum to hold it to: nothing is assumed for it.
+     *
+     * @param int $runid The run.
+     * @return array
+     */
+    protected function run_facts(int $runid): array {
+        global $DB;
+
+        if (!isset($this->runfacts[$runid])) {
+            $record = $DB->get_record('local_catquizlab_run', ['id' => $runid]);
+            $definition = $record ? run_registry::definition_for($record) : [];
+            if ($definition === []) {
+                $this->runfacts[$runid] = [];
+            } else {
+                $options = test_provisioner::options_from_definition($definition);
+                $strategy = (string) ($definition['strategy'] ?? '');
+                $this->runfacts[$runid] = [
+                    'strategy' => $strategy,
+                    'minitems' => strategy_catalog::uses($strategy, 'globalmin') ? (int) $options['minquestions'] : 0,
+                    'maxitems' => (int) $options['maxquestions'],
+                    'semin' => strategy_catalog::uses_standard_error($strategy) ? (float) $options['se_min'] : null,
+                    'poolsize' => $DB->count_records('local_catquizlab_item', ['runid' => $runid]),
+                ];
+            }
+        }
+
+        return $this->runfacts[$runid];
+    }
+
+    /**
+     * The tier of a run row as the observation carries it.
+     *
+     * @param array $run A run row from runs().
+     * @return string
+     */
+    protected function tier_of_run(array $run): string {
+        return (string) ($run['tier'] ?? '');
+    }
+
+    /**
+     * The success of the stop rules: sittings that ended on a criterion, of all collected (#118).
+     *
+     * Of all, not of the valid ones: those are the ones that may enter the
+     * figures, and an end before the minimum is exactly a stop rule not met.
+     *
+     * @param string $level '' for the whole selection, 'bystrategy' or 'bycell'.
+     * @param string $key The strategy or the cell key.
+     * @return float|null Percent, null where nothing was collected.
+     */
+    public function stop_success(string $level = '', string $key = ''): ?float {
+        $counts = $this->validity_counts();
+        $node = $level === '' ? $counts : ($counts[$level][$key] ?? ['total' => 0, 'designstops' => 0]);
+
+        return (int) $node['total'] === 0 ? null : 100.0 * (int) $node['designstops'] / (int) $node['total'];
+    }
+
+    /**
+     * How many sittings the last whole pass read: valid, invalid, by end — before any filter (#118).
+     *
+     * @return array{total: int, valid: int, invalid: int, designstops: int, reasons: array<string, int>}
+     */
+    public function validity_counts(): array {
+        if ($this->validitycounts['total'] === 0) {
+            foreach ($this->each_observation() as $unused) {
+                // A pass for its counts.
+                continue;
+            }
+        }
+
+        return $this->validitycounts;
     }
 
     /** @var int[]|null Restrict the observations to these sittings, or null for all. */
@@ -442,6 +541,11 @@ class results_query {
 
         self::$detailfor = '';
         self::$detail = [];
+        // The counts are those of this pass — of a whole one, not of the few
+        // sittings a comparison fetches as themselves.
+        if ($this->onlyattempts === null) {
+            $this->validitycounts = self::EMPTY_COUNTS;
+        }
 
         $runs = $this->runs();
         if ($runs === []) {
@@ -461,7 +565,7 @@ class results_query {
         // per person and the row never reads it — detail() fetches it for the
         // one observation that needs it. Caching it for every person of a run
         // is what made the stream grow to 48 MB while keeping no rows.
-        $personfields = 'id, twinid, abilityglobal';
+        $personfields = 'id, twinid, abilityglobal, stratum';
 
         // A recordset, and only sittings that have something to report. Every
         // sitting of every run used to be loaded at once — nine thousand rows
@@ -499,7 +603,7 @@ class results_query {
                     $where,
                     $batchparams,
                     'id ASC',
-                    'id, runid, personid, runtimems, tracejson',
+                    'id, runid, personid, runtimems, tracejson, engineattemptid',
                     0,
                     self::BATCH
                 );
@@ -507,6 +611,23 @@ class results_query {
                 // The end reason of every sitting in the batch, in one query
                 // (#106): the latest code each one's history carries.
                 $this->endreasons = [];
+                // The engine's own end code of every sitting in the batch (#118):
+                // a number, whatever language the stop text was written in.
+                $this->enginestatus = [];
+                $engineids = array_filter(array_map(static fn($a): int => (int) ($a->engineattemptid ?? 0), $batch));
+                if ($engineids !== [] && $DB->get_manager()->table_exists('local_catquiz_attempts')) {
+                    [$inengine, $engineparams] = $DB->get_in_or_equal(array_values($engineids), SQL_PARAMS_NAMED, 'eng');
+                    $statuses = $DB->get_records_select_menu(
+                        'local_catquiz_attempts',
+                        "component = 'adaptivequiz' AND attemptid " . $inengine,
+                        $engineparams,
+                        '',
+                        'attemptid, status'
+                    );
+                    foreach ($statuses as $engineattemptid => $status) {
+                        $this->enginestatus[(int) $engineattemptid] = $status === null ? null : (int) $status;
+                    }
+                }
                 if ($batch !== [] && $DB->get_manager()->table_exists('local_catquizlab_attemptlog')) {
                     [$inreason, $reasonparams] = $DB->get_in_or_equal(array_keys($batch), SQL_PARAMS_NAMED, 'att');
                     $codes = $DB->get_records_select(
@@ -565,12 +686,52 @@ class results_query {
         $esttheta = (float) ($trace['finaltheta'] ?? 0.0);
         $se = isset($trace['finalse']) ? (float) $trace['finalse'] : null;
 
+        // How it ended and whether its result counts, decided here for every
+        // view alike (#118) — from the engine's code and the run's design, not
+        // from the code stored at collection, which knew neither the minimum
+        // number of questions nor the engine's code.
+        $run = $runs[(int) $attempt->runid];
+        $facts = $this->run_facts((int) $attempt->runid) + [
+            'played' => (int) ($trace['nitems'] ?? count((array) ($trace['items'] ?? []))),
+            'finalse' => $se,
+            'dropped' => count((array) ($trace['progress']['droppedscales'] ?? [])),
+            'enginestatus' => $trace['enginestatus']
+                ?? ($this->enginestatus[(int) ($attempt->engineattemptid ?? 0)] ?? null),
+        ];
+        $endcode = reason_catalog::outcome((string) ($trace['stopreason'] ?? ''), $facts);
+        $validity = result_validity::evaluate($endcode);
+        if ($this->onlyattempts === null) {
+            $this->validitycounts['total']++;
+            $this->validitycounts[$validity['valid'] ? 'valid' : 'invalid']++;
+            $this->validitycounts['designstops'] += $validity['criterionstop'] ? 1 : 0;
+            $this->validitycounts['reasons'][$endcode] = ($this->validitycounts['reasons'][$endcode] ?? 0) + 1;
+            // Per strategy and per cell as well: the success of the stop rules is
+            // a share of all sittings, invalid ones included, at every level.
+            // The cell as the overview keys it: tier, strategy, model, variant, stratum, severity.
+            $cell = implode('|', [$this->tier_of_run($run), $run['strategy'], $run['model'], $run['variant'],
+                $run['stratum'], $run['severity']]);
+            foreach (['bystrategy' => (string) $run['strategy'], 'bycell' => $cell] as $level => $key) {
+                $this->validitycounts[$level][$key]['total'] = ($this->validitycounts[$level][$key]['total'] ?? 0) + 1;
+                $this->validitycounts[$level][$key]['designstops'] = ($this->validitycounts[$level][$key]['designstops'] ?? 0)
+                    + ($validity['criterionstop'] ? 1 : 0);
+            }
+        }
+        $mode = (string) ($this->filter['validity'] ?? result_validity::VALID);
+        if (
+            ($mode === result_validity::VALID && !$validity['valid'])
+            || ($mode === result_validity::INVALID && $validity['valid'])
+        ) {
+            return;
+        }
+
         yield [
             'nscales'     => count((array) ($trace['scaleabilities'] ?? [])),
             'attemptid'   => (int) $attempt->id,
             'runid'       => (int) $attempt->runid,
             'personid'    => (int) $attempt->personid,
             'twinid'      => (string) ($person->twinid ?? ''),
+            // The person's own stratum: a run's people need not all share the run's.
+            'personstratum' => (string) ($person->stratum ?? ''),
             'experimentid' => $run['experimentid'],
             'experiment'  => $run['experiment'],
             'cellkey'     => $run['cellkey'],
@@ -589,17 +750,24 @@ class results_query {
             'truetheta'   => $truetheta,
             'esttheta'    => $esttheta,
             'error'       => $esttheta - $truetheta,
-            'nitems'      => (int) ($trace['nitems'] ?? 0),
+            'nitems'      => (int) ($trace['nitems'] ?? count((array) ($trace['items'] ?? []))),
             'se'          => $se,
             'stopreason'  => (string) ($trace['stopreason'] ?? ''),
             // The stop rule succeeded when the engine stopped on a
             // criterion of its own rather than running out of items.
-            'stopreached' => self::stop_reached((string) ($trace['stopreason'] ?? '')),
+            // A criterion met — what the stop rules' success counts — and,
+            // apart from it, any planned end, the maximum included (#118).
+            'stopreached' => $validity['criterionstop'],
+            'designstopreached' => $validity['designstop'],
+            'enginefinished' => $validity['enginefinished'],
+            'valid' => $validity['valid'],
+            'validityreason' => $validity['reason'],
             'runtimems'   => (int) ($attempt->runtimems ?? 0),
             // How it ended, as a code and in words, and where it ended (#106).
-            'endreasoncode'  => $this->endreasons[(int) $attempt->id] ?? '',
-            'endreasonlabel' => isset($this->endreasons[(int) $attempt->id])
-                ? reason_catalog::label($this->endreasons[(int) $attempt->id])
+            'endreasoncode'  => $endcode,
+            'storedreasoncode' => $this->endreasons[(int) $attempt->id] ?? '',
+            'endreasonlabel' => $endcode !== ''
+                ? reason_catalog::label($endcode)
                 : '',
             'finalti'        => isset($trace['information']) && is_numeric($trace['information'])
                 ? (float) $trace['information']

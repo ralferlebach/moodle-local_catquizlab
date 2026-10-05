@@ -6,6 +6,83 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.7.28] — 2026-10-05 — #118: an end before the minimum is not a regular one
+
+### What Experiment 12 showed, and more
+22 of 50 `fastest` sittings ended after 5 to 14 questions — the minimum was 15 —
+with the engine out of questions, many with a standard error below the target.
+The results counted them as precision successes. Checking the cause found more:
+
+- **"No remaining questions" was not recognised in any language.** The engine's
+  text is "You ran out of questions" in English, "Keine weiteren Fragen" in
+  German; the patterns matched neither. Every such end fell to the SE target, a
+  subscale or pool rule, or "finished_other".
+- **The classification knew no minimum number of questions** and asked the SE
+  target before the engine's own reason.
+- **`results_query` dropped two filters without a word:** `runid` — a query for
+  one run read every run (107 sittings instead of 15 locally) — and the new
+  `validity`.
+
+### The engine's code, not its text
+The engine keeps a language-independent end code beside its stop text, in
+`local_catquiz_attempts.status` (1 = out of questions, 4 = maximum reached, …).
+New traces carry it; for traces collected before, the results read it from the
+engine's table, batch by batch — so existing results, Experiment 12 included,
+are classified anew without collecting again. Where there is no number, the
+text is matched against the engine's strings in every installed language.
+
+### The classification
+Before the minimum number of questions no end is a regular one: not a standard
+error at its target, since the design does not allow a stop there. Out of
+questions before it is `no_eligible_item_before_minimum`, any other end
+`ended_before_minimum`; both make a result invalid. Strategies without a
+minimum — the classical test — are not held to one.
+
+### Three things kept apart
+Per sitting: did the engine finish it, did it end as the design planned (a stop
+rule met), may its result go into the figures (`result_validity`). In the
+export and the raw data as `enginefinished`, `designstopreached`, `valid`,
+`validityreason`, appended.
+
+### The results
+Every aggregated view uses valid sittings only by default; the raw data shows
+all, marked; `validity=valid|invalid|all` chooses. Above every view: "Valid
+sittings: 28 / 50 (56.0 %) · excluded — No eligible item left before the
+minimum number of questions: 22 / 50 (44.0 %)". The test-length plot says what
+it leaves out. The success of the stop rules is a share of all sittings — in the
+overview, per strategy and per cell — so 22 ends before the minimum can no
+longer read as 100 %. The aggregator and the collector classify the same way;
+the aggregator stores `validshare` with the reasons.
+
+### Stop-rule success keeps its meaning
+"Stopped on a criterion, not on exhaustion", as documented: the standard error
+at its target, a subscale rule, the full fixed form — not the maximum number of
+questions, not running out of items. A first version of this release counted the
+maximum as a success, changing a documented metric silently; it was taken back.
+What #118 adds is kept apart: `designstopreached` marks any planned end, the
+maximum included.
+
+### Found while making the existing tests pass
+- The stop keys of older traces (`standarderror`, `maxquestions`, `nomoreitems`,
+  …), which the old list of stop texts knew, are recognised as aliases — without
+  them they would have fallen to "finished_other".
+- The aggregator now reads its sittings from the same place as every view; per
+  stratum it keeps the person's stratum, as before, and the item count falls
+  back to the item list where a trace has no count.
+- Test data whose runs had a minimum of 10 questions and traces of 2 or 3 items
+  — invalid under the new rule, rightly — were given a minimum they meet, and a
+  test run with an adaptive test's stop reasons an adaptive strategy; the rule
+  itself was not softened for them.
+
+### Tests
+The issue's cases (SE 0.20 after 7 of 15 and after 15, out of questions after
+17, maximum after 35); the engine's text whatever its language; and Experiment
+12's run as a regression test — the observed lengths of the 22, one of them
+from before with its code only in the engine's table: 28 valid, 22 excluded,
+stop rules met in 56 %, said above the figures.
+
+---
+
 ## [0.7.27] — 2026-10-02 — #117: people, twins and sittings, apart; plan against actual
 
 ### The plan, before anything is created

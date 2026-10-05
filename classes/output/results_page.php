@@ -26,6 +26,7 @@ namespace local_catquizlab\output;
 
 use local_catquizlab\local\local_analysis;
 use local_catquizlab\local\metrics;
+use local_catquizlab\local\reason_catalog;
 use local_catquizlab\local\results_export;
 use local_catquizlab\local\results_query;
 use local_catquizlab\local\stream_summary;
@@ -347,7 +348,7 @@ class results_page {
             'small text-muted mb-1'
         );
 
-        $out = $problems . $out . $population;
+        $out = $problems . $out . $population . $this->render_coverage();
 
         // What the ground truth was drawn from, named (#105): mean and
         // standard deviation, distribution and range of the selected runs.
@@ -446,6 +447,15 @@ class results_page {
         $chart->set_axes(axis_scale::INTEGER, axis_scale::LINEAR, ['yfromzero' => true, 'jitter' => 0.15]);
         $chart->set_basis($this->plot_basis());
         $this->configure_chart($chart, 'lengthprecision');
+        // What the plot leaves out (#118): a short test that ended before the
+        // minimum would read as an efficient one.
+        $counts = $this->query->validity_counts();
+        if ($counts['invalid'] > 0 && ($this->filter['validity'] ?? 'valid') === 'valid') {
+            $chart->add_note(get_string('chart:excludedinvalid', 'local_catquizlab', (object) [
+                'n' => $counts['invalid'], 'total' => $counts['total'],
+                'percent' => format_float(100 * $counts['invalid'] / $counts['total'], 1),
+            ]));
+        }
         $chart->set_points($overview['points'])
             ->set_description(get_string('chart:pointisattempt', $component));
         $semin = $this->target_se();
@@ -486,7 +496,7 @@ class results_page {
             ['metric:bias', $this->format_stat($all->describe('error'))],
             ['metric:rmse', format_float($all->rmse(), 4)],
             ['metric:correlation', $this->format_number($all->correlation())],
-            ['metric:stopsuccess', format_float($all->stop_rate(), 1) . '&nbsp;%'],
+            ['metric:stopsuccess', $this->format_percent($this->query->stop_success())],
             ['metric:concentration', $this->format_number($exposure['concentration']['gini'] ?? null)],
             ['metric:runtime', $this->format_runtime($all->describe('runtimems'))],
         ];
@@ -535,7 +545,9 @@ class results_page {
                 $this->format_stat($summary->describe('se')),
                 $this->format_stat($summary->describe('error')),
                 format_float($summary->rmse(), 4),
-                format_float($summary->stop_rate(), 1) . '&nbsp;%',
+                // Of all sittings, invalid ones included (#118).
+                $this->format_percent($groupby === 'strategy'
+                    ? $this->query->stop_success('bystrategy', (string) $key) : $summary->stop_rate()),
             ];
         }
 
@@ -583,7 +595,7 @@ class results_page {
                 $this->format_stat($summary->describe('error')),
                 format_float($summary->rmse(), 4),
                 $this->format_number($summary->correlation()),
-                format_float($summary->stop_rate(), 1) . '&nbsp;%',
+                $this->format_percent($this->query->stop_success('bycell', (string) $key)),
                 $this->format_runtime($summary->describe('runtimems')),
             ];
         }
@@ -1827,6 +1839,48 @@ class results_page {
      */
     protected function run_maxitems(int $runid): int {
         return results_query::run_maxitems($runid);
+    }
+
+    /**
+     * Which sittings the figures are made of, and which were left out and why (#118).
+     *
+     * @return string
+     */
+    protected function render_coverage(): string {
+        $component = 'local_catquizlab';
+        $counts = $this->query->validity_counts();
+        if ($counts['total'] === 0) {
+            return '';
+        }
+        $percent = static fn(int $n): string => format_float(100 * $n / $counts['total'], 1);
+        $parts = [get_string('validity:coverage', $component, (object) [
+            'valid' => $counts['valid'], 'total' => $counts['total'], 'percent' => $percent($counts['valid']),
+        ])];
+        foreach ($counts['reasons'] as $code => $n) {
+            if (in_array($code, reason_catalog::INVALID_OUTCOMES, true)) {
+                $parts[] = get_string('validity:excluded', $component, (object) [
+                    'reason' => reason_catalog::label($code), 'n' => $n, 'total' => $counts['total'], 'percent' => $percent($n),
+                ]);
+            }
+        }
+        $mode = (string) ($this->filter['validity'] ?? 'valid');
+        $parts[] = get_string('validity:shown_' . $mode, $component);
+
+        return \html_writer::div(
+            implode(' · ', $parts),
+            'small mb-1' . ($counts['invalid'] > 0 ? ' text-warning' : ' text-muted'),
+            ['data-region' => 'catquizlab-coverage']
+        );
+    }
+
+    /**
+     * A percentage, or a dash where there is none.
+     *
+     * @param float|null $value Percent.
+     * @return string
+     */
+    protected function format_percent(?float $value): string {
+        return $value === null ? '–' : format_float($value, 1) . '&nbsp;%';
     }
 
     /**

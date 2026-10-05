@@ -214,6 +214,9 @@ class results_export {
         // final estimate, n the test length — from the engine. finalti above
         // is the information of the items played.
         'finaltiatn',
+        // Three things kept apart (#118): did the engine finish, did it end as
+        // the design planned, may it go into the figures — and why not.
+        'valid', 'validityreason', 'enginefinished', 'designstopreached',
     ];
 
     /** @var array<int, array> Ability distribution and range by run, for this request. */
@@ -348,6 +351,10 @@ class results_export {
                 $row[$column] = is_bool($value) ? (int) $value : $value;
             }
             $row['finaltiatn'] = self::final_ti_at_n($observation);
+            $row['valid'] = !empty($observation['valid']) ? 1 : 0;
+            $row['validityreason'] = (string) ($observation['validityreason'] ?? '');
+            $row['enginefinished'] = !empty($observation['enginefinished']) ? 1 : 0;
+            $row['designstopreached'] = !empty($observation['designstopreached']) ? 1 : 0;
             $ability = self::run_ability((int) $observation['runid']);
             $row['abilitydistribution'] = $ability['distribution'];
             $row['abilitymean'] = $ability['mean'];

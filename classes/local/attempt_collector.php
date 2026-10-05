@@ -118,6 +118,7 @@ class attempt_collector {
             $engine['responses'],
             $engine['stopreason']
         );
+        $trace['enginestatus'] = $engine['enginestatus'] ?? null;
         $debug = $engine['debug'] ?? [];
         // The debug_info blob comes first, since it carries the whole path; the
         // attempt row is the fallback that exists on every site.
@@ -217,10 +218,17 @@ class attempt_collector {
         $runid = (int) $DB->get_field('local_catquizlab_attempt', 'runid', ['id' => $attemptid]);
         $runrecord = $DB->get_record('local_catquizlab_run', ['id' => $runid]);
         $rundefinition = $runrecord ? run_registry::definition_for($runrecord) : [];
+        $options = $rundefinition === [] ? [] : test_provisioner::options_from_definition($rundefinition);
+        $strategy = (string) ($rundefinition['strategy'] ?? '');
         $code = attempt_history::record_outcome_reason($attemptid, (string) ($trace['stopreason'] ?? ''), [
-            'strategy' => (string) ($rundefinition['strategy'] ?? ''),
+            'strategy' => $strategy,
             'finalse'  => $trace['finalse'] ?? null,
             'semin'    => $rundefinition['budgets']['se']['min'] ?? null,
+            // The design's minimum, and the engine's code (#118): without them an
+            // end after seven of fifteen questions read as a standard error reached.
+            'minitems' => $options !== [] && strategy_catalog::uses($strategy, 'globalmin') ? (int) $options['minquestions'] : 0,
+            'maxitems' => $options !== [] ? (int) $options['maxquestions'] : 0,
+            'enginestatus' => $trace['enginestatus'] ?? null,
             'dropped'  => count((array) ($trace['progress']['droppedscales'] ?? [])),
             'played'   => (int) ($trace['nitems'] ?? count((array) ($trace['items'] ?? []))),
             'poolsize' => $DB->count_records('local_catquizlab_item', ['runid' => $runid]),
@@ -284,6 +292,9 @@ class attempt_collector {
             'finalse'    => $finalse,
             'responses'  => self::read_responses((int) $aq->uniqueid),
             'stopreason' => (string) ($aq->attemptstopcriteria ?? ''),
+            // The engine's own end code beside its text (#118): the text is in
+            // the language of the moment, the number is not.
+            'enginestatus' => ($catquiz && $catquiz->status !== null) ? (int) $catquiz->status : null,
             'debug'      => self::parse_debug_info(
                 (string) ($catquiz->debug_info ?? ''),
                 (int) ($catquiz->contextid ?? 0)
