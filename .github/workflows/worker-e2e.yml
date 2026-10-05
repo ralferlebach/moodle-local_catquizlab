@@ -203,10 +203,13 @@ jobs:
 
       - name: Play one attempt through the real UI
         working-directory: moodle/local/catquizlab/worker
+        # The token in the environment, not on the command line, where every
+        # process listing shows it (#111).
+        env:
+          CATQUIZLAB_WORKER_TOKEN: ${{ steps.prepare.outputs.token }}
         run: |
           node run_attempt.js \
               --base-url=http://127.0.0.1:8000 \
-              --token='${{ steps.prepare.outputs.token }}' \
               --max-jobs=1
 
       - name: Verify the queue reports the attempt as finished

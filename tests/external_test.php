@@ -283,4 +283,50 @@ final class external_test extends \advanced_testcase {
         $this->assertContains($verdict['reason'], ['no-test-instance', 'no-simulated-person', 'engine-missing']);
         $this->assertNull($verdict['exception']);
     }
+
+    /**
+     * A failure report with a large diagnosis is stored whole, with what was cut and where the rest is (#111).
+     *
+     * @return void
+     */
+    public function test_a_large_diagnosis_is_stored_with_its_failure(): void {
+        global $DB;
+        $this->resetAfterTest();
+        $this->setAdminUser();
+
+        /** @var \local_catquizlab_generator $generator */
+        $generator = $this->getDataGenerator()->get_plugin_generator('local_catquizlab');
+        $run = $generator->create_run();
+        $attemptid = (int) $DB->insert_record('local_catquizlab_attempt', (object) [
+            'runid' => $run->id, 'personid' => 0, 'status' => 10,
+            'tries' => 1, 'timecreated' => time(), 'timemodified' => time(),
+        ]);
+        // About the size the worker sends at most, as it sends it: cut by structure, the full one referenced.
+        $events = [];
+        for ($i = 0; $i < 250; $i++) {
+            $events[] = ['at' => $i, 'type' => 'console', 'detail' => str_repeat('e', 200)];
+        }
+        $diagnostics = json_encode([
+            'browser' => ['events' => $events],
+            'transport' => ['message' => 'HTTP 500 on mod/adaptivequiz/attempt.php'],
+            'truncated' => ['originalbytes' => 412345, 'limit' => 60000, 'full' => 'experiment-1/run-2/diagnosis-full.json'],
+        ]);
+        $this->assertGreaterThan(50000, strlen($diagnostics));
+
+        \local_catquizlab\external\job_complete::execute(
+            $attemptid,
+            'failed',
+            4100,
+            0,
+            'Attempt did not reach the finish page: HTTP 500',
+            $diagnostics
+        );
+
+        $row = $DB->get_record_select('local_catquizlab_attemptlog', 'attemptid = ? AND outcome = ?', [$attemptid, 'failed']);
+        $this->assertNotFalse($row, 'the original failure is recorded');
+        $this->assertStringContainsString('HTTP 500', (string) $row->detail);
+        $stored = json_decode((string) $row->diagnosis, true);
+        $this->assertCount(250, $stored['browser']['events'], 'the diagnosis arrived whole');
+        $this->assertSame('experiment-1/run-2/diagnosis-full.json', $stored['truncated']['full']);
+    }
 }

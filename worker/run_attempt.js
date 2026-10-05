@@ -13,7 +13,10 @@
  * depends on the deployment and is provided via --login-* options.
  *
  * Invocation (as the ad-hoc task calls it):
- *   node run_attempt.js --base-url=<wwwroot> --token=<wstoken> [--worker-id=<id>]
+ *   CATQUIZLAB_WORKER_TOKEN=<wstoken> node run_attempt.js --base-url=<wwwroot> [--worker-id=<id>]
+ *
+ * The token comes from the environment. `--token=<wstoken>` still works, but a
+ * command line is visible to every user of the machine in a process listing.
  *                       [--max-jobs=<n>] [--login-suffix=<pw>]
  *
  * This is a reference implementation. The DOM interaction is written defensively
@@ -86,12 +89,16 @@ if (require.main === module && !SELF_TEST && (!BASE_URL || !TOKEN)) {
  * @returns {Promise<object>} The decoded response.
  */
 async function callWs(wsfunction, params) {
-    const url = buildWsUrl(BASE_URL, TOKEN, wsfunction, params);
+    const {url, body} = buildWsRequest(BASE_URL, TOKEN, wsfunction, params);
     const started = Date.now();
     let response = null;
     let data = null;
     try {
-        response = await fetch(url, {method: 'POST'});
+        response = await fetch(url, {
+            method: 'POST',
+            headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+            body,
+        });
         if (!response.ok) {
             throw new Error(`HTTP ${response.status}`);
         }
@@ -264,21 +271,19 @@ async function playAttempt(browser, job) {
     } finally {
         await page.close();
         await context.close();
+        const diagnosis = {browser: recorder.summary(), transport, artefacts};
+        const fullpath = writeFullDiagnosis(diagnosis, job);
         await callWs('local_catquizlab_job_complete', {
             // The reason travels with the report. Without it the server sees a
             // failed attempt and no explanation, and the retry count is all
-            // anyone has to go on.
-            message: failure ? String(failure).slice(0, 2000) : '',
+            // anyone has to go on. Cut visibly if it is long (#111).
+            message: failure ? fitMessage(failure) : '',
             attemptid: job.attemptid,
             status,
             runtimems: Date.now() - started,
             engineattemptid: engineAttemptId,
             // The browser's record for the attempt history (#100, #107).
-            diagnostics: JSON.stringify({
-                browser: recorder.summary(),
-                transport,
-                artefacts,
-            }).slice(0, 60000),
+            diagnostics: fitDiagnostics(diagnosis, DIAGNOSTICS_LIMIT, fullpath),
         });
         currentAttemptId = 0;
     }
@@ -724,15 +729,98 @@ function normaliseBaseUrl(value) {
  * @param {object} params The function parameters.
  * @returns {string}
  */
-function buildWsUrl(baseUrl, token, wsfunction, params) {
-    const url = new URL(`${normaliseBaseUrl(baseUrl)}/webservice/rest/server.php`);
-    url.searchParams.set('wstoken', token);
-    url.searchParams.set('wsfunction', wsfunction);
-    url.searchParams.set('moodlewsrestformat', 'json');
+function buildWsRequest(baseUrl, token, wsfunction, params) {
+    // Everything in the body (#111): the parameters — a diagnosis can be tens
+    // of kilobytes, which as a query string made the server answer 414 and the
+    // report of a failure fail in turn — and the token, which in a URL ends up
+    // in every access log. Moodle's REST server reads all of them from POST.
+    const body = new URLSearchParams();
+    body.set('wstoken', token);
+    body.set('wsfunction', wsfunction);
+    body.set('moodlewsrestformat', 'json');
     for (const [k, v] of Object.entries(params || {})) {
-        url.searchParams.set(k, String(v));
+        body.set(k, String(v));
     }
-    return url.toString();
+    return {
+        url: `${normaliseBaseUrl(baseUrl)}/webservice/rest/server.php`,
+        body: body.toString(),
+    };
+}
+
+/** @type {number} The largest diagnosis sent with a report, in bytes; larger ones are cut by structure. */
+const DIAGNOSTICS_LIMIT = 60000;
+
+/** @type {number} The longest failure message sent with a report, in characters. */
+const MESSAGE_LIMIT = 4000;
+
+/**
+ * A failure message within the limit — cut visibly, never silently (#111).
+ *
+ * @param {string} message The message.
+ * @param {number} limit The limit in characters.
+ * @returns {string}
+ */
+function fitMessage(message, limit = MESSAGE_LIMIT) {
+    const text = String(message || '');
+    if (text.length <= limit) {
+        return text;
+    }
+    const note = ` … [truncated: ${text.length - limit + 80} of ${text.length} characters cut; full text in the artefacts]`;
+    return text.slice(0, limit - note.length) + note;
+}
+
+/**
+ * A diagnosis within the limit, cut by its structure and saying so (#111).
+ *
+ * Cutting a JSON text at a byte count leaves a text that is not JSON, and the
+ * server dropped the whole diagnosis: that is what the old slice did. Here the
+ * long strings are shortened and the oldest browser events dropped until it
+ * fits; what was cut is said in the diagnosis itself, and the full one is
+ * written beside the artefacts, its path sent instead.
+ *
+ * @param {object} diagnosis The diagnosis.
+ * @param {number} limit The limit in bytes.
+ * @param {?string} fullpath Where the full diagnosis was written, if it was.
+ * @returns {string} JSON, at most the limit long.
+ */
+function fitDiagnostics(diagnosis, limit = DIAGNOSTICS_LIMIT, fullpath = null) {
+    const full = JSON.stringify(diagnosis);
+    if (Buffer.byteLength(full) <= limit) {
+        return full;
+    }
+    const copy = JSON.parse(full);
+    const shorten = (value, max) => {
+        if (typeof value === 'string') {
+            return value.length > max ? value.slice(0, max) + ` … [${value.length - max} characters cut]` : value;
+        }
+        if (Array.isArray(value)) {
+            return value.map((v) => shorten(v, max));
+        }
+        if (value && typeof value === 'object') {
+            const out = {};
+            for (const [k, v] of Object.entries(value)) {
+                out[k] = shorten(v, max);
+            }
+            return out;
+        }
+        return value;
+    };
+    let fitted = copy;
+    for (const max of [4000, 1000, 300, 100]) {
+        fitted = shorten(copy, max);
+        fitted.truncated = {originalbytes: Buffer.byteLength(full), limit, full: fullpath};
+        // The oldest browser events go first: the last ones are nearest the failure.
+        const events = fitted.browser && Array.isArray(fitted.browser.events) ? fitted.browser.events : null;
+        while (Buffer.byteLength(JSON.stringify(fitted)) > limit && events && events.length > 20) {
+            events.splice(0, Math.ceil(events.length / 4));
+            fitted.truncated.eventsdropped = true;
+        }
+        if (Buffer.byteLength(JSON.stringify(fitted)) <= limit) {
+            return JSON.stringify(fitted);
+        }
+    }
+    // Still too large: the marker and the path, which always fit.
+    return JSON.stringify({truncated: {originalbytes: Buffer.byteLength(full), limit, full: fullpath, structure: 'dropped'}});
 }
 
 /**
@@ -959,9 +1047,9 @@ async function selfTest() {
     check('argument parsing', parsed['base-url'] === 'http://example.test/moodle/' && parsed.headless === true);
     check('base url normalisation', normaliseBaseUrl('http://x/moodle///') === 'http://x/moodle');
 
-    const url = buildWsUrl('http://x/', 'tok', 'local_catquizlab_job_claim', {workerid: 'w1'});
-    check('web service url', url.startsWith('http://x/webservice/rest/server.php?')
-        && url.includes('wsfunction=local_catquizlab_job_claim'));
+    const request = buildWsRequest('http://x/', 'tok', 'local_catquizlab_job_claim', {workerid: 'w1'});
+    check('web service request', request.url === 'http://x/webservice/rest/server.php'
+        && request.body.includes('wsfunction=local_catquizlab_job_claim'));
 
     check('dichotomous choice', chooseOptionIndex({fraction: 1.0, choice: -1}, 4) === 0);
     check('polytomous choice', chooseOptionIndex({fraction: 0.5, choice: 2}, 4) === 2);
@@ -1120,6 +1208,30 @@ if (require.main === module) {
  * @param {object} job The claimed job.
  * @returns {string}
  */
+/**
+ * Write the full diagnosis beside the artefacts when it is larger than a report carries (#111).
+ *
+ * @param {object} diagnosis The diagnosis.
+ * @param {object} job The job.
+ * @returns {?string} The path relative to the artefact root, or null.
+ */
+function writeFullDiagnosis(diagnosis, job) {
+    const text = JSON.stringify(diagnosis, null, 1);
+    if (Buffer.byteLength(text) <= DIAGNOSTICS_LIMIT || !ARTEFACT_DIR) {
+        return null;
+    }
+    try {
+        const path = require('path');
+        const relative = path.join(artefactPath(job), 'diagnosis-full.json');
+        require('fs').mkdirSync(path.dirname(path.join(ARTEFACT_DIR, relative)), {recursive: true});
+        require('fs').writeFileSync(path.join(ARTEFACT_DIR, relative), text);
+        return relative;
+    } catch (error) {
+        console.error(`The full diagnosis of attempt ${job.attemptid} could not be written: ${error.message}`);
+        return null;
+    }
+}
+
 function artefactPath(job) {
     return [
         `experiment-${job.experimentid || 0}`,
@@ -1179,7 +1291,10 @@ module.exports = {
     selfTest,
     parseArgs,
     normaliseBaseUrl,
-    buildWsUrl,
+    buildWsRequest,
+    fitDiagnostics,
+    fitMessage,
+    DIAGNOSTICS_LIMIT,
     parseQuestionId,
     parseEngineAttemptId,
     usernameFor,

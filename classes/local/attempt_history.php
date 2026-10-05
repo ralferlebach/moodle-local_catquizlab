@@ -111,7 +111,8 @@ class attempt_history {
             ? self::diagnose((string) $detail['detail'])
             : [];
         $extra = (array) ($detail['extra'] ?? []);
-        foreach (['browser', 'transport', 'artefacts'] as $key) {
+        // The entry 'truncated' says what was cut and where the full diagnosis is (#111).
+        foreach (['browser', 'transport', 'artefacts', 'truncated'] as $key) {
             if (!empty($extra[$key])) {
                 $diagnosis[$key] = json_decode(self::redact(json_encode($extra[$key], JSON_UNESCAPED_SLASHES)), true);
             }

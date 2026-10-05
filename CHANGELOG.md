@@ -6,6 +6,48 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.7.21] — 2026-10-02 — #111: reports in the body, never cut silently
+
+### Every web service parameter in the body — HTTP 414 gone, the token out of URLs
+The worker POSTed to `webservice/rest/server.php` but put every parameter into
+the query string: the token, the function and the failure report with its
+diagnosis. A large diagnosis made the request line too long; the web server
+answered 414, and the report of a failure failed in turn — the original failure
+never reached Moodle. The token, meanwhile, stood in every access log line.
+Everything now goes in the body as `application/x-www-form-urlencoded` — Moodle's
+REST server reads token, function and parameters from POST (checked against the
+real endpoint); the URL is the same for every call.
+
+### Never cut silently
+The diagnosis used to be cut at 60,000 bytes in the middle of its JSON — leaving
+text that is not JSON, which the server then dropped entirely — and the message
+at 2,000 characters without a word. Now: the message is cut at 4,000 characters
+with a marker saying how much was cut; the diagnosis is cut by its structure —
+long strings shortened, the oldest browser events dropped — stays valid JSON,
+says in `truncated` how large it was, and the full one is written beside the
+artefacts as `diagnosis-full.json`, its path sent along. The server keeps the
+`truncated` entry. Limits documented in `worker/README.md`.
+
+### The token not on a command line
+Moodle's launcher already passes it in the environment; the CI workflow passed
+it as `--token=…`, visible in every process listing, and the worker's usage
+text recommended that. Both use `CATQUIZLAB_WORKER_TOKEN` now.
+
+### Tests
+Worker: the request carries everything in its body and its URL nothing; values
+escaped; a 400 KB diagnosis cut to the limit, valid JSON, newest events kept; a
+long message cut visibly; against a server with Apache's request-line limit the
+old way gets 414 and the new one arrives whole. Moodle: a failure report with a
+large diagnosis is stored whole, with its failure message and the path of the
+full diagnosis.
+
+### #105 — a test for the plot that is not drawn
+The local-deviation plot is suppressed when the true deviation does not vary; no
+test said so. `local_deviation_variation_test`: without variation the note and
+no plot, with variation the plot with y = x.
+
+---
+
 ## [0.7.20] — 2026-10-02 — #90: from a worker into its log
 
 "An error link from a run, a sitting or a worker opens the Logs tab with its
