@@ -161,6 +161,11 @@ async function playAttempt(browser, job) {
     // What the browser sees, kept for the attempt history and — on failure —
     // written out as screenshots, DOM and events (#107).
     const recorder = new nav.Recorder(page, {capture: CAPTURE});
+    // Every request of this sitting carries the execution's correlation id, so
+    // that a server-side error can be found by it (#107, #110).
+    if (job.correlationid) {
+        await page.setExtraHTTPHeaders({'X-CatQuizLab-Correlation': String(job.correlationid)});
+    }
     let transport = null;
     let artefacts = null;
     currentAttemptId = job.attemptid;
@@ -692,6 +697,7 @@ async function saveArtefacts(recorder, job, error) {
             attemptid: job.attemptid,
             execution: job.execution || 0,
             workerid: WORKER_ID,
+            correlationid: job.correlationid || '',
         }, error);
         return {path: relative, files};
     } catch (saveError) {

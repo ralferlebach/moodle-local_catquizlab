@@ -6,6 +6,60 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.7.25] — 2026-10-02 — #109: remaining TI per scale
+
+"For the selected scale: estimate, SE, TI@n, remaining TI min/max, status"
+(#109, criterion 10): the remaining TI was there for the test as a whole only.
+The comparison offers "Remaining TI (max)" and "(min)" as metrics now, globally
+and for a selected scale — the scale's own pool from the engine, the items of
+its subtree played so far, and as many as may still be played: a single
+subscale is bounded by its questions per subscale, a category of several by
+the items left in it. Checked on a real sitting: values on exactly the steps the
+engine has an estimate of the scale for, the minimum never above the maximum.
+Where every item left may still be played the two are equal — not a fault; the
+comparison says so beneath the plot.
+
+The status of a scale (active, locked, dropped) and "active scales" as a metric
+per step wait for the engine (ralferlebach/moodle-local_catquiz#133), as for
+#106; the status at the end is shown.
+
+---
+
+## [0.7.24] — 2026-10-02 — #107: a correlation id from claim to artefact
+
+"Artefacts are referenced by experiment, run, sitting, execution, worker,
+correlation id and time" (#107, criterion 2): the correlation id was missing.
+The server already records the start of an execution under the id of the claim
+request; `job_claim` now returns it. The worker writes it into its artefacts'
+metadata and sends it with every request of the sitting as
+`X-CatQuizLab-Correlation` — the hook for finding a server-side error by it
+(#110). Tested: the id returned is the one the start was recorded under.
+
+#106: criteria 16, 17, 18 and 29 — active, dropped and locked scales per step —
+wait for the engine to record when a scale's state changes; filed as
+ralferlebach/moodle-local_catquiz#133 (`scalestatetrace`).
+
+---
+
+## [0.7.23] — 2026-10-02 — #106: what checking its criteria found missing
+
+- Remaining TI (min) beside the maximum (#106, criterion 19): the least the
+  items still allowed could add — the weakest of them, by the same engine
+  arithmetic. Column in the single-test view, `ti_remaining_min` in the step
+  export, tested against the sum of the weakest unplayed items.
+- Final TI@n in the sitting export (#106, criterion 23): `finaltiatn`, the n
+  most informative pool items at the final estimate, from the engine — appended,
+  no column moves. `finalti` is the information of the items played. Checked on
+  a real sitting: the export's value equals the last step of its test flow.
+  Found on the way: the observation carries the plugin's model key ("2pl"), the
+  engine its own name ("raschbirnbaum"); without the catalogue's mapping the
+  value came out empty, silently.
+- Dropped / locked scales per step: N/A on every step, as the engine records
+  them at the end only — now with their numbers on the last step, where the
+  engine's values are known.
+
+---
+
 ## [0.7.22] — 2026-10-02 — #111: a failed report no longer hides the failure
 
 "A secondary reporting error no longer hides the original attempt failure"

@@ -79,6 +79,7 @@ class job_claim extends external_api {
             'username'  => '',
             'experimentid' => 0,
             'execution' => 0,
+            'correlationid' => '',
             'message'   => get_string('job:none', 'local_catquizlab'),
         ];
 
@@ -207,6 +208,10 @@ class job_claim extends external_api {
             // attempt and which try this is.
             'experimentid' => $run ? (int) $run->experimentid : 0,
             'execution' => (int) $attempt->tries + 1,
+            // The id the start of this execution was recorded under: the worker
+            // carries it in its artefacts and sends it with every request of the
+            // sitting, so that browser, server and history meet (#107, #110).
+            'correlationid' => \local_catquizlab\local\debug_trace::correlation_id(),
             'message'   => get_string('job:claimed', 'local_catquizlab'),
         ];
     }
@@ -230,6 +235,12 @@ class job_claim extends external_api {
                 ''
             ),
             'experimentid' => new external_value(PARAM_INT, 'Experiment of the claimed run (0 when none).', VALUE_OPTIONAL, 0),
+            'correlationid' => new external_value(
+                PARAM_ALPHANUMEXT,
+                'Correlation id of this execution, as recorded in its history.',
+                VALUE_OPTIONAL,
+                ''
+            ),
             'execution'    => new external_value(PARAM_INT, 'Which try of the sitting this is (0 when none).', VALUE_OPTIONAL, 0),
             'message'   => new external_value(PARAM_TEXT, 'Human-readable status.'),
         ]);

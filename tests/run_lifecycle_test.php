@@ -905,6 +905,29 @@ final class run_lifecycle_test extends \advanced_testcase {
     }
 
     /**
+     * A claim hands the worker the id its execution's start is recorded under (#107, #110).
+     *
+     * @return void
+     */
+    public function test_a_claim_carries_its_correlation_id(): void {
+        global $DB;
+        $this->resetAfterTest();
+        $this->setAdminUser();
+
+        $runid = $this->run_ids($this->experiment_with_runs())[0];
+        $DB->set_field('local_catquizlab_run', 'status', registry::STATUS_READY, ['id' => $runid]);
+        $this->add_attempt($runid, attempt_scheduler::STATUS_QUEUED);
+
+        $job = \local_catquizlab\external\job_claim::execute('w-corr');
+        $this->assertTrue($job['hasjob']);
+        $this->assertNotSame('', $job['correlationid']);
+        $recorded = $DB->get_field('local_catquizlab_attemptlog', 'correlationid', [
+            'attemptid' => $job['attemptid'], 'outcome' => \local_catquizlab\local\attempt_history::STARTED,
+        ]);
+        $this->assertSame($recorded, $job['correlationid'], 'the same id as the start in the history');
+    }
+
+    /**
      * A worker cannot claim an attempt of a terminal run.
      *
      * @return void

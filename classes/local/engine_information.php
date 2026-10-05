@@ -144,11 +144,11 @@ class engine_information {
      * @param int $n How many items TI@n takes.
      * @param int[] $played Component ids of the items played so far.
      * @param int $remaining How many items may still be played.
-     * @return array{tiatn: ?float, remaining: ?float}
+     * @return array{tiatn: ?float, remaining: ?float, remainingmin: ?float}
      */
     public static function step(float $theta, $pool, int $n, array $played, int $remaining): array {
         if ($pool === null) {
-            return ['tiatn' => null, 'remaining' => null];
+            return ['tiatn' => null, 'remaining' => null, 'remainingmin' => null];
         }
         try {
             $information = [];
@@ -156,7 +156,7 @@ class engine_information {
                 $information[$id] = $model->fisher_info(['ability' => $theta], $params);
             }
         } catch (\Throwable $e) {
-            return ['tiatn' => null, 'remaining' => null];
+            return ['tiatn' => null, 'remaining' => null, 'remainingmin' => null];
         }
 
         $all = array_values($information);
@@ -164,15 +164,18 @@ class engine_information {
         $tiatn = $n < 1 ? null : (float) array_sum(array_slice($all, 0, $n));
 
         if ($remaining < 1) {
-            return ['tiatn' => $tiatn, 'remaining' => 0.0];
+            return ['tiatn' => $tiatn, 'remaining' => 0.0, 'remainingmin' => 0.0];
         }
         foreach ($played as $id) {
             unset($information[(int) $id]);
         }
         $rest = array_values($information);
         rsort($rest, SORT_NUMERIC);
+        $best = (float) array_sum(array_slice($rest, 0, $remaining));
+        // The least the rest could add (#106): the same items, the weakest of them.
+        $worst = (float) array_sum(array_slice(array_reverse($rest), 0, min($remaining, count($rest))));
 
-        return ['tiatn' => $tiatn, 'remaining' => (float) array_sum(array_slice($rest, 0, $remaining))];
+        return ['tiatn' => $tiatn, 'remaining' => $best, 'remainingmin' => $worst];
     }
 
     /**

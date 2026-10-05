@@ -1323,6 +1323,8 @@ class results_page {
             'se' => get_string('flow:se', $component),
             'ti' => get_string('flow:ti', $component),
             'tiatn' => get_string('flow:tiatn', $component),
+            'tiremainingmin' => get_string('flow:tiremainingmin', $component),
+            'tiremaining' => get_string('flow:tiremaining', $component),
             'scales' => get_string('flow:scalesestimated', $component),
         ];
         $chart = new scatter_chart(
@@ -1342,6 +1344,11 @@ class results_page {
         $rows = [];
         $notes = [];
         $traces = [];
+        // Remaining TI at its least and most (#109): equal wherever every item
+        // left may still be played — not a fault, and said so.
+        if (in_array($metric, ['tiremaining', 'tiremainingmin'], true)) {
+            $notes[] = get_string('compare:remainingnote', $component);
+        }
         foreach ($selected as $observation) {
             $detail = $observation + results_query::detail($observation);
             $strategy = (string) $observation['strategy'];
@@ -1354,7 +1361,7 @@ class results_page {
             }
             $trace = (array) ($detail['trace'] ?? []);
             $flow = \local_catquizlab\local\test_flow::steps($detail);
-            if ($metric === 'tiatn' && $scaleid === 0) {
+            if (in_array($metric, ['tiatn', 'tiremaining', 'tiremainingmin'], true) && $scaleid === 0) {
                 $flow = \local_catquizlab\local\test_flow::with_engine_information(
                     $flow,
                     $trace,
@@ -1369,7 +1376,8 @@ class results_page {
                 $metric,
                 $scaleid,
                 $subtree,
-                (int) $observation['runid']
+                (int) $observation['runid'],
+                results_query::run_subscale_maxitems((int) $observation['runid'])
             );
             $groupvalue = [
                 'twin' => (string) $observation['twinid'],
@@ -1566,6 +1574,8 @@ class results_page {
         $out .= $field('cmp_metric', get_string('compare:metric', $component), \html_writer::select([
             'ability' => get_string('axis:esttheta', $component), 'se' => get_string('flow:se', $component),
             'ti' => get_string('flow:ti', $component), 'tiatn' => get_string('flow:tiatn', $component),
+            'tiremainingmin' => get_string('flow:tiremainingmin', $component),
+            'tiremaining' => get_string('flow:tiremaining', $component),
             'scales' => get_string('flow:scalesestimated', $component),
         ], 'cmp_metric', $metric, false, ['class' => 'custom-select', 'id' => 'cmp_metric']));
         $out .= $field(
@@ -1968,10 +1978,18 @@ class results_page {
             get_string('flow:se', $component),
             get_string('flow:ti', $component),
             get_string('flow:tiatn', $component),
+            get_string('flow:tiremainingmin', $component),
             get_string('flow:tiremaining', $component),
             get_string('flow:scalesestimated', $component),
             get_string('flow:droppedlocked', $component),
         ];
+        // Dropped and locked scales the engine records at the end only: N/A
+        // on every step but the last, where its values are known (#106).
+        $laststep = $flow['steps'] === [] ? 0 : (int) end($flow['steps'])['step'];
+        $atend = get_string('flow:droppedlockedatend', $component, (object) [
+            'dropped' => count((array) ($flow['scales']['dropped'] ?? [])),
+            'locked'  => count((array) ($flow['scales']['locked'] ?? [])),
+        ]);
         foreach ($flow['steps'] as $step) {
             $table->data[] = [
                 $step['step'],
@@ -1982,9 +2000,10 @@ class results_page {
                 $step['se'] === null ? $na : format_float($step['se'], 3),
                 $step['ti'] === null ? $na : format_float($step['ti'], 3),
                 $step['tiatn'] === null ? $na : format_float($step['tiatn'], 3),
+                ($step['tiremainingmin'] ?? null) === null ? $na : format_float($step['tiremainingmin'], 3),
                 $step['tiremaining'] === null ? $na : format_float($step['tiremaining'], 3),
                 $step['scalesestimated'] === null ? $na : (string) $step['scalesestimated'],
-                $na,
+                (int) $step['step'] === $laststep && !empty($flow['scales']) ? $atend : $na,
             ];
         }
         $out .= \html_writer::table($table);

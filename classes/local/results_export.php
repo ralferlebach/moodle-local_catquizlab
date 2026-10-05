@@ -98,7 +98,7 @@ class results_export {
     /** @var string[] The columns of the step level. */
     public const STEP_COLUMNS = [
         'attemptid', 'runid', 'strategy', 'step', 'questionid', 'subscaleid', 'score',
-        'esttheta', 'se', 'ti_played', 'ti_at_n', 'ti_remaining_max', 'scales_estimated',
+        'esttheta', 'se', 'ti_played', 'ti_at_n', 'ti_remaining_min', 'ti_remaining_max', 'scales_estimated',
     ];
 
     /**
@@ -210,10 +210,50 @@ class results_export {
         // engine's estimates live in (#102) — on every row, so that a CSV
         // without metadata still says it. Appended: no column moves.
         'abilitydistribution', 'abilitymean', 'abilitysd', 'abilitymin', 'abilitymax',
+        // TI@n at the end (#106): the n most informative pool items at the
+        // final estimate, n the test length — from the engine. finalti above
+        // is the information of the items played.
+        'finaltiatn',
     ];
 
     /** @var array<int, array> Ability distribution and range by run, for this request. */
     protected static array $abilities = [];
+
+    /**
+     * TI@n at the end of a sitting, from the engine; null where its pool is not there.
+     *
+     * @param array $observation The observation.
+     * @return float|null
+     */
+    protected static function final_ti_at_n(array $observation): ?float {
+        global $DB;
+
+        $runid = (int) $observation['runid'];
+        $n = (int) ($observation['nitems'] ?? 0);
+        if ($observation['esttheta'] === null || $n < 1 || !engine_information::available()) {
+            return null;
+        }
+        if (!array_key_exists($runid, self::$finalpools)) {
+            $root = (int) $DB->get_field_sql(
+                'SELECT catscaleid FROM {local_catquizlab_scalemap}
+                  WHERE runid = ? AND parentcatscaleid = 0 ORDER BY generation DESC',
+                [$runid],
+                IGNORE_MULTIPLE
+            );
+            // The engine's own name of the model: the observation carries the plugin's key ('2pl').
+            $model = model_catalog::has((string) ($observation['model'] ?? ''))
+                ? model_catalog::engine_key((string) $observation['model']) : '';
+            self::$finalpools[$runid] = $root > 0 && $model !== ''
+                ? engine_information::pool($runid, $root, $model) : null;
+        }
+
+        $pool = self::$finalpools[$runid];
+
+        return engine_information::step((float) $observation['esttheta'], $pool, $n, [], 0)['tiatn'];
+    }
+
+    /** @var array<int, mixed> Item pools by run, for TI@n at the end. */
+    protected static array $finalpools = [];
 
     /**
      * Forget what this request has looked up — for tests, which reuse run ids.
@@ -222,6 +262,7 @@ class results_export {
      */
     public static function reset_caches(): void {
         self::$abilities = [];
+        self::$finalpools = [];
     }
 
     /**
@@ -283,6 +324,7 @@ class results_export {
                     // informative items of the pool — as the engine computes it.
                     'ti_played'        => $step['ti'],
                     'ti_at_n'          => $step['tiatn'] ?? null,
+                    'ti_remaining_min' => $step['tiremainingmin'] ?? null,
                     'ti_remaining_max' => $step['tiremaining'] ?? null,
                     'scales_estimated' => $step['scalesestimated'],
                 ];
@@ -305,6 +347,7 @@ class results_export {
                 // those, and "true"/"" would silently become a factor level.
                 $row[$column] = is_bool($value) ? (int) $value : $value;
             }
+            $row['finaltiatn'] = self::final_ti_at_n($observation);
             $ability = self::run_ability((int) $observation['runid']);
             $row['abilitydistribution'] = $ability['distribution'];
             $row['abilitymean'] = $ability['mean'];

@@ -74,7 +74,8 @@ final class export_ability_test extends \advanced_testcase {
         }
         // Appended, so that no existing column moves.
         $columns = results_export::ATTEMPT_COLUMNS;
-        $this->assertSame('abilitymax', end($columns));
+        // Appended after it since: finaltiatn (#106), again without moving a column.
+        $this->assertSame(['abilitymax', 'finaltiatn'], array_slice($columns, -2));
         $this->assertSame('activescalesatend', $columns[array_search('abilitydistribution', $columns) - 1]);
 
         $metadata = results_export::metadata($query, results_export::LEVEL_ATTEMPT);

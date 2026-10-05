@@ -189,6 +189,22 @@ class results_query {
     }
 
     /**
+     * A run's effective questions per subscale, as provisioned; -1 for none (#109).
+     *
+     * @param int $runid The run.
+     * @return int
+     */
+    public static function run_subscale_maxitems(int $runid): int {
+        global $DB;
+
+        $record = $DB->get_record('local_catquizlab_run', ['id' => $runid]);
+        $definition = $record ? run_registry::definition_for($record) : [];
+
+        return $definition === [] ? -1
+            : (int) test_provisioner::options_from_definition($definition)['maxquestionspersubscale'];
+    }
+
+    /**
      * A run's effective maximum number of questions, as provisioned; -1 for none.
      *
      * @param int $runid The run.

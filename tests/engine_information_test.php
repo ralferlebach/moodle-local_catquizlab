@@ -97,4 +97,33 @@ final class engine_information_test extends \advanced_testcase {
         // The pool itself is not changed by it.
         $this->assertEqualsWithDelta($all, engine_information::ti_at_n($theta, $pool, 6), 1e-12);
     }
+
+    /**
+     * The remaining potential at its least: the weakest of the items not yet played (#106).
+     *
+     * @return void
+     */
+    public function test_the_remaining_minimum(): void {
+        [$pool, $records] = $this->pool();
+        $theta = -0.4;
+        $played = [100, 103];
+        $rest = [];
+        foreach ($records as $record) {
+            if (!in_array((int) $record->id, $played, true)) {
+                $rest[] = test_flow::item_information([
+                    'model' => 'raschbirnbaum', 'discrimination' => $record->discrimination,
+                    'difficulty' => $record->difficulty,
+                ], $theta);
+            }
+        }
+        sort($rest);
+
+        $step = engine_information::step($theta, $pool, 2, $played, 2);
+        $this->assertEqualsWithDelta($rest[0] + $rest[1], $step['remainingmin'], 1e-9);
+        $this->assertEqualsWithDelta($rest[3] + $rest[2], $step['remaining'], 1e-9);
+        $this->assertLessThanOrEqual($step['remaining'], $step['remainingmin']);
+        // Nothing may still be played: nothing remains, at most or at least.
+        $none = engine_information::step($theta, $pool, 2, $played, 0);
+        $this->assertSame([0.0, 0.0], [$none['remaining'], $none['remainingmin']]);
+    }
 }

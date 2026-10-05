@@ -150,7 +150,7 @@ class test_flow {
     }
 
     /** @var string[] The metrics a trace can be compared by (#109). */
-    public const METRICS = ['ability', 'se', 'ti', 'tiatn', 'scales'];
+    public const METRICS = ['ability', 'se', 'ti', 'tiatn', 'tiremainingmin', 'tiremaining', 'scales'];
 
     /**
      * TI@n and the remaining potential per step, from the engine.
@@ -188,6 +188,7 @@ class test_flow {
         foreach ($flow['steps'] as $index => $step) {
             $flow['steps'][$index]['tiatn'] = null;
             $flow['steps'][$index]['tiremaining'] = null;
+            $flow['steps'][$index]['tiremainingmin'] = null;
             if (isset($played[$index])) {
                 $ids[] = (int) ($played[$index]['componentid'] ?? $played[$index]['id'] ?? 0);
             }
@@ -201,6 +202,7 @@ class test_flow {
             $metrics = engine_information::step((float) $step['ability'], $pool, $n, $ids, $allowed);
             $flow['steps'][$index]['tiatn'] = $metrics['tiatn'];
             $flow['steps'][$index]['tiremaining'] = $metrics['remaining'];
+            $flow['steps'][$index]['tiremainingmin'] = $metrics['remainingmin'];
         }
         $last = $flow['steps'] === [] ? [] : $flow['steps'][count($flow['steps']) - 1];
         $flow['final']['tiatn'] = $last['tiatn'] ?? null;
@@ -227,6 +229,7 @@ class test_flow {
      * @param int $scaleid 0 for the global ability, else a catscale id.
      * @param int[] $subtree The scale and every scale below it.
      * @param int $runid The run, for the engine's item pool (TI@n of a scale).
+     * @param int $subscalemax The run's questions per subscale, -1 for no limit.
      * @return array{points: array[], consistent: bool, status: string}
      */
     public static function series(
@@ -235,11 +238,13 @@ class test_flow {
         string $metric,
         int $scaleid = 0,
         array $subtree = [],
-        int $runid = 0
+        int $runid = 0,
+        int $subscalemax = -1
     ): array {
         $points = [];
         if ($scaleid === 0) {
             $field = ['ability' => 'ability', 'se' => 'se', 'ti' => 'ti', 'tiatn' => 'tiatn',
+                'tiremainingmin' => 'tiremainingmin', 'tiremaining' => 'tiremaining',
                 'scales' => 'scalesestimated'][$metric] ?? 'ability';
             foreach ($flow['steps'] as $step) {
                 $points[] = ['x' => $step['step'], 'y' => $step[$field] ?? null];
@@ -278,23 +283,39 @@ class test_flow {
         $consistent = is_numeric($engine) && $last !== null && $last['se'] !== null
             && abs($last['se'] - (float) $engine) / max((float) $engine, 1e-9) < 0.01;
 
-        $scalepool = ($metric === 'tiatn' && $runid > 0 && $played !== [])
+        $scalepool = (in_array($metric, ['tiatn', 'tiremaining', 'tiremainingmin'], true) && $runid > 0 && $played !== [])
             ? engine_information::pool($runid, $scaleid, (string) ($played[0]['model'] ?? ''))
             : null;
+        // What may still be played on this scale (#109): a single subscale is
+        // bounded by the questions per subscale; a category of several is not
+        // bounded by one number, and the rest of its items is what remains.
+        $poolsize = $scalepool === null ? 0 : count($scalepool);
+        $bounded = count($subtree) === 1 && $subscalemax > 0;
         $inscale = 0;
+        $scaleplayed = [];
         foreach ($values as $index => $value) {
             if (isset($played[$index]) && in_array((int) ($played[$index]['catscaleid'] ?? 0), $subtree, true)) {
                 $inscale++;
+                $scaleplayed[] = (int) ($played[$index]['componentid'] ?? $played[$index]['id'] ?? 0);
             }
-            $values[$index]['tiatn'] = ($scalepool !== null && $value['theta'] !== null && $inscale > 0)
-                ? engine_information::ti_at_n((float) $value['theta'], $scalepool, $inscale)
-                : null;
+            $metrics = ($scalepool !== null && $value['theta'] !== null && $inscale > 0)
+                ? engine_information::step(
+                    (float) $value['theta'],
+                    $scalepool,
+                    $inscale,
+                    $scaleplayed,
+                    $bounded ? $subscalemax - $inscale : $poolsize - $inscale
+                )
+                : ['tiatn' => null, 'remaining' => null, 'remainingmin' => null];
+            $values[$index]['tiatn'] = $metrics['tiatn'];
+            $values[$index]['tiremaining'] = $metrics['remaining'];
+            $values[$index]['tiremainingmin'] = $metrics['remainingmin'];
         }
 
         foreach ($values as $value) {
             $y = null;
-            if ($metric === 'tiatn') {
-                $y = $value['tiatn'];
+            if (in_array($metric, ['tiatn', 'tiremaining', 'tiremainingmin'], true)) {
+                $y = $value[$metric];
             } else if ($metric === 'ability') {
                 $y = $value['theta'];
             } else if ($metric === 'se' && $consistent) {
