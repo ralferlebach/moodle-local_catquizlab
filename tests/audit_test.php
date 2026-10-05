@@ -1014,20 +1014,23 @@ final class audit_test extends \advanced_testcase {
 
         // Four fields per strategy; empty means "use the budgets above".
         $block = $read->invoke(null, [
+            // The classical test plays every item: what is sent for it is not taken.
             'perstrategy_classic_globalmin' => '20',
-            'perstrategy_classic_globalmax' => 'unlimited',
+            'perstrategy_classic_globalmax' => '30',
+            'perstrategy_relsubs_globalmax' => 'unlimited',
             'perstrategy_allsubs_globalmax' => '80',
             'perstrategy_allsubs_subscalemax' => '5',
             'perstrategy_fastest_globalmax' => '',
         ]);
 
         $this->assertArrayNotHasKey('fastest', $block, 'an empty field became an override');
-        $this->assertSame('unlimited', $block['classic']['global']['maxitems']);
+        $this->assertArrayNotHasKey('classic', $block, 'the classical test has no question budget');
+        $this->assertSame('unlimited', $block['relsubs']['global']['maxitems']);
         $this->assertSame(80, $block['allsubs']['global']['maxitems']);
 
         // And back into the form without loss.
         $fields = $write->invoke(null, ['budgetsbystrategy' => $block]);
-        $this->assertSame('unlimited', $fields['perstrategy_classic_globalmax']);
+        $this->assertSame('unlimited', $fields['perstrategy_relsubs_globalmax']);
         $this->assertSame('80', $fields['perstrategy_allsubs_globalmax']);
 
         // The preview shows what each run will actually use, before anything
@@ -1044,12 +1047,15 @@ final class audit_test extends \advanced_testcase {
             $rows[$row['strategy']] = $row;
         }
 
+        // The classical test: every item of the scale, not a number, and no budget of its own.
         $classic = $rows[\local_catquizlab\local\strategy_catalog::label('classic')];
-        $this->assertSame(get_string('budget:unlimited', 'local_catquizlab'), $classic['globalmax']);
-        $this->assertTrue($classic['overridden']);
+        $this->assertSame(get_string('form:allitems_short', 'local_catquizlab'), $classic['globalmax']);
+        $this->assertFalse($classic['overridden']);
 
+        // The strategy relsubs was given its own maximum ("unlimited") above, and is marked so.
         $relsubs = $rows[\local_catquizlab\local\strategy_catalog::label('relsubs')];
-        $this->assertFalse($relsubs['overridden']);
+        $this->assertTrue($relsubs['overridden']);
+        $this->assertSame(get_string('budget:unlimited', 'local_catquizlab'), $relsubs['globalmax']);
     }
 
     /**

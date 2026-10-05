@@ -192,8 +192,11 @@ class experiment_service {
                 'strategy'     => strategy_catalog::has($strategy)
                     ? strategy_catalog::label($strategy)
                     : $strategy,
-                'globalmin'    => (string) ($global['minitems'] ?? ''),
-                'globalmax'    => self::budget_text($global['maxitems'] ?? null),
+                // The classical test plays every item: no number, in words.
+                'globalmin'    => strategy_catalog::uses($strategy, 'globalmax')
+                    ? (string) ($global['minitems'] ?? '') : get_string('form:allitems_short', 'local_catquizlab'),
+                'globalmax'    => strategy_catalog::uses($strategy, 'globalmax')
+                    ? self::budget_text($global['maxitems'] ?? null) : get_string('form:allitems_short', 'local_catquizlab'),
                 // Marked n/a where the strategy has no subscale budget: an empty cell
                 // would read as "not set", which is a different statement.
                 'subscalemin'  => strategy_catalog::uses_subscales($strategy)

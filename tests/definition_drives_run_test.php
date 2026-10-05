@@ -418,6 +418,9 @@ final class definition_drives_run_test extends \advanced_testcase {
      * @return void
      */
     public function test_effective_parameters_document_the_information_target(): void {
+        // Reads the engine's strategy catalogue, which records the engine's
+        // fingerprint in the plugin's config the first time it is read.
+        $this->resetAfterTest();
         $definition = $this->definition('2pl');
         $definition['budgets']['se'] = ['min' => 0.5, 'max' => 1.0];
         // A strategy with a precision target: the classical test has none, and

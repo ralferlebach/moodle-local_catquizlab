@@ -372,12 +372,9 @@ class sweep {
         // itself a swept factor, it is the variable under study and applies to
         // every strategy, the classical test included: overriding it would
         // collapse the swept levels into identical cells.
-        if (!isset($combo['globalbudget']) && !isset($cellbudget['global']['maxitems'])) {
-            $definition = strategy_parameters::fixed_form_default(
-                $definition,
-                (array) ($definition['budgetsbystrategy'] ?? [])
-            );
-        }
+        // Last and unconditional: the classical test plays every item, over
+        // any swept, strategy or cell budget.
+        $definition = strategy_parameters::fixed_form_default($definition, []);
 
         // The run's own definition holds exactly what its strategy uses (#101).
         // The per-strategy budgets have been applied above; left in, they would

@@ -211,7 +211,7 @@ class log_view {
 
         $lines = [];
         foreach ($rows as $row) {
-            $failed = $row->outcome === attempt_history::FAILED;
+            $failed = in_array($row->outcome, [attempt_history::FAILED, attempt_history::ABANDONED], true);
             $text = 'sitting=' . $row->attemptid . ' run=' . $row->runid . ' try=' . $row->tryno . ' ' . $row->outcome
                 . (!empty($row->reasoncode) ? ' reason=' . $row->reasoncode : '')
                 . (!empty($row->workerid) ? ' worker=' . $row->workerid : '')

@@ -64,7 +64,9 @@ final class strategy_parameters_test extends \advanced_testcase {
         $this->assertFalse(strategy_catalog::supports_pilot_items('classic'));
         $this->assertFalse(strategy_catalog::uses_first_question_policy('classic'));
         $this->assertTrue(strategy_catalog::fixed_form('classic'));
-        $this->assertTrue(strategy_catalog::uses_global_min('classic'));
+        // The classical test plays every item of the scale: no question budget.
+        $this->assertFalse(strategy_catalog::uses_global_min('classic'));
+        $this->assertFalse(strategy_catalog::uses_global_max('classic'));
         $this->assertTrue(strategy_catalog::uses_global_max('fastest'));
         $this->assertTrue(strategy_catalog::uses_standard_error('fastest'));
         $this->assertTrue(strategy_catalog::uses_subscale_max('allsubs'));

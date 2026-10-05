@@ -260,7 +260,9 @@ class strategy_catalog {
             'standarderror' => true, 'pilot' => true, 'firstquestion' => true, 'fixedform' => false],
         'pilot'      => ['globalmin' => true, 'globalmax' => true, 'subscalemin' => false, 'subscalemax' => false,
             'standarderror' => true, 'pilot' => true, 'firstquestion' => true, 'fixedform' => false],
-        'classic'    => ['globalmin' => true, 'globalmax' => true, 'subscalemin' => false, 'subscalemax' => false,
+        // The classical test plays every item of the chosen scale: no question
+        // budget, only an evaluation by IRT (score and SE, not points).
+        'classic'    => ['globalmin' => false, 'globalmax' => false, 'subscalemin' => false, 'subscalemax' => false,
             'standarderror' => false, 'pilot' => false, 'firstquestion' => false, 'fixedform' => true],
         'relsubs'    => ['globalmin' => true, 'globalmax' => true, 'subscalemin' => true, 'subscalemax' => true,
             'standarderror' => true, 'pilot' => true, 'firstquestion' => true, 'fixedform' => false],

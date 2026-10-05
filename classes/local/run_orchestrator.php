@@ -136,7 +136,7 @@ class run_orchestrator {
 
         $drift = self::manifest_drift($run, $definition);
         if ($drift !== []) {
-            $DB->set_field('local_catquizlab_run', 'status', registry::STATUS_FAILED, ['id' => $runid]);
+            run_lifecycle::set_status($runid, registry::STATUS_FAILED, 'setup_failed');
 
             return [
                 'ok'          => false,
@@ -186,7 +186,7 @@ class run_orchestrator {
 
         if ($failedstage !== null) {
             $reason = self::stage_reason($failedstage, $stages[$failedstage]);
-            $DB->set_field('local_catquizlab_run', 'status', registry::STATUS_FAILED, ['id' => $runid]);
+            run_lifecycle::set_status($runid, registry::STATUS_FAILED, 'setup_failed');
 
             return [
                 'ok'          => false,
@@ -196,7 +196,7 @@ class run_orchestrator {
             ];
         }
 
-        $DB->set_field('local_catquizlab_run', 'status', registry::STATUS_SCHEDULED, ['id' => $runid]);
+        run_lifecycle::set_status($runid, registry::STATUS_SCHEDULED, 'setup_complete');
 
         \local_catquizlab\event\run_scheduled::create([
             'objectid' => $runid,

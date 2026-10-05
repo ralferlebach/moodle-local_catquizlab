@@ -41,6 +41,9 @@ class strategy_parameters {
     /** @var string How a parameter that does not apply is recorded. */
     public const NEUTRALISED = 'N/A (neutralised)';
 
+    /** @var string What the classical test plays: every item of the scale (#104). */
+    public const ALL_ITEMS = 'all items of the scale';
+
     /** @var int Minimum questions per subscale that asks for none. */
     public const NEUTRAL_SUBSCALE_MIN = 0;
 
@@ -122,6 +125,9 @@ class strategy_parameters {
 
         // A strategy's own budgets, down to the levels it uses.
         foreach ((array) ($def['budgetsbystrategy'] ?? []) as $key => $levels) {
+            if (!strategy_catalog::uses((string) $key, 'globalmax')) {
+                unset($def['budgetsbystrategy'][$key]['global']);
+            }
             if (!strategy_catalog::uses((string) $key, 'subscalemax')) {
                 unset($def['budgetsbystrategy'][$key]['subscale']);
             }
@@ -155,10 +161,15 @@ class strategy_parameters {
         if (!strategy_catalog::fixed_form($strategy)) {
             return $definition;
         }
-        if (isset($overrides[$strategy]['global']['maxitems'])) {
-            return $definition;
-        }
-        $definition['budgets']['global']['maxitems'] = experiment_definition::UNLIMITED;
+        // Every item of the scale, always: no minimum, no maximum. A budget
+        // named for it anywhere — shared, swept, per strategy, per cell — does
+        // not apply; the classical test does not count questions.
+        // A minimum of 1 is the smallest a definition takes; with no maximum
+        // the engine plays every item of the scale either way.
+        $definition['budgets']['global'] = [
+            'minitems' => 1,
+            'maxitems' => experiment_definition::UNLIMITED,
+        ];
 
         return $definition;
     }
@@ -211,13 +222,19 @@ class strategy_parameters {
         $component = 'local_catquizlab';
         $rules = [];
 
-        $global = (array) ($effective['budgets']['global'] ?? []);
-        $max = $global['maxitems'] ?? null;
-        $rules[] = experiment_definition::is_unlimited($max)
-            ? get_string('stoprule:nomaximum', $component)
-            : get_string('stoprule:maximum', $component, (int) $max);
-        if ((int) ($global['minitems'] ?? 0) > 0) {
-            $rules[] = get_string('stoprule:minimum', $component, (int) $global['minitems']);
+        $global = $effective['budgets']['global'] ?? [];
+        if ($global === self::ALL_ITEMS) {
+            // The classical test: it ends when every item of the scale is played.
+            $rules[] = get_string('stoprule:allitems', $component);
+        } else {
+            $global = (array) $global;
+            $max = $global['maxitems'] ?? null;
+            $rules[] = experiment_definition::is_unlimited($max)
+                ? get_string('stoprule:nomaximum', $component)
+                : get_string('stoprule:maximum', $component, (int) $max);
+            if ((int) ($global['minitems'] ?? 0) > 0) {
+                $rules[] = get_string('stoprule:minimum', $component, (int) $global['minitems']);
+            }
         }
 
         $se = $effective['se'] ?? null;

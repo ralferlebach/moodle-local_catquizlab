@@ -509,7 +509,7 @@ if ($action !== '' && $runid > 0) {
         // Cancelled, not failed: one records a decision, the other a defect,
         // and a list where both look alike hides the defects among the
         // decisions.
-        $DB->set_field('local_catquizlab_run', 'status', registry::STATUS_CANCELLED, ['id' => $runid]);
+        \local_catquizlab\local\run_lifecycle::set_status($runid, registry::STATUS_CANCELLED, 'cancelled_by_user');
         $DB->set_field('local_catquizlab_run', 'timemodified', time(), ['id' => $runid]);
         \local_catquizlab\event\run_aborted::create([
             'objectid' => $runid,
@@ -634,6 +634,10 @@ if ($runid > 0) {
     };
     $subscale = $effective['budgets']['subscale'];
     $se = $effective['se'];
+    // The classical test plays every item of the scale: no number to show (#104).
+    $allitems = is_array($effective['budgets']['global'])
+        ? null
+        : get_string('form:allitems_short', $component);
     $paramtable = new html_table();
     $paramtable->attributes['class'] = 'generaltable table-sm w-auto';
     $paramtable->attributes['data-region'] = 'catquizlab-effective-parameters';
@@ -645,8 +649,10 @@ if ($runid > 0) {
     $paramtable->data = [
         [get_string('form:strategy', $component),
             s($effective['strategy']['label']) . ' (' . (int) $effective['strategy']['engineid'] . ')', $pair('strategy')],
-        [get_string('form:globalmin', $component), $defined($effective['budgets']['global']['minitems']), $pair('minquestions')],
-        [get_string('form:globalmax', $component), $defined($effective['budgets']['global']['maxitems']), $pair('maxquestions')],
+        [get_string('form:globalmin', $component), $allitems ?? $defined($effective['budgets']['global']['minitems']),
+            $pair('minquestions')],
+        [get_string('form:globalmax', $component), $allitems ?? $defined($effective['budgets']['global']['maxitems']),
+            $pair('maxquestions')],
         [get_string('form:subscalemin', $component), is_array($subscale) ? $defined($subscale['minitems']) : $na,
             $pair('minquestionspersubscale')],
         [get_string('form:subscalemax', $component), is_array($subscale) ? $defined($subscale['maxitems']) : $na,

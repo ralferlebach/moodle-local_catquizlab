@@ -127,10 +127,13 @@ class test_provisioner {
                 ? 'N/A (neutralised)'
                 : ($options['includepilot'] ? ['include' => true, 'ratio' => $options['pilotratio']] : ['include' => false]),
             'budgets'          => [
-                'global'   => [
-                    'minitems' => $options['minquestions'],
-                    'maxitems' => $options['maxquestions'],
-                ],
+                // The classical test: every item of the scale, not a number.
+                'global'   => !strategy_catalog::uses((string) ($definition['strategy'] ?? ''), 'globalmax')
+                    ? strategy_parameters::ALL_ITEMS
+                    : [
+                        'minitems' => $options['minquestions'],
+                        'maxitems' => $options['maxquestions'],
+                    ],
                 // Recorded as neutralised where the strategy does not use it:
                 // the run shows what was in force, not what was typed.
                 'subscale' => !empty($options['na']['subscale'])

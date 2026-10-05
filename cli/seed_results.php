@@ -49,7 +49,7 @@ experiment_service::create_sweep($experimentid);
 mt_srand(105);
 $items = [[1.2, -0.5], [0.8, 0.3], [1.5, 1.1], [1.0, -1.2], [0.9, 0.6], [1.3, -0.1]];
 foreach ($DB->get_records('local_catquizlab_run', ['experimentid' => $experimentid], 'id ASC') as $run) {
-    $DB->set_field('local_catquizlab_run', 'status', registry::STATUS_FINISHED, ['id' => $run->id]);
+    \local_catquizlab\local\run_lifecycle::set_status((int) $run->id, registry::STATUS_FINISHED, 'seeded');
     for ($i = 1; $i <= 20; $i++) {
         $truth = round((mt_rand() / mt_getrandmax() - 0.5) * 5, 3);
         $played = [];

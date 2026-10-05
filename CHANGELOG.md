@@ -6,6 +6,65 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.7.20] — 2026-10-02 — #90: from a worker into its log
+
+"An error link from a run, a sitting or a worker opens the Logs tab with its
+filter" (#90, criterion 26): runs and sittings had one, workers had none. Every
+worker in the progress view now links to the log filtered to it — the last
+criterion of #90 found missing while checking them against the code.
+
+---
+
+## [0.7.19] — 2026-10-02 — #90: every status change, every retry decision
+
+### Every change of a run's status is recorded — from, to, why
+A run's status was written in more than a dozen places — `set_field`,
+`update_record`, one SQL update — and only some of them recorded it. There is
+one way now: `run_lifecycle::set_status()`, `update_run()` for a record that
+carries other fields too, and `set_status_if()` for the conditional
+ready → running of the first claim, which stays atomic and records only the call
+that made the change. Each records `status_changed` with from, to and why
+(`cancelled_by_user`, `failed: <reason>`, `circuit_breaker_tripped`,
+`first_sitting_claimed`, …), which the Logs tab shows in its chronology. A test
+guards the source: a run's status written anywhere else fails it.
+
+### Every retry decision is recorded
+A failed execution was recorded; what was decided about it was not — and a
+sitting whose lease expired or was released left no trace at all. The decision
+is recorded where it is made: requeued, with the reason, the retry delay and
+when, or given up after its tries (`abandoned`, shown as an error in the
+Logs tab, and kept apart from `failed` so that failures are not counted twice).
+
+---
+
+## [0.7.18] — 2026-10-02 — The classical test plays every item (#104)
+
+The classical test plays every item of the chosen scale; only its evaluation is
+by IRT — ability and standard error, not points. It has no number of questions.
+Since 0.7.3 it could be given its own maximum, and a swept question budget
+reached it: both were wrong. Now:
+
+- the catalogue: `classic` uses no question budget;
+- the engine always gets "every item" (`maxquestions = -1`), whatever budget is
+  named for it — shared, swept, per strategy, per cell;
+- the form: its question fields — in the per-strategy row and in the cell
+  budgets — are disabled and say "all items"; the shared question budget is
+  disabled when the classical test is the only strategy in play; values sent
+  for it anyway are not taken;
+- the manifest and the run's parameter table say "all items of the scale", the
+  stop rules "every item of the scale (classical test)";
+- a definition sweeping the question budget over the classical test is warned
+  that its cells are alike.
+
+Found on the way: a first minimum of 0 for the classical test made every one of
+its sweep cells invalid ("must be a positive integer"); it is 1 — with no
+maximum the engine plays every item either way. Tests that held the old
+behaviour were changed to the right one; two tests that read the engine's
+strategy catalogue now reset the database, since the catalogue records the
+engine's fingerprint in the plugin's config on its first read.
+
+---
+
 ## [0.7.17] — 2026-10-01 — #100 and #102, found while ticking
 
 ### #100 — a navigation after the login is no longer swallowed

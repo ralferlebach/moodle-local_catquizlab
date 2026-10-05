@@ -91,6 +91,10 @@ class progress_view {
 
             $workers[] = [
                 'workerid'   => $worker->workerid,
+                // Straight into the log, filtered to this worker (#90).
+                'logurl'     => (new \moodle_url('/local/catquizlab/logs.php', [
+                    'workerid' => $worker->workerid, 'hours' => 24,
+                ]))->out(false),
                 'status'     => status_report::worker($worker),
                 'slot'       => (int) $worker->slot,
                 'statename'  => $stale

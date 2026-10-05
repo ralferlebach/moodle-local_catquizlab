@@ -356,7 +356,7 @@ Feature: Defining and running CAT experiments from the web interface
     Then I should see "Stop rules in force"
     # The adaptive strategies stop at the shared maximum; the classical test
     # plays every item unless given its own maximum (#104).
-    And I should see "no maximum number of questions" in the "[data-strategy='classic']" "css_element"
+    And I should see "every item of the scale" in the "[data-strategy='classic']" "css_element"
     And I should see "stops after at most" in the "[data-strategy='fastest']" "css_element"
     # The classical test has no precision target and no subscales: neither is listed.
     And I should not see "standard error" in the "[data-strategy='classic']" "css_element"
@@ -561,7 +561,11 @@ Feature: Defining and running CAT experiments from the web interface
     And I navigate to "Reports > CAT experiment suite" in site administration
     When I follow "Behat cells"
     And I expand all fieldsets
-    Then I should see "Budgets per cell"
+    # The classical test plays every item of its scale: no number of questions to set.
+    Then the "perstrategy_classic_globalmin" "field" should be disabled
+    And the "perstrategy_classic_globalmax" "field" should be disabled
+    And the "perstrategy_allsubs_globalmax" "field" should be enabled
+    And I should see "Budgets per cell"
     When I set cell budget "globalmax" of "allsubs" in "Behat cells" to "25"
     And I set cell budget "semin" of "allsubs" in "Behat cells" to "0.3"
     And I press "Save experiment"

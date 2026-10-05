@@ -47,9 +47,13 @@ final class sweep_factors_test extends \advanced_testcase {
      * @return array The spec.
      */
     protected function spec(array $factors): array {
+        // A strategy that counts questions: the baseline's classical test plays
+        // every item of its scale, and a swept question budget never reaches it.
+        $base = experiment_definition::example_baseline();
+        $base['strategy'] = 'fastest';
+
         return [
-            'base'         => (new experiment_definition(experiment_definition::example_baseline()))
-                ->get_normalised(),
+            'base'         => (new experiment_definition($base))->get_normalised(),
             'factors'      => $factors,
             'replications' => 1,
             'seed'         => 42,

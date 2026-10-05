@@ -266,6 +266,6 @@ class run_cleanup {
         if ($coursecleared) {
             $update->courseid = null;
         }
-        $DB->update_record('local_catquizlab_run', $update);
+        run_lifecycle::update_run($update, 'reset_run');
     }
 }

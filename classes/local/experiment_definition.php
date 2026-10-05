@@ -166,6 +166,16 @@ class experiment_definition {
         self::validate_strategy($def, $errors);
         self::validate_pilot($def, $errors);
         self::validate_cell_budgets($def, $errors);
+
+        // The classical test plays every item of its scale: a swept question
+        // budget leaves its cells alike (#104).
+        $strategies = array_merge(
+            [(string) ($def['strategy'] ?? '')],
+            (array) ($def['sweep']['factors']['strategy'] ?? [])
+        );
+        if (!empty($def['sweep']['factors']['globalbudget']) && in_array('classic', $strategies, true)) {
+            $warnings[] = get_string('def:classicallitems', 'local_catquizlab');
+        }
         self::validate_pool($def, $errors);
         self::validate_persons($def, $errors, $warnings);
         self::validate_budgets($def, $errors);

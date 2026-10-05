@@ -18,6 +18,7 @@ namespace local_catquizlab;
 
 use local_catquizlab\local\experiment_definition;
 use local_catquizlab\local\provisioning_check;
+use local_catquizlab\local\strategy_parameters;
 use local_catquizlab\local\sweep;
 use local_catquizlab\local\test_provisioner;
 
@@ -56,8 +57,9 @@ final class effective_parameters_test extends \advanced_testcase {
         // The shared 35 was meant for the adaptive strategies beside it.
         $this->assertSame(['allsubs' => 80, 'classic' => -1, 'relsubs' => 40], $this->sorted($max));
 
-        // A swept global budget is the variable under study: it applies to the
-        // classical test too, or its levels would be identical cells.
+        // The classical test plays every item of the scale: a swept question
+        // budget does not reach it — its cells are alike, and the definition
+        // warns about that.
         $swept = sweep::expand(['base' => $definition, 'factors' => [
             'strategy'     => ['classic'],
             'globalbudget' => [['minitems' => 5, 'maxitems' => 20], ['minitems' => 5, 'maxitems' => 40]],
@@ -66,14 +68,22 @@ final class effective_parameters_test extends \advanced_testcase {
         foreach ($swept['runs'] as $run) {
             $levels[] = test_provisioner::options_from_definition($run['definition'])['maxquestions'];
         }
-        sort($levels);
-        $this->assertSame([20, 40], $levels);
+        $this->assertSame([-1, -1], $levels);
+        $sweepdefinition = $definition;
+        $sweepdefinition['sweep']['factors'] = ['strategy' => ['classic'],
+            'globalbudget' => [['minitems' => 5, 'maxitems' => 20], ['minitems' => 5, 'maxitems' => 40]]];
+        $warnings = (new \local_catquizlab\local\experiment_definition($sweepdefinition))->validate()['warnings'];
+        $this->assertStringContainsString('every item', implode(' ', $warnings));
 
-        // A maximum given to the classical test itself still applies.
+        // Nor does a question budget named for it: it is not its parameter.
         $definition['budgetsbystrategy']['classic'] = ['global' => ['maxitems' => 20]];
         $plan = sweep::expand(['base' => $definition, 'factors' => ['strategy' => ['classic']]]);
         $options = test_provisioner::options_from_definition($plan['runs'][0]['definition']);
-        $this->assertSame(20, $options['maxquestions']);
+        $this->assertSame(-1, $options['maxquestions']);
+        $this->assertSame(
+            strategy_parameters::ALL_ITEMS,
+            test_provisioner::effective_parameters($plan['runs'][0]['definition'])['budgets']['global']
+        );
     }
 
     /**

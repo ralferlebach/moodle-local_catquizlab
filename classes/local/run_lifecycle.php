@@ -87,11 +87,11 @@ class run_lifecycle {
             return ['started' => false, 'reason' => preflight::summary($preflight)];
         }
 
-        $DB->update_record('local_catquizlab_run', (object) [
+        self::update_run((object) [
             'id'           => $runid,
             'status'       => registry::STATUS_SCHEDULED,
             'timemodified' => time(),
-        ]);
+        ], 'start_requested');
         self::refresh_experiment($runid);
 
         \local_catquizlab\task\orchestrate_run::queue($runid, $options);
@@ -153,11 +153,11 @@ class run_lifecycle {
             return;
         }
 
-        $DB->update_record('local_catquizlab_run', (object) [
+        self::update_run((object) [
             'id'           => $runid,
             'status'       => registry::STATUS_READY,
             'timemodified' => time(),
-        ]);
+        ], 'provisioned');
         self::refresh_experiment($runid);
     }
 
@@ -321,7 +321,7 @@ class run_lifecycle {
 
         $status = (int) $DB->get_field('local_catquizlab_run', 'status', ['id' => $runid]);
         if (in_array($status, [registry::STATUS_FINISHED, registry::STATUS_FAILED, registry::STATUS_AGGREGATING], true)) {
-            $DB->set_field('local_catquizlab_run', 'status', registry::STATUS_READY, ['id' => $runid]);
+            self::set_status($runid, registry::STATUS_READY, 'reopened_for_work');
         }
     }
 
@@ -472,16 +472,12 @@ class run_lifecycle {
         // Conditional even so: callers hold a transaction that serialises the
         // claims, and the condition is what keeps that true if one ever does
         // not. An UPDATE that matches nothing is not an error here.
-        $DB->execute(
-            'UPDATE {local_catquizlab_run}
-                SET status = :running, timemodified = :now
-              WHERE id = :id AND status = :ready',
-            [
-                'running' => registry::STATUS_RUNNING,
-                'now'     => time(),
-                'id'      => $runid,
-                'ready'   => registry::STATUS_READY,
-            ]
+        self::set_status_if(
+            $runid,
+            registry::STATUS_READY,
+            registry::STATUS_RUNNING,
+            'first_sitting_claimed',
+            ['timemodified' => time()]
         );
 
         self::refresh_experiment($runid);
@@ -522,7 +518,7 @@ class run_lifecycle {
             return 'failed';
         }
 
-        $DB->set_field('local_catquizlab_run', 'status', registry::STATUS_AGGREGATING, ['id' => $runid]);
+        self::set_status($runid, registry::STATUS_AGGREGATING, 'all_sittings_done');
         self::refresh_experiment($runid);
 
         // Exactly once: the guard above means a second caller finds the run
@@ -554,7 +550,7 @@ class run_lifecycle {
             return;
         }
 
-        $DB->set_field('local_catquizlab_run', 'status', registry::STATUS_FINISHED, ['id' => $runid]);
+        self::set_status($runid, registry::STATUS_FINISHED, 'aggregated');
         $DB->set_field('local_catquizlab_run', 'timemodified', time(), ['id' => $runid]);
         self::refresh_experiment($runid);
     }
@@ -588,12 +584,12 @@ class run_lifecycle {
             $manifest['lifecycle']['readinessfacts'] = $readiness['facts'];
         }
 
-        $DB->update_record('local_catquizlab_run', (object) [
+        self::update_run((object) [
             'id'           => $runid,
             'status'       => registry::STATUS_FAILED,
             'manifestjson' => json_encode($manifest, JSON_UNESCAPED_SLASHES),
             'timemodified' => time(),
-        ]);
+        ], 'failed: ' . $reason);
 
         run_log::record($runid, run_log::RUN_FAILED, ['reason' => $reason]);
 
@@ -867,14 +863,14 @@ class run_lifecycle {
         $manifest = json_decode((string) $run->manifestjson, true) ?: [];
         unset($manifest['lifecycle']);
 
-        $DB->update_record('local_catquizlab_run', (object) [
+        self::update_run((object) [
             'id'           => $runid,
             'status'       => registry::STATUS_DRAFT,
             'testcmid'     => 0,
             'sectionid'    => 0,
             'manifestjson' => json_encode($manifest, JSON_UNESCAPED_SLASHES),
             'timemodified' => time(),
-        ]);
+        ], 'reset');
 
         self::refresh_experiment($runid);
 
@@ -942,12 +938,12 @@ class run_lifecycle {
             $manifest['lifecycle']['readinessfacts']
         );
 
-        $DB->update_record('local_catquizlab_run', (object) [
+        self::update_run((object) [
             'id'           => $runid,
             'status'       => registry::STATUS_READY,
             'manifestjson' => json_encode($manifest, JSON_UNESCAPED_SLASHES),
             'timemodified' => time(),
-        ]);
+        ], 'rechecked');
         self::refresh_experiment($runid);
 
         return ['ok' => true, 'reason' => '', 'requeued' => $reopened];
@@ -1191,5 +1187,115 @@ class run_lifecycle {
         $copy->timemodified = $now;
 
         return (int) $DB->insert_record('local_catquizlab_run', $copy);
+    }
+
+    /**
+     * A status by its name, for the log.
+     *
+     * @param int|null $status The status.
+     * @return string
+     */
+    protected static function status_name(?int $status): string {
+        $names = [
+            registry::STATUS_DRAFT => 'draft', registry::STATUS_SCHEDULED => 'scheduled',
+            registry::STATUS_READY => 'ready', registry::STATUS_RUNNING => 'running',
+            registry::STATUS_AGGREGATING => 'aggregating', registry::STATUS_FINISHED => 'finished',
+            registry::STATUS_FAILED => 'failed', registry::STATUS_CANCELLED => 'cancelled',
+        ];
+
+        return $status === null ? 'none' : ($names[$status] ?? (string) $status);
+    }
+
+    /**
+     * Record a change of a run's status, if it is one (#90).
+     *
+     * @param int $runid The run.
+     * @param int|null $from The status before.
+     * @param int $to The status after.
+     * @param string $why Why, in a word or two.
+     * @return void
+     */
+    protected static function record_status(int $runid, ?int $from, int $to, string $why): void {
+        if ($from === $to) {
+            return;
+        }
+        run_log::record($runid, run_log::STATUS_CHANGED, [
+            'from' => self::status_name($from),
+            'to'   => self::status_name($to),
+            'why'  => $why,
+        ]);
+    }
+
+    /**
+     * Set a run's status — the one way it is changed, so that every change is
+     * recorded: from, to, why (#90, "every status change is logged").
+     *
+     * @param int $runid The run.
+     * @param int $to The new status.
+     * @param string $why Why, in a word or two.
+     * @param array $fields Other fields written with it.
+     * @return void
+     */
+    public static function set_status(int $runid, int $to, string $why, array $fields = []): void {
+        global $DB;
+
+        $from = $DB->get_field('local_catquizlab_run', 'status', ['id' => $runid]);
+        $DB->update_record('local_catquizlab_run', (object) (['id' => $runid, 'status' => $to] + $fields));
+        self::record_status($runid, $from === false ? null : (int) $from, $to, $why);
+    }
+
+    /**
+     * Change a run's status only if it is the expected one — atomically, for
+     * transitions several processes may attempt at once — and record it if it
+     * happened.
+     *
+     * @param int $runid The run.
+     * @param int $from The status it must have.
+     * @param int $to The new status.
+     * @param string $why Why, in a word or two.
+     * @param array $fields Other fields written with it (name => value).
+     * @return bool Whether this call made the change.
+     */
+    public static function set_status_if(int $runid, int $from, int $to, string $why, array $fields = []): bool {
+        global $DB;
+
+        $sets = ['status = :to'];
+        $params = ['to' => $to, 'id' => $runid, 'from' => $from];
+        foreach ($fields as $name => $value) {
+            $sets[] = $name . ' = :f_' . $name;
+            $params['f_' . $name] = $value;
+        }
+        $before = $DB->count_records('local_catquizlab_run', ['id' => $runid, 'status' => $from]);
+        $DB->execute(
+            'UPDATE {local_catquizlab_run} SET ' . implode(', ', $sets) . ' WHERE id = :id AND status = :from',
+            $params
+        );
+        // This call changed it if the run had the expected status before and
+        // has the new one now — the update does not say how many rows it hit.
+        $changed = $before > 0 && (int) $DB->get_field('local_catquizlab_run', 'status', ['id' => $runid]) === $to;
+        if ($changed) {
+            self::record_status($runid, $from, $to, $why);
+        }
+
+        return $changed;
+    }
+
+    /**
+     * Write a run record, recording its status change if it carries one (#90).
+     *
+     * @param \stdClass $record The record, with its id.
+     * @param string $why Why, in a word or two.
+     * @return void
+     */
+    public static function update_run(\stdClass $record, string $why): void {
+        global $DB;
+
+        $from = isset($record->status)
+            ? $DB->get_field('local_catquizlab_run', 'status', ['id' => $record->id])
+            : false;
+        $DB->update_record('local_catquizlab_run', $record);
+        if (isset($record->status)) {
+            self::record_status((int) $record->id, $from === false ? null : (int) $from, (int) $record->status, $why);
+        }
     }
 }

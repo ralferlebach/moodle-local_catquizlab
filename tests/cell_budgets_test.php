@@ -84,8 +84,8 @@ final class cell_budgets_test extends \advanced_testcase {
         $this->assertSame(25, $options['allsubs']['maxquestions'], "the cell over its strategy's 80");
         $this->assertSame(0.3, $options['allsubs']['se_min']);
         $this->assertSame(35, $options['fastest']['maxquestions'], 'the other cells untouched');
-        // A cell maximum for the classical test wins over its "unlimited" default.
-        $this->assertSame(12, $options['classic']['maxquestions']);
+        // The classical test plays every item: a cell's question budget does not reach it.
+        $this->assertSame(-1, $options['classic']['maxquestions']);
 
         unset($definition['budgetsbycell'][$keys['classic']]);
         $this->assertSame(-1, $this->options($definition)['classic']['maxquestions']);

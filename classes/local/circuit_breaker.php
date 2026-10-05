@@ -68,12 +68,12 @@ class circuit_breaker {
             ['runid' => $runid, 'queued' => attempt_scheduler::STATUS_QUEUED]
         );
 
-        $DB->update_record('local_catquizlab_run', (object) [
+        run_lifecycle::update_run((object) [
             'id'           => $runid,
             'status'       => registry::STATUS_FAILED,
             'lasterror'    => $streak['lasterror'],
             'timemodified' => time(),
-        ]);
+        ], 'circuit_breaker_tripped');
 
         run_log::record($runid, run_log::RUN_AUTOPAUSED, [
             'reason'        => 'failure-streak',
@@ -231,12 +231,12 @@ class circuit_breaker {
             ]
         );
 
-        $DB->update_record('local_catquizlab_run', (object) [
+        run_lifecycle::update_run((object) [
             'id'           => $runid,
             'status'       => registry::STATUS_READY,
             'lasterror'    => null,
             'timemodified' => time(),
-        ]);
+        ], 'circuit_breaker_reset');
 
         run_log::record($runid, run_log::RUN_RESUMED, [
             'reason'   => 'operator-reset',

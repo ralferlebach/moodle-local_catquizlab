@@ -50,6 +50,9 @@ class attempt_history {
     /** @var string Somebody put it back in the queue. */
     public const REQUEUED = 'requeued';
 
+    /** @var string A sitting given up: no tries left (#90). */
+    public const ABANDONED = 'abandoned';
+
     /**
      * Record one execution.
      *

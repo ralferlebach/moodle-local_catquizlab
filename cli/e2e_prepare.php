@@ -217,7 +217,7 @@ function local_catquizlab_e2e_prepare(string $name, int $persons): int {
     // authenticated, asked for work and was correctly told there was none —
     // which reads as an empty queue rather than as a run that was never let go.
     if ((int) $DB->get_field('local_catquizlab_run', 'status', ['id' => $runid]) !== registry::STATUS_READY) {
-        $DB->set_field('local_catquizlab_run', 'status', registry::STATUS_READY, ['id' => $runid]);
+        \local_catquizlab\local\run_lifecycle::set_status($runid, registry::STATUS_READY, 'e2e_prepared');
     }
 
     $token = local_catquizlab_e2e_token();

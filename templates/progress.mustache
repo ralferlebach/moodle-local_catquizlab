@@ -16,7 +16,7 @@
     * situation - the overall verdict
     * runs - hasany and rows of id, cellkey, status, progress, url
     * tasks - scheduled, adhoc, hasadhoc, cron
-    * workers - hasany and rows of workerid, status, log
+    * workers - hasany and rows of workerid, logurl, status, log
     * queuestatus - the queue as a status card
     * queue - claimable, notdue, blocked, paused, running, collected, failed
     * pipelinestatus - the pipeline as a status card
@@ -355,7 +355,8 @@
         {{#workers.hasany}}
             {{#workers.rows}}
                 <div class="mb-2">
-                    <div class="small text-muted">{{workerid}} — {{statename}}</div>
+                    <div class="small text-muted">{{workerid}} — {{statename}}
+                        <a href="{{logurl}}" class="ml-2" data-region="catquizlab-worker-log">{{#str}}worker:openlog, local_catquizlab{{/str}}</a></div>
                     {{#status}}{{> local_catquizlab/statuscard }}{{/status}}
                     <ul class="list-inline small text-muted mb-1 mt-1">
                         <li class="list-inline-item">{{#str}}worker:slot, local_catquizlab{{/str}}: {{slot}}</li>

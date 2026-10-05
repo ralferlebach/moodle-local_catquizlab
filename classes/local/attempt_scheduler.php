@@ -227,7 +227,7 @@ class attempt_scheduler {
         foreach ($held as $attempt) {
             $DB->set_field('local_catquizlab_attempt', 'leaseowner', null, ['id' => $attempt->id]);
             $DB->set_field('local_catquizlab_attempt', 'leaseexpires', 0, ['id' => $attempt->id]);
-            self::apply_retry((int) $attempt->id, (int) $attempt->tries, $now);
+            self::apply_retry((int) $attempt->id, (int) $attempt->tries, $now, 'lease_released');
         }
 
         return count($held);
@@ -292,7 +292,7 @@ class attempt_scheduler {
         foreach ($stale as $attempt) {
             $DB->set_field('local_catquizlab_attempt', 'leaseowner', null, ['id' => $attempt->id]);
             $DB->set_field('local_catquizlab_attempt', 'leaseexpires', 0, ['id' => $attempt->id]);
-            self::apply_retry((int) $attempt->id, (int) $attempt->tries, $now);
+            self::apply_retry((int) $attempt->id, (int) $attempt->tries, $now, 'lease_expired');
         }
         return count($stale);
     }
@@ -356,10 +356,10 @@ class attempt_scheduler {
      * @param int $attemptid The attempt.
      * @param int $tries The current try count.
      * @param int $now The current time.
+     * @param string $why Why the sitting is retried or given up, for the history.
      * @return int The resulting status.
      */
-    protected static function apply_retry(int $attemptid, int $tries, int $now): int {
-
+    protected static function apply_retry(int $attemptid, int $tries, int $now, string $why = 'failed'): int {
         global $DB;
 
         $status = self::retry_status($tries);
@@ -372,6 +372,26 @@ class attempt_scheduler {
             $update->nextruntime = $now + self::RETRY_BACKOFF * max(1, $tries);
         }
         $DB->update_record('local_catquizlab_attempt', $update);
+
+        // Every retry decision is recorded (#90): requeued — after which
+        // backoff, when — or given up, and why. The failure itself is recorded
+        // where it was reported; this is what was decided about it.
+        if ($status === self::STATUS_QUEUED) {
+            attempt_history::record($attemptid, attempt_history::REQUEUED, [
+                'tryno'  => $tries,
+                'detail' => sprintf(
+                    '%s; retry after %d s, at %s',
+                    $why,
+                    (int) $update->nextruntime - $now,
+                    date('c', (int) $update->nextruntime)
+                ),
+            ]);
+        } else if ($status === self::STATUS_FAILED) {
+            attempt_history::record($attemptid, attempt_history::ABANDONED, [
+                'tryno'  => $tries,
+                'detail' => sprintf('%s; no tries left after %d', $why, $tries),
+            ]);
+        }
 
         // A sitting that has given up is the moment to ask whether this run is
         // failing the same way over and over. Asking later — on a page load, in
@@ -424,7 +444,7 @@ class attempt_scheduler {
         }
 
         if ($created > 0) {
-            $DB->set_field('local_catquizlab_run', 'status', registry::STATUS_SCHEDULED, ['id' => $runid]);
+            run_lifecycle::set_status($runid, registry::STATUS_SCHEDULED, 'sittings_scheduled');
         }
 
         return $created;

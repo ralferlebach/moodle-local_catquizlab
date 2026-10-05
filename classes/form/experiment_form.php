@@ -326,6 +326,12 @@ class experiment_form extends \moodleform {
         $mform->addElement('text', 'globalmax', get_string('form:globalmax', $component), ['size' => 8]);
         $mform->setType('globalmax', PARAM_INT);
         $mform->setDefault('globalmax', 25);
+        // Classic only: it plays every item, the question budget is not its (#104).
+        $mform->addElement('static', 'na_globalmax', '', \html_writer::span(
+            get_string('form:allitems', $component),
+            'text-muted',
+            ['data-catquizlab-na' => 'globalmax', 'hidden' => 'hidden']
+        ));
 
         $mform->addElement('text', 'subscalemin', get_string('form:subscalemin', $component), ['size' => 8]);
         $mform->setType('subscalemin', PARAM_INT);
@@ -388,6 +394,13 @@ class experiment_form extends \moodleform {
                     $attributes['placeholder'] = get_string('form:na_short', $component);
                     $attributes['title'] = get_string('form:na_forstrategy', $component, strategy_catalog::label($key));
                 }
+                // The classical test plays every item of the scale: there is
+                // no number of questions to set for it.
+                if (str_starts_with($field, 'global') && !strategy_catalog::uses($key, 'globalmax')) {
+                    $attributes['disabled'] = 'disabled';
+                    $attributes['placeholder'] = get_string('form:allitems_short', $component);
+                    $attributes['title'] = get_string('form:allitems', $component);
+                }
                 $group[] = $mform->createElement('text', $name, '', $attributes);
                 // Text, not integer: a maximum may be the word "unlimited".
                 $mform->setType($name, PARAM_ALPHANUMEXT);
@@ -409,11 +422,13 @@ class experiment_form extends \moodleform {
         $PAGE->requires->js_amd_inline('
             require([], function() {
                 var capabilities = ' . json_encode([
+                    'globalmax'     => strategy_catalog::using('globalmax'),
                     'subscalemax'   => strategy_catalog::using('subscalemax'),
                     'standarderror' => strategy_catalog::using('standarderror'),
                     'pilot'         => strategy_catalog::using('pilot'),
                 ]) . ';
                 var fields = {
+                    globalmax: ["id_globalmin", "id_globalmax"],
                     subscalemax: ["id_subscalemin", "id_subscalemax"],
                     standarderror: ["id_semin", "id_semax"],
                     pilot: ["id_pilotinclude", "id_pilotratio"]
@@ -936,7 +951,7 @@ class experiment_form extends \moodleform {
             $mform->setType($prefix . 'key', PARAM_RAW);
             $group = [];
             foreach (self::CELL_FIELDS as $field => [$level, $key]) {
-                $applies = $level === 'global'
+                $applies = ($level === 'global' && \local_catquizlab\local\strategy_catalog::uses($strategy, 'globalmax'))
                     || ($level === 'subscale' && \local_catquizlab\local\strategy_catalog::uses_subscales($strategy))
                     || ($level === 'se' && \local_catquizlab\local\strategy_catalog::uses_standard_error($strategy));
                 $current = $applied['budgets'][$level][$key] ?? null;
@@ -944,7 +959,7 @@ class experiment_form extends \moodleform {
                     'placeholder' => $applies
                         ? ($current === null ? '' : (\local_catquizlab\local\experiment_definition::is_unlimited($current)
                             ? get_string('budget:unlimited', $component) : (string) $current))
-                        : $na];
+                        : ($level === 'global' ? get_string('form:allitems_short', $component) : $na)];
                 if (!$applies) {
                     $attributes['disabled'] = 'disabled';
                 }
@@ -1042,6 +1057,9 @@ class experiment_form extends \moodleform {
                 // was sent: the field is disabled in the browser, and a request
                 // that fills it anyway describes nothing the engine would use.
                 if ($level === 'subscale' && !strategy_catalog::uses_subscales($key)) {
+                    continue;
+                }
+                if ($level === 'global' && !strategy_catalog::uses($key, 'globalmax')) {
                     continue;
                 }
                 foreach ($fields as $target => $field) {
