@@ -273,18 +273,29 @@ async function playAttempt(browser, job) {
         await context.close();
         const diagnosis = {browser: recorder.summary(), transport, artefacts};
         const fullpath = writeFullDiagnosis(diagnosis, job);
-        await callWs('local_catquizlab_job_complete', {
-            // The reason travels with the report. Without it the server sees a
-            // failed attempt and no explanation, and the retry count is all
-            // anyone has to go on. Cut visibly if it is long (#111).
-            message: failure ? fitMessage(failure) : '',
-            attemptid: job.attemptid,
-            status,
-            runtimems: Date.now() - started,
-            engineattemptid: engineAttemptId,
-            // The browser's record for the attempt history (#100, #107).
-            diagnostics: fitDiagnostics(diagnosis, DIAGNOSTICS_LIMIT, fullpath),
-        });
+        // A report that fails must not hide what it was reporting (#111): an
+        // exception thrown here replaced the attempt's own failure, and only
+        // the transport error was left. Both are said, and kept beside the
+        // artefacts; the lease then expires and the retry is recorded.
+        try {
+            await callWs('local_catquizlab_job_complete', {
+                // The reason travels with the report. Without it the server sees a
+                // failed attempt and no explanation, and the retry count is all
+                // anyone has to go on. Cut visibly if it is long (#111).
+                message: failure ? fitMessage(failure) : '',
+                attemptid: job.attemptid,
+                status,
+                runtimems: Date.now() - started,
+                engineattemptid: engineAttemptId,
+                // The browser's record for the attempt history (#100, #107).
+                diagnostics: fitDiagnostics(diagnosis, DIAGNOSTICS_LIMIT, fullpath),
+            });
+        } catch (reportError) {
+            const both = reportFailureMessage(job.attemptid, status, failure, reportError);
+            console.error(both);
+            keepUnreported(job, {status, failure, diagnosis: fitDiagnostics(diagnosis), report: reportError.message});
+            throw new Error(both);
+        }
         currentAttemptId = 0;
     }
 }
@@ -1232,6 +1243,41 @@ function writeFullDiagnosis(diagnosis, job) {
     }
 }
 
+/**
+ * What to say when the report of an attempt fails: the attempt's own outcome first.
+ *
+ * @param {number} attemptid The attempt.
+ * @param {string} status Its outcome.
+ * @param {string} failure Its failure, if it failed.
+ * @param {Error} reportError Why the report failed.
+ * @returns {string}
+ */
+function reportFailureMessage(attemptid, status, failure, reportError) {
+    return `Attempt ${attemptid} ${status}${failure ? ': ' + failure : ''} — and its report to Moodle failed: `
+        + `${reportError && reportError.message ? reportError.message : String(reportError)}`;
+}
+
+/**
+ * Keep an outcome that could not be reported, beside the attempt's artefacts.
+ *
+ * @param {object} job The job.
+ * @param {object} record What was to be reported, and why it was not.
+ * @returns {void}
+ */
+function keepUnreported(job, record) {
+    if (!ARTEFACT_DIR) {
+        return;
+    }
+    try {
+        const path = require('path');
+        const file = path.join(ARTEFACT_DIR, artefactPath(job), 'report-failed.json');
+        require('fs').mkdirSync(path.dirname(file), {recursive: true});
+        require('fs').writeFileSync(file, JSON.stringify(record, null, 1));
+    } catch (error) {
+        console.error(`The unreported outcome of attempt ${job.attemptid} could not be kept: ${error.message}`);
+    }
+}
+
 function artefactPath(job) {
     return [
         `experiment-${job.experimentid || 0}`,
@@ -1292,6 +1338,7 @@ module.exports = {
     parseArgs,
     normaliseBaseUrl,
     buildWsRequest,
+    reportFailureMessage,
     fitDiagnostics,
     fitMessage,
     DIAGNOSTICS_LIMIT,

@@ -6,6 +6,20 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.7.22] — 2026-10-02 — #111: a failed report no longer hides the failure
+
+"A secondary reporting error no longer hides the original attempt failure"
+(#111): with the parameters in the body, the 414 is gone — but a report can
+still fail for other reasons, the network for one. The report was sent in a
+`finally` block, and an exception thrown there replaces the one it was
+reporting: the worker's log said only that the report failed. Now the report's
+failure is caught: the worker logs the attempt's own outcome first and the
+report's failure after it, keeps both beside the artefacts as
+`report-failed.json`, and the error it raises names both. The lease then
+expires, and the retry is recorded with its reason (0.7.19).
+
+---
+
 ## [0.7.21] — 2026-10-02 — #111: reports in the body, never cut silently
 
 ### Every web service parameter in the body — HTTP 414 gone, the token out of URLs

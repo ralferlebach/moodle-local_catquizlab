@@ -195,3 +195,11 @@ test('artefacts of an execution have a place of their own (#107)', () => {
         'experiment-4/run-36/attempt-1052/execution-2'
     );
 });
+
+test('a failed report does not hide the attempt it was reporting (#111)', () => {
+    const message = worker.reportFailureMessage(42, 'failed', 'Attempt did not reach the finish page: HTTP 500',
+        new Error('local_catquizlab_job_complete: fetch failed (ECONNRESET)'));
+    // The attempt's own failure first, then the report's.
+    assert.ok(message.indexOf('HTTP 500') < message.indexOf('ECONNRESET'));
+    assert.match(message, /^Attempt 42 failed: .*HTTP 500 — and its report to Moodle failed: .*ECONNRESET/);
+});
