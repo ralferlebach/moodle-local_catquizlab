@@ -319,11 +319,24 @@ class experiment_service {
             $warnings[] = get_string('sweep:large', 'local_catquizlab', number_format($runs));
         }
 
+        // People, run-persons and sittings, kept apart (#117) — each derived
+        // from the definition, and the sweep's own count checked against it.
+        $population = population_plan::plan($expansion);
+        if ((int) ($capacity['attempts'] ?? 0) !== $population['sittings']) {
+            $warnings[] = get_string('plan:capacitymismatch', 'local_catquizlab', (object) [
+                'capacity' => (int) ($capacity['attempts'] ?? 0), 'plan' => $population['sittings'],
+            ]);
+        }
+
         return [
             'cells'        => count($expansion['cells'] ?? []),
             'replications' => (int) ($normalised['replications'] ?? 1),
             'runs'         => $runs,
-            'attempts'     => (int) ($capacity['attempts'] ?? 0),
+            'attempts'     => $population['sittings'],
+            'twins'        => $population['twins'],
+            'twinsvary'    => $population['twins'] === null && $population['runs'] > 0,
+            'runpersons'   => $population['runpersons'],
+            'sittings'     => $population['sittings'],
             'large'        => $runs > self::LARGE_SWEEP_RUNS,
             'excluded'     => (int) ($expansion['excluded'] ?? 0),
             // What each run would actually use, after the factors and after

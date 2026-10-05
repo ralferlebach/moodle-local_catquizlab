@@ -182,4 +182,31 @@ final class person_integrity_test extends \advanced_testcase {
         $this->assertFalse($check['ok']);
         $this->assertSame([4, 4], [$check['rows'], $check['distinct']]);
     }
+
+    /**
+     * A people stage interrupted after some twins is continued, not started over (#116, criterion 3).
+     *
+     * @return void
+     */
+    public function test_an_interrupted_people_stage_is_continued(): void {
+        global $DB;
+        $this->resetAfterTest();
+        [$run, $persons] = $this->run_and_twins();
+
+        // Interrupted after three of five.
+        person_generator::persist((int) $run->id, array_slice($persons, 0, 3));
+        $before = $DB->get_records_menu('local_catquizlab_person', ['runid' => $run->id], 'id', 'twinid, id');
+
+        // Run again, whole.
+        person_generator::persist((int) $run->id, $persons);
+
+        $check = person_integrity::check_run((int) $run->id, 5);
+        $this->assertTrue($check['ok']);
+        $after = $DB->get_records_menu('local_catquizlab_person', ['runid' => $run->id], 'id', 'twinid, id');
+        // The three already there are the same rows; the two missing ones were added.
+        foreach ($before as $twinid => $id) {
+            $this->assertSame($id, $after[$twinid]);
+        }
+        $this->assertCount(5, $after);
+    }
 }

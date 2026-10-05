@@ -331,6 +331,35 @@ if ($queued === 0) {
 }
 step($queued . ' attempts queued.');
 
+// Every run exactly its planned twins, each once, each with one sitting (#116):
+// a setup done twice at once used to store every twin twice and give each copy
+// a sitting — ten sittings for five people, and nothing said so.
+$populations = [];
+foreach ($DB->get_records('local_catquizlab_run', ['experimentid' => $experimentid], 'id ASC') as $run) {
+    $planned = \local_catquizlab\local\person_generator::planned_count(
+        \local_catquizlab\local\run_registry::definition_for($run)
+    );
+    $check = \local_catquizlab\local\person_integrity::check_run((int) $run->id, $planned);
+    $sittings = $DB->count_records('local_catquizlab_attempt', ['runid' => $run->id]);
+    if (!$check['ok'] || $sittings !== $planned) {
+        cli_error(sprintf(
+            'Run %d: planned %d people, has %d rows for %d twins and %d sittings%s.',
+            $run->id,
+            $planned,
+            $check['rows'],
+            $check['distinct'],
+            $sittings,
+            $check['duplicates'] === [] ? '' : ' — twins more than once: ' . count($check['duplicates'])
+        ));
+    }
+    $populations[] = $planned;
+}
+step(sprintf(
+    'Population: %d runs, each its %s planned twins once, each with one sitting.',
+    count($populations),
+    implode('/', array_unique($populations))
+));
+
 // 4. Run it: a real browser, against real questions.
 //
 // Other work on this installation is paused first. A worker takes whatever is

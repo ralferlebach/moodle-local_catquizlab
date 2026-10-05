@@ -259,6 +259,7 @@ class experiment_form extends \moodleform {
         $mform->addElement('text', 'personcount', get_string('form:personcount', $component), ['size' => 8]);
         $mform->setType('personcount', PARAM_INT);
         $mform->setDefault('personcount', 50);
+        $mform->addHelpButton('personcount', 'form:personcount', $component);
 
         // The simulated abilities: distribution, parameters and range, named
         // explicitly (#102, #105) — "N(0, 2)" left open whether 2 was a

@@ -140,6 +140,17 @@ class job_claim extends external_api {
             if (\local_catquizlab\local\run_lifecycle::is_paused($runid)) {
                 continue;
             }
+            // A run with a twin more than once is not executed (#117): its
+            // results would count people twice. It is failed, with the reason,
+            // rather than left to hand out nothing — which would look like a
+            // run that hangs. Runs damaged before 0.7.26 are caught here.
+            if (\local_catquizlab\local\person_integrity::has_duplicates($runid)) {
+                \local_catquizlab\local\run_lifecycle::fail(
+                    $runid,
+                    get_string('integrity:runblocked', 'local_catquizlab', $runid)
+                );
+                continue;
+            }
             if (!\local_catquizlab\local\run_lifecycle::is_runnable($runid)) {
                 continue;
             }

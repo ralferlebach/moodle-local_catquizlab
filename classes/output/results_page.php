@@ -285,6 +285,36 @@ class results_page {
     }
 
     /**
+     * The population of the selected experiments, and their problems above everything (#117).
+     *
+     * @return array{0: string, 1: string} The problems, and the line.
+     */
+    protected function render_population(): array {
+        $component = 'local_catquizlab';
+        $problems = '';
+        $lines = '';
+        $runs = $this->query->runs();
+        $experiments = array_unique(array_map(static fn($run): int => (int) $run['experimentid'], $runs));
+        foreach ($experiments as $experimentid) {
+            $population = \local_catquizlab\local\population_plan::describe($experimentid);
+            if (!$population['consistent']) {
+                $problems .= \html_writer::div(
+                    get_string('plan:inconsistent', $component) . \html_writer::alist($population['problems']),
+                    'alert alert-danger',
+                    ['data-region' => 'catquizlab-population-problems']
+                );
+            }
+            $lines .= \html_writer::div(
+                s($population['text']),
+                'small text-muted mb-1',
+                ['data-region' => 'catquizlab-population']
+            );
+        }
+
+        return [$problems, $lines];
+    }
+
+    /**
      * A statement of what the figures on this page rest on.
      *
      * @return string
@@ -293,14 +323,17 @@ class results_page {
         $component = 'local_catquizlab';
         $provenance = $this->query->provenance();
 
+        // The population first, results or not: a plan the stored people do not
+        // match is to be seen before there is anything to read (#117).
+        [$problems, $population] = $this->render_population();
         if ($provenance['attempts'] === 0) {
             // The two cases -- "nothing matches this filter" and "nothing has been run" -- look the
             // same from here and mean entirely different things. Saying which
             // one it is turns a dead end into a next step.
-            return \html_writer::div(
+            return $problems . \html_writer::div(
                 $this->explain_absence(),
                 'alert alert-info'
-            );
+            ) . $population;
         }
 
         $out = \html_writer::div(
@@ -313,6 +346,8 @@ class results_page {
             ]),
             'small text-muted mb-1'
         );
+
+        $out = $problems . $out . $population;
 
         // What the ground truth was drawn from, named (#105): mean and
         // standard deviation, distribution and range of the selected runs.

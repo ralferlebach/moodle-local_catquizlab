@@ -86,6 +86,23 @@ class person_integrity {
     }
 
     /**
+     * Whether a run has a twin more than once — one query, for every claim (#117).
+     *
+     * @param int $runid The run.
+     * @return bool
+     */
+    public static function has_duplicates(int $runid): bool {
+        global $DB;
+
+        return $DB->record_exists_sql(
+            "SELECT 1 FROM {local_catquizlab_person}
+              WHERE runid = :runid AND twinid IS NOT NULL AND twinid <> ''
+           GROUP BY twinid HAVING COUNT(1) > 1",
+            ['runid' => $runid]
+        );
+    }
+
+    /**
      * Every run with a twin more than once, for the operator (#116, POP-004).
      *
      * Nothing is deleted here or anywhere else by the plugin: which rows go is

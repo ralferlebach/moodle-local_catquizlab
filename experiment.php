@@ -424,6 +424,11 @@ if ($preview !== null && $preview['runs'] > 0) {
         'replications' => $preview['replications'],
         'runs'         => $preview['runs'],
         'attempts'     => $preview['attempts'],
+        // Twins, run-persons and sittings, apart (#117).
+        'twins'        => $preview['twins'] ?? null,
+        'twinsvary'    => !empty($preview['twinsvary']),
+        'runpersons'   => $preview['runpersons'] ?? 0,
+        'sittings'     => $preview['sittings'] ?? 0,
         'large'        => $preview['large'],
         'cansweep'     => has_capability('local/catquizlab:execute', $context),
         // What would stop a start, shown next to the button rather than after

@@ -19,7 +19,7 @@ Feature: Defining and running CAT experiments from the web interface
     And I should see "Master seed"
     When I set the following fields to these values:
       | Name                        | Behat baseline |
-      | Persons per run             | 5              |
+      | Simulated DigiTwins per replication | 5      |
       | Minimum items (global)      | 10             |
       | Maximum items (global)      | 15             |
       | SE lower bound              | 0.35           |
@@ -27,6 +27,10 @@ Feature: Defining and running CAT experiments from the web interface
     And I press "Save experiment"
     Then I should see "Experiment saved."
     And I should see "Edit experiment"
+    # Twins, run-persons and sittings, apart (#117).
+    And I should see "5" in the "[data-region='catquizlab-plan-twins']" "css_element"
+    And I should see "Expected run-person rows" in the "[data-region='catquizlab-plan-runpersons']" "css_element"
+    And I should see "Expected test sittings" in the "[data-region='catquizlab-plan-sittings']" "css_element"
 
   Scenario: A contradictory budget is refused with a field-level message
     Given I navigate to "Reports > CAT experiment suite" in site administration

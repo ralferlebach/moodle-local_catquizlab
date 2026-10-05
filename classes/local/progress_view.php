@@ -137,7 +137,11 @@ class progress_view {
         $candebug = has_capability('local/catquizlab:debug', \context_system::instance());
         $debug = ($candebug && debug_trace::enabled()) ? debug_trace::entries([], 60) : [];
 
+        // The population, as the results report it (#117): the same numbers.
+        $population = $experimentid > 0 ? population_plan::describe($experimentid) : null;
+
         return [
+            'population'  => $population,
             // The two actions the whole interface reduces to, and the line of
             // experiments waiting their turn.
             'runner'      => $experimentid > 0

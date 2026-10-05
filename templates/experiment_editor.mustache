@@ -153,9 +153,17 @@
                                 <span>{{#str}}preview:runs, local_catquizlab{{/str}}</span>
                                 <strong>{{runs}}</strong>
                             </li>
-                            <li class="d-flex justify-content-between py-1">
-                                <span>{{#str}}preview:attempts, local_catquizlab{{/str}}</span>
-                                <strong>{{attempts}}</strong>
+                            <li class="d-flex justify-content-between py-1" data-region="catquizlab-plan-twins">
+                                <span>{{#str}}plan:twins, local_catquizlab{{/str}}</span>
+                                <strong>{{#twinsvary}}{{#str}}plan:twinsvary, local_catquizlab{{/str}}{{/twinsvary}}{{^twinsvary}}{{twins}}{{/twinsvary}}</strong>
+                            </li>
+                            <li class="d-flex justify-content-between py-1" data-region="catquizlab-plan-runpersons">
+                                <span>{{#str}}plan:runpersons, local_catquizlab{{/str}}</span>
+                                <strong>{{runpersons}}</strong>
+                            </li>
+                            <li class="d-flex justify-content-between py-1" data-region="catquizlab-plan-sittings">
+                                <span>{{#str}}plan:sittings, local_catquizlab{{/str}}</span>
+                                <strong>{{sittings}}</strong>
                             </li>
                         </ul>
 

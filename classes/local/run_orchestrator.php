@@ -864,7 +864,19 @@ class run_orchestrator {
      * @return array
      */
     protected static function stage_attempts(array $context): array {
-        return ['scheduled' => attempt_scheduler::schedule((int) $context['runid'])];
+        global $DB;
+
+        $runid = (int) $context['runid'];
+        $scheduled = attempt_scheduler::schedule($runid);
+        // One sitting per planned person, no more and no fewer (#117).
+        $planned = person_generator::planned_count($context['definition']);
+        $sittings = $DB->count_records('local_catquizlab_attempt', ['runid' => $runid]);
+        if ($sittings !== $planned) {
+            return ['failed' => true, 'reason' => population_plan::SITTINGS_MISMATCH,
+                'planned' => $planned, 'sittings' => $sittings, 'scheduled' => $scheduled];
+        }
+
+        return ['scheduled' => $scheduled, 'sittings' => $sittings];
     }
 
     /**

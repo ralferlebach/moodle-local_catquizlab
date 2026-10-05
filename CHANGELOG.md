@@ -6,6 +6,45 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.7.27] — 2026-10-02 — #117: people, twins and sittings, apart; plan against actual
+
+### The plan, before anything is created
+The preview shows three numbers instead of "estimated test attempts": simulated
+DigiTwins per replication (or "differs by cell"), expected run-person rows and
+expected test sittings — each derived from the definition, and the sweep's own
+count checked against it. The field is "Simulated DigiTwins per replication",
+with help: the same twins in every cell, which pairs the comparison — not the
+number of sittings, which is twins × cells × replications.
+
+### The actual, run by run
+`population_plan::actual()`: per run the planned people, the rows stored, the
+distinct twins and the sittings, with a state — as planned, twins more than
+once, people missing or extra, sittings not one per person. The progress page
+and the results' provenance say the same sentence from the same numbers, and
+where the experiment is not as planned, a warning above everything else names
+the runs and what is wrong — on the results even before there are any.
+
+### No execution when it does not match
+- The attempts stage: one sitting per planned person, no more, no fewer, or it
+  fails.
+- The claim: a run with a twin more than once is failed with its reason instead
+  of handing out its sittings — runs damaged before 0.7.26 included, rather than
+  left to look as if they hang.
+
+### Experiment 12's case, as a regression test
+Six strategies of fifty twins, relsubs with every twin stored twice and each
+copy given a sitting — 350 sittings for 300 planned: recognised as inconsistent
+without anybody looking, with relsubs named as the one run (100 rows for 50
+twins, 100 sittings) and every other run as planned.
+
+### #116, the rest
+A test that an interrupted people stage is continued — the rows already there
+kept, the missing ones added — and the worker end-to-end test now checks every
+run's population after scheduling: planned people, each twin once, one sitting
+each.
+
+---
+
 ## [0.7.26] — 2026-10-02 — #116: each digital twin once per run
 
 ### The cause: two setups of one run at once
