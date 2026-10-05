@@ -80,6 +80,9 @@ class run_log {
     /** @var string Let go again by a person who dealt with the cause. */
     public const RUN_RESUMED = 'run_resumed';
 
+    /** @var string A setup was not run: another one holds or finished the run (#116). */
+    public const SETUP_SKIPPED = 'setup_skipped';
+
     /** @var string A run's status changed: from, to, and why (#90). */
     public const STATUS_CHANGED = 'status_changed';
 

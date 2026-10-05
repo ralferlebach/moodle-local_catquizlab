@@ -236,7 +236,8 @@ class person_generator {
         $count = 0;
         $transaction = $DB->start_delegated_transaction();
         foreach ($persons as $person) {
-            $DB->insert_record('local_catquizlab_person', (object) [
+            $twinid = (string) ($person['twinid'] ?? '');
+            $record = (object) [
                 'runid'         => $runid,
                 'twinid'        => (string) ($person['twinid'] ?? ''),
                 'twinindex'     => (int) ($person['twinindex'] ?? 0),
@@ -250,12 +251,60 @@ class person_generator {
                 'moodleuserid'  => null,
                 'timecreated'   => $now,
                 'timemodified'  => $now,
+            ];
+            if ($twinid === '') {
+                $DB->insert_record('local_catquizlab_person', $record);
+                $count++;
+                continue;
+            }
+            // Each twin once in a run (#116). Claimed first: the claim table's
+            // unique index refuses a second claim of the same twin, whichever
+            // process makes it, so not even two setups at once can store it twice.
+            $claim = $DB->get_record('local_catquizlab_twinclaim', ['runid' => $runid, 'twinid' => $twinid]);
+            if ($claim) {
+                // Provisioned before: the same person is used again — if it is
+                // the same person. Ground truth is never changed silently.
+                $existing = $DB->get_record('local_catquizlab_person', ['id' => $claim->personid]);
+                if ($existing && !self::same_truth($existing, $record)) {
+                    throw new \moodle_exception('twinmismatch', 'local_catquizlab', '', (object) [
+                        'twin' => $twinid, 'run' => $runid,
+                    ]);
+                }
+                $count++;
+                continue;
+            }
+            $claimid = $DB->insert_record('local_catquizlab_twinclaim', (object) [
+                'runid' => $runid, 'twinid' => $twinid, 'personid' => 0, 'timecreated' => $now,
             ]);
+            $personid = $DB->insert_record('local_catquizlab_person', $record);
+            $DB->set_field('local_catquizlab_twinclaim', 'personid', $personid, ['id' => $claimid]);
             $count++;
         }
         $transaction->allow_commit();
 
         return $count;
+    }
+
+    /**
+     * Whether a stored person is the one about to be stored: the same ground truth.
+     *
+     * @param \stdClass $stored The stored person.
+     * @param \stdClass $new The person generated now.
+     * @return bool
+     */
+    protected static function same_truth(\stdClass $stored, \stdClass $new): bool {
+        return abs((float) $stored->abilityglobal - (float) $new->abilityglobal) < 1e-9
+            && json_decode((string) $stored->profilejson, true) == json_decode((string) $new->profilejson, true);
+    }
+
+    /**
+     * How many people a run of this definition is to have (#116).
+     *
+     * @param array $definition The definition.
+     * @return int
+     */
+    public static function planned_count(array $definition): int {
+        return (int) self::read_params($definition)['count'];
     }
 
     /**

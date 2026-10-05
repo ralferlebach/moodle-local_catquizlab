@@ -66,6 +66,12 @@ class run_orchestrator {
     /** @var string Generate persons and provision users, course and enrolment. */
     public const STAGE_PEOPLE = 'people';
 
+    /** @var string Another process is setting this run up: nothing was done (#116). */
+    public const REASON_SETUP_IN_PROGRESS = 'setup_in_progress';
+
+    /** @var string Another process has set this run up already: nothing was done (#116). */
+    public const REASON_ALREADY_SET_UP = 'already_set_up';
+
     /** @var string Queue the simulated attempts. */
     /**
      * Stage: can this configuration actually select a first question?
@@ -125,6 +131,42 @@ class run_orchestrator {
      * @return array{ok: bool, reason?: string, stages: array<string, mixed>}
      */
     public static function setup(int $runid, array $options = []): array {
+        global $DB;
+
+        // One setup of a run at a time (#116). Two did run at once — the
+        // queued task from cron and "provision now" from a page — and each
+        // people stage stored every twin, so a run of fifty had a hundred people
+        // and a hundred sittings. Whoever does not get the lock does nothing: it
+        // neither fails the run nor sets it up a second time.
+        $factory = \core\lock\lock_config::get_lock_factory('local_catquizlab_setup');
+        $lock = $factory->get_lock('run_' . $runid, 0);
+        if (!$lock) {
+            run_log::record($runid, run_log::SETUP_SKIPPED, ['why' => 'another setup of this run is in progress']);
+            return ['ok' => false, 'reason' => self::REASON_SETUP_IN_PROGRESS, 'stages' => [], 'concurrent' => true];
+        }
+        try {
+            // Asked again under the lock: the other one may just have finished it.
+            $status = (int) $DB->get_field('local_catquizlab_run', 'status', ['id' => $runid]);
+            $done = [registry::STATUS_READY, registry::STATUS_RUNNING, registry::STATUS_AGGREGATING, registry::STATUS_FINISHED];
+            if (in_array($status, $done, true)) {
+                run_log::record($runid, run_log::SETUP_SKIPPED, ['why' => 'already set up', 'status' => $status]);
+                return ['ok' => true, 'reason' => self::REASON_ALREADY_SET_UP, 'stages' => [], 'concurrent' => true];
+            }
+
+            return self::setup_locked($runid, $options);
+        } finally {
+            $lock->release();
+        }
+    }
+
+    /**
+     * Set up a run end to end, holding its setup lock.
+     *
+     * @param int $runid The run to set up.
+     * @param array $options 'questioncategoryid' for materialisation, 'template'. Polytomy follows the model.
+     * @return array{ok: bool, reason?: string, stages: array<string, mixed>}
+     */
+    protected static function setup_locked(int $runid, array $options = []): array {
         global $DB;
 
         if (!environment::engine_available()) {
@@ -760,6 +802,14 @@ class run_orchestrator {
      */
     protected static function stage_people(array $context): array {
         $runid = (int) $context['runid'];
+        // A run with a twin more than once is not provisioned further (#116):
+        // its population is not the planned one, and every extra row would get
+        // a sitting of its own. Removing them is the operator's decision.
+        $before = person_integrity::check_run($runid);
+        if ($before['duplicates'] !== []) {
+            return ['failed' => true, 'reason' => person_integrity::REASON_DUPLICATE_TWINS,
+                'duplicates' => $before['duplicates']];
+        }
         $persons = person_generator::generate_and_persist(
             $runid,
             $context['definition'],
@@ -769,6 +819,15 @@ class run_orchestrator {
                 'replication'   => (int) ($context['run']->replication ?? 1),
             ]
         );
+        // The stage's postcondition (#116, POP-005): as many people as planned,
+        // each a different twin. Without it, the attempts stage is not reached.
+        $planned = person_generator::planned_count($context['definition']);
+        $after = person_integrity::check_run($runid, $planned);
+        if (!$after['ok']) {
+            return ['failed' => true, 'reason' => person_integrity::REASON_POPULATION_MISMATCH,
+                'planned' => $planned, 'rows' => $after['rows'], 'distinct' => $after['distinct'],
+                'duplicates' => $after['duplicates']];
+        }
         $users = user_provisioner::provision($runid);
 
         // No starting abilities are written. They used to be: one row per

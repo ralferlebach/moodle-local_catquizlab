@@ -6,6 +6,51 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.7.26] — 2026-10-02 — #116: each digital twin once per run
+
+### The cause: two setups of one run at once
+A run's log showed two complete setups interleaved within the same second —
+scales, materialise, people, twice over. A run is set up by the queued task (from
+cron) or by "provision now" (from a page); neither held a lock, and the status
+check before them is not atomic. Both people stages stored every twin: five
+planned, ten people, ten sittings. The local installation had eight runs like
+that, among them the interface end-to-end run of the morning — the "ten sittings
+for five people" read then as twins twice was this. Experiment 12's
+"relsubs = 100 instead of 50" fits the same pattern.
+
+### What prevents it now
+- **One setup of a run at a time:** `run_orchestrator::setup()` takes a lock per
+  run. Whoever does not get it does nothing — no second setup, no failed run —
+  and the log says so (`setup_skipped`); under the lock the status is asked
+  again, and a run another process has just set up is left as it is.
+- **The database's guarantee:** a new table `local_catquizlab_twinclaim` with a
+  unique key on (run, twin). Every person claims its twin first; a second claim
+  fails in the database itself, whichever process makes it. A twin already
+  claimed is reused — if its ground truth is the same; a different one is
+  refused, never changed silently. The upgrade claims every (run, twin) present,
+  so that damaged runs grow no further. (A unique key on the person table
+  itself would make the upgrade fail wherever duplicates exist, and removing
+  them is not the plugin's to do.)
+- **The people stage's postcondition:** person rows = distinct twins = planned
+  people, or the stage fails and no sitting is scheduled. A run with a twin twice
+  is refused before anything is stored.
+- **The scheduler:** no sittings for a run with a twin twice.
+
+### Existing duplicates
+Not deleted — that is an operator's decision, and their sittings may hold
+results. The run page says how many twins are there more than once, how many
+extra rows and which twins; `person_integrity::runs_with_duplicates()` lists
+every such run with the sittings on the extra rows.
+
+### Tests
+Storing twice stores once; a different ground truth is refused; the database
+refuses a second claim; a concurrent setup does nothing and does not fail the
+run (with file locks, which within one process behave as two processes do —
+PostgreSQL's advisory locks are re-entrant within a session); a damaged run is
+blocked and diagnosed; fewer people than planned fails the postcondition.
+
+---
+
 ## [0.7.25] — 2026-10-02 — #109: remaining TI per scale
 
 "For the selected scale: estimate, SE, TI@n, remaining TI min/max, status"

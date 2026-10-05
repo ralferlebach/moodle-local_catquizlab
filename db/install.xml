@@ -154,6 +154,22 @@
         <INDEX NAME="moodleuserid" UNIQUE="false" FIELDS="moodleuserid"/>
       </INDEXES>
     </TABLE>
+    <TABLE NAME="local_catquizlab_twinclaim" COMMENT="One claim per digital twin and run: the database's guarantee that a twin is materialised in a run once, however often or concurrently its people are provisioned (#116).">
+      <FIELDS>
+        <FIELD NAME="id" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="true"/>
+        <FIELD NAME="runid" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="false" COMMENT="The run."/>
+        <FIELD NAME="twinid" TYPE="char" LENGTH="64" NOTNULL="true" SEQUENCE="false" COMMENT="The twin's comparison key."/>
+        <FIELD NAME="personid" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false" COMMENT="The person row that embodies the twin in the run."/>
+        <FIELD NAME="timecreated" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
+      </FIELDS>
+      <KEYS>
+        <KEY NAME="primary" TYPE="primary" FIELDS="id"/>
+        <KEY NAME="runid" TYPE="foreign" FIELDS="runid" REFTABLE="local_catquizlab_run" REFFIELDS="id"/>
+      </KEYS>
+      <INDEXES>
+        <INDEX NAME="runid-twinid" UNIQUE="true" FIELDS="runid, twinid"/>
+      </INDEXES>
+    </TABLE>
 
     <TABLE NAME="local_catquizlab_attempt" COMMENT="One simulated CAT attempt played through the real mod_adaptivequiz UI: link to the engine attempt plus the collected trace.">
       <FIELDS>

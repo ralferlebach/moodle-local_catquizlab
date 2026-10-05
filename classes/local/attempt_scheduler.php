@@ -418,6 +418,16 @@ class attempt_scheduler {
         global $DB;
 
         $now = time();
+        // Not one sitting more than there are twins (#116, POP-003): a run whose
+        // people are damaged is blocked, not given a sitting per extra row.
+        $integrity = person_integrity::check_run($runid);
+        if ($integrity['duplicates'] !== []) {
+            run_log::record($runid, run_log::SETUP_SKIPPED, ['why' => person_integrity::REASON_DUPLICATE_TWINS,
+                'duplicates' => count($integrity['duplicates'])]);
+            throw new \moodle_exception('duplicatetwins', 'local_catquizlab', '', (object) [
+                'run' => $runid, 'n' => count($integrity['duplicates']),
+            ]);
+        }
         $persons = $DB->get_records_select(
             'local_catquizlab_person',
             'runid = :runid AND moodleuserid IS NOT NULL',

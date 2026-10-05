@@ -587,6 +587,19 @@ if ($runid > 0) {
 
     echo $OUTPUT->heading(get_string('heading:rundetail', $component, $runid));
 
+    // A twin more than once in this run (#116): said where it cannot be missed,
+    // with what it affects. The plugin deletes nothing — which rows go is the
+    // operator's decision, and their sittings may hold results already.
+    $integrity = \local_catquizlab\local\person_integrity::check_run($runid);
+    if ($integrity['duplicates'] !== []) {
+        $extra = array_sum(array_column($integrity['duplicates'], 'rows')) - count($integrity['duplicates']);
+        echo $OUTPUT->notification(get_string('integrity:duplicatetwins', $component, (object) [
+            'twins' => count($integrity['duplicates']), 'extra' => $extra, 'rows' => $integrity['rows'],
+            'distinct' => $integrity['distinct'],
+            'examples' => implode(', ', array_slice(array_column($integrity['duplicates'], 'twinid'), 0, 5)),
+        ]), \core\output\notification::NOTIFY_ERROR);
+    }
+
     if ($detail['failure'] !== null) {
         echo $OUTPUT->notification($detail['failure'], \core\output\notification::NOTIFY_ERROR);
     }

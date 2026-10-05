@@ -659,7 +659,10 @@ class run_lifecycle {
 
         $result = run_orchestrator::setup($runid);
 
-        self::provisioned($runid, !empty($result['ok']), (string) ($result['reason'] ?? ''));
+        // Set up by another process at the same time: not this call's to judge (#116).
+        if (empty($result['concurrent'])) {
+            self::provisioned($runid, !empty($result['ok']), (string) ($result['reason'] ?? ''));
+        }
 
         return [
             'ok'     => !empty($result['ok']),

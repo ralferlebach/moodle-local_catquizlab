@@ -564,6 +564,41 @@ function xmldb_local_catquizlab_upgrade($oldversion): bool {
         upgrade_plugin_savepoint(true, 2026092806, 'local', 'catquizlab');
     }
 
+    if ($oldversion < 2026100100) {
+        // One claim per twin and run (#116). Existing people are left as they
+        // are — duplicates included, which only an operator may remove — but
+        // every (run, twin) already present is claimed, so that none of them
+        // can be materialised again.
+        $table = new xmldb_table('local_catquizlab_twinclaim');
+        if (!$dbman->table_exists($table)) {
+            $table->add_field('id', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, XMLDB_SEQUENCE, null);
+            $table->add_field('runid', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, null);
+            $table->add_field('twinid', XMLDB_TYPE_CHAR, '64', null, XMLDB_NOTNULL, null, null);
+            $table->add_field('personid', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, '0');
+            $table->add_field('timecreated', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, '0');
+            $table->add_key('primary', XMLDB_KEY_PRIMARY, ['id']);
+            $table->add_key('runid', XMLDB_KEY_FOREIGN, ['runid'], 'local_catquizlab_run', ['id']);
+            $table->add_index('runid-twinid', XMLDB_INDEX_UNIQUE, ['runid', 'twinid']);
+            $dbman->create_table($table);
+        }
+        $groups = $DB->get_recordset_sql(
+            "SELECT runid, twinid, MIN(id) AS personid
+               FROM {local_catquizlab_person}
+              WHERE twinid IS NOT NULL AND twinid <> ''
+           GROUP BY runid, twinid"
+        );
+        foreach ($groups as $group) {
+            if (!$DB->record_exists('local_catquizlab_twinclaim', ['runid' => $group->runid, 'twinid' => $group->twinid])) {
+                $DB->insert_record('local_catquizlab_twinclaim', (object) [
+                    'runid' => $group->runid, 'twinid' => $group->twinid,
+                    'personid' => $group->personid, 'timecreated' => time(),
+                ]);
+            }
+        }
+        $groups->close();
+        upgrade_plugin_savepoint(true, 2026100100, 'local', 'catquizlab');
+    }
+
     return true;
 }
 
