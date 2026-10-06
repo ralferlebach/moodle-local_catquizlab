@@ -67,6 +67,12 @@ class orchestrate_run extends \core\task\adhoc_task {
         $options = isset($data->options) ? (array) $data->options : [];
 
         $result = run_orchestrator::setup($runid, $options);
+        if (!empty($result['concurrent'])) {
+            // Another process holds or finished this run's setup: its outcome is
+            // that one's to report, not this task's (#116).
+            mtrace("local_catquizlab: run {$runid} setup skipped: " . ($result['reason'] ?? '') . '.');
+            return;
+        }
 
         // One place decides what the run's state is now; the task only reports
         // what happened.

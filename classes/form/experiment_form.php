@@ -49,6 +49,23 @@ require_once($GLOBALS['CFG']->libdir . '/formslib.php');
  */
 class experiment_form extends \moodleform {
     /**
+     * Make the whole form read-only, for an experiment that has runs.
+     *
+     * An experiment with runs documents what those runs did, and saving was
+     * refused — but only after somebody had edited it, believing the runs
+     * would follow (#104). Frozen, the form cannot be mistaken for one that
+     * changes anything, and the page offers the copy that can.
+     *
+     * @return void
+     */
+    public function freeze_for_runs(): void {
+        $this->_form->hardFreezeAllVisibleExcept([]);
+        if ($this->_form->elementExists('buttonar')) {
+            $this->_form->removeElement('buttonar');
+        }
+    }
+
+    /**
      * Build the form.
      *
      * @return void
@@ -129,22 +146,22 @@ class experiment_form extends \moodleform {
         $mform->hideIf('allowdegenerate', 'model', 'eq', '1pl');
 
         $mform->addElement('text', 'discriminationa', get_string('form:paramone', $component), ['size' => 10]);
-        $mform->setType('discriminationa', PARAM_FLOAT);
+        $mform->setType('discriminationa', PARAM_LOCALISEDFLOAT);
         $mform->setDefault('discriminationa', 1.0);
         $mform->hideIf('discriminationa', 'model', 'eq', '1pl');
 
         $mform->addElement('text', 'discriminationb', get_string('form:paramtwo', $component), ['size' => 10]);
-        $mform->setType('discriminationb', PARAM_FLOAT);
+        $mform->setType('discriminationb', PARAM_LOCALISEDFLOAT);
         $mform->setDefault('discriminationb', 0.3);
         $mform->hideIf('discriminationb', 'discriminationdist', 'eq', 'constant');
 
         $mform->addElement('text', 'guessingmin', get_string('form:guessingmin', $component), ['size' => 10]);
-        $mform->setType('guessingmin', PARAM_FLOAT);
+        $mform->setType('guessingmin', PARAM_LOCALISEDFLOAT);
         $mform->setDefault('guessingmin', 0.1);
         $mform->hideIf('guessingmin', 'model', 'noteq', '3pl');
 
         $mform->addElement('text', 'guessingmax', get_string('form:guessingmax', $component), ['size' => 10]);
-        $mform->setType('guessingmax', PARAM_FLOAT);
+        $mform->setType('guessingmax', PARAM_LOCALISEDFLOAT);
         $mform->setDefault('guessingmax', 0.25);
         $mform->hideIf('guessingmax', 'model', 'noteq', '3pl');
 
@@ -187,32 +204,32 @@ class experiment_form extends \moodleform {
         // Variant parameters appear only for the variant they belong to, so the
         // form never asks for a shift on a pool that is not shifted.
         $mform->addElement('text', 'recipeshift', get_string('form:shift', $component), ['size' => 8]);
-        $mform->setType('recipeshift', PARAM_FLOAT);
+        $mform->setType('recipeshift', PARAM_LOCALISEDFLOAT);
         $mform->setDefault('recipeshift', pool_mutator::DEFAULT_SHIFT);
         $mform->hideIf('recipeshift', 'variant', 'noteq', 'shifted');
 
         $mform->addElement('text', 'recipefactor', get_string('form:stretch', $component), ['size' => 8]);
-        $mform->setType('recipefactor', PARAM_FLOAT);
+        $mform->setType('recipefactor', PARAM_LOCALISEDFLOAT);
         $mform->setDefault('recipefactor', pool_mutator::DEFAULT_STRETCH);
         $mform->hideIf('recipefactor', 'variant', 'noteq', 'stretched');
 
         $mform->addElement('text', 'recipefraction', get_string('form:fraction', $component), ['size' => 8]);
-        $mform->setType('recipefraction', PARAM_FLOAT);
+        $mform->setType('recipefraction', PARAM_LOCALISEDFLOAT);
         $mform->setDefault('recipefraction', 0.1);
         $mform->addHelpButton('recipefraction', 'form:fraction', $component);
 
         $mform->addElement('text', 'recipesd', get_string('form:errorsd', $component), ['size' => 8]);
-        $mform->setType('recipesd', PARAM_FLOAT);
+        $mform->setType('recipesd', PARAM_LOCALISEDFLOAT);
         $mform->setDefault('recipesd', 0.5);
         $mform->hideIf('recipesd', 'variant', 'noteq', 'calibrationerror');
 
         $mform->addElement('text', 'recipegapmin', get_string('form:gapmin', $component), ['size' => 8]);
-        $mform->setType('recipegapmin', PARAM_FLOAT);
+        $mform->setType('recipegapmin', PARAM_LOCALISEDFLOAT);
         $mform->setDefault('recipegapmin', -0.5);
         $mform->hideIf('recipegapmin', 'variant', 'noteq', 'gappy');
 
         $mform->addElement('text', 'recipegapmax', get_string('form:gapmax', $component), ['size' => 8]);
-        $mform->setType('recipegapmax', PARAM_FLOAT);
+        $mform->setType('recipegapmax', PARAM_LOCALISEDFLOAT);
         $mform->setDefault('recipegapmax', 0.5);
         $mform->hideIf('recipegapmax', 'variant', 'noteq', 'gappy');
 
@@ -242,6 +259,54 @@ class experiment_form extends \moodleform {
         $mform->addElement('text', 'personcount', get_string('form:personcount', $component), ['size' => 8]);
         $mform->setType('personcount', PARAM_INT);
         $mform->setDefault('personcount', 50);
+        $mform->addHelpButton('personcount', 'form:personcount', $component);
+
+        // The simulated abilities: distribution, parameters and range, named
+        // explicitly (#102, #105) — "N(0, 2)" left open whether 2 was a
+        // variance or a standard deviation. The range is also the range of
+        // every provisioned CAT scale.
+        $recommended = \local_catquizlab\local\ability_distribution::RECOMMENDED;
+        $mform->addElement('select', 'abilitydistribution', get_string('form:abilitydistribution', $component), [
+            'truncated_normal' => get_string('distribution:truncated_normal', $component),
+            'normal'           => get_string('distribution:normal', $component),
+            'uniform'          => get_string('distribution:uniform', $component),
+        ]);
+        $mform->setDefault('abilitydistribution', $recommended['distribution']);
+        $mform->addHelpButton('abilitydistribution', 'form:abilitydistribution', $component);
+        $mform->addElement('text', 'abilitymean', get_string('form:abilitymean', $component), ['size' => 6]);
+        $mform->setType('abilitymean', PARAM_LOCALISEDFLOAT);
+        $mform->setDefault('abilitymean', $recommended['mean']);
+        $mform->addElement('text', 'abilitysd', get_string('form:abilitysd', $component), ['size' => 6]);
+        $mform->setType('abilitysd', PARAM_LOCALISEDFLOAT);
+        $mform->setDefault('abilitysd', $recommended['sd']);
+        $mform->hideIf('abilitysd', 'abilitydistribution', 'eq', 'uniform');
+        $mform->addElement('text', 'abilitymin', get_string('form:abilitymin', $component), ['size' => 6]);
+        $mform->setType('abilitymin', PARAM_LOCALISEDFLOAT);
+        $mform->setDefault('abilitymin', $recommended['min']);
+        $mform->addElement('text', 'abilitymax', get_string('form:abilitymax', $component), ['size' => 6]);
+        $mform->setType('abilitymax', PARAM_LOCALISEDFLOAT);
+        $mform->setDefault('abilitymax', $recommended['max']);
+        $mform->addHelpButton('abilitymin', 'form:abilitymin', $component);
+
+        // Local deviations (#102): the SD of each category around the global
+        // ability and of each subscale around its category. Empty follows
+        // the stratum and the severity; a number sets it outright.
+        foreach (['catsd', 'subsd'] as $field) {
+            $mform->addElement('text', $field, get_string('form:' . $field, $component), ['size' => 6]);
+            $mform->setType($field, PARAM_RAW_TRIMMED);
+            $mform->addHelpButton($field, 'form:' . $field, $component);
+        }
+        // What mild, medium and strong multiply the stratum's deviation by.
+        foreach (['mild' => 0.5, 'medium' => 1.0, 'strong' => 2.0] as $level => $default) {
+            $mform->addElement('text', 'severity' . $level, get_string(
+                'form:severityfactor',
+                $component,
+                get_string('severity:' . $level, $component)
+            ), ['size' => 5]);
+            $mform->setType('severity' . $level, PARAM_LOCALISEDFLOAT);
+            $mform->setDefault('severity' . $level, $default);
+        }
+        $mform->addHelpButton('severitymild', 'form:severityfactor', $component);
 
         $mform->addElement('advcheckbox', 'twins', get_string('form:twins', $component));
         $mform->setDefault('twins', 1);
@@ -262,6 +327,12 @@ class experiment_form extends \moodleform {
         $mform->addElement('text', 'globalmax', get_string('form:globalmax', $component), ['size' => 8]);
         $mform->setType('globalmax', PARAM_INT);
         $mform->setDefault('globalmax', 25);
+        // Classic only: it plays every item, the question budget is not its (#104).
+        $mform->addElement('static', 'na_globalmax', '', \html_writer::span(
+            get_string('form:allitems', $component),
+            'text-muted',
+            ['data-catquizlab-na' => 'globalmax', 'hidden' => 'hidden']
+        ));
 
         $mform->addElement('text', 'subscalemin', get_string('form:subscalemin', $component), ['size' => 8]);
         $mform->setType('subscalemin', PARAM_INT);
@@ -270,17 +341,184 @@ class experiment_form extends \moodleform {
         $mform->addElement('text', 'subscalemax', get_string('form:subscalemax', $component), ['size' => 8]);
         $mform->setType('subscalemax', PARAM_INT);
         $mform->setDefault('subscalemax', 5);
+        // Said in words where it does not apply (#101), not just greyed out.
+        $mform->addElement('static', 'na_subscalemax', '', \html_writer::span(
+            get_string('form:na_subscale', $component),
+            'text-muted',
+            ['data-catquizlab-na' => 'subscalemax', 'hidden' => 'hidden']
+        ));
+
+        // Budgets that belong to one strategy. Left empty, a strategy uses the
+        // budgets above; filled, it overrides only what is filled. This is how
+        // "classic without a ceiling, allsubs at eighty" is said without a
+        // sweep multiplying every budget across every strategy.
+        $mform->addElement('header', 'perstrategy', get_string('form:perstrategy', $component));
+        $mform->setExpanded('perstrategy', false);
+        $mform->addElement('static', 'perstrategyhelp', '', get_string('form:perstrategyhelp', $component));
+
+        foreach (strategy_catalog::keys() as $key) {
+            if (!strategy_catalog::runnable($key)) {
+                continue;
+            }
+
+            // Every field says what it is: "per sitting" and "per subscale",
+            // each from – to. A row of four unlabelled boxes asked the reader
+            // to remember an order given in a paragraph above.
+            $group = [];
+            $group[] = $mform->createElement(
+                'static',
+                'perstrategy_' . $key . '_testlabel',
+                '',
+                \html_writer::span(get_string('form:persitting', $component), 'mr-1 text-muted')
+            );
+            foreach (['globalmin', 'globalmax', 'subscalemin', 'subscalemax'] as $field) {
+                if ($field === 'subscalemin') {
+                    $group[] = $mform->createElement(
+                        'static',
+                        'perstrategy_' . $key . '_sublabel',
+                        '',
+                        \html_writer::span(get_string('form:persubscale', $component), 'ml-3 mr-1 text-muted')
+                    );
+                }
+                $name = 'perstrategy_' . $key . '_' . $field;
+                $attributes = [
+                    'size' => 5,
+                    'aria-label' => strategy_catalog::label($key) . ': ' . get_string('form:' . $field, $component),
+                    'title' => get_string('form:' . $field, $component),
+                    'data-catquizlab-perstrategy' => $key,
+                    'data-catquizlab-field' => $field,
+                ];
+                // A strategy without subscales has no subscale budget to set,
+                // and the field says so rather than sitting there empty (#101).
+                if (str_starts_with($field, 'subscale') && !strategy_catalog::uses_subscales($key)) {
+                    $attributes['disabled'] = 'disabled';
+                    $attributes['placeholder'] = get_string('form:na_short', $component);
+                    $attributes['title'] = get_string('form:na_forstrategy', $component, strategy_catalog::label($key));
+                }
+                // The classical test plays every item of the scale: there is
+                // no number of questions to set for it.
+                if (str_starts_with($field, 'global') && !strategy_catalog::uses($key, 'globalmax')) {
+                    $attributes['disabled'] = 'disabled';
+                    $attributes['placeholder'] = get_string('form:allitems_short', $component);
+                    $attributes['title'] = get_string('form:allitems', $component);
+                }
+                $group[] = $mform->createElement('text', $name, '', $attributes);
+                // Text, not integer: a maximum may be the word "unlimited".
+                $mform->setType($name, PARAM_ALPHANUMEXT);
+                if (str_ends_with($field, 'min')) {
+                    $group[] = $mform->createElement('static', $name . '_dash', '', '–');
+                }
+            }
+
+            $mform->addGroup($group, 'perstrategygroup_' . $key, strategy_catalog::label($key), ' ', false);
+            $mform->addHelpButton('perstrategygroup_' . $key, 'form:perstrategy', $component);
+        }
+
+        // Which fields apply follows what is chosen, as it is chosen: the
+        // subscale budgets only where a strategy in play uses subscales, a
+        // strategy's own row only while that strategy is in play, and the
+        // shared budgets shown in every empty field of a row as what it will
+        // inherit.
+        global $PAGE;
+        $PAGE->requires->js_amd_inline('
+            require([], function() {
+                var capabilities = ' . json_encode([
+                    'globalmax'     => strategy_catalog::using('globalmax'),
+                    'subscalemax'   => strategy_catalog::using('subscalemax'),
+                    'standarderror' => strategy_catalog::using('standarderror'),
+                    'pilot'         => strategy_catalog::using('pilot'),
+                ]) . ';
+                var fields = {
+                    globalmax: ["id_globalmin", "id_globalmax"],
+                    subscalemax: ["id_subscalemin", "id_subscalemax"],
+                    standarderror: ["id_semin", "id_semax"],
+                    pilot: ["id_pilotinclude", "id_pilotratio"]
+                };
+                var na = ' . json_encode(get_string('form:na_short', $component)) . ';
+                var byid = function(id) { return document.getElementById(id); };
+                var inplay = function() {
+                    var keys = {};
+                    var main = byid("id_strategy");
+                    if (main) { keys[main.value] = true; }
+                    var sweep = byid("id_sweepstrategies");
+                    if (sweep) {
+                        Array.prototype.forEach.call(sweep.options, function(o) {
+                            if (o.selected) { keys[o.value] = true; }
+                        });
+                    }
+                    return keys;
+                };
+                var update = function() {
+                    var keys = inplay();
+                    Object.keys(fields).forEach(function(cap) {
+                        var applies = Object.keys(keys).some(function(k) {
+                            return capabilities[cap].indexOf(k) !== -1;
+                        });
+                        fields[cap].forEach(function(id) {
+                            var el = byid(id);
+                            if (el) { el.disabled = !applies; }
+                        });
+                        document.querySelectorAll("[data-catquizlab-na=\\"" + cap + "\\"]").forEach(function(note) {
+                            note.hidden = applies;
+                        });
+                    });
+                    document.querySelectorAll("[data-catquizlab-perstrategy]").forEach(function(el) {
+                        var key = el.getAttribute("data-catquizlab-perstrategy");
+                        var field = el.getAttribute("data-catquizlab-field");
+                        var notapplicable = field.indexOf("subscale") === 0
+                            && capabilities.subscalemax.indexOf(key) === -1;
+                        el.disabled = !keys[key] || notapplicable;
+                        if (notapplicable) {
+                            el.placeholder = na;
+                            return;
+                        }
+                        var shared = byid("id_" + field);
+                        el.placeholder = shared && !shared.disabled ? shared.value : "";
+                    });
+                };
+                document.addEventListener("change", update);
+                document.addEventListener("input", update);
+                update();
+            });
+        ');
+
+        // Pilot questions: an option of their own, not a strategy (#103). The
+        // engine mixes not-yet-calibrated questions into the sitting at the
+        // given share; a strategy that cannot include them ignores this.
+        $mform->addElement('advcheckbox', 'pilotinclude', get_string('form:pilotinclude', $component));
+        $mform->addHelpButton('pilotinclude', 'form:pilotinclude', $component);
+        $mform->addElement('text', 'pilotratio', get_string('form:pilotratio', $component), ['size' => 5]);
+        $mform->setType('pilotratio', PARAM_LOCALISEDFLOAT);
+        $mform->setDefault('pilotratio', 20);
+        $mform->hideIf('pilotratio', 'pilotinclude', 'notchecked');
+        // Said in words where it does not apply (#101), not just greyed out.
+        $mform->addElement('static', 'na_pilot', '', \html_writer::span(
+            get_string('form:na_pilot', $component),
+            'text-muted',
+            ['data-catquizlab-na' => 'pilot', 'hidden' => 'hidden']
+        ));
 
         $mform->addElement('text', 'semin', get_string('form:semin', $component), ['size' => 8]);
-        $mform->setType('semin', PARAM_FLOAT);
+        $mform->setType('semin', PARAM_LOCALISEDFLOAT);
         $mform->setDefault('semin', 0.35);
         $mform->addHelpButton('semin', 'form:semin', $component);
 
         $mform->addElement('text', 'semax', get_string('form:semax', $component), ['size' => 8]);
-        $mform->setType('semax', PARAM_FLOAT);
+        $mform->setType('semax', PARAM_LOCALISEDFLOAT);
         $mform->setDefault('semax', 0.75);
+        // Said in words where it does not apply (#101), not just greyed out.
+        $mform->addElement('static', 'na_standarderror', '', \html_writer::span(
+            get_string('form:na_standarderror', $component),
+            'text-muted',
+            ['data-catquizlab-na' => 'standarderror', 'hidden' => 'hidden']
+        ));
 
         // Sweep.
+        // Budgets of single cells (#96): for an experiment already saved, one
+        // row per concrete cell of its sweep, empty fields following the
+        // strategy's budgets, a number setting it for that cell alone.
+        $this->add_cell_budgets($mform);
+
         $mform->addElement('header', 'sweepheader', get_string('form:sweep', $component));
 
         $strategies = $mform->addElement(
@@ -363,6 +601,35 @@ class experiment_form extends \moodleform {
      */
     public function validation($data, $files) {
         $errors = parent::validation($data, $files);
+
+        // A number that could not be read is false, not zero. Storing it as
+        // zero — which the old float type did for "0,3" on a German site — made
+        // a standard-error floor of 0 and a discrimination of 0 out of typing
+        // mistakes, and the experiment ran with them without a word.
+        $floats = [
+            'discriminationa', 'discriminationb', 'guessingmin', 'guessingmax',
+            'recipeshift', 'recipefactor', 'recipefraction', 'recipesd',
+            'recipegapmin', 'recipegapmax', 'semin', 'semax',
+        ];
+        foreach ($floats as $field) {
+            if (array_key_exists($field, $data) && $data[$field] === false) {
+                $errors[$field] = get_string('form:notanumber', 'local_catquizlab');
+            }
+        }
+        if ($errors !== []) {
+            return $errors;
+        }
+
+        // A budget a strategy cannot use, caught while it is being typed. The
+        // readiness check catches it too, but only once the run is being
+        // provisioned: by then a course, two and a half thousand questions and
+        // a thousand accounts exist for a run that was never going to start.
+        foreach (self::impossible_budgets((array) $data) as $field => $message) {
+            $errors[$field] = $message;
+        }
+        if ($errors !== []) {
+            return $errors;
+        }
 
         $definition = self::to_definition((array) $data);
         $result = (new experiment_definition($definition))->validate();
@@ -460,8 +727,33 @@ class experiment_form extends \moodleform {
                 'stratum'  => (string) ($data['stratum'] ?? 'conforming'),
                 'severity' => (string) ($data['severity'] ?? 'none'),
                 'count'    => (int) ($data['personcount'] ?? 50),
+                'distribution' => (string) ($data['abilitydistribution']
+                    ?? \local_catquizlab\local\ability_distribution::RECOMMENDED['distribution']),
+                'abilitymean'  => (float) unformat_float((string) ($data['abilitymean'] ?? 0)),
+                'abilitysd'    => (float) unformat_float((string) ($data['abilitysd'] ?? 1)),
+                'abilityrange' => [
+                    'min' => (float) unformat_float((string) ($data['abilitymin'] ?? -3)),
+                    'max' => (float) unformat_float((string) ($data['abilitymax'] ?? 3)),
+                ],
+                'variation'    => array_filter([
+                    'category' => trim((string) ($data['catsd'] ?? '')) === '' ? null
+                        : unformat_float((string) $data['catsd']),
+                    'subscale' => trim((string) ($data['subsd'] ?? '')) === '' ? null
+                        : unformat_float((string) $data['subsd']),
+                ], static fn($v): bool => $v !== null),
+                'severityscale' => [
+                    'mild'   => (float) unformat_float((string) ($data['severitymild'] ?? 0.5)),
+                    'medium' => (float) unformat_float((string) ($data['severitymedium'] ?? 1.0)),
+                    'strong' => (float) unformat_float((string) ($data['severitystrong'] ?? 2.0)),
+                ],
                 'twins'    => ['enabled' => !empty($data['twins'])],
                 'naming'   => ['pattern' => 'P-{stratum}-{index:04d}'],
+            ],
+            'budgetsbystrategy' => self::per_strategy_budgets($data),
+            'budgetsbycell' => self::per_cell_budgets($data),
+            'pilot'         => [
+                'include' => !empty($data['pilotinclude']),
+                'ratio'   => (float) unformat_float((string) ($data['pilotratio'] ?? 0)),
             ],
             'budgets'       => [
                 'global'   => [
@@ -522,6 +814,312 @@ class experiment_form extends \moodleform {
     }
 
     /**
+     * Budgets that the chosen strategies cannot satisfy.
+     *
+     * The same arithmetic readiness uses, applied to every strategy this
+     * experiment will run — the one chosen, plus every level of a swept
+     * strategy factor — and to whichever budget each of them will actually
+     * use, its own or the shared one.
+     *
+     * @param array $data The submitted form data.
+     * @return array<string, string> Field name => message.
+     */
+    protected static function impossible_budgets(array $data): array {
+        $categories = (int) ($data['categories'] ?? 0);
+        $subcategories = (int) ($data['subcategories'] ?? 0);
+        $leaves = $categories * $subcategories;
+
+        if ($leaves <= 0) {
+            return [];
+        }
+
+        $overrides = self::per_strategy_budgets($data);
+        $errors = [];
+
+        foreach (self::strategies_in_play($data) as $key) {
+            if (!strategy_catalog::enforces_per_subscale_minimum($key)) {
+                continue;
+            }
+
+            $own = (array) ($overrides[$key] ?? []);
+            $submin = (int) ($own['subscale']['minitems'] ?? $data['subscalemin'] ?? 0);
+            $max = $own['global']['maxitems'] ?? ($data['globalmax'] ?? 0);
+
+            if ($submin <= 0 || experiment_definition::is_unlimited($max) || (int) $max <= 0) {
+                continue;
+            }
+
+            if ($submin * $leaves <= (int) $max) {
+                continue;
+            }
+
+            // Reported on the field somebody can change: their own maximum
+            // where they set one, the shared maximum otherwise.
+            $field = isset($own['global']['maxitems'])
+                ? 'perstrategygroup_' . $key
+                : 'globalmax';
+
+            $errors[$field] = get_string('readiness:subscalefloorabovemaximum', 'local_catquizlab', (object) [
+                'floor'    => $submin * $leaves,
+                'maximum'  => (int) $max,
+                'leaves'   => $leaves,
+                'submin'   => $submin,
+                'strategy' => strategy_catalog::label($key),
+            ]);
+        }
+
+        return $errors;
+    }
+
+    /**
+     * Every strategy this experiment would run.
+     *
+     * @param array $data The submitted form data.
+     * @return string[]
+     */
+    protected static function strategies_in_play(array $data): array {
+        $keys = [];
+
+        if (!empty($data['strategy'])) {
+            $keys[] = (string) $data['strategy'];
+        }
+        foreach ((array) ($data['sweepstrategies'] ?? []) as $level) {
+            $keys[] = (string) $level;
+        }
+
+        return array_values(array_unique(array_filter($keys, static function (string $key): bool {
+            return strategy_catalog::has($key);
+        })));
+    }
+
+    /** @var string[] The fields of a cell's budget, with their level and key in the definition. */
+    protected const CELL_FIELDS = [
+        'globalmin' => ['global', 'minitems'], 'globalmax' => ['global', 'maxitems'],
+        'subscalemin' => ['subscale', 'minitems'], 'subscalemax' => ['subscale', 'maxitems'],
+        'semin' => ['se', 'min'], 'semax' => ['se', 'max'],
+    ];
+
+    /**
+     * The form field prefix of one cell: a short hash of its key.
+     *
+     * @param string $cellkey The sweep cell key.
+     * @return string
+     */
+    public static function cell_prefix(string $cellkey): string {
+        return 'cb_' . substr(sha1($cellkey), 0, 10) . '_';
+    }
+
+    /**
+     * One row of fields per cell of the saved experiment's sweep (#96).
+     *
+     * @param \MoodleQuickForm $mform The form.
+     * @return void
+     */
+    protected function add_cell_budgets(\MoodleQuickForm $mform): void {
+        $component = 'local_catquizlab';
+        $existing = $this->_customdata['existing'] ?? null;
+        if (!$existing || empty($existing->configjson)) {
+            return;
+        }
+        try {
+            $definition = \local_catquizlab\local\experiment_definition::from_json((string) $existing->configjson)
+                ->get_normalised();
+            $expansion = \local_catquizlab\local\sweep::expand(
+                \local_catquizlab\local\experiment_service::sweep_spec($definition)
+            );
+        } catch (\Throwable $e) {
+            return;
+        }
+        $cells = [];
+        foreach ((array) ($expansion['runs'] ?? []) as $run) {
+            $cells[(string) $run['cellkey']] = (array) $run['definition'];
+        }
+        if (count($cells) < 1 || count($cells) > 60) {
+            return;
+        }
+        $factors = [];
+        foreach ((array) ($expansion['cells'] ?? []) as $cell) {
+            $factors[(string) $cell['cellkey']] = (array) ($cell['factors'] ?? []);
+        }
+
+        $mform->addElement('header', 'cellbudgets', get_string('form:cellbudgets', $component));
+        $mform->addElement('static', 'cellbudgetsexplain', '', get_string('form:cellbudgets_help', $component));
+        $na = get_string('form:na_short', $component);
+        foreach ($cells as $cellkey => $applied) {
+            $prefix = self::cell_prefix($cellkey);
+            $strategy = (string) ($applied['strategy'] ?? '');
+            $mform->addElement('hidden', $prefix . 'key', $cellkey);
+            $mform->setType($prefix . 'key', PARAM_RAW);
+            $group = [];
+            foreach (self::CELL_FIELDS as $field => [$level, $key]) {
+                $applies = ($level === 'global' && \local_catquizlab\local\strategy_catalog::uses($strategy, 'globalmax'))
+                    || ($level === 'subscale' && \local_catquizlab\local\strategy_catalog::uses_subscales($strategy))
+                    || ($level === 'se' && \local_catquizlab\local\strategy_catalog::uses_standard_error($strategy));
+                $current = $applied['budgets'][$level][$key] ?? null;
+                $attributes = ['size' => 5, 'title' => get_string('form:cell_' . $field, $component),
+                    'placeholder' => $applies
+                        ? ($current === null ? '' : (\local_catquizlab\local\experiment_definition::is_unlimited($current)
+                            ? get_string('budget:unlimited', $component) : (string) $current))
+                        : ($level === 'global' ? get_string('form:allitems_short', $component) : $na)];
+                if (!$applies) {
+                    $attributes['disabled'] = 'disabled';
+                }
+                $group[] = $mform->createElement(
+                    'text',
+                    $prefix . $field,
+                    get_string('form:cell_' . $field, $component),
+                    $attributes
+                );
+            }
+            $mform->addGroup(
+                $group,
+                $prefix . 'group',
+                s(\local_catquizlab\local\experiment_service::factor_text($factors[$cellkey] ?? [])),
+                ' ',
+                false
+            );
+            foreach (array_keys(self::CELL_FIELDS) as $field) {
+                $mform->setType($prefix . $field, PARAM_RAW_TRIMMED);
+            }
+        }
+    }
+
+    /**
+     * The per-cell budgets from the submitted data (#96).
+     *
+     * @param array $data Submitted data.
+     * @return array cellkey => budgets
+     */
+    protected static function per_cell_budgets(array $data): array {
+        $budgets = [];
+        foreach ($data as $name => $cellkey) {
+            if (!preg_match('/^(cb_[0-9a-f]{10}_)key$/', (string) $name, $m)) {
+                continue;
+            }
+            foreach (self::CELL_FIELDS as $field => [$level, $key]) {
+                $raw = trim((string) ($data[$m[1] . $field] ?? ''));
+                if ($raw === '') {
+                    continue;
+                }
+                $budgets[(string) $cellkey][$level][$key] = \local_catquizlab\local\experiment_definition::is_unlimited($raw)
+                    || \core_text::strtolower($raw) === \core_text::strtolower(get_string('budget:unlimited', 'local_catquizlab'))
+                    ? \local_catquizlab\local\experiment_definition::UNLIMITED
+                    : (is_numeric(unformat_float($raw)) ? unformat_float($raw) : $raw);
+            }
+        }
+
+        return $budgets;
+    }
+
+    /**
+     * The form fields of the per-cell budgets of a definition.
+     *
+     * @param array $normalised The definition.
+     * @return array
+     */
+    protected static function per_cell_fields(array $normalised): array {
+        $fields = [];
+        foreach ((array) ($normalised['budgetsbycell'] ?? []) as $cellkey => $levels) {
+            $prefix = self::cell_prefix((string) $cellkey);
+            foreach (self::CELL_FIELDS as $field => [$level, $key]) {
+                if (isset($levels[$level][$key])) {
+                    $value = $levels[$level][$key];
+                    $fields[$prefix . $field] = \local_catquizlab\local\experiment_definition::is_unlimited($value)
+                        ? get_string('budget:unlimited', 'local_catquizlab')
+                        : self::localised((float) $value);
+                }
+            }
+        }
+
+        return $fields;
+    }
+
+    /**
+     * The per-strategy budget block, from the form's fields.
+     *
+     * Only what somebody filled in: an empty field means "use the budgets
+     * above", and a strategy with four empty fields does not appear at all.
+     *
+     * @param array $data The submitted form data.
+     * @return array<string, array>
+     */
+    protected static function per_strategy_budgets(array $data): array {
+        $bystrategy = [];
+
+        foreach (strategy_catalog::keys() as $key) {
+            $levels = [];
+
+            $levelfields = [
+                'global'   => ['minitems' => 'globalmin', 'maxitems' => 'globalmax'],
+                'subscale' => ['minitems' => 'subscalemin', 'maxitems' => 'subscalemax'],
+            ];
+            foreach ($levelfields as $level => $fields) {
+                // No subscale budget for a strategy without subscales, whatever
+                // was sent: the field is disabled in the browser, and a request
+                // that fills it anyway describes nothing the engine would use.
+                if ($level === 'subscale' && !strategy_catalog::uses_subscales($key)) {
+                    continue;
+                }
+                if ($level === 'global' && !strategy_catalog::uses($key, 'globalmax')) {
+                    continue;
+                }
+                foreach ($fields as $target => $field) {
+                    $value = trim((string) ($data['perstrategy_' . $key . '_' . $field] ?? ''));
+                    if ($value === '') {
+                        continue;
+                    }
+
+                    $levels[$level][$target] = experiment_definition::is_unlimited($value)
+                        ? experiment_definition::UNLIMITED
+                        : (int) $value;
+                }
+            }
+
+            if ($levels !== []) {
+                $bystrategy[$key] = $levels;
+            }
+        }
+
+        return $bystrategy;
+    }
+
+    /**
+     * The per-strategy budget fields, from a stored definition.
+     *
+     * @param array $normalised The stored definition.
+     * @return array<string, string>
+     */
+    protected static function per_strategy_fields(array $normalised): array {
+        $fields = [];
+
+        foreach ((array) ($normalised['budgetsbystrategy'] ?? []) as $key => $levels) {
+            $levelfields = [
+                'global'   => ['minitems' => 'globalmin', 'maxitems' => 'globalmax'],
+                'subscale' => ['minitems' => 'subscalemin', 'maxitems' => 'subscalemax'],
+            ];
+            foreach ($levelfields as $level => $map) {
+                foreach ($map as $source => $field) {
+                    if (isset($levels[$level][$source])) {
+                        $fields['perstrategy_' . $key . '_' . $field] = (string) $levels[$level][$source];
+                    }
+                }
+            }
+        }
+
+        return $fields;
+    }
+
+    /**
+     * A float, written the way the person's language writes it.
+     *
+     * @param float $value The number.
+     * @return string
+     */
+    protected static function localised(float $value): string {
+        return format_float($value, -1, true, true);
+    }
+
+    /**
      * Convert a stored definition back into form data.
      *
      * @param array $definition The stored definition.
@@ -550,33 +1148,47 @@ class experiment_form extends \moodleform {
             'model'              => (string) ($normalised['model'] ?? '2pl'),
             'discriminationdist' => (string) ($discrimination['dist'] ?? 'constant'),
             'allowdegenerate'    => !empty($params['allowdegenerate']) ? 1 : 0,
-            'discriminationa'    => (float) ($discrimination['value']
-                ?? $discrimination['meanlog'] ?? $discrimination['min'] ?? 1.0),
-            'discriminationb'    => (float) ($discrimination['sdlog'] ?? $discrimination['max'] ?? 0.3),
-            'guessingmin'        => (float) ($guessing['min'] ?? $guessing['value'] ?? 0.1),
-            'guessingmax'        => (float) ($guessing['max'] ?? 0.25),
+            'discriminationa'    => self::localised((float) ($discrimination['value']
+                ?? $discrimination['meanlog'] ?? $discrimination['min'] ?? 1.0)),
+            'discriminationb'    => self::localised((float) ($discrimination['sdlog'] ?? $discrimination['max'] ?? 0.3)),
+            'guessingmin'        => self::localised((float) ($guessing['min'] ?? $guessing['value'] ?? 0.1)),
+            'guessingmax'        => self::localised((float) ($guessing['max'] ?? 0.25)),
             'categories'         => (int) ($params['categories'] ?? 4),
             'poolcategories'     => (int) ($normalised['pool']['scales']['categories'] ?? 10),
             'poolsubcategories'  => (int) ($normalised['pool']['scales']['subcategories'] ?? 10),
             'poolitems'          => (int) ($normalised['pool']['scales']['itemspersubscale'] ?? 25),
             'variant'            => (string) ($normalised['pool']['variant'] ?? 'ideal'),
-            'recipeshift'        => (float) ($recipe['shift'] ?? pool_mutator::DEFAULT_SHIFT),
-            'recipefactor'       => (float) ($recipe['factor'] ?? pool_mutator::DEFAULT_STRETCH),
-            'recipefraction'     => (float) ($recipe['fraction'] ?? 0.1),
-            'recipesd'           => (float) ($recipe['sd'] ?? 0.5),
-            'recipegapmin'       => (float) ($recipe['gapmin'] ?? -0.5),
-            'recipegapmax'       => (float) ($recipe['gapmax'] ?? 0.5),
+            'recipeshift'        => self::localised((float) ($recipe['shift'] ?? pool_mutator::DEFAULT_SHIFT)),
+            'recipefactor'       => self::localised((float) ($recipe['factor'] ?? pool_mutator::DEFAULT_STRETCH)),
+            'recipefraction'     => self::localised((float) ($recipe['fraction'] ?? 0.1)),
+            'recipesd'           => self::localised((float) ($recipe['sd'] ?? 0.5)),
+            'recipegapmin'       => self::localised((float) ($recipe['gapmin'] ?? -0.5)),
+            'recipegapmax'       => self::localised((float) ($recipe['gapmax'] ?? 0.5)),
             'stratum'            => (string) ($normalised['persons']['stratum'] ?? 'conforming'),
             'severity'           => (string) ($normalised['persons']['severity'] ?? 'none'),
             'personcount'        => (int) ($normalised['persons']['count'] ?? 50),
+            // What the experiment really does — for one saved before these
+            // fields existed, the unbounded N(μ = 0, σ = 2) within ±3.
+            'abilitydistribution' => \local_catquizlab\local\ability_distribution::of($normalised)['distribution'],
+            'abilitymean'        => self::localised(\local_catquizlab\local\ability_distribution::of($normalised)['mean']),
+            'abilitysd'          => self::localised(\local_catquizlab\local\ability_distribution::of($normalised)['sd']),
+            'abilitymin'         => self::localised(\local_catquizlab\local\ability_distribution::of($normalised)['min']),
+            'abilitymax'         => self::localised(\local_catquizlab\local\ability_distribution::of($normalised)['max']),
+            'catsd'              => isset($normalised['persons']['variation']['category'])
+                ? self::localised((float) $normalised['persons']['variation']['category']) : '',
+            'subsd'              => isset($normalised['persons']['variation']['subscale'])
+                ? self::localised((float) $normalised['persons']['variation']['subscale']) : '',
+            'severitymild'       => self::localised((float) ($normalised['persons']['severityscale']['mild'] ?? 0.5)),
+            'severitymedium'     => self::localised((float) ($normalised['persons']['severityscale']['medium'] ?? 1.0)),
+            'severitystrong'     => self::localised((float) ($normalised['persons']['severityscale']['strong'] ?? 2.0)),
             'twins'              => !empty($normalised['persons']['twins']['enabled']) ? 1 : 0,
             'strategy'           => (string) ($normalised['strategy'] ?? 'fastest'),
             'globalmin'          => (int) ($normalised['budgets']['global']['minitems'] ?? 20),
             'globalmax'          => (int) ($normalised['budgets']['global']['maxitems'] ?? 25),
             'subscalemin'        => (int) ($normalised['budgets']['subscale']['minitems'] ?? 3),
             'subscalemax'        => (int) ($normalised['budgets']['subscale']['maxitems'] ?? 5),
-            'semin'              => (float) ($normalised['budgets']['se']['min'] ?? 0.35),
-            'semax'              => (float) ($normalised['budgets']['se']['max'] ?? 0.75),
+            'semin'              => self::localised((float) ($normalised['budgets']['se']['min'] ?? 0.35)),
+            'semax'              => self::localised((float) ($normalised['budgets']['se']['max'] ?? 0.75)),
             'sweepstrategies'    => (array) ($factors['strategy'] ?? []),
             'sweepvariants'      => (array) ($factors['variant'] ?? []),
             'sweepstrata'        => (array) ($factors['stratum'] ?? []),
@@ -603,7 +1215,9 @@ class experiment_form extends \moodleform {
             )),
             'poolpreset'         => (int) ($normalised['poolpreset'] ?? 0),
             'personspreset'      => (int) ($normalised['personspreset'] ?? 0),
-        ];
+            'pilotinclude'       => !empty($normalised['pilot']['include']) ? 1 : 0,
+            'pilotratio'         => self::localised((float) ($normalised['pilot']['ratio'] ?? 20)),
+        ] + self::per_strategy_fields($normalised) + self::per_cell_fields($normalised);
     }
 
     /**
@@ -872,9 +1486,15 @@ class experiment_form extends \moodleform {
      * @return array<string, string>
      */
     public static function strategy_menu(): array {
+        // Only what the installed engine can play — for the strategy and for
+        // the sweep alike. 0.6.94 filtered the catalogue's menu and missed
+        // this one, which both selects use: "balanced" and "pilot" stayed on
+        // offer and validation then refused them.
         $menu = [];
         foreach (strategy_catalog::keys() as $key) {
-            $menu[$key] = strategy_catalog::label($key) . ' (' . $key . ')';
+            if (strategy_catalog::runnable($key)) {
+                $menu[$key] = strategy_catalog::label($key) . ' (' . $key . ')';
+            }
         }
         return $menu;
     }

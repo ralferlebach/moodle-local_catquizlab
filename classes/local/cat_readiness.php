@@ -64,12 +64,6 @@ class cat_readiness {
             return self::verdict(false, [get_string('readiness:norun', $component)]);
         }
 
-        if (!environment::catquiz_available()) {
-            // Nothing to check against, and nothing to run either — the
-            // preflight already refuses this, so it is not reported twice.
-            return self::verdict(true, [], ['skipped' => 'engine-absent']);
-        }
-
         $definition = json_decode((string) ($run->manifestjson ?? ''), true)['config']['definition'] ?? null;
         if (!is_array($definition)) {
             // Falling back to the experiment, and saying so if that is gone
@@ -92,13 +86,23 @@ class cat_readiness {
             }
         }
 
+        // Only now the engine: a missing definition is a verdict whether or not
+        // there is an engine to check a pool against. Without one there is
+        // nothing to check the pool against and nothing to run either — the
+        // preflight refuses that already, so it is not reported twice.
+        if (!environment::catquiz_available()) {
+            return self::verdict(true, [], ['skipped' => 'engine-absent']);
+        }
+
         $facts = self::pool_facts($runid);
         $facts['strategy'] = (string) ($definition['strategy'] ?? '');
+
         $facts['enforcespersubscale'] = $facts['strategy'] !== ''
             && strategy_catalog::has($facts['strategy'])
             && strategy_catalog::enforces_per_subscale_minimum($facts['strategy']);
 
         $reasons = array_merge(
+            self::check_strategy($facts, $component),
             self::check_pool_exists($facts, $component),
             self::check_budgets($definition, $facts, $component)
         );
@@ -287,5 +291,29 @@ class cat_readiness {
      */
     public static function summary(array $result): string {
         return implode(' ', $result['reasons']);
+    }
+    /**
+     * Whether the installed engine can play the chosen strategy.
+     *
+     * The engine builds its strategies from classes, and this fork ships six
+     * of them for eight constants. A run of one of the other two provisions
+     * cleanly — courses, questions, people, sittings — and then fails every
+     * sitting, because nothing on the engine side answers to that number.
+     *
+     * @param array $facts What is known about the run.
+     * @param string $component For the strings.
+     * @return string[]
+     */
+    protected static function check_strategy(array $facts, string $component): array {
+        $strategy = (string) ($facts['strategy'] ?? '');
+
+        if ($strategy === '' || strategy_catalog::runnable($strategy)) {
+            return [];
+        }
+
+        return [get_string('readiness:strategynotinengine', $component, (object) [
+            'label' => strategy_catalog::label($strategy),
+            'id'    => strategy_catalog::engine_id($strategy),
+        ])];
     }
 }

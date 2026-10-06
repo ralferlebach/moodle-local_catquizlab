@@ -556,36 +556,58 @@ final class provisioning_test extends \advanced_testcase {
     }
 
     /**
-     * Simulated persons start with a stated ability on every scale.
+     * Provisioning writes no starting abilities, and removes any it finds.
      *
      * @return void
      */
-    public function test_person_parameters_are_seeded(): void {
+    public function test_no_person_has_a_starting_ability(): void {
+        global $DB;
         $this->resetAfterTest();
+        $this->setAdminUser();
 
-        if (!environment::engine_available()) {
-            $this->markTestSkipped('No CAT engine installed; seeding writes to its tables.');
+        if (!\local_catquizlab\local\environment::engine_available()) {
+            $this->markTestSkipped('No CAT engine installed.');
         }
 
-        // The engine needs an ability before it can choose a first question. In
-        // normal use the activity's entry path establishes one; a person the
-        // worker drops straight into an attempt has none, so the lab states it.
-        $this->assertSame(0, \local_catquizlab\local\user_provisioner::seed_person_parameters(0));
-    }
+        /** @var \local_catquizlab_generator $generator */
+        $generator = $this->getDataGenerator()->get_plugin_generator('local_catquizlab');
+        $runid = (int) $generator->create_run()->id;
+        $contextid = 4242;
+        $DB->insert_record('local_catquizlab_scalemap', (object) [
+            'runid' => $runid, 'level' => 0, 'catscaleid' => 1, 'parentcatscaleid' => 0,
+            'contextid' => $contextid, 'nodekey' => 'root', 'generation' => 1, 'timecreated' => time(),
+        ]);
 
-    /**
-     * Seeding is a no-op without the engine.
-     *
-     * @return void
-     */
-    public function test_seeding_without_the_engine(): void {
-        $this->resetAfterTest();
-
-        if (environment::engine_available()) {
-            $this->markTestSkipped('Engine present; the guard path is not exercised.');
+        // What an earlier version left behind: fifty people at exactly 0.0.
+        // Fifty is the engine's threshold for taking the standard deviation of
+        // existing abilities as the prior, and fifty identical values have a
+        // standard deviation of zero — the first answer of every sitting then
+        // divided by it. That was "Division by zero" on the live installation.
+        for ($i = 1; $i <= 50; $i++) {
+            $DB->insert_record('local_catquiz_personparams', (object) [
+                'userid' => 1000 + $i, 'catscaleid' => 1, 'contextid' => $contextid,
+                'ability' => 0.0, 'standarderror' => null, 'status' => 0,
+                'timecreated' => time(), 'timemodified' => time(),
+            ]);
         }
+        // And one the engine measured in an earlier round of this run.
+        $DB->insert_record('local_catquiz_personparams', (object) [
+            'userid' => 2000, 'catscaleid' => 1, 'contextid' => $contextid,
+            'ability' => 0.7, 'standarderror' => 0.4, 'status' => 1,
+            'timecreated' => time(), 'timemodified' => time(),
+        ]);
 
-        $this->assertSame(0, \local_catquizlab\local\user_provisioner::seed_person_parameters(1));
+        // Preparing the run clears its contexts completely, measured rows
+        // included. They belong to sittings this preparation is discarding,
+        // and leaving them is what made every sitting after a reset fail at
+        // once: fifty abilities from the previous round, all the same, whose
+        // standard deviation the engine takes as its prior.
+        $removed = \local_catquizlab\local\user_provisioner::remove_seeded_parameters($runid);
+
+        $this->assertSame(51, $removed);
+        $this->assertSame(0, $DB->count_records('local_catquiz_personparams', ['contextid' => $contextid]));
+        $this->assertSame(0, \local_catquizlab\local\user_provisioner::remove_seeded_parameters($runid));
+        $this->assertSame(0, \local_catquizlab\local\user_provisioner::remove_seeded_parameters(0));
     }
 
     /**

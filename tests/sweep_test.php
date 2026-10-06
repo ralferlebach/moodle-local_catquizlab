@@ -63,6 +63,9 @@ final class sweep_test extends \advanced_testcase {
      * @return void
      */
     public function test_full_product(): void {
+        // Reads the engine's strategy catalogue, which records the engine's
+        // fingerprint in the plugin's config the first time it is read.
+        $this->resetAfterTest();
         $out = sweep::expand($this->spec());
 
         $this->assertCount(8, $out['cells']);

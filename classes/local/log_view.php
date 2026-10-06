@@ -48,13 +48,18 @@ class log_view {
         $lines = array_merge(
             self::from_debug($filter),
             self::from_runlog($filter),
-            self::from_tasks($filter)
+            self::from_attemptlog($filter),
+            self::from_tasks($filter),
+            self::from_dispatch($filter)
         );
 
         // Newest last: a log is read downwards, and a person pasting the tail
-        // of it wants the end to be the end.
+        // of it wants the end to be the end. Reversible, because somebody
+        // watching something happen wants the newest line first.
         usort($lines, static function (array $a, array $b): int {
-            return $a['time'] <=> $b['time'] ?: $a['seq'] <=> $b['seq'];
+            // Milliseconds first: two entries of the same second used to keep
+            // only the order their sources happened to be merged in.
+            return $a['ms'] <=> $b['ms'] ?: $a['seq'] <=> $b['seq'];
         });
 
         $search = trim((string) ($filter['search'] ?? ''));
@@ -64,7 +69,14 @@ class log_view {
             }));
         }
 
-        return array_slice($lines, -$limit);
+        $lines = self::narrow($lines, $filter);
+        $lines = array_slice($lines, -$limit);
+
+        if (!empty($filter['newestfirst'])) {
+            $lines = array_reverse($lines);
+        }
+
+        return $lines;
     }
 
     /**
@@ -101,11 +113,20 @@ class log_view {
 
         self::apply_time($filter, $where, $params);
 
-        foreach (['channel' => 'channel', 'runid' => 'runid'] as $key => $column) {
+        // Channel, run, sitting — and the experiment, which the debug log
+        // records too and which used to be ignored here: filtering by an
+        // experiment dropped its worker and debug lines (#90).
+        foreach (['channel' => 'channel', 'runid' => 'runid', 'attemptid' => 'attemptid'] as $key => $column) {
             if (!empty($filter[$key])) {
                 $where[] = $column . ' = :' . $key;
                 $params[$key] = $filter[$key];
             }
+        }
+        if (!empty($filter['experimentid'])) {
+            $where[] = '(experimentid = :experimentid OR runid IN (SELECT id FROM {local_catquizlab_run}'
+                . ' WHERE experimentid = :experimentid2))';
+            $params['experimentid'] = $filter['experimentid'];
+            $params['experimentid2'] = $filter['experimentid'];
         }
 
         $rows = $DB->get_records_select(
@@ -131,6 +152,78 @@ class log_view {
                 'runid'         => (int) $row->runid,
                 'correlationid' => (string) ($row->correlationid ?? ''),
                 'failed'        => $row->outcome === 'error',
+                'severity'      => $row->outcome === 'error' ? self::ERROR
+                    : ($row->outcome === 'warning' ? self::WARNING : self::DEBUG),
+                'action'        => (string) $row->action,
+                'userid'        => (int) ($row->userid ?? 0),
+                'ms'            => (int) ($row->timecreatedms ?? 0),
+                'workerid'      => (string) ($row->workerid ?? ''),
+                // The sitting, under its own name: it used to be filed as
+                // "attemptno", the lifecycle attempt of a run — another thing.
+                'attemptid'     => (int) ($row->attemptid ?? 0),
+            ]);
+        }
+
+        return $lines;
+    }
+
+    /**
+     * Lines from the sittings' histories: every execution, started, failed,
+     * collected, put back — in the same chronology as the worker and the run
+     * lifecycle (#90).
+     *
+     * @param array $filter The filter.
+     * @return array[]
+     */
+    protected static function from_attemptlog(array $filter): array {
+        global $DB;
+
+        if (!$DB->get_manager()->table_exists('local_catquizlab_attemptlog')) {
+            return [];
+        }
+        if (!empty($filter['channel']) && $filter['channel'] !== 'attempt') {
+            return [];
+        }
+
+        $where = ['1=1'];
+        $params = [];
+        self::apply_time($filter, $where, $params);
+        foreach (['runid' => 'runid', 'attemptid' => 'attemptid'] as $key => $column) {
+            if (!empty($filter[$key])) {
+                $where[] = $column . ' = :' . $key;
+                $params[$key] = $filter[$key];
+            }
+        }
+        if (!empty($filter['experimentid'])) {
+            $where[] = 'runid IN (SELECT id FROM {local_catquizlab_run} WHERE experimentid = :experimentid)';
+            $params['experimentid'] = $filter['experimentid'];
+        }
+
+        $rows = $DB->get_records_select(
+            'local_catquizlab_attemptlog',
+            implode(' AND ', $where),
+            $params,
+            'timecreated ASC, id ASC',
+            '*',
+            0,
+            2000
+        );
+
+        $lines = [];
+        foreach ($rows as $row) {
+            $failed = in_array($row->outcome, [attempt_history::FAILED, attempt_history::ABANDONED], true);
+            $text = 'sitting=' . $row->attemptid . ' run=' . $row->runid . ' try=' . $row->tryno . ' ' . $row->outcome
+                . (!empty($row->reasoncode) ? ' reason=' . $row->reasoncode : '')
+                . (!empty($row->workerid) ? ' worker=' . $row->workerid : '')
+                . (!empty($row->detail) ? ' ' . attempt_history::redact((string) $row->detail) : '');
+            $lines[] = self::line((int) $row->timecreated, (int) $row->id, 'attempt', $text, [
+                'runid'         => (int) $row->runid,
+                'attemptid'     => (int) $row->attemptid,
+                'correlationid' => (string) ($row->correlationid ?? ''),
+                'failed'        => $failed,
+                'severity'      => $failed ? self::ERROR : self::INFO,
+                'action'        => 'attempt_' . $row->outcome,
+                'workerid'      => (string) ($row->workerid ?? ''),
             ]);
         }
 
@@ -147,6 +240,13 @@ class log_view {
         global $DB;
 
         if (!$DB->get_manager()->table_exists('local_catquizlab_runlog')) {
+            return [];
+        }
+
+        // Only when asked for, or when no channel is: filtering by "worker"
+        // used to bring the whole run lifecycle along, which is the opposite
+        // of what a channel filter is for.
+        if (!empty($filter['channel']) && $filter['channel'] !== 'lifecycle') {
             return [];
         }
 
@@ -187,6 +287,15 @@ class log_view {
                 'runid'         => (int) $row->runid,
                 'correlationid' => (string) ($row->correlationid ?? ''),
                 'failed'        => $row->event === run_log::STAGE_FAILED || $row->event === run_log::RUN_FAILED,
+                'severity'      => in_array($row->event, [run_log::STAGE_FAILED, run_log::RUN_FAILED], true)
+                    ? self::ERROR
+                    : (in_array($row->event, [run_log::RUN_AUTOPAUSED, run_log::ABILITIES_OUTSIDE], true)
+                        ? self::WARNING : self::INFO),
+                'action'        => (string) $row->event,
+                'attemptno'     => (int) ($row->attemptno ?? 0),
+                'userid'        => (int) ($row->userid ?? 0),
+                'ms'            => (int) ($row->timecreatedms ?? 0),
+                'taskid'        => (int) ($row->taskid ?? 0),
             ]);
         }
 
@@ -236,6 +345,90 @@ class log_view {
     }
 
     /**
+     * The pipeline's last decision about starting a worker.
+     *
+     * Recorded on every tick whether or not debug recording is on: it is the
+     * one line that answers "why is nothing running", and it used to exist
+     * only in cron's output.
+     *
+     * @param array $filter The filter.
+     * @return array[]
+     */
+    protected static function from_dispatch(array $filter): array {
+        if (!empty($filter['channel']) && $filter['channel'] !== 'task') {
+            return [];
+        }
+
+        $last = json_decode((string) get_config('local_catquizlab', 'lastdispatch'), true);
+        if (!is_array($last) || empty($last['time'])) {
+            return [];
+        }
+        if (!empty($filter['since']) && (int) $last['time'] < (int) $filter['since']) {
+            return [];
+        }
+
+        $text = 'pipeline tick: started ' . (int) $last['launched'] . ' worker(s), '
+            . (int) $last['claimable'] . ' sitting(s) claimable'
+            . ((string) $last['reason'] !== '' ? ', reason=' . $last['reason'] : '');
+
+        return [self::line((int) $last['time'], PHP_INT_MAX, 'task', $text, [
+            'failed' => (int) $last['launched'] === 0 && (string) $last['reason'] !== '',
+        ])];
+    }
+
+    /**
+     * Remove entries older than the configured retention.
+     *
+     * A debug recording on a busy installation writes a row per service call;
+     * left alone it grows without a ceiling. Nothing here is the record of an
+     * experiment — that is in the run tables and the results — so a window
+     * that covers troubleshooting is enough.
+     *
+     * @return int Rows removed.
+     */
+    public static function prune(): int {
+        global $DB;
+
+        $retention = (int) get_config('local_catquizlab', 'logretention');
+        if ($retention <= 0) {
+            return 0;
+        }
+
+        $cutoff = time() - $retention;
+        $removed = 0;
+
+        foreach (['local_catquizlab_debug', 'local_catquizlab_runlog'] as $table) {
+            if (!$DB->get_manager()->table_exists($table)) {
+                continue;
+            }
+            $removed += (int) $DB->count_records_select($table, 'timecreated < ?', [$cutoff]);
+            $DB->delete_records_select($table, 'timecreated < ?', [$cutoff]);
+        }
+
+        return $removed;
+    }
+
+    /**
+     * When the most recent entry of any source was written.
+     *
+     * @return int A timestamp, or 0 when nothing was ever recorded.
+     */
+    public static function latest(): int {
+        global $DB;
+
+        $times = [0];
+        foreach (['local_catquizlab_runlog', 'local_catquizlab_debug'] as $table) {
+            if ($DB->get_manager()->table_exists($table)) {
+                $times[] = (int) $DB->get_field_sql('SELECT MAX(timecreated) FROM {' . $table . '}');
+            }
+        }
+        $last = json_decode((string) get_config('local_catquizlab', 'lastdispatch'), true);
+        $times[] = (int) ($last['time'] ?? 0);
+
+        return max($times);
+    }
+
+    /**
      * Add the time window to a query.
      *
      * @param array $filter The filter.
@@ -273,11 +466,116 @@ class log_view {
             'text'   => trim($text),
             // ISO-ish and sortable: a support thread is read by somebody in
             // another timezone as often as not.
-            'stamp'  => userdate($time, '%Y-%m-%d %H:%M:%S'),
+            'stamp'  => userdate($time, '%Y-%m-%d %H:%M:%S')
+                . (isset($meta['ms']) && $meta['ms'] > 0 ? sprintf('.%03d', (int) $meta['ms'] % 1000) : ''),
+            'ms'     => (int) ($meta['ms'] ?? ((int) $time * 1000)),
+            'workerid' => (string) ($meta['workerid'] ?? ''),
+            'taskid'   => (int) ($meta['taskid'] ?? 0),
             'runid'  => (int) ($meta['runid'] ?? 0),
             'correlationid' => (string) ($meta['correlationid'] ?? ''),
             'failed' => !empty($meta['failed']),
+            // A level on every line, so a reader can ask for the errors
+            // without knowing which of the four sources wrote them.
+            'severity' => (string) ($meta['severity'] ?? (!empty($meta['failed']) ? self::ERROR : self::INFO)),
+            'action'   => (string) ($meta['action'] ?? ''),
+            'attemptno' => (int) ($meta['attemptno'] ?? 0),
+            'attemptid' => (int) ($meta['attemptid'] ?? 0),
+            'userid'   => (int) ($meta['userid'] ?? 0),
         ];
+    }
+
+    /** @var string Everything that happened, in order. */
+    public const DEBUG = 'debug';
+
+    /** @var string The normal course of events. */
+    public const INFO = 'info';
+
+    /** @var string Something that deserves attention but is not a failure. */
+    public const WARNING = 'warning';
+
+    /** @var string Something failed. */
+    public const ERROR = 'error';
+
+    /** @var string[] The levels, least to most severe. */
+    public const SEVERITIES = [self::DEBUG, self::INFO, self::WARNING, self::ERROR];
+
+    /**
+     * Whether a line is at least as severe as the level asked for.
+     *
+     * @param string $line The line's severity.
+     * @param string $wanted The lowest severity to show.
+     * @return bool
+     */
+    public static function at_least(string $line, string $wanted): bool {
+        $order = array_flip(self::SEVERITIES);
+
+        return ($order[$line] ?? 1) >= ($order[$wanted] ?? 0);
+    }
+
+    /**
+     * The filters that narrow the lines after they are gathered.
+     *
+     * Applied here rather than in each source's query: the four sources store
+     * different columns, and a reader asking for "everything about correlation
+     * X, errors only, oldest first" should not have to know which of them can
+     * answer in SQL.
+     *
+     * @param array[] $lines The gathered lines.
+     * @param array $filter The filter.
+     * @return array[]
+     */
+    protected static function narrow(array $lines, array $filter): array {
+        $severity = (string) ($filter['severity'] ?? '');
+        $action = trim((string) ($filter['action'] ?? ''));
+        $correlation = trim((string) ($filter['correlationid'] ?? ''));
+        $attempt = (int) ($filter['attemptno'] ?? 0);
+        $userid = (int) ($filter['userid'] ?? 0);
+        $until = (int) ($filter['until'] ?? 0);
+        $worker = trim((string) ($filter['workerid'] ?? ''));
+        $task = (int) ($filter['taskid'] ?? 0);
+        $sitting = (int) ($filter['attemptid'] ?? 0);
+
+        return array_values(array_filter($lines, static function (array $line) use (
+            $sitting,
+            $severity,
+            $action,
+            $correlation,
+            $attempt,
+            $userid,
+            $until,
+            $worker,
+            $task
+        ): bool {
+            if ($severity !== '' && !self::at_least((string) $line['severity'], $severity)) {
+                return false;
+            }
+            if ($action !== '' && stripos((string) $line['action'] . ' ' . $line['text'], $action) === false) {
+                return false;
+            }
+            if ($correlation !== '' && stripos((string) $line['correlationid'], $correlation) === false) {
+                return false;
+            }
+            if ($sitting > 0 && (int) $line['attemptid'] !== $sitting) {
+                return false;
+            }
+            if ($attempt > 0 && (int) $line['attemptno'] !== $attempt) {
+                return false;
+            }
+            if ($userid > 0 && (int) $line['userid'] !== $userid) {
+                return false;
+            }
+            if ($until > 0 && (int) $line['time'] > $until) {
+                return false;
+            }
+            if ($worker !== '' && stripos((string) $line['workerid'], $worker) === false) {
+                return false;
+            }
+            if ($task > 0 && (int) $line['taskid'] !== $task) {
+                return false;
+            }
+
+            return true;
+        }));
     }
 
     /**

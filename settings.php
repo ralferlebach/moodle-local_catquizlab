@@ -105,6 +105,35 @@ if ($hassiteconfig) {
         get_string('setting:worker', $component),
         get_string('setting:worker_desc', $component)
     ));
+    // Debug artefacts of executions (#107): how long they are kept, whether a
+    // page's HTML is part of a download, and whether successful executions
+    // are captured too.
+    $settings->add(new admin_setting_configtext(
+        $component . '/artefact_retention_days',
+        get_string('setting:artefactretention', $component),
+        get_string('setting:artefactretention_desc', $component),
+        14,
+        PARAM_INT
+    ));
+    $settings->add(new admin_setting_configcheckbox(
+        $component . '/artefacts_include_html',
+        get_string('setting:artefactshtml', $component),
+        get_string('setting:artefactshtml_desc', $component),
+        1
+    ));
+    $settings->add(new admin_setting_configcheckbox(
+        $component . '/artefacts_capture_all',
+        get_string('setting:artefactsall', $component),
+        get_string('setting:artefactsall_desc', $component),
+        0
+    ));
+
+    $settings->add(new admin_setting_configduration(
+        $component . '/logretention',
+        get_string('setting:logretention', $component),
+        get_string('setting:logretention_desc', $component),
+        30 * DAYSECS
+    ));
     $settings->add(new admin_setting_configcheckbox(
         $component . '/worker_exec_enabled',
         get_string('setting:worker_exec_enabled', $component),

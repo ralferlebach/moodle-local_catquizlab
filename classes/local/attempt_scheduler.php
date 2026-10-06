@@ -77,6 +77,24 @@ class attempt_scheduler {
      * @return int The number of attempts reclaimed (requeued or failed).
      */
     /**
+     * A sitting's status in words.
+     *
+     * @param int $status One of the STATUS_ constants.
+     * @return string
+     */
+    public static function status_label(int $status): string {
+        $keys = [
+            self::STATUS_QUEUED    => 'attemptstatus:queued',
+            self::STATUS_RUNNING   => 'attemptstatus:running',
+            self::STATUS_COLLECTED => 'attemptstatus:collected',
+            self::STATUS_VALIDATED => 'attemptstatus:validated',
+            self::STATUS_FAILED    => 'attemptstatus:failed',
+        ];
+
+        return get_string($keys[$status] ?? 'attemptstatus:unknown', 'local_catquizlab');
+    }
+
+    /**
      * How the queue breaks down for an operator, not for the database.
      *
      * `QUEUED` is a storage state and was being read as "waiting for a worker",
@@ -85,30 +103,50 @@ class attempt_scheduler {
      * state that hands out work, or paused by a decision somebody took. Those
      * four need four different responses, and one number gave them one.
      *
+     * @param int $experimentid Restrict to one experiment, or 0 for the installation.
      * @return array{claimable: int, notdue: int, blocked: int, paused: int,
      *               running: int, collected: int, failed: int, queued: int}
      */
-    public static function queue_breakdown(): array {
+    public static function queue_breakdown(int $experimentid = 0): array {
         global $DB;
+
+        // Scoped to one experiment when the caller names one. A page showing
+        // experiment A used to put A's progress beside the whole
+        // installation's queue: "18 of 50" over "150 sittings blocked" when
+        // the 150 belonged to experiment B. The counts and the card now answer
+        // for the same thing; the worker pool and the pipeline stay
+        // site-wide, because they are, and the interface says so.
+        $scope = '';
+        $scopeparams = [];
+        if ($experimentid > 0) {
+            $scope = ' AND runid IN (SELECT id FROM {local_catquizlab_run} WHERE experimentid = :experimentid)';
+            $scopeparams['experimentid'] = $experimentid;
+        }
+
+        // One grouped query for the terminal states instead of one count per
+        // state: three separate counts over fifty thousand sittings cost about
+        // 450 ms, and a live poll asks for them every two seconds.
+        $bystatus = $DB->get_records_sql(
+            'SELECT status, COUNT(1) AS n
+               FROM {local_catquizlab_attempt}
+              WHERE 1 = 1' . $scope . '
+           GROUP BY status',
+            $scopeparams
+        );
+        $count = static function (int $status) use ($bystatus): int {
+            return (int) ($bystatus[$status]->n ?? 0);
+        };
 
         $now = time();
         $counts = [
+            'experimentid' => $experimentid,
             'claimable' => 0,
             'notdue'    => 0,
             'blocked'   => 0,
             'paused'    => 0,
-            'running'   => (int) $DB->count_records(
-                'local_catquizlab_attempt',
-                ['status' => self::STATUS_RUNNING]
-            ),
-            'collected' => (int) $DB->count_records(
-                'local_catquizlab_attempt',
-                ['status' => self::STATUS_COLLECTED]
-            ),
-            'failed'    => (int) $DB->count_records(
-                'local_catquizlab_attempt',
-                ['status' => self::STATUS_FAILED]
-            ),
+            'running'   => $count(self::STATUS_RUNNING),
+            'collected' => $count(self::STATUS_COLLECTED),
+            'failed'    => $count(self::STATUS_FAILED),
         ];
 
         // Grouped by run so the run's state is read once rather than per
@@ -120,9 +158,10 @@ class attempt_scheduler {
                     COUNT(1) AS total
                FROM {local_catquizlab_attempt} a
                JOIN {local_catquizlab_run} r ON r.id = a.runid
-              WHERE a.status = :queued
-           GROUP BY a.runid, r.status, r.manifestjson',
-            ['now' => $now, 'queued' => self::STATUS_QUEUED]
+              WHERE a.status = :queued'
+              . ($experimentid > 0 ? ' AND r.experimentid = :experimentid' : '')
+              . ' GROUP BY a.runid, r.status, r.manifestjson',
+            ['now' => $now, 'queued' => self::STATUS_QUEUED] + $scopeparams
         );
 
         foreach ($rows as $row) {
@@ -173,6 +212,7 @@ class attempt_scheduler {
      * @return int How many attempts went back into the queue.
      */
     public static function release_lease(string $workerid): int {
+
         global $DB;
 
         $held = $DB->get_records_select(
@@ -187,7 +227,7 @@ class attempt_scheduler {
         foreach ($held as $attempt) {
             $DB->set_field('local_catquizlab_attempt', 'leaseowner', null, ['id' => $attempt->id]);
             $DB->set_field('local_catquizlab_attempt', 'leaseexpires', 0, ['id' => $attempt->id]);
-            self::apply_retry((int) $attempt->id, (int) $attempt->tries, $now);
+            self::apply_retry((int) $attempt->id, (int) $attempt->tries, $now, 'lease_released');
         }
 
         return count($held);
@@ -201,6 +241,9 @@ class attempt_scheduler {
      * @return void
      */
     public static function record_error(int $attemptid, string $error): void {
+        // Never a session key in a stored error; see attempt_history::redact().
+        $error = attempt_history::redact($error);
+
         global $DB;
 
         if (trim($error) === '') {
@@ -228,6 +271,7 @@ class attempt_scheduler {
      * @return int How many attempts went back into the queue.
      */
     public static function reclaim_stale(?int $runid, int $timeoutseconds): int {
+
         global $DB;
 
         $now = time();
@@ -248,7 +292,7 @@ class attempt_scheduler {
         foreach ($stale as $attempt) {
             $DB->set_field('local_catquizlab_attempt', 'leaseowner', null, ['id' => $attempt->id]);
             $DB->set_field('local_catquizlab_attempt', 'leaseexpires', 0, ['id' => $attempt->id]);
-            self::apply_retry((int) $attempt->id, (int) $attempt->tries, $now);
+            self::apply_retry((int) $attempt->id, (int) $attempt->tries, $now, 'lease_expired');
         }
         return count($stale);
     }
@@ -273,6 +317,7 @@ class attempt_scheduler {
      * @return int The number of attempts aborted.
      */
     public static function abort(int $runid): int {
+
         global $DB;
 
         $active = [self::STATUS_QUEUED, self::STATUS_RUNNING];
@@ -311,9 +356,10 @@ class attempt_scheduler {
      * @param int $attemptid The attempt.
      * @param int $tries The current try count.
      * @param int $now The current time.
+     * @param string $why Why the sitting is retried or given up, for the history.
      * @return int The resulting status.
      */
-    protected static function apply_retry(int $attemptid, int $tries, int $now): int {
+    protected static function apply_retry(int $attemptid, int $tries, int $now, string $why = 'failed'): int {
         global $DB;
 
         $status = self::retry_status($tries);
@@ -326,6 +372,26 @@ class attempt_scheduler {
             $update->nextruntime = $now + self::RETRY_BACKOFF * max(1, $tries);
         }
         $DB->update_record('local_catquizlab_attempt', $update);
+
+        // Every retry decision is recorded (#90): requeued — after which
+        // backoff, when — or given up, and why. The failure itself is recorded
+        // where it was reported; this is what was decided about it.
+        if ($status === self::STATUS_QUEUED) {
+            attempt_history::record($attemptid, attempt_history::REQUEUED, [
+                'tryno'  => $tries,
+                'detail' => sprintf(
+                    '%s; retry after %d s, at %s',
+                    $why,
+                    (int) $update->nextruntime - $now,
+                    date('c', (int) $update->nextruntime)
+                ),
+            ]);
+        } else if ($status === self::STATUS_FAILED) {
+            attempt_history::record($attemptid, attempt_history::ABANDONED, [
+                'tryno'  => $tries,
+                'detail' => sprintf('%s; no tries left after %d', $why, $tries),
+            ]);
+        }
 
         // A sitting that has given up is the moment to ask whether this run is
         // failing the same way over and over. Asking later — on a page load, in
@@ -348,9 +414,20 @@ class attempt_scheduler {
      * @return int The number of attempts newly created.
      */
     public static function schedule(int $runid): int {
+
         global $DB;
 
         $now = time();
+        // Not one sitting more than there are twins (#116, POP-003): a run whose
+        // people are damaged is blocked, not given a sitting per extra row.
+        $integrity = person_integrity::check_run($runid);
+        if ($integrity['duplicates'] !== []) {
+            run_log::record($runid, run_log::SETUP_SKIPPED, ['why' => person_integrity::REASON_DUPLICATE_TWINS,
+                'duplicates' => count($integrity['duplicates'])]);
+            throw new \moodle_exception('duplicatetwins', 'local_catquizlab', '', (object) [
+                'run' => $runid, 'n' => count($integrity['duplicates']),
+            ]);
+        }
         $persons = $DB->get_records_select(
             'local_catquizlab_person',
             'runid = :runid AND moodleuserid IS NOT NULL',
@@ -377,7 +454,7 @@ class attempt_scheduler {
         }
 
         if ($created > 0) {
-            $DB->set_field('local_catquizlab_run', 'status', registry::STATUS_SCHEDULED, ['id' => $runid]);
+            run_lifecycle::set_status($runid, registry::STATUS_SCHEDULED, 'sittings_scheduled');
         }
 
         return $created;
@@ -390,6 +467,7 @@ class attempt_scheduler {
      * @return void
      */
     public static function queue(int $runid): void {
+
         $task = new \local_catquizlab\task\schedule_attempts();
         $task->set_custom_data(['runid' => $runid]);
         \core\task\manager::queue_adhoc_task($task, true);

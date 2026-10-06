@@ -77,6 +77,314 @@ class scatter_chart {
     /** @var string The accessible description: what one point is. */
     protected string $description = '';
 
+    /** @var string How the x axis is scaled: one of axis_scale's modes. */
+    protected string $xmode = axis_scale::LINEAR;
+
+    /** @var string How the y axis is scaled. */
+    protected string $ymode = axis_scale::LINEAR;
+
+    /** @var array Axis options: xatleast, yatleast, xfromzero, yfromzero, jitter. */
+    protected array $axisoptions = [];
+
+    /** @var array[] Several traces in one plot: label, group, points (#109). */
+    protected array $series = [];
+
+    /** @var array|null Fixed axis ranges: xmin, xmax, ymin, ymax, any of them. */
+    protected ?array $fixed = null;
+
+    /** @var string[] Colours by group, distinguishable in print as on screen. */
+    protected const PALETTE = ['#1b9e77', '#d95f02', '#7570b3', '#e7298a', '#66a61e', '#e6ab02', '#a6761d', '#666666'];
+
+    /**
+     * Add one trace, drawn as a joined line (#109).
+     *
+     * Traces of the same group share a colour and one legend entry.
+     *
+     * @param string $label What the trace is (sitting, strategy, run …).
+     * @param string $group What colours and names it in the legend.
+     * @param array[] $points Its points in order; points without a value are skipped.
+     * @return self
+     */
+    public function add_series(string $label, string $group, array $points): self {
+        $clean = [];
+        foreach ($points as $point) {
+            if (isset($point['x'], $point['y']) && is_numeric($point['x']) && is_numeric($point['y'])) {
+                $clean[] = ['x' => (float) $point['x'], 'y' => (float) $point['y']];
+            }
+        }
+        $this->series[] = ['label' => $label, 'group' => $group, 'points' => $clean];
+
+        return $this;
+    }
+
+    /**
+     * Fix the axis ranges by hand; unset ones follow the data.
+     *
+     * @param array $fixed xmin, xmax, ymin, ymax — numbers or null.
+     * @return self
+     */
+    public function set_fixed_bounds(array $fixed): self {
+        $this->fixed = array_filter($fixed, static fn($v): bool => $v !== null && $v !== '' && is_numeric($v));
+
+        return $this;
+    }
+
+    /** @var string The kind of plot, for export file names and metadata (#108). */
+    protected string $plottype = '';
+
+    /** @var string Experiment or run context for the file name. */
+    protected string $context = '';
+
+    /** @var array The selected filters, for the metadata. */
+    protected array $filters = [];
+
+    /** @var string The axis profile applied, if any. */
+    protected string $profile = '';
+
+    /** @var array Hand-set tick spacing: x, y. */
+    protected array $spacing = [];
+
+    /** @var array[] The data behind the plot, for the CSV export. */
+    protected array $exportrows = [];
+
+    /** @var array The settings of the last drawing, for its metadata and JSON. */
+    protected array $settings = [];
+
+    /**
+     * Name the plot for its export (#108).
+     *
+     * @param string $type The plot type, such as "recovery".
+     * @param string $context The experiment or run context, such as "exp12".
+     * @param array $filters The filters in force.
+     * @param array[] $rows The data behind the plot, for the CSV.
+     * @return self
+     */
+    public function set_export(string $type, string $context, array $filters, array $rows = []): self {
+        $this->plottype = $type;
+        $this->context = $context;
+        $this->filters = $filters;
+        $this->exportrows = $rows;
+
+        return $this;
+    }
+
+    /** @var string[] Notes beneath the plot. */
+    protected array $notes = [];
+
+    /**
+     * A note beneath the plot, such as how many values lie outside the scale range.
+     *
+     * @param string $note The note.
+     * @return self
+     */
+    public function add_note(string $note): self {
+        $this->notes[] = $note;
+
+        return $this;
+    }
+
+    /** @var bool Whether y spans only the 1st to 99th percentile (#105, section 6). */
+    protected bool $robust = false;
+
+    /** @var int Points outside the displayed range in the last drawing. */
+    protected int $hidden = 0;
+
+    /**
+     * A robust y range: the 1st to the 99th percentile, so that a few outliers
+     * do not flatten the rest. Points outside it are not drawn but counted,
+     * and the count is said beneath the plot.
+     *
+     * @param bool $robust Whether to.
+     * @return self
+     */
+    public function set_robust(bool $robust = true): self {
+        $this->robust = $robust;
+
+        return $this;
+    }
+
+    /**
+     * Keep a drawing in the session for its PDF export, under a key.
+     *
+     * The PDF endpoint renders only drawings this plugin made for this user,
+     * never SVG sent by a browser. The last few are kept.
+     *
+     * @param string $drawing The SVG.
+     * @param string $name The file name.
+     * @return string The key.
+     */
+    public static function keep_for_pdf(string $drawing, string $name): string {
+        global $SESSION;
+
+        $key = substr(sha1($drawing), 0, 16);
+        $kept = (array) ($SESSION->local_catquizlab_plots ?? []);
+        unset($kept[$key]);
+        $kept[$key] = ['svg' => $drawing, 'name' => $name];
+        $SESSION->local_catquizlab_plots = array_slice($kept, -24, null, true);
+
+        return $key;
+    }
+
+    /**
+     * The settings of the last drawing: plot type, axes with their ranges and ticks.
+     *
+     * @return array
+     */
+    public function last_settings(): array {
+        if ($this->settings === []) {
+            $this->drawing();
+        }
+
+        return $this->settings;
+    }
+
+    /** @var string Controls shown beneath the plot (its axis settings). */
+    protected string $controls = '';
+
+    /**
+     * Controls to show beneath the plot.
+     *
+     * @param string $html The controls.
+     * @return self
+     */
+    public function set_controls(string $html): self {
+        $this->controls = $html;
+
+        return $this;
+    }
+
+    /**
+     * Force the axes symmetric around 0 (#108): y always, x unless it counts.
+     *
+     * @return self
+     */
+    public function force_symmetric(): self {
+        if ($this->xmode !== axis_scale::INTEGER) {
+            $this->xmode = axis_scale::SYMMETRIC;
+        }
+        $this->ymode = axis_scale::SYMMETRIC;
+
+        return $this;
+    }
+
+    /**
+     * Tick spacing set by hand; null leaves an axis to its rules.
+     *
+     * @param float|null $x Spacing on x.
+     * @param float|null $y Spacing on y.
+     * @return self
+     */
+    public function set_tick_spacing(?float $x, ?float $y): self {
+        $this->spacing = array_filter(['x' => $x, 'y' => $y], static fn($v): bool => $v !== null && $v > 0);
+
+        return $this;
+    }
+
+    /**
+     * Record which axis profile was applied, for the metadata.
+     *
+     * @param string $profile The profile's name.
+     * @return self
+     */
+    public function set_profile(string $profile): self {
+        $this->profile = $profile;
+
+        return $this;
+    }
+
+    /**
+     * The export file name: plot type, context, timestamp.
+     *
+     * @return string
+     */
+    protected function filename(): string {
+        return clean_filename(implode('-', array_filter([
+            'catquizlab', $this->plottype, $this->context, date('Ymd-His'),
+        ])));
+    }
+
+    /**
+     * The spacing of a tick sequence.
+     *
+     * @param float[] $ticks The ticks.
+     * @return float|null
+     */
+    protected static function spacing(array $ticks): ?float {
+        return count($ticks) > 1 ? round($ticks[1] - $ticks[0], 6) : null;
+    }
+
+    /** @var string What the plot is based on, shown beneath it (#105, section 9). */
+    protected string $basis = '';
+
+    /**
+     * Say what the plot is based on: experiment, runs, strategy, model, n, range, filter.
+     *
+     * @param string $basis The text.
+     * @return self
+     */
+    public function set_basis(string $basis): self {
+        $this->basis = $basis;
+
+        return $this;
+    }
+
+    /** @var bool Whether the points form a sequence to be joined by a line. */
+    protected bool $connected = false;
+
+    /** @var array[] An uncertainty band: x, lower and upper y per point. */
+    protected array $band = [];
+
+    /** @var string What the band shows, for its legend. */
+    protected string $bandlabel = '';
+
+    /**
+     * Join the points by a line, in the order given: a trajectory, not a cloud.
+     *
+     * @param bool $connected Whether to.
+     * @return self
+     */
+    public function set_connected(bool $connected = true): self {
+        $this->connected = $connected;
+
+        return $this;
+    }
+
+    /**
+     * Shade a band around the points, such as estimate ± standard error.
+     *
+     * @param array[] $band Per point: x, lo, hi.
+     * @param string $label What it shows.
+     * @return self
+     */
+    public function add_band(array $band, string $label): self {
+        $this->band = array_values(array_filter($band, static fn(array $b): bool =>
+            isset($b['x'], $b['lo'], $b['hi']) && is_numeric($b['lo']) && is_numeric($b['hi'])));
+        $this->bandlabel = $label;
+
+        return $this;
+    }
+
+    /**
+     * How the axes are scaled (#105).
+     *
+     * Logit quantities (ability, error, deviation) symmetric around 0; counts
+     * (test length, step) as integers; anything else linear with round ticks.
+     *
+     * @param string $x Mode of the x axis.
+     * @param string $y Mode of the y axis.
+     * @param array $options xatleast / yatleast: a half-range a symmetric axis
+     *     covers at least; xfromzero / yfromzero: include 0; jitter: a spread
+     *     for points on an integer x axis, in units of that axis.
+     * @return self
+     */
+    public function set_axes(string $x, string $y, array $options = []): self {
+        $this->xmode = $x;
+        $this->ymode = $y;
+        $this->axisoptions = $options;
+
+        return $this;
+    }
+
     /**
      * Construct a plot.
      *
@@ -100,7 +408,12 @@ class scatter_chart {
         $this->points = [];
         foreach ($points as $point) {
             if (isset($point['x'], $point['y']) && is_numeric($point['x']) && is_numeric($point['y'])) {
-                $this->points[] = ['x' => (float) $point['x'], 'y' => (float) $point['y']];
+                $this->points[] = [
+                    'x' => (float) $point['x'],
+                    'y' => (float) $point['y'],
+                    // What the point is, as a tooltip (#105): person, scale, values.
+                    'label' => (string) ($point['label'] ?? ''),
+                ];
             }
         }
 
@@ -151,7 +464,59 @@ class scatter_chart {
      * @return string The SVG markup, or an empty-state notice when there is nothing to plot.
      */
     public function render(): string {
-        if ($this->points === []) {
+        $svg = $this->drawing();
+        if (strpos($svg, '<svg') === false) {
+            return $svg;
+        }
+        if ($this->hidden > 0) {
+            $svg .= \html_writer::div(get_string('chart:hiddenpoints', 'local_catquizlab', (object) [
+                'hidden' => $this->hidden,
+                'total' => count($this->points),
+                'why' => get_string($this->robust ? 'chart:robustrange' : 'chart:manualrange', 'local_catquizlab'),
+            ]), 'small text-muted mt-1', ['data-region' => 'catquizlab-hidden-points']);
+        }
+        if ($this->notes !== []) {
+            foreach ($this->notes as $note) {
+                $svg .= \html_writer::div(s($note), 'small text-muted mt-1', ['data-region' => 'catquizlab-plot-note']);
+            }
+        }
+        if ($this->basis !== '') {
+            $svg .= \html_writer::div(s($this->basis), 'small text-muted mt-1', ['data-region' => 'catquizlab-plot-basis']);
+        }
+        // Every plot exportable from where it is shown (#108).
+        if ($this->plottype !== '') {
+            $rows = $this->exportrows;
+            if ($rows === []) {
+                // Without rows of its own, a plot exports what it draws.
+                foreach ($this->points as $point) {
+                    $rows[] = ['series' => '', 'x' => $point['x'], 'y' => $point['y'], 'label' => $point['label'] ?? ''];
+                }
+                foreach ($this->series as $trace) {
+                    foreach ($trace['points'] as $point) {
+                        $rows[] = ['series' => $trace['label'], 'x' => $point['x'], 'y' => $point['y'], 'label' => $trace['group']];
+                    }
+                }
+            }
+            $svg .= $this->download_links($this->filename(), $rows);
+        }
+        $svg .= $this->controls;
+
+        return $svg;
+    }
+
+    /**
+     * The SVG alone: a file of its own, with its settings as metadata (#108).
+     *
+     * Text as text, points and lines as vector elements — nothing rasterised.
+     *
+     * @return string
+     */
+    protected function drawing(): string {
+        $seriespoints = [];
+        foreach ($this->series as $trace) {
+            $seriespoints = array_merge($seriespoints, $trace['points']);
+        }
+        if ($this->points === [] && $seriespoints === []) {
             return \html_writer::div(
                 get_string('chart:nodata', 'local_catquizlab'),
                 'alert alert-info'
@@ -161,6 +526,12 @@ class scatter_chart {
         $bounds = $this->bounds();
         $plotwidth = self::WIDTH - self::MARGIN_LEFT - self::MARGIN_RIGHT;
         $plotheight = self::HEIGHT - self::MARGIN_TOP - self::MARGIN_BOTTOM;
+        // With an identity line the plotting area is square: the same range on
+        // both axes only makes y = x a 45° line if a unit is as long on one
+        // axis as on the other (AXIS-003). 560 × 310 had it at about 29°.
+        if ($this->has_identity()) {
+            $plotwidth = $plotheight;
+        }
 
         $sx = static function (float $x) use ($bounds, $plotwidth): float {
             $span = $bounds['xmax'] - $bounds['xmin'];
@@ -176,10 +547,30 @@ class scatter_chart {
         $titleid = 'catlabtitle' . uniqid();
         $descid = 'catlabdesc' . uniqid();
 
-        $svg = '<svg viewBox="0 0 ' . self::WIDTH . ' ' . self::HEIGHT . '" '
+        $this->settings = [
+            'plot_type'   => $this->plottype,
+            'title'       => $this->title,
+            'data_source' => $this->basis,
+            'filters'     => $this->filters,
+            'axis'        => [
+                'x' => ['label' => $this->xlabel, 'mode' => $this->has_identity() ? 'shared' : $this->xmode,
+                    'min' => $bounds['xmin'], 'max' => $bounds['xmax'], 'ticks' => $bounds['xticks'],
+                    'tick_spacing' => self::spacing($bounds['xticks'])],
+                'y' => ['label' => $this->ylabel, 'mode' => $this->has_identity() ? 'shared' : $this->ymode,
+                    'min' => $bounds['ymin'], 'max' => $bounds['ymax'], 'ticks' => $bounds['yticks'],
+                    'tick_spacing' => self::spacing($bounds['yticks'])],
+                'manual' => $this->fixed ?: null,
+                'robust' => $this->robust,
+                'profile' => $this->profile,
+            ],
+            'exported' => date('c'),
+        ];
+        $metadata = '<metadata>' . s((string) json_encode($this->settings, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE))
+            . '</metadata>';
+        $svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ' . self::WIDTH . ' ' . self::HEIGHT . '" '
             . 'class="local-catquizlab-chart" role="img" '
             . 'aria-labelledby="' . $titleid . ' ' . $descid . '" '
-            . 'style="max-width:100%;height:auto;">';
+            . 'style="max-width:100%;height:auto;">' . $metadata;
         $svg .= '<title id="' . $titleid . '">' . s($this->title) . '</title>';
         $svg .= '<desc id="' . $descid . '">' . s($this->description) . '</desc>';
 
@@ -202,12 +593,12 @@ class scatter_chart {
         );
 
         // Ticks with their values, so a reader can put numbers on the points.
-        foreach ($this->ticks($bounds['xmin'], $bounds['xmax']) as $value) {
+        foreach ($bounds['xticks'] as $value) {
             $x = $sx($value);
             $svg .= $this->line($x, self::MARGIN_TOP + $plotheight, $x, self::MARGIN_TOP + $plotheight + 5, '#666', 1);
             $svg .= $this->text($x, self::MARGIN_TOP + $plotheight + 18, self::format($value), 'middle');
         }
-        foreach ($this->ticks($bounds['ymin'], $bounds['ymax']) as $value) {
+        foreach ($bounds['yticks'] as $value) {
             $y = $sy($value);
             $svg .= $this->line(self::MARGIN_LEFT - 5, $y, self::MARGIN_LEFT, $y, '#666', 1);
             $svg .= $this->text(self::MARGIN_LEFT - 9, $y + 4, self::format($value), 'end');
@@ -235,9 +626,77 @@ class scatter_chart {
 
         // Points. Semi-transparent, because overplotting is the norm with a
         // few hundred replications and solid dots would hide the density.
-        foreach ($this->points as $point) {
-            $svg .= '<circle cx="' . round($sx($point['x']), 2) . '" cy="' . round($sy($point['y']), 2)
-                . '" r="3" fill="#2c3e50" fill-opacity="0.45"/>';
+        // Several traces (#109): one colour per group, joined in order, and a
+        // legend naming each group once.
+        $groups = [];
+        foreach ($this->series as $trace) {
+            if (!isset($groups[$trace['group']])) {
+                $groups[$trace['group']] = self::PALETTE[count($groups) % count(self::PALETTE)];
+            }
+            $colour = $groups[$trace['group']];
+            $coords = [];
+            foreach ($trace['points'] as $point) {
+                $coords[] = round($sx($point['x']), 2) . ',' . round($sy($point['y']), 2);
+            }
+            if (count($coords) >= 2) {
+                $svg .= '<polyline points="' . implode(' ', $coords) . '" fill="none" stroke="' . $colour
+                    . '" stroke-width="1.6" stroke-opacity="0.85" data-region="series"><title>' . s($trace['label'])
+                    . '</title></polyline>';
+            }
+            foreach ($trace['points'] as $point) {
+                $svg .= '<circle cx="' . round($sx($point['x']), 2) . '" cy="' . round($sy($point['y']), 2)
+                    . '" r="2.5" fill="' . $colour . '"><title>' . s($trace['label']) . '</title></circle>';
+            }
+        }
+        $row = 0;
+        foreach ($groups as $group => $colour) {
+            $ly = self::MARGIN_TOP + 12 + 16 * $row++;
+            $svg .= '<rect x="' . (self::MARGIN_LEFT + 10) . '" y="' . ($ly - 8) . '" width="12" height="3"'
+                . ' fill="' . $colour . '"/>';
+            $svg .= $this->text(self::MARGIN_LEFT + 27, $ly - 3, (string) $group, 'start', $colour);
+        }
+
+        // The band first, then the line, then the points on top.
+        if (count($this->band) >= 2) {
+            $upper = [];
+            $lower = [];
+            foreach ($this->band as $b) {
+                $upper[] = round($sx((float) $b['x']), 2) . ',' . round($sy((float) $b['hi']), 2);
+                $lower[] = round($sx((float) $b['x']), 2) . ',' . round($sy((float) $b['lo']), 2);
+            }
+            $svg .= '<polygon points="' . implode(' ', array_merge($upper, array_reverse($lower)))
+                . '" fill="#2c7fb8" fill-opacity="0.15" stroke="none" data-region="band"><title>'
+                . s($this->bandlabel) . '</title></polygon>';
+        }
+        if ($this->connected && count($this->points) >= 2) {
+            $coords = [];
+            foreach ($this->points as $point) {
+                $coords[] = round($sx($point['x']), 2) . ',' . round($sy($point['y']), 2);
+            }
+            $svg .= '<polyline points="' . implode(' ', $coords) . '" fill="none" stroke="#2c3e50" stroke-width="1.5"'
+                . ' stroke-opacity="0.8" data-region="trajectory"/>';
+        }
+
+        $jitter = (float) ($this->axisoptions['jitter'] ?? 0.0);
+        $this->hidden = 0;
+        foreach ($this->points as $index => $point) {
+            // Outside the displayed range — a robust or a hand-set one — a
+            // point is not drawn at the edge, where it would read as a value
+            // there, but counted and named beneath the plot.
+            if (
+                $point['y'] < $bounds['ymin'] - 1e-9 || $point['y'] > $bounds['ymax'] + 1e-9
+                || $point['x'] < $bounds['xmin'] - 1e-9 || $point['x'] > $bounds['xmax'] + 1e-9
+            ) {
+                $this->hidden++;
+                continue;
+            }
+            // A small, reproducible spread on an integer axis, so that tests
+            // of equal length do not hide behind each other; the value itself
+            // is unchanged.
+            $dx = $jitter > 0 ? ((crc32((string) $index) % 1000) / 999 - 0.5) * 2 * $jitter : 0.0;
+            $title = $point['label'] !== '' ? '<title>' . s($point['label']) . '</title>' : '';
+            $svg .= '<circle cx="' . round($sx($point['x'] + $dx), 2) . '" cy="' . round($sy($point['y']), 2)
+                . '" r="3" fill="#2c3e50" fill-opacity="0.45">' . $title . '</circle>';
         }
 
         // Axis labels.
@@ -254,6 +713,70 @@ class scatter_chart {
         $svg .= '</svg>';
 
         return $svg;
+    }
+
+    /**
+     * The plot as a downloadable SVG and its data as CSV (#109, #108).
+     *
+     * @param string $basename File name without extension.
+     * @param array[] $rows The data behind the plot, one array per row.
+     * @return string Links, or '' when there is nothing drawn.
+     */
+    public function download_links(string $basename, array $rows): string {
+        $drawing = $this->drawing();
+        if (strpos($drawing, '<svg') === false) {
+            return '';
+        }
+        $drawing = substr($drawing, strpos($drawing, '<svg'));
+        $drawing = substr($drawing, 0, strpos($drawing, '</svg>') + 6);
+        $csv = '';
+        if ($rows !== []) {
+            $handle = fopen('php://temp', 'r+');
+            fputcsv($handle, array_keys(reset($rows)));
+            foreach ($rows as $row) {
+                fputcsv($handle, array_values($row));
+            }
+            rewind($handle);
+            $csv = (string) stream_get_contents($handle);
+            fclose($handle);
+        }
+        $name = clean_filename($basename);
+        $key = self::keep_for_pdf($drawing, $name);
+        $links = \html_writer::link(
+            'data:image/svg+xml;base64,' . base64_encode($drawing),
+            get_string('chart:downloadsvg', 'local_catquizlab'),
+            ['download' => $name . '.svg', 'class' => 'btn btn-sm btn-outline-secondary mr-2', 'data-download' => 'svg']
+        );
+        if ($csv !== '') {
+            $links .= \html_writer::link(
+                'data:text/csv;charset=utf-8;base64,' . base64_encode($csv),
+                get_string('chart:downloadcsv', 'local_catquizlab'),
+                ['download' => $name . '.csv', 'class' => 'btn btn-sm btn-outline-secondary', 'data-download' => 'csv']
+            );
+        }
+
+        // PNG in the browser, from the SVG; PDF on the server, as vectors (#108).
+        $links .= \html_writer::tag('button', get_string('chart:downloadpng', 'local_catquizlab'), [
+            'type' => 'button', 'class' => 'btn btn-sm btn-outline-secondary ml-2', 'data-download' => 'png',
+            'data-filename' => $name . '.png',
+        ]);
+        $links .= \html_writer::link(
+            new \moodle_url('/local/catquizlab/plotpdf.php', ['key' => $key, 'sesskey' => sesskey()]),
+            get_string('chart:downloadpdf', 'local_catquizlab'),
+            ['class' => 'btn btn-sm btn-outline-secondary ml-2', 'data-download' => 'pdf']
+        );
+        // The settings beside the drawing (#108): plot-settings.json.
+        $links .= \html_writer::link(
+            'data:application/json;base64,' . base64_encode((string) json_encode(
+                $this->settings,
+                JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE
+            )),
+            get_string('chart:downloadsettings', 'local_catquizlab'),
+            ['download' => $name . '-plot-settings.json', 'class' => 'btn btn-sm btn-outline-secondary ml-2',
+                'data-download' => 'json']
+        );
+
+        return \html_writer::div($links, 'mb-3', ['data-region' => 'catquizlab-plot-export']);
     }
 
     /**
@@ -282,53 +805,127 @@ class scatter_chart {
     }
 
     /**
-     * The data bounds, padded so points do not sit on the axes.
+     * Whether the chart has an identity line.
      *
-     * @return array{xmin: float, xmax: float, ymin: float, ymax: float}
+     * @return bool
      */
-    protected function bounds(): array {
-        $xs = array_column($this->points, 'x');
-        $ys = array_column($this->points, 'y');
-
-        $pad = static function (float $min, float $max): array {
-            if ($min === $max) {
-                // A single distinct value still needs a visible range.
-                return [$min - 0.5, $max + 0.5];
-            }
-            $margin = ($max - $min) * 0.05;
-            return [$min - $margin, $max + $margin];
-        };
-
-        [$xmin, $xmax] = $pad(min($xs), max($xs));
-        [$ymin, $ymax] = $pad(min($ys), max($ys));
-
-        // With an identity line the two axes must share a scale, or the line no
-        // longer means "estimate equals truth".
+    protected function has_identity(): bool {
         foreach ($this->references as $reference) {
             if ($reference['kind'] === 'identity') {
-                $lo = min($xmin, $ymin);
-                $hi = max($xmax, $ymax);
-                return ['xmin' => $lo, 'xmax' => $hi, 'ymin' => $lo, 'ymax' => $hi];
+                return true;
             }
         }
 
-        return ['xmin' => $xmin, 'xmax' => $xmax, 'ymin' => $ymin, 'ymax' => $ymax];
+        return false;
     }
 
     /**
-     * Five evenly spaced tick values across a range.
+     * The ranges and ticks of both axes (#105).
      *
-     * @param float $min The lower bound.
-     * @param float $max The upper bound.
-     * @return float[]
+     * @return array{xmin: float, xmax: float, ymin: float, ymax: float, xticks: float[], yticks: float[]}
      */
-    protected function ticks(float $min, float $max): array {
-        $ticks = [];
-        for ($i = 0; $i <= 4; $i++) {
-            $ticks[] = $min + ($max - $min) * $i / 4;
+    protected function bounds(): array {
+        $all = $this->points;
+        foreach ($this->series as $trace) {
+            $all = array_merge($all, $trace['points']);
+        }
+        $xs = array_map('floatval', array_column($all, 'x'));
+        $ys = array_map('floatval', array_column($all, 'y'));
+        foreach ($this->references as $reference) {
+            if ($reference['kind'] === 'horizontal') {
+                $ys[] = (float) $reference['value'];
+            }
+        }
+        foreach ($this->band as $b) {
+            $ys[] = (float) $b['lo'];
+            $ys[] = (float) $b['hi'];
         }
 
-        return $ticks;
+        // A comparison plot: one symmetric range for both axes, so that the
+        // identity line is the diagonal (AXIS-003).
+        if ($this->has_identity()) {
+            $atleast = max((float) ($this->axisoptions['xatleast'] ?? 0), (float) ($this->axisoptions['yatleast'] ?? 0));
+            $axis = axis_scale::symmetric(array_merge($xs, $ys), $atleast);
+            // A hand-set range or spacing applies to both axes at once: the
+            // identity line stays the diagonal (#108).
+            if ($this->fixed) {
+                $lo = min((float) ($this->fixed['xmin'] ?? $axis['min']), (float) ($this->fixed['ymin'] ?? $axis['min']));
+                $hi = max((float) ($this->fixed['xmax'] ?? $axis['max']), (float) ($this->fixed['ymax'] ?? $axis['max']));
+                $axis = axis_scale::linear([$lo, $hi]);
+            }
+            $step = $this->spacing['x'] ?? $this->spacing['y'] ?? null;
+            if ($step !== null && ($axis['max'] - $axis['min']) / $step <= 60) {
+                $lo = floor($axis['min'] / $step + 1e-9) * $step;
+                $hi = ceil($axis['max'] / $step - 1e-9) * $step;
+                $ticks = [];
+                for ($t = $lo; $t <= $hi + $step / 2; $t += $step) {
+                    $ticks[] = round($t, 6) == 0.0 ? 0.0 : round($t, 6);
+                }
+                $axis = ['min' => $lo, 'max' => $hi, 'ticks' => $ticks];
+            }
+            return ['xmin' => $axis['min'], 'xmax' => $axis['max'], 'ymin' => $axis['min'], 'ymax' => $axis['max'],
+                'xticks' => $axis['ticks'], 'yticks' => $axis['ticks']];
+        }
+
+        if ($this->robust && count($ys) >= 20) {
+            $sorted = $ys;
+            sort($sorted);
+            $lo = $sorted[(int) floor(0.01 * (count($sorted) - 1))];
+            $hi = $sorted[(int) ceil(0.99 * (count($sorted) - 1))];
+            $ys = array_values(array_filter($ys, static fn(float $v): bool => $v >= $lo && $v <= $hi));
+        }
+        $x = $this->axis($this->xmode, $xs, 'x');
+        $y = $this->axis($this->ymode, $ys, 'y');
+
+        // Ranges set by hand (#109): the same scale across compared plots.
+        if ($this->fixed) {
+            $fx = axis_scale::linear([(float) ($this->fixed['xmin'] ?? $x['min']), (float) ($this->fixed['xmax'] ?? $x['max'])]);
+            $fy = axis_scale::linear([(float) ($this->fixed['ymin'] ?? $y['min']), (float) ($this->fixed['ymax'] ?? $y['max'])]);
+            $x = isset($this->fixed['xmin']) || isset($this->fixed['xmax']) ? $fx : $x;
+            $y = isset($this->fixed['ymin']) || isset($this->fixed['ymax']) ? $fy : $y;
+        }
+
+        // Tick spacing set by hand (#108), applied after any hand-set range —
+        // which recomputes ticks of its own: ticks at multiples of it, the range
+        // widened to the next multiple so the first and last tick are on it.
+        foreach (['x' => &$x, 'y' => &$y] as $which => &$axis) {
+            if (isset($this->spacing[$which])) {
+                $step = (float) $this->spacing[$which];
+                $lo = floor($axis['min'] / $step + 1e-9) * $step;
+                $hi = ceil($axis['max'] / $step - 1e-9) * $step;
+                if (($hi - $lo) / $step <= 60) {
+                    $ticks = [];
+                    for ($t = $lo; $t <= $hi + $step / 2; $t += $step) {
+                        $ticks[] = round($t, 6) == 0.0 ? 0.0 : round($t, 6);
+                    }
+                    $axis = ['min' => $lo, 'max' => $hi, 'ticks' => $ticks];
+                }
+            }
+        }
+        unset($axis);
+
+        return ['xmin' => $x['min'], 'xmax' => $x['max'], 'ymin' => $y['min'], 'ymax' => $y['max'],
+            'xticks' => $x['ticks'], 'yticks' => $y['ticks']];
+    }
+
+    /**
+     * One axis by its mode.
+     *
+     * @param string $mode One of axis_scale's modes.
+     * @param float[] $values The values on this axis.
+     * @param string $which 'x' or 'y', for the options.
+     * @return array{min: float, max: float, ticks: float[]}
+     */
+    protected function axis(string $mode, array $values, string $which): array {
+        $fromzero = !empty($this->axisoptions[$which . 'fromzero']);
+        switch ($mode) {
+            case axis_scale::SYMMETRIC:
+                return axis_scale::symmetric($values, (float) ($this->axisoptions[$which . 'atleast'] ?? 0));
+            case axis_scale::INTEGER:
+                return axis_scale::integer($values, $fromzero);
+            default:
+                return axis_scale::linear($values, $fromzero);
+        }
     }
 
     /**

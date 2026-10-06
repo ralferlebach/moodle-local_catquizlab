@@ -14,10 +14,15 @@ on:
         description: 'Simulated people'
         required: false
         default: '5'
-      keepvideo:
-        description: 'Keep video and trace for passing runs too'
-        required: false
-        default: 'true'
+        # There is deliberately no switch for keeping the video: it is kept for
+        # every run. A recording that only exists after a failure cannot answer
+        # "does the interface still work", which is the question somebody starts
+        # this job to ask.
+
+env:
+  # Used by the installer and by the test. Written once so they cannot drift.
+  CATLAB_ADMIN_USER: admin
+  CATLAB_ADMIN_PASSWORD: 'Admin123!'
 
 permissions:
   contents: read
@@ -26,7 +31,6 @@ jobs:
   ui-e2e:
     name: "Interface end-to-end (Playwright)"
     runs-on: ubuntu-24.04
-    if: github.event_name == 'workflow_dispatch' && inputs.run_e2e
     services:
       postgres:
         image: postgres:16
@@ -62,7 +66,15 @@ jobs:
 
       - name: Check out the CAT engine and its host activity
         run: |
-          git clone --depth 1 https://github.com/ralferlebach/moodle-local_catquiz.git \
+          # The branch the live installation runs, not main: catquiz 1.2.1 on
+          # ALiSe-v-1.2.0-legacy dropped local_catquiz_attemptscale and stopped
+          # writing debug_info, and a CI testing against main tested an engine
+          # nobody uses. Its two hub subplugins are git submodules; a plain
+          # clone leaves their directories empty, and Moodle then fails on a
+          # plugin without a version.php.
+          git clone --depth 1 --recurse-submodules --shallow-submodules \
+              -b "${CATQUIZ_BRANCH:-ALiSe-v-1.2.0-legacy}" \
+              https://github.com/ralferlebach/moodle-local_catquiz.git \
               moodle/local/catquiz
           git clone --depth 1 https://github.com/ralferlebach/moodle-mod_adaptivequiz.git \
               moodle/mod/adaptivequiz
@@ -99,7 +111,8 @@ jobs:
         working-directory: moodle
         run: |
           php admin/cli/install_database.php --agree-license \
-              --adminpass='Admin123!' --adminemail=admin@example.com \
+              --adminuser="$CATLAB_ADMIN_USER" \
+              --adminpass="$CATLAB_ADMIN_PASSWORD" --adminemail=admin@example.com \
               --fullname="CATLab E2E" --shortname="CATLabE2E"
 
       # Everything the worker needs is prepared by the plugin's own CLI rather
@@ -113,7 +126,13 @@ jobs:
       - name: Start the web server
         working-directory: moodle
         run: |
-          nohup php -S 127.0.0.1:8000 -t . > /tmp/webserver.log 2>&1 &
+          # More than one worker. PHP's development server answers one request
+          # at a time by default, and the self-test makes an HTTP call to this
+          # very server from inside a request — which then waits for itself
+          # until it times out and reports the token as not answering. On a
+          # real web server this never happens, which is why the same self-test
+          # is green on a production site and red here.
+          PHP_CLI_SERVER_WORKERS=4 nohup php -S 127.0.0.1:8000 -t . > /tmp/webserver.log 2>&1 &
           for i in $(seq 1 20); do
             if curl -sf -o /dev/null http://127.0.0.1:8000/; then exit 0; fi
             sleep 1
@@ -142,12 +161,20 @@ jobs:
           nohup bash -c 'while true; do php admin/cli/cron.php >> /tmp/cron.log 2>&1; sleep 20; done' &
           sleep 5
 
+      - name: Seed a failed sitting for the recovery test (#98)
+        working-directory: moodle
+        run: php local/catquizlab/cli/seed_failed_attempt.php | grep -E '^RECOVERY_RUNID=' >> "$GITHUB_ENV"
+
+      - name: Seed results for the plot checks (#105)
+        working-directory: moodle
+        run: php local/catquizlab/cli/seed_results.php | grep -E '^PLOTS_EXPERIMENTID=' >> "$GITHUB_ENV"
+
       - name: Play one experiment through the interface
         working-directory: moodle/local/catquizlab/tests/playwright
         env:
           MOODLE_URL: http://127.0.0.1:8000
-          MOODLE_ADMIN: admin
-          MOODLE_ADMIN_PASSWORD: 'Admin#12345'
+          MOODLE_ADMIN: ${{ env.CATLAB_ADMIN_USER }}
+          MOODLE_ADMIN_PASSWORD: ${{ env.CATLAB_ADMIN_PASSWORD }}
           PERSONS: ${{ github.event.inputs.persons || '5' }}
         run: npx playwright test --reporter=list,html,json
 

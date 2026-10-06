@@ -47,9 +47,13 @@ final class sweep_factors_test extends \advanced_testcase {
      * @return array The spec.
      */
     protected function spec(array $factors): array {
+        // A strategy that counts questions: the baseline's classical test plays
+        // every item of its scale, and a swept question budget never reaches it.
+        $base = experiment_definition::example_baseline();
+        $base['strategy'] = 'fastest';
+
         return [
-            'base'         => (new experiment_definition(experiment_definition::example_baseline()))
-                ->get_normalised(),
+            'base'         => (new experiment_definition($base))->get_normalised(),
             'factors'      => $factors,
             'replications' => 1,
             'seed'         => 42,
@@ -92,8 +96,12 @@ final class sweep_factors_test extends \advanced_testcase {
     public function test_se_window_is_swept_as_a_pair(): void {
         $this->resetAfterTest();
 
+        // Swept with a strategy that stops by standard error: over the
+        // classical test, which has no precision target, the window would be
+        // removed from every run (#101).
         $expansion = sweep::expand($this->spec([
-            'se' => [['min' => 0.30, 'max' => 0.75], ['min' => 0.45, 'max' => 1.0]],
+            'se'       => [['min' => 0.30, 'max' => 0.75], ['min' => 0.45, 'max' => 1.0]],
+            'strategy' => ['fastest'],
         ]));
 
         $this->assertCount(2, $expansion['cells']);

@@ -49,6 +49,17 @@ class recovery_advisor {
         $breakdown = attempt_scheduler::queue_breakdown();
         $workers = worker_registry::summary();
 
+        // Several held runs: one action for all of them. The reset also
+        // removes the seeded starting abilities that held them.
+        $heldcount = $DB->count_records('local_catquizlab_run', ['status' => registry::STATUS_FAILED]);
+        if ($heldcount > 1) {
+            return self::problem(
+                get_string('recovery:problemheldmany', $component, $heldcount),
+                get_string('recovery:actionheldmany', $component, $heldcount),
+                'resetallheld'
+            );
+        }
+
         // A held run comes first: everything else is downstream of it, and
         // restarting a worker would not help.
         if ($experimentid > 0) {

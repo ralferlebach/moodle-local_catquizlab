@@ -60,25 +60,63 @@ class situation {
     /**
      * Assess the installation as a whole.
      *
+     * @param int $experimentid Restrict to one experiment, or 0 for the installation.
+     * @param array|null $breakdown The queue counts, when the caller has them.
      * @return array{state: string, headline: string, detail: string, action: array|null}
      */
-    public static function assess(): array {
+    public static function assess(int $experimentid = 0, ?array $breakdown = null): array {
         global $DB;
+
+        // Counted by the caller where there is one. A live poll used to take
+        // this count three times over, and on fifty thousand queued sittings
+        // each one costs half a second.
+        $breakdown = $breakdown ?? attempt_scheduler::queue_breakdown($experimentid);
+
+        // The first run that holds queued work back, with its cause. Queued
+        // sittings of a held run are not waiting for a worker; they are waiting
+        // for a person, and saying "stalled — start workers" about them sent
+        // somebody pressing a button that correctly did nothing.
+        $heldparams = ['queued' => attempt_scheduler::STATUS_QUEUED, 'failed' => registry::STATUS_FAILED];
+        $heldscope = '';
+        if ($experimentid > 0) {
+            $heldscope = ' AND r.experimentid = :experimentid';
+            $heldparams['experimentid'] = $experimentid;
+        }
+        $held = $DB->get_records_sql(
+            'SELECT r.id, r.lasterror, COUNT(a.id) AS waiting
+               FROM {local_catquizlab_run} r
+               JOIN {local_catquizlab_attempt} a ON a.runid = r.id AND a.status = :queued
+              WHERE r.status = :failed' . $heldscope . '
+           GROUP BY r.id, r.lasterror
+           ORDER BY r.id ASC',
+            $heldparams,
+            0,
+            1
+        );
+        $heldrun = $held === [] ? null : reset($held);
 
         return self::rank([
             'workers'    => worker_registry::summary(),
-            'queued'     => $DB->count_records(
-                'local_catquizlab_attempt',
-                ['status' => attempt_scheduler::STATUS_QUEUED]
-            ),
-            'running'    => $DB->count_records(
-                'local_catquizlab_attempt',
-                ['status' => attempt_scheduler::STATUS_RUNNING]
-            ),
-            'failedruns' => $DB->count_records(
-                'local_catquizlab_run',
-                ['status' => registry::STATUS_FAILED]
-            ),
+            // Only work a worker may take. Everything else is counted below
+            // under what is actually holding it.
+            'queued'     => (int) $breakdown['claimable'],
+            'blocked'    => (int) $breakdown['blocked'],
+            'heldrun'    => $heldrun ? [
+                'id'      => (int) $heldrun->id,
+                'waiting' => (int) $heldrun->waiting,
+                'cause'   => (string) $heldrun->lasterror,
+            ] : null,
+            // Both scoped like everything else here. Left site-wide, experiment
+            // A's headline could be about experiment B's five sittings in
+            // flight and two held runs — which is the whole point of the
+            // experiment selector above it.
+            'running'    => (int) $breakdown['running'],
+            'failedruns' => $experimentid > 0
+                ? $DB->count_records('local_catquizlab_run', [
+                    'experimentid' => $experimentid,
+                    'status'       => registry::STATUS_FAILED,
+                ])
+                : $DB->count_records('local_catquizlab_run', ['status' => registry::STATUS_FAILED]),
             'wizard'     => setup_wizard::state(),
         ]);
     }
@@ -103,6 +141,30 @@ class situation {
         $setupurl = new \moodle_url('/local/catquizlab/index.php', ['tab' => 'setup']);
         $runsurl = new \moodle_url('/local/catquizlab/runs.php', ['status' => registry::STATUS_FAILED]);
 
+        // Queued work that belongs to a held run: nothing will start until a
+        // person looks at why the run was stopped. This is what the reported
+        // installation sat in, all runs held after "Division by zero", while
+        // the page said "stalled" and offered a button that could not help.
+        $heldrun = $facts['heldrun'] ?? null;
+        if ($queue['queued'] === 0 && is_array($heldrun)) {
+            $cause = trim((string) $heldrun['cause']);
+
+            return self::verdict(
+                self::FAILING,
+                get_string('situation:held', $component, (object) [
+                    'runid'   => $heldrun['id'],
+                    'waiting' => $heldrun['waiting'],
+                ]),
+                $cause !== ''
+                    ? get_string('situation:heldcause', $component, \core_text::substr($cause, 0, 240))
+                    : get_string('situation:heldnocause', $component),
+                get_string('situation:heldaction', $component),
+                // Step 3, where the recovery section offers the reset — for
+                // every held run at once when there is more than one.
+                new \moodle_url('/local/catquizlab/runs.php')
+            );
+        }
+
         // Not ready comes first: nothing else can be acted on until it is. The
         // exception is work already in the queue — attempts mean the
         // installation ran at some point, so the setup warning is stale and the
@@ -118,8 +180,23 @@ class situation {
         }
 
         // Work waiting with nobody to do it: the one combination that never
-        // resolves itself, and the one the reported installation sat in.
+        // resolves itself.
         if ($queue['queued'] > 0 && $workers['live'] === 0) {
+            // Why nobody is doing it. "Stalled" with a start button, on an
+            // installation whose worker switch was off, sent people pressing a
+            // button that could not work and never said so.
+            $missing = worker_launcher::missing(worker_launcher::config_from_settings());
+
+            if ($missing !== []) {
+                return self::verdict(
+                    self::STALLED,
+                    get_string('situation:stalled', $component, $queue['queued']),
+                    get_string('situation:stallednotconfigured', $component, implode(', ', $missing)),
+                    get_string('wizard:runandenable', $component),
+                    $setupurl
+                );
+            }
+
             return self::verdict(
                 self::STALLED,
                 get_string('situation:stalled', $component, $queue['queued']),

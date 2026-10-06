@@ -272,4 +272,1120 @@ final class audit_test extends \advanced_testcase {
         $this->assertFalse($DB->record_exists('user', ['id' => $ours->id, 'deleted' => 0]));
         $this->assertTrue($DB->record_exists('user', ['id' => $theirs->id, 'deleted' => 0]));
     }
+
+    /**
+     * One press on a fresh installation flips every switch the pipeline needs.
+     *
+     * @return void
+     */
+    public function test_one_press_switches_everything_the_pipeline_needs(): void {
+        global $CFG, $DB;
+        $this->resetAfterTest();
+        $this->setAdminUser();
+
+        // Factory state: this is what every fresh installation and every CI
+        // job starts from, and what the reported installation sat in.
+        set_config('worker_exec_enabled', 0, 'local_catquizlab');
+        set_config('enabled', 0, 'local_catquizlab');
+        set_config('pathtophp', '');
+        $CFG->pathtophp = '';
+
+        $before = \local_catquizlab\local\worker_launcher::missing(
+            \local_catquizlab\local\worker_launcher::config_from_settings()
+        );
+        $this->assertContains('worker_exec_enabled', $before);
+
+        if (!\local_catquizlab\local\environment::engine_available()) {
+            // Without an engine the setup rightly switches nothing on: there
+            // would be nothing to play.
+            $this->markTestSkipped('Needs local_catquiz, which this job does not install.');
+        }
+        \local_catquizlab\local\setup_wizard::run(true);
+
+        // The switch nothing used to flip: an installation could pass every
+        // other check and still never play a sitting, and the page said
+        // "stalled" with no word about why.
+        $this->assertSame(1, (int) get_config('local_catquizlab', 'worker_exec_enabled'));
+        $this->assertSame(1, (int) get_config('local_catquizlab', 'enabled'));
+
+        // The PHP binary, detected rather than left as an amber line with a
+        // settings page behind it.
+        $this->assertNotSame('', (string) get_config('core', 'pathtophp'));
+
+        $after = \local_catquizlab\local\worker_launcher::missing(
+            \local_catquizlab\local\worker_launcher::config_from_settings()
+        );
+        $this->assertNotContains('worker_exec_enabled', $after);
+        $this->assertNotContains('worker_token', $after);
+        $this->assertNotContains('worker_base_url', $after);
+
+        // And the wizard now lists the switch, so an installation where it is
+        // off cannot report itself ready.
+        set_config('worker_exec_enabled', 0, 'local_catquizlab');
+        $state = \local_catquizlab\local\setup_wizard::state();
+        $this->assertFalse($state['ready']);
+        $this->assertContains(get_string('wizard:workerexec', 'local_catquizlab'), $state['blockers']);
+    }
+
+    /**
+     * A launch that cannot happen says what is missing, never nothing.
+     *
+     * @return void
+     */
+    public function test_a_launch_that_cannot_happen_names_what_is_missing(): void {
+        $this->resetAfterTest();
+
+        set_config('worker_exec_enabled', 0, 'local_catquizlab');
+        set_config('worker_token', '', 'local_catquizlab');
+
+        $result = \local_catquizlab\local\worker_launcher::launch_pool(
+            \local_catquizlab\local\worker_launcher::config_from_settings()
+        );
+
+        // Null here was what the tick printed nothing about, every five
+        // minutes, for as long as anybody watched.
+        $this->assertNotNull($result);
+        $this->assertSame(0, $result['launched']);
+        $this->assertStringStartsWith('not-configured', $result['reason']);
+        $this->assertStringContainsString('worker_exec_enabled', $result['reason']);
+        $this->assertStringContainsString('worker_token', $result['reason']);
+    }
+
+    /**
+     * The installation says what the server must allow before it tries.
+     *
+     * @return void
+     */
+    public function test_the_preflight_names_what_the_server_must_allow(): void {
+        global $CFG;
+        $this->resetAfterTest();
+
+        $steps = \local_catquizlab\local\worker_runtime::preflight(false);
+        $ids = array_column($steps, 'id');
+
+        // Writable directories and disk space are checked every time; both
+        // name the operating-system user, because "the web server user" is
+        // not something an administrator can type into chown.
+        $this->assertContains('storage', $ids);
+        $this->assertContains('diskspace', $ids);
+        $storage = $steps[array_search('storage', $ids)];
+        $this->assertTrue($storage['ok']);
+        $this->assertStringContainsString(\local_catquizlab\local\worker_runtime::process_user(), $storage['detail']);
+
+        // Moodle's proxy reaches npm and the browser download. Without it a
+        // site behind a proxy could reach the internet from Moodle and not
+        // from the installation it started.
+        $CFG->proxyhost = 'proxy.example.org';
+        $CFG->proxyport = 3128;
+        $CFG->proxybypass = 'localhost';
+        $environment = implode(' ', \local_catquizlab\local\worker_launcher::runtime_environment([]));
+        $this->assertStringContainsString('HTTPS_PROXY=http://proxy.example.org:3128', $environment);
+        $this->assertStringContainsString('npm_config_https_proxy=http://proxy.example.org:3128', $environment);
+        $this->assertStringContainsString('NO_PROXY=localhost', $environment);
+
+        // And a password in the proxy never reaches a message.
+        $CFG->proxyuser = 'u';
+        $CFG->proxypassword = 's3cret';
+        $this->assertStringContainsString('u:s3cret@', \local_catquizlab\local\worker_runtime::proxy_url());
+    }
+
+    /**
+     * Queued sittings of a held run are named as held, not as stalled.
+     *
+     * @return void
+     */
+    public function test_held_work_is_not_reported_as_stalled(): void {
+        global $DB;
+        $this->resetAfterTest();
+        $this->setAdminUser();
+
+        /** @var \local_catquizlab_generator $generator */
+        $generator = $this->getDataGenerator()->get_plugin_generator('local_catquizlab');
+        $runid = (int) $generator->create_run()->id;
+        $DB->set_field('local_catquizlab_run', 'status', \local_catquizlab\local\registry::STATUS_FAILED, ['id' => $runid]);
+        $DB->set_field('local_catquizlab_run', 'lasterror', 'Division by zero', ['id' => $runid]);
+        for ($i = 0; $i < 3; $i++) {
+            $DB->insert_record('local_catquizlab_attempt', (object) [
+                'runid' => $runid, 'personid' => 0,
+                'status' => \local_catquizlab\local\attempt_scheduler::STATUS_QUEUED,
+                'tries' => 0, 'timecreated' => time(), 'timemodified' => time(),
+            ]);
+        }
+
+        // This was the reported installation: every run held, the page saying
+        // "stalled — start workers", and the start correctly doing nothing
+        // because nothing was claimable.
+        $verdict = \local_catquizlab\local\situation::assess();
+        $this->assertNotSame(\local_catquizlab\local\situation::STALLED, $verdict['state']);
+        $this->assertStringContainsString('#' . $runid, $verdict['headline']);
+        $this->assertStringContainsString('Division by zero', $verdict['detail']);
+    }
+
+    /**
+     * The live poll answers for the whole site without a parameter mismatch.
+     *
+     * @return void
+     */
+    public function test_the_live_poll_works_without_an_experiment(): void {
+        $this->resetAfterTest();
+        $this->setAdminUser();
+
+        $site = \local_catquizlab\external\live_status::execute(0);
+        $this->assertSame('site', $site['scope']);
+        \core_external\external_api::clean_returnvalue(\local_catquizlab\external\live_status::execute_returns(), $site);
+
+        /** @var \local_catquizlab_generator $generator */
+        $generator = $this->getDataGenerator()->get_plugin_generator('local_catquizlab');
+        $experimentid = (int) $generator->create_experiment()->id;
+        $this->assertSame('experiment', \local_catquizlab\external\live_status::execute($experimentid)['scope']);
+    }
+
+    /**
+     * Every count a preview or a result can contain has a name.
+     *
+     * @return void
+     */
+    public function test_every_count_has_a_name(): void {
+        global $DB;
+        $this->resetAfterTest();
+        $this->setAdminUser();
+
+        // Every key the previews and the reset and deletion results produce.
+        // One of them — "activity" — had no string, and the reset preview
+        // failed with a debugging notice; the other results printed the
+        // internal keys to the person.
+        $keys = ['activities', 'activity', 'activityfailed', 'attempts', 'collected', 'contexts', 'course',
+            'engineitems', 'enginescales', 'enrolments', 'experiment', 'failed', 'generations', 'items',
+            'logentries', 'nodes', 'open', 'people', 'questions', 'results', 'run', 'runs', 'scales', 'tasks',
+            'total', 'users'];
+        foreach ($keys as $key) {
+            $this->assertTrue(
+                get_string_manager()->string_exists('purge:count' . $key, 'local_catquizlab'),
+                'no name for the count "' . $key . '"'
+            );
+            $this->assertSame(
+                '2 ' . get_string('purge:count' . $key, 'local_catquizlab'),
+                \local_catquizlab\local\purger::counts_line([$key => 2])
+            );
+        }
+
+        // The reset preview of a run with a test activity renders without a
+        // debugging notice — which PHPUnit turns into a failure by itself.
+        /** @var \local_catquizlab_generator $generator */
+        $generator = $this->getDataGenerator()->get_plugin_generator('local_catquizlab');
+        $runid = (int) $generator->create_run()->id;
+        $DB->set_field('local_catquizlab_run', 'testcmid', 4711, ['id' => $runid]);
+
+        $message = \local_catquizlab\local\run_lifecycle::reset_preview_message($runid, 'local_catquizlab');
+        $this->assertStringContainsString(get_string('purge:countactivities', 'local_catquizlab'), $message);
+
+        // An unknown key still reads as something rather than failing.
+        $this->assertSame('3 somethingnew', \local_catquizlab\local\purger::count_label('somethingnew', 3));
+    }
+
+    /**
+     * The engine's prior never fills up with identical abilities.
+     *
+     * @return void
+     */
+    public function test_a_persons_engine_parameters_go_when_their_sitting_is_read(): void {
+        global $DB;
+        $this->resetAfterTest();
+        $this->setAdminUser();
+
+        if (!\local_catquizlab\local\environment::engine_available()) {
+            $this->markTestSkipped('No CAT engine installed.');
+        }
+
+        /** @var \local_catquizlab_generator $generator */
+        $generator = $this->getDataGenerator()->get_plugin_generator('local_catquizlab');
+        $runid = (int) $generator->create_run()->id;
+        $contextid = 7777;
+        $root = 55;
+        $DB->insert_record('local_catquizlab_scalemap', (object) [
+            'runid' => $runid, 'level' => 0, 'catscaleid' => $root, 'parentcatscaleid' => 0,
+            'contextid' => $contextid, 'nodekey' => 'root', 'generation' => 1, 'timecreated' => time(),
+        ]);
+
+        // The engine writes one ability per person per scale. Fifty people all
+        // start from the same value, and once fifty are in the context the
+        // engine takes their standard deviation as the prior for the next
+        // estimate: zero, and the estimate divides by it. That is the
+        // "Division by zero" — no seeding needed, only enough people.
+        $mine = 4242;
+        for ($i = 1; $i <= 50; $i++) {
+            $DB->insert_record('local_catquiz_personparams', (object) [
+                'userid' => $i === 1 ? $mine : 9000 + $i, 'catscaleid' => $root, 'contextid' => $contextid,
+                'attemptid' => 0, 'ability' => 0.0, 'standarderror' => null, 'status' => 0,
+                'timecreated' => time(), 'timemodified' => time(),
+            ]);
+        }
+
+        // One person's sitting has been read back: their rows go, nobody
+        // else's does.
+        $removed = \local_catquizlab\local\user_provisioner::forget_engine_person_params($runid, $mine);
+        $this->assertSame(1, $removed);
+        $this->assertSame(49, $DB->count_records('local_catquiz_personparams', ['contextid' => $contextid]));
+
+        // Preparing the run again clears the context completely, so a reset
+        // does not start against fifty stale abilities — which is what made
+        // every sitting after a reset fail at once.
+        $this->assertSame(49, \local_catquizlab\local\user_provisioner::remove_seeded_parameters($runid));
+        $this->assertSame(0, $DB->count_records('local_catquiz_personparams', ['contextid' => $contextid]));
+    }
+
+    /**
+     * A worker whose process is gone does not hold its slot.
+     *
+     * @return void
+     */
+    public function test_a_dead_process_does_not_hold_a_slot(): void {
+        global $DB;
+        $this->resetAfterTest();
+
+        $registry = \local_catquizlab\local\worker_registry::class;
+
+        // A worker that crashed a second ago: heartbeat fresh, process gone.
+        // It used to hold the only slot for five minutes, during which the page
+        // said "1 worker running" and the pipeline said "all-slots-busy".
+        $registry::acquire_slot(1, 'crashed', 999999);
+        $DB->set_field('local_catquizlab_worker', 'status', $registry::STATUS_RUNNING, ['workerid' => 'crashed']);
+        $DB->set_field('local_catquizlab_worker', 'heartbeat', time(), ['workerid' => 'crashed']);
+        $this->assertSame(1, $registry::summary()['live']);
+
+        $this->assertSame(1, $registry::reap_dead_processes());
+        $this->assertSame(0, $registry::summary()['live']);
+        $this->assertSame(
+            $registry::STATUS_CRASHED,
+            (int) $DB->get_field('local_catquizlab_worker', 'status', ['workerid' => 'crashed'])
+        );
+
+        // A process that is alive is left alone, whatever its heartbeat says.
+        $registry::acquire_slot(2, 'alive', getmypid());
+        $DB->set_field('local_catquizlab_worker', 'status', $registry::STATUS_RUNNING, ['workerid' => 'alive']);
+        $this->assertSame(0, $registry::reap_dead_processes());
+        $this->assertSame(1, $registry::summary()['live']);
+    }
+
+    /**
+     * Every setting the form offers is a setting the form saves.
+     *
+     * @return void
+     */
+    public function test_the_settings_form_saves_what_it_shows(): void {
+        $this->resetAfterTest();
+        $this->setAdminUser();
+
+        $form = new \local_catquizlab\form\settings_form();
+        $property = new \ReflectionProperty($form, '_form');
+        $property->setAccessible(true);
+        $mform = $property->getValue($form);
+
+        $elements = [];
+        foreach ($mform->_elements as $element) {
+            $name = $element->getName();
+            if ($name === null || $name === '' || in_array($element->getType(), ['submit', 'header', 'static', 'hidden'], true)) {
+                continue;
+            }
+            $elements[] = $name;
+        }
+
+        $saved = \local_catquizlab\form\settings_form::saved_fields();
+
+        // The debug level was offered, read back and never written: choosing
+        // it did nothing, and the page came back saying "Off" with nobody
+        // having touched it.
+        foreach ($elements as $name) {
+            $this->assertContains($name, $saved, 'the form shows "' . $name . '" but does not save it');
+        }
+        $this->assertContains('debuglevel', $saved);
+    }
+
+    /**
+     * The evaluation reads only what it reports on.
+     *
+     * @return void
+     */
+    public function test_the_evaluation_does_not_load_every_row(): void {
+        global $DB;
+        $this->resetAfterTest();
+        $this->setAdminUser();
+
+        /** @var \local_catquizlab_generator $generator */
+        $generator = $this->getDataGenerator()->get_plugin_generator('local_catquizlab');
+        $run = $generator->create_run();
+        $runid = (int) $run->id;
+        $DB->set_field('local_catquizlab_run', 'status', \local_catquizlab\local\registry::STATUS_FINISHED, ['id' => $runid]);
+
+        // A profile of the size a hundred-subscale experiment produces.
+        $profile = json_encode(['subscales' => array_fill(0, 100, ['key' => 'cat', 'theta' => 0.3])]);
+        $trace = json_encode([
+            'finaltheta' => 0.4, 'finalse' => 0.3, 'items' => range(1, 35),
+            'responses' => array_fill(1, 35, 1.0), 'nitems' => 35, 'steps' => 35,
+            'stopreason' => 'se', 'scaleabilities' => [],
+        ]);
+
+        // Two hundred people, of whom ten sat the test. The page used to read
+        // every person and every sitting, profile JSON and all, and ran out of
+        // memory on an installation with nine thousand of each.
+        $withtrace = [];
+        for ($i = 1; $i <= 200; $i++) {
+            $personid = (int) $DB->insert_record('local_catquizlab_person', (object) [
+                'runid' => $runid, 'twinid' => $i, 'twinindex' => $i, 'severity' => 'none',
+                'stratum' => 'conforming', 'abilityglobal' => 0.1, 'profilejson' => $profile,
+                'timecreated' => time(), 'timemodified' => time(),
+            ]);
+            $collected = $i <= 10;
+            $id = (int) $DB->insert_record('local_catquizlab_attempt', (object) [
+                'runid' => $runid, 'personid' => $personid,
+                'status' => $collected
+                    ? \local_catquizlab\local\attempt_scheduler::STATUS_COLLECTED
+                    : \local_catquizlab\local\attempt_scheduler::STATUS_QUEUED,
+                'tries' => 1, 'runtimems' => 5000, 'tracejson' => $collected ? $trace : null,
+                'timecreated' => time(), 'timemodified' => time(),
+            ]);
+            if ($collected) {
+                $withtrace[] = $id;
+            }
+        }
+
+        $reads = $DB->perf_get_reads();
+        $observations = (new \local_catquizlab\local\results_query(['runid' => $runid]))->observations();
+        $queries = $DB->perf_get_reads() - $reads;
+
+        // Only the sittings that have something to report.
+        $this->assertCount(count($withtrace), $observations);
+
+        // And a query count that does not grow with the two hundred people who
+        // did not sit: the runs, the sittings, and one read per person who did.
+        $this->assertLessThan(40, $queries, 'the evaluation read ' . $queries . ' times for ten sittings');
+
+        // The heavy structures are not in the rows. A decoded profile of a
+        // hundred-subscale experiment is about thirty kilobytes, and carrying
+        // it and the trace in every observation is what filled the memory.
+        $first = reset($observations);
+        $this->assertArrayNotHasKey('profile', $first);
+        $this->assertArrayNotHasKey('trace', $first);
+        $this->assertArrayHasKey('attemptid', $first);
+        $this->assertArrayHasKey('personid', $first);
+
+        // They are there for the row that needs them.
+        $detail = \local_catquizlab\local\results_query::detail($first);
+        $this->assertArrayHasKey('profile', $detail);
+        $this->assertSame(35, count($detail['trace']['items']));
+
+        // A hundred observations hold well under a megabyte between them.
+        $this->assertLessThan(
+            500 * 1024,
+            strlen(serialize($observations)),
+            'the observations carry more than half a kilobyte per row'
+        );
+    }
+
+    /**
+     * Sittings that gave up are named, and can be tried again.
+     *
+     * @return void
+     */
+    public function test_a_run_says_how_many_gave_up(): void {
+        global $DB;
+        $this->resetAfterTest();
+        $this->setAdminUser();
+
+        /** @var \local_catquizlab_generator $generator */
+        $generator = $this->getDataGenerator()->get_plugin_generator('local_catquizlab');
+        $runid = (int) $generator->create_run()->id;
+
+        // Ninety collected, ten that failed three times. The run will never
+        // reach a hundred, and the card used to say only "90 of 100
+        // collected" — which reads as work still in hand.
+        for ($i = 0; $i < 100; $i++) {
+            $failed = $i >= 90;
+            $DB->insert_record('local_catquizlab_attempt', (object) [
+                'runid' => $runid, 'personid' => 0,
+                'status' => $failed
+                    ? \local_catquizlab\local\attempt_scheduler::STATUS_FAILED
+                    : \local_catquizlab\local\attempt_scheduler::STATUS_COLLECTED,
+                'tries' => $failed ? \local_catquizlab\local\attempt_scheduler::MAX_TRIES : 1,
+                'lasterror' => $failed ? 'browser closed' : null,
+                'timecreated' => time(), 'timemodified' => time(),
+            ]);
+        }
+        $DB->set_field('local_catquizlab_run', 'status', \local_catquizlab\local\registry::STATUS_FINISHED, ['id' => $runid]);
+
+        $card = \local_catquizlab\local\status_report::run($runid);
+        $this->assertStringContainsString('10', $card['reason']);
+        $this->assertSame('requeuefailed', $card['action']['command'] ?? '');
+
+        $requeued = \local_catquizlab\local\run_lifecycle::requeue_failed($runid);
+        $this->assertSame(10, $requeued);
+
+        $counts = \local_catquizlab\local\run_lifecycle::attempt_counts($runid);
+        $this->assertSame(10, $counts['open']);
+        $this->assertSame(0, $counts['failed']);
+
+        // With work to do again, the run is ready rather than finished.
+        $this->assertSame(
+            \local_catquizlab\local\registry::STATUS_READY,
+            (int) $DB->get_field('local_catquizlab_run', 'status', ['id' => $runid])
+        );
+
+        // The counters were cleared, so they get their three tries again.
+        $maxtries = (int) $DB->get_field_sql(
+            'SELECT MAX(tries) FROM {local_catquizlab_attempt} WHERE runid = ? AND status = ?',
+            [$runid, \local_catquizlab\local\attempt_scheduler::STATUS_QUEUED]
+        );
+        $this->assertSame(0, $maxtries);
+
+        $this->assertSame(0, \local_catquizlab\local\run_lifecycle::requeue_failed($runid));
+    }
+
+    /**
+     * The queue card and the numbers beside it come from one count.
+     *
+     * @return void
+     */
+    public function test_the_queue_card_agrees_with_the_numbers_beside_it(): void {
+        global $DB;
+        $this->resetAfterTest();
+        $this->setAdminUser();
+
+        /** @var \local_catquizlab_generator $generator */
+        $generator = $this->getDataGenerator()->get_plugin_generator('local_catquizlab');
+        $runid = (int) $generator->create_run()->id;
+        $DB->set_field('local_catquizlab_run', 'status', \local_catquizlab\local\registry::STATUS_READY, ['id' => $runid]);
+
+        for ($i = 0; $i < 20; $i++) {
+            $DB->insert_record('local_catquizlab_attempt', (object) [
+                'runid' => $runid, 'personid' => 0,
+                'status' => \local_catquizlab\local\attempt_scheduler::STATUS_QUEUED,
+                'tries' => 0, 'nextruntime' => $i < 15 ? 0 : time() + 300,
+                'timecreated' => time(), 'timemodified' => time(),
+            ]);
+        }
+
+        $breakdown = \local_catquizlab\local\attempt_scheduler::queue_breakdown();
+        $card = \local_catquizlab\local\status_report::queue($breakdown);
+
+        // The card describes the count it was given rather than taking its
+        // own: a page that counted twice showed "7074 claimable" in the
+        // headline and "7134" three lines below, with two different numbers
+        // for the sittings waiting out a retry delay.
+        $this->assertStringContainsString((string) $breakdown['claimable'], $card['state']);
+        $this->assertSame(15, $breakdown['claimable']);
+        $this->assertSame(5, $breakdown['notdue']);
+
+        // A queue that moves between the two reads cannot make them disagree,
+        // because there is only one read.
+        $DB->execute(
+            'UPDATE {local_catquizlab_attempt} SET status = ? WHERE runid = ? AND status = ?',
+            [
+                \local_catquizlab\local\attempt_scheduler::STATUS_COLLECTED,
+                $runid,
+                \local_catquizlab\local\attempt_scheduler::STATUS_QUEUED,
+            ]
+        );
+        $again = \local_catquizlab\local\status_report::queue($breakdown);
+        $this->assertSame($card['state'], $again['state']);
+    }
+
+    /**
+     * A simulated person sits the test once at a time.
+     *
+     * @return void
+     */
+    public function test_two_workers_never_get_the_same_person(): void {
+        global $DB;
+        $this->resetAfterTest();
+        $this->setAdminUser();
+
+        /** @var \local_catquizlab_generator $generator */
+        $generator = $this->getDataGenerator()->get_plugin_generator('local_catquizlab');
+        $run = $generator->create_run();
+        $runid = (int) $run->id;
+        $DB->set_field('local_catquizlab_run', 'status', \local_catquizlab\local\registry::STATUS_READY, ['id' => $runid]);
+
+        $alice = (int) $generator->create_person(['runid' => $runid])->id;
+        $bob = (int) $generator->create_person(['runid' => $runid])->id;
+
+        // Alice is already sitting the test, with a live lease.
+        $busy = (int) $DB->insert_record('local_catquizlab_attempt', (object) [
+            'runid' => $runid, 'personid' => $alice,
+            'status' => \local_catquizlab\local\attempt_scheduler::STATUS_RUNNING,
+            'tries' => 1, 'leaseowner' => 'worker-a', 'leaseexpires' => time() + 600,
+            'timecreated' => time(), 'timemodified' => time(),
+        ]);
+        // Her second sitting, and one of Bob's, both waiting.
+        $second = (int) $DB->insert_record('local_catquizlab_attempt', (object) [
+            'runid' => $runid, 'personid' => $alice,
+            'status' => \local_catquizlab\local\attempt_scheduler::STATUS_QUEUED,
+            'tries' => 0, 'timecreated' => time(), 'timemodified' => time(),
+        ]);
+        $bobs = (int) $DB->insert_record('local_catquizlab_attempt', (object) [
+            'runid' => $runid, 'personid' => $bob,
+            'status' => \local_catquizlab\local\attempt_scheduler::STATUS_QUEUED,
+            'tries' => 0, 'timecreated' => time(), 'timemodified' => time(),
+        ]);
+
+        // Two workers logging in as the same person open the same adaptive
+        // quiz attempt, and Moodle rejects the second one's answers with
+        // "adaptivequiz/uniquenotpartofattempt". With a thousand people, two
+        // sittings each and a hundred workers, that is the normal case.
+        $claim = \local_catquizlab\external\job_claim::execute('worker-b');
+        $this->assertTrue($claim['hasjob']);
+        $this->assertSame($bobs, (int) $claim['attemptid']);
+        $this->assertNotSame($second, (int) $claim['attemptid']);
+
+        // Once Alice's sitting is over, her second one is claimable.
+        $DB->update_record('local_catquizlab_attempt', (object) [
+            'id' => $busy,
+            'status' => \local_catquizlab\local\attempt_scheduler::STATUS_COLLECTED,
+            'leaseowner' => null, 'leaseexpires' => 0,
+        ]);
+        $next = \local_catquizlab\external\job_claim::execute('worker-c');
+        $this->assertSame($second, (int) $next['attemptid']);
+    }
+
+    /**
+     * Experiment A's snapshot says nothing about experiment B.
+     *
+     * @return void
+     */
+    public function test_a_snapshot_of_one_experiment_ignores_the_other(): void {
+        global $DB;
+        $this->resetAfterTest();
+        $this->setAdminUser();
+
+        /** @var \local_catquizlab_generator $generator */
+        $generator = $this->getDataGenerator()->get_plugin_generator('local_catquizlab');
+        $quiet = $generator->create_run();
+        $busy = $generator->create_run();
+
+        // B: five sittings in flight and a run held after failures. A: nothing.
+        for ($i = 0; $i < 5; $i++) {
+            $DB->insert_record('local_catquizlab_attempt', (object) [
+                'runid' => $busy->id, 'personid' => 0,
+                'status' => \local_catquizlab\local\attempt_scheduler::STATUS_RUNNING,
+                'tries' => 1, 'leaseowner' => 'w', 'leaseexpires' => time() + 600,
+                'timecreated' => time(), 'timemodified' => time(),
+            ]);
+        }
+        $DB->set_field('local_catquizlab_run', 'status', \local_catquizlab\local\registry::STATUS_FAILED, ['id' => $busy->id]);
+
+        $a = (int) $quiet->experimentid;
+        $b = (int) $busy->experimentid;
+        $this->assertNotSame($a, $b);
+
+        $counts = \local_catquizlab\local\attempt_scheduler::queue_breakdown($a);
+        $this->assertSame(0, (int) $counts['running']);
+
+        $verdict = \local_catquizlab\local\situation::assess($a, $counts);
+        $this->assertStringNotContainsString('5', $verdict['headline']);
+
+        // And B still sees its own.
+        $bcounts = \local_catquizlab\local\attempt_scheduler::queue_breakdown($b);
+        $this->assertSame(5, (int) $bcounts['running']);
+
+        // The first render and the first poll agree: same scope, same counts.
+        $render = \local_catquizlab\local\progress_view::context($a);
+        $poll = \local_catquizlab\external\live_status::execute($a);
+        $this->assertSame(
+            $render['situation']['state'],
+            $poll['regions'][0]['value'] ?? $render['situation']['state']
+        );
+    }
+
+    /**
+     * A strategy the engine cannot play is refused before anything is built.
+     *
+     * @return void
+     */
+    public function test_a_strategy_without_an_engine_class_is_refused(): void {
+        $this->resetAfterTest();
+
+        if (!\local_catquizlab\local\environment::engine_available()) {
+            $this->markTestSkipped('No CAT engine installed.');
+        }
+
+        $catalog = \local_catquizlab\local\strategy_catalog::class;
+
+        // The engine builds its strategies from classes, not from constants.
+        // This fork defines eight constants and ships six classes; the other
+        // two provisioned cleanly and then failed every sitting.
+        $runnable = $catalog::runnable_engine_ids();
+        $this->assertNotEmpty($runnable);
+
+        foreach ($catalog::keys() as $key) {
+            $this->assertSame(
+                in_array($catalog::engine_id($key), $runnable, true),
+                $catalog::runnable($key),
+                $key . ' is described incorrectly'
+            );
+
+            // Every key the engine cannot play is left out of the menu (#97:
+            // offer only what the engine can run) and refused by readiness.
+            if (!$catalog::runnable($key)) {
+                $this->assertArrayNotHasKey($key, $catalog::menu(), $key . ' is still offered');
+
+                $check = new \ReflectionMethod(\local_catquizlab\local\cat_readiness::class, 'check_strategy');
+                $check->setAccessible(true);
+                $reasons = $check->invoke(null, ['strategy' => $key], 'local_catquizlab');
+                $this->assertNotEmpty($reasons, $key . ' is offered but not refused');
+                $this->assertStringContainsString((string) $catalog::engine_id($key), $reasons[0]);
+            }
+        }
+
+        // And compatibility answers for classes, not constants.
+        $compat = $catalog::engine_compatibility();
+        $this->assertSame(
+            count($catalog::keys()) === count($runnable),
+            $compat['compatible']
+        );
+    }
+
+    /**
+     * Budgets can belong to one strategy, and a maximum can be unlimited.
+     *
+     * @return void
+     */
+    public function test_budgets_can_differ_per_strategy_and_be_unlimited(): void {
+        $this->resetAfterTest();
+        $this->setAdminUser();
+
+        $definition = \local_catquizlab\local\experiment_definition::example_baseline();
+        $definition['budgetsbystrategy'] = [
+            'classic' => ['global' => ['minitems' => 20, 'maxitems' => 'unlimited']],
+            'allsubs' => ['global' => ['maxitems' => 80], 'subscale' => ['maxitems' => 5]],
+            'relsubs' => ['global' => ['maxitems' => 40], 'subscale' => ['maxitems' => 8]],
+        ];
+
+        // A cartesian sweep cannot say "classic without a ceiling, allsubs at
+        // eighty": sweeping the budget as a factor applies every level to every
+        // strategy and produces the combinations nobody asked for.
+        $plan = \local_catquizlab\local\sweep::expand([
+            'base'    => $definition,
+            'factors' => ['strategy' => ['classic', 'allsubs', 'relsubs']],
+        ]);
+
+        $this->assertCount(3, $plan['cells']);
+
+        $seen = [];
+        foreach ($plan['runs'] as $run) {
+            $def = $run['definition'];
+            // A run keeps only the budgets its strategy uses (#101): the
+            // classical test has no subscale budget at all.
+            $seen[$def['strategy']] = [
+                (string) $def['budgets']['global']['maxitems'],
+                isset($def['budgets']['subscale']) ? (string) $def['budgets']['subscale']['maxitems'] : 'n/a',
+            ];
+        }
+
+        $this->assertSame(['unlimited', 'n/a'], $seen['classic']);
+        $this->assertSame(['80', '5'], $seen['allsubs']);
+        $this->assertSame(['40', '8'], $seen['relsubs']);
+
+        // Unlimited is a word in the definition and -1 to the engine, which
+        // already reads that as "stop applying this maximum".
+        $unlimited = \local_catquizlab\local\experiment_definition::engine_maximum('unlimited', 15);
+        $this->assertSame(-1, $unlimited);
+        $this->assertSame(80, \local_catquizlab\local\experiment_definition::engine_maximum(80, 15));
+        $this->assertSame(15, \local_catquizlab\local\experiment_definition::engine_maximum(null, 15));
+
+        // And a definition with an unlimited maximum validates.
+        $classic = $definition;
+        $classic['budgets']['global'] = ['minitems' => 20, 'maxitems' => 'unlimited'];
+        $result = (new \local_catquizlab\local\experiment_definition($classic))->validate();
+        $this->assertTrue($result['valid'], implode(' | ', $result['errors']));
+    }
+
+    /**
+     * The form edits per-strategy budgets, and the preview shows the result.
+     *
+     * @return void
+     */
+    public function test_per_strategy_budgets_can_be_edited_and_previewed(): void {
+        $this->resetAfterTest();
+        $this->setAdminUser();
+
+        $read = new \ReflectionMethod(\local_catquizlab\form\experiment_form::class, 'per_strategy_budgets');
+        $read->setAccessible(true);
+        $write = new \ReflectionMethod(\local_catquizlab\form\experiment_form::class, 'per_strategy_fields');
+        $write->setAccessible(true);
+
+        // Four fields per strategy; empty means "use the budgets above".
+        $block = $read->invoke(null, [
+            // The classical test plays every item: what is sent for it is not taken.
+            'perstrategy_classic_globalmin' => '20',
+            'perstrategy_classic_globalmax' => '30',
+            'perstrategy_relsubs_globalmax' => 'unlimited',
+            'perstrategy_allsubs_globalmax' => '80',
+            'perstrategy_allsubs_subscalemax' => '5',
+            'perstrategy_fastest_globalmax' => '',
+        ]);
+
+        $this->assertArrayNotHasKey('fastest', $block, 'an empty field became an override');
+        $this->assertArrayNotHasKey('classic', $block, 'the classical test has no question budget');
+        $this->assertSame('unlimited', $block['relsubs']['global']['maxitems']);
+        $this->assertSame(80, $block['allsubs']['global']['maxitems']);
+
+        // And back into the form without loss.
+        $fields = $write->invoke(null, ['budgetsbystrategy' => $block]);
+        $this->assertSame('unlimited', $fields['perstrategy_relsubs_globalmax']);
+        $this->assertSame('80', $fields['perstrategy_allsubs_globalmax']);
+
+        // The preview shows what each run will actually use, before anything
+        // is created: a count of runs does not say whether classic kept its
+        // unlimited ceiling, which is the thing being checked.
+        $definition = \local_catquizlab\local\experiment_definition::example_baseline();
+        $definition['budgetsbystrategy'] = $block;
+        $preview = \local_catquizlab\local\experiment_service::preview($definition + [
+            'sweep' => ['factors' => ['strategy' => ['classic', 'allsubs', 'relsubs']]],
+        ]);
+
+        $rows = [];
+        foreach ($preview['budgetrows'] as $row) {
+            $rows[$row['strategy']] = $row;
+        }
+
+        // The classical test: every item of the scale, not a number, and no budget of its own.
+        $classic = $rows[\local_catquizlab\local\strategy_catalog::label('classic')];
+        $this->assertSame(get_string('form:allitems_short', 'local_catquizlab'), $classic['globalmax']);
+        $this->assertFalse($classic['overridden']);
+
+        // The strategy relsubs was given its own maximum ("unlimited") above, and is marked so.
+        $relsubs = $rows[\local_catquizlab\local\strategy_catalog::label('relsubs')];
+        $this->assertTrue($relsubs['overridden']);
+        $this->assertSame(get_string('budget:unlimited', 'local_catquizlab'), $relsubs['globalmax']);
+    }
+
+    /**
+     * A budget a strategy cannot satisfy is refused while it is typed.
+     *
+     * @return void
+     */
+    public function test_an_impossible_budget_is_refused_in_the_form(): void {
+        $this->resetAfterTest();
+        $this->setAdminUser();
+
+        $check = new \ReflectionMethod(\local_catquizlab\form\experiment_form::class, 'impossible_budgets');
+        $check->setAccessible(true);
+
+        // The reported run: allsubs over a hundred subscales, three questions
+        // each, a global maximum of thirty-five. Readiness caught it — after a
+        // course, 2500 questions and a thousand accounts had been built.
+        $errors = $check->invoke(null, [
+            'categories' => 10, 'subcategories' => 10, 'strategy' => 'allsubs',
+            'subscalemin' => 3, 'globalmax' => 35,
+        ]);
+        $this->assertArrayHasKey('globalmax', $errors);
+        $this->assertStringContainsString('300', $errors['globalmax']);
+
+        // Raising the maximum, or lifting it for that strategy alone, settles it.
+        $this->assertSame([], $check->invoke(null, [
+            'categories' => 10, 'subcategories' => 10, 'strategy' => 'allsubs',
+            'subscalemin' => 3, 'globalmax' => 400,
+        ]));
+        $this->assertSame([], $check->invoke(null, [
+            'categories' => 10, 'subcategories' => 10, 'strategy' => 'allsubs',
+            'subscalemin' => 3, 'globalmax' => 35,
+            'perstrategy_allsubs_globalmax' => 'unlimited',
+        ]));
+
+        // A strategy that does not have to serve every subscale is not bound
+        // by the arithmetic at all.
+        $this->assertSame([], $check->invoke(null, [
+            'categories' => 10, 'subcategories' => 10, 'strategy' => 'classic',
+            'subscalemin' => 3, 'globalmax' => 35,
+        ]));
+
+        // And a swept strategy counts even when it is not the chosen one.
+        $swept = $check->invoke(null, [
+            'categories' => 3, 'subcategories' => 3, 'strategy' => 'classic',
+            'sweepstrategies' => ['classic', 'allsubs'],
+            'subscalemin' => 5, 'globalmax' => 20,
+        ]);
+        $this->assertNotSame([], $swept);
+        $this->assertStringContainsString('45', reset($swept));
+    }
+
+    /**
+     * A download is written as it goes, and says the same as before.
+     *
+     * @return void
+     */
+    public function test_an_export_streams_without_a_second_copy(): void {
+        global $DB;
+        $this->resetAfterTest();
+        $this->setAdminUser();
+
+        /** @var \local_catquizlab_generator $generator */
+        $generator = $this->getDataGenerator()->get_plugin_generator('local_catquizlab');
+        $run = $generator->create_run();
+        $DB->set_field('local_catquizlab_run', 'status', \local_catquizlab\local\registry::STATUS_FINISHED, ['id' => $run->id]);
+        $person = $generator->create_person(['runid' => $run->id]);
+
+        $trace = json_encode([
+            'finaltheta' => 0.4, 'finalse' => 0.3, 'items' => range(1, 10),
+            'responses' => array_fill(1, 10, 1.0), 'nitems' => 10, 'steps' => 10,
+            'stopreason' => 'se', 'scaleabilities' => [],
+        ]);
+        for ($i = 0; $i < 25; $i++) {
+            $DB->insert_record('local_catquizlab_attempt', (object) [
+                'runid' => $run->id, 'personid' => $person->id,
+                'status' => \local_catquizlab\local\attempt_scheduler::STATUS_COLLECTED,
+                'tries' => 1, 'runtimems' => 1000, 'tracejson' => $trace,
+                'timecreated' => time(), 'timemodified' => time(),
+            ]);
+        }
+
+        $filter = ['experimentid' => (int) $run->experimentid];
+        $query = new \local_catquizlab\local\results_query($filter);
+
+        ob_start();
+        \local_catquizlab\local\results_export::stream($query, 'attempt', 'csv');
+        $csv = ob_get_clean();
+
+        // A header and one line per sitting: the file is complete, not a
+        // prefix of one, which is what a stream gets wrong when it gets it
+        // wrong.
+        $lines = array_values(array_filter(explode("\n", trim($csv))));
+        $this->assertCount(26, $lines);
+
+        $dataset = \local_catquizlab\local\results_export::dataset(
+            new \local_catquizlab\local\results_query($filter),
+            'attempt'
+        );
+        $this->assertSame(implode(',', $dataset['columns']), $lines[0]);
+        $this->assertCount(25, $dataset['rows']);
+
+        // And the JSON form is valid JSON rather than a concatenation that
+        // happens to look like it.
+        ob_start();
+        \local_catquizlab\local\results_export::stream(
+            new \local_catquizlab\local\results_query($filter),
+            'attempt',
+            'json'
+        );
+        $json = json_decode(ob_get_clean(), true);
+        $this->assertIsArray($json);
+        $this->assertCount(25, $json['rows']);
+        $this->assertSame($dataset['columns'], $json['columns']);
+        $this->assertArrayHasKey('metadata', $json);
+    }
+
+    /**
+     * A retry does not erase the diagnosis of the try before it.
+     *
+     * @return void
+     */
+    public function test_the_execution_history_survives_a_retry(): void {
+        global $DB;
+        $this->resetAfterTest();
+        $this->setAdminUser();
+
+        /** @var \local_catquizlab_generator $generator */
+        $generator = $this->getDataGenerator()->get_plugin_generator('local_catquizlab');
+        $run = $generator->create_run();
+        $runid = (int) $run->id;
+        $DB->set_field('local_catquizlab_run', 'status', \local_catquizlab\local\registry::STATUS_FAILED, ['id' => $runid]);
+
+        $attemptid = (int) $DB->insert_record('local_catquizlab_attempt', (object) [
+            'runid' => $runid, 'personid' => 0,
+            'status' => \local_catquizlab\local\attempt_scheduler::STATUS_FAILED,
+            'tries' => \local_catquizlab\local\attempt_scheduler::MAX_TRIES,
+            'lasterror' => 'Division by zero at model_raschmodel.php:734',
+            'timecreated' => time(), 'timemodified' => time(),
+        ]);
+
+        $history = \local_catquizlab\local\attempt_history::class;
+        $history::record($attemptid, $history::STARTED, ['workerid' => 'w-1', 'tryno' => 1]);
+        $history::record($attemptid, $history::FAILED, [
+            'workerid' => 'w-1', 'tryno' => 1, 'detail' => 'timeout after 33 answers',
+        ]);
+        $history::record($attemptid, $history::FAILED, [
+            'workerid' => 'w-2', 'tryno' => 2, 'detail' => 'Division by zero at model_raschmodel.php:734',
+        ]);
+
+        // The retry clears tries, nextruntime and lasterror — which is how the
+        // first failure used to become unreadable by the time the second one
+        // was being investigated.
+        \local_catquizlab\local\run_lifecycle::requeue_failed($runid);
+
+        $this->assertEmpty($DB->get_field('local_catquizlab_attempt', 'lasterror', ['id' => $attemptid]));
+
+        $rows = $history::of_attempt($attemptid);
+        $this->assertCount(4, $rows, 'the retry itself is recorded too');
+
+        $details = array_column($rows, 'detail');
+        $this->assertContains('timeout after 33 answers', $details);
+        $this->assertStringContainsString(
+            'model_raschmodel.php:734',
+            $history::last_failure($attemptid)
+        );
+
+        // And the outcomes of a run can be counted without walking them.
+        $outcomes = $history::outcomes_of_run($runid);
+        $this->assertSame(2, $outcomes[$history::FAILED]);
+        $this->assertSame(1, $outcomes[$history::REQUEUED]);
+    }
+
+    /**
+     * The log orders within a second, filters by worker, and keeps what it is told to.
+     *
+     * @return void
+     */
+    public function test_the_log_is_a_troubleshooting_console(): void {
+        global $DB;
+        $this->resetAfterTest();
+        $this->setAdminUser();
+
+        set_config('debuglevel', 'verbose', 'local_catquizlab');
+        $trace = \local_catquizlab\local\debug_trace::class;
+        $view = \local_catquizlab\local\log_view::class;
+
+        $trace::record($trace::WORKER, 'heartbeat', ['workerid' => 'exec-7', 'attemptid' => 4711], 'ok');
+        $trace::record($trace::WORKER, 'job_complete', ['workerid' => 'exec-3', 'attemptid' => 4712], 'error');
+
+        // The ids are columns now, not words inside a JSON blob that only a
+        // text search could find.
+        $row = $DB->get_record('local_catquizlab_debug', ['workerid' => 'exec-3']);
+        $this->assertSame(4712, (int) $row->attemptid);
+        $this->assertGreaterThan((int) $row->timecreated * 1000 - 1, (int) $row->timecreatedms);
+
+        $lines = $view::lines(['hours' => 1, 'channel' => 'worker']);
+        $this->assertCount(2, $lines);
+        // Milliseconds in the stamp, so two entries of one second keep an order.
+        $this->assertMatchesRegularExpression('/\\.\\d{3}$/', $lines[0]['stamp']);
+
+        $this->assertCount(1, $view::lines(['hours' => 1, 'channel' => 'worker', 'workerid' => 'exec-7']));
+        // The sitting is filtered as the sitting; "attemptno" is the lifecycle
+        // attempt of a run and does not find it.
+        $this->assertCount(1, $view::lines(['hours' => 1, 'channel' => 'worker', 'attemptid' => 4712]));
+        $this->assertCount(0, $view::lines(['hours' => 1, 'channel' => 'worker', 'attemptno' => 4712]));
+
+        // A channel filter is a filter: "worker" does not bring the run
+        // lifecycle along.
+        \local_catquizlab\local\run_log::record(0, 'start_requested');
+        foreach ($view::lines(['hours' => 1, 'channel' => 'worker']) as $line) {
+            $this->assertSame('worker', $line['source']);
+        }
+
+        // Retention is a setting, and zero keeps everything.
+        set_config('logretention', 3 * DAYSECS, 'local_catquizlab');
+        $this->assertSame(3 * DAYSECS, $trace::retention());
+        set_config('logretention', 0, 'local_catquizlab');
+        $this->assertSame(0, $trace::retention());
+        unset_config('logretention', 'local_catquizlab');
+        $this->assertSame($trace::KEEP_SECONDS, $trace::retention());
+    }
+
+    /**
+     * A sitting is read back from catquiz 1.2.1, which writes no debug_info.
+     *
+     * @return void
+     */
+    public function test_the_collector_reads_the_engine_summary(): void {
+        $this->resetAfterTest();
+        if (!$GLOBALS['DB']->get_manager()->table_exists('local_catquiz_attempts')) {
+            $this->markTestSkipped('Needs local_catquiz, which this job does not install.');
+        }
+
+        // What catquiz 1.2.1 (ALiSe-v-1.2.0-legacy, 2026092612) stores: no
+        // debug_info, no progress row once the attempt is over, and a
+        // per-question summary with the ability after each question.
+        $summary = [];
+        foreach ([[-0.40, 0], [-0.73, 0], [-1.06, 0], [-1.86, 1]] as $index => [$ability, $response]) {
+            $summary[] = [
+                'id' => (string) (6458 + $index), 'slot' => (string) ($index + 1),
+                'questionscale' => '836', 'lastresponse' => $response,
+                'personability_after' => $ability,
+            ];
+        }
+
+        $read = new \ReflectionMethod(\local_catquizlab\local\attempt_collector::class, 'read_summary');
+        $read->setAccessible(true);
+
+        global $DB;
+        $DB->insert_record('local_catquiz_attempts', (object) [
+            'userid' => 2, 'scaleid' => 836, 'contextid' => 1, 'courseid' => 1, 'attemptid' => 9001,
+            'component' => 'mod_adaptivequiz', 'instanceid' => 1, 'teststrategy' => 1, 'status' => 0,
+            'total_number_of_testitems' => 4, 'number_of_testitems_used' => 4,
+            'personability_before_attempt' => 0, 'personability_after_attempt' => -1.86,
+            'starttime' => time(), 'endtime' => time(),
+            'json' => json_encode(['graphicalsummary_data' => $summary]),
+            'debug_info' => null, 'timecreated' => time(), 'timemodified' => time(),
+        ]);
+
+        $path = $read->invoke(null, 9001);
+
+        // Four points, in the shape the debug_info path had, so everything
+        // that reads the path reads this one unchanged.
+        $this->assertCount(4, $path);
+        $this->assertSame(1, $path[0]['step']);
+        $this->assertSame([836 => -0.40], $path[0]['abilities']);
+        $this->assertSame([836 => -1.86], $path[3]['abilities']);
+
+        // The step count comes from it: a sitting of four questions used to be
+        // collected with its items and a step count of zero.
+        $steps = new \ReflectionMethod(\local_catquizlab\local\attempt_collector::class, 'step_series');
+        $steps->setAccessible(true);
+        $this->assertSame(4, $steps->invoke(null, ['summarysteps' => 4, 'items' => [1, 2, 3, 4]], []));
+
+        // And with no summary at all, the items read back from the question
+        // usage still say how many questions there were.
+        $this->assertSame(3, $steps->invoke(null, ['items' => [1, 2, 3]], []));
+    }
+
+    /**
+     * The engine's progress trace becomes the ability path, every scale per step.
+     *
+     * @return void
+     */
+    public function test_the_progress_trace_is_read_as_the_path(): void {
+        $this->resetAfterTest();
+
+        // What catquiz 1.2.1 writes with progressretention = trace: per scale,
+        // a list of {step, ability}. Richer than the attempt summary, which
+        // holds only the scale of the question just asked.
+        $abilitytrace = [
+            836 => [['step' => 1, 'ability' => -0.40], ['step' => 2, 'ability' => -0.73]],
+            834 => [['step' => 1, 'ability' => 0.10], ['step' => 2, 'ability' => 0.25]],
+        ];
+
+        $read = new \ReflectionMethod(\local_catquizlab\local\attempt_collector::class, 'path_from_progress_trace');
+        $read->setAccessible(true);
+        $path = $read->invoke(null, $abilitytrace);
+
+        $this->assertCount(2, $path);
+        $this->assertSame(1, $path[0]['step']);
+        $this->assertSame([834 => 0.10, 836 => -0.40], $path[0]['abilities']);
+        $this->assertSame([834 => 0.25, 836 => -0.73], $path[1]['abilities']);
+
+        // Nothing recorded, nothing invented.
+        $this->assertSame([], $read->invoke(null, []));
+    }
+
+    /**
+     * The setup sets the engine to its longest progress retention.
+     *
+     * @return void
+     */
+    public function test_the_setup_keeps_the_engine_trace(): void {
+        $this->resetAfterTest();
+        $this->setAdminUser();
+
+        if (!\local_catquizlab\local\setup_wizard::engine_retention_available()) {
+            $this->markTestSkipped('The installed engine predates progress retention.');
+        }
+
+        set_config('progressretention', 'minimal', 'local_catquiz');
+        set_config('progressretentiondays', 30, 'local_catquiz');
+        $this->assertFalse(\local_catquizlab\local\setup_wizard::engine_keeps_trace());
+
+        \local_catquizlab\local\setup_wizard::run(true);
+
+        $this->assertSame('trace', get_config('local_catquiz', 'progressretention'));
+        $this->assertSame(0, (int) get_config('local_catquiz', 'progressretentiondays'));
+        $this->assertTrue(\local_catquizlab\local\setup_wizard::engine_keeps_trace());
+    }
 }

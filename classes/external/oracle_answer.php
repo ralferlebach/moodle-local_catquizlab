@@ -154,6 +154,12 @@ class oracle_answer extends external_api {
             $usage = \question_engine::load_questions_usage_by_activity($qubaid);
             $question = $usage->get_question($slot);
         } catch (\Throwable $e) {
+            // Not fatal — the answer falls back — but no longer silent (#90).
+            \local_catquizlab\local\debug_trace::exception(
+                \local_catquizlab\local\debug_trace::SERVICE,
+                'oracle_question_lookup',
+                $e
+            );
             return 0;
         }
 

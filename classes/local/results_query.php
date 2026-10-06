@@ -41,6 +41,10 @@ class results_query {
     public const FILTERS = [
         'experimentid', 'tier', 'model', 'strategy', 'variant', 'stratum', 'severity',
         'replication', 'cellkey', 'budget',
+        // One run, and which sittings by validity (#118). Both were dropped here
+        // without a word: a query for one run read every run, and "all" read
+        // only the valid ones.
+        'runid', 'validity',
     ];
 
     /** @var string Dispersion reported as the standard deviation over replications. */
@@ -54,6 +58,12 @@ class results_query {
 
     /** @var array The active filter. */
     protected array $filter;
+
+    /** @var string The sitting and person whose detail is cached. */
+    protected static string $detailfor = '';
+
+    /** @var array The cached detail of that attempt. */
+    protected static array $detail = [];
 
     /** @var array|null Cached observations. */
     protected ?array $observations = null;
@@ -88,6 +98,11 @@ class results_query {
         if (!empty($this->filter['experimentid'])) {
             $conditions['experimentid'] = (int) $this->filter['experimentid'];
         }
+        // One run: asked for by the aggregator and by the export's context, and
+        // ignored until 0.7.28 — a query for one run read every run (#118).
+        if (!empty($this->filter['runid'])) {
+            $conditions['id'] = (int) $this->filter['runid'];
+        }
         if (!empty($this->filter['replication'])) {
             $conditions['replication'] = (int) $this->filter['replication'];
         }
@@ -105,87 +120,663 @@ class results_query {
     }
 
     /**
-     * One row per attempt, carrying its outcome and its experimental coordinates.
+     * The stop rules in force, per strategy, for the runs of the selection.
      *
-     * @return array[] Observations.
+     * Read from each run's own definition through the same function that
+     * provisioned it, so the results report what the engine was given — and
+     * only what applies: a classical test reports no precision target, a
+     * strategy without subscales no limit per subscale (#101).
+     *
+     * @return array<string, array{label: string, rules: string[], runs: int}> Keyed by strategy and rule set.
      */
-    public function observations(): array {
+    public function stop_rules(): array {
         global $DB;
 
+        $groups = [];
+        $ids = array_keys($this->runs());
+        if ($ids === []) {
+            return $groups;
+        }
+
+        [$insql, $params] = $DB->get_in_or_equal($ids, SQL_PARAMS_NAMED, 'run');
+        $records = $DB->get_records_select('local_catquizlab_run', 'id ' . $insql, $params, 'id ASC');
+        foreach ($records as $record) {
+            $definition = run_registry::definition_for($record);
+            if (!isset($definition['strategy'])) {
+                continue;
+            }
+            $effective = test_provisioner::effective_parameters($definition);
+            $rules = strategy_parameters::stop_rules($effective);
+            $key = $definition['strategy'] . '|' . implode('|', $rules);
+            if (!isset($groups[$key])) {
+                $groups[$key] = [
+                    'key'   => (string) $definition['strategy'],
+                    'label' => strategy_catalog::display_label((string) $definition['strategy']),
+                    'rules' => $rules,
+                    'runs'  => 0,
+                ];
+            }
+            $groups[$key]['runs']++;
+        }
+
+        return $groups;
+    }
+
+    /**
+     * The ability distributions of the selection's runs, in words (#105).
+     *
+     * @return array<string, int> Description => number of runs.
+     */
+    public function ability_distributions(): array {
+        global $DB;
+
+        $out = [];
+        $ids = array_keys($this->runs());
+        if ($ids === []) {
+            return $out;
+        }
+        [$insql, $params] = $DB->get_in_or_equal($ids, SQL_PARAMS_NAMED, 'run');
+        foreach ($DB->get_records_select('local_catquizlab_run', 'id ' . $insql, $params) as $record) {
+            $text = ability_distribution::describe(ability_distribution::of(run_registry::definition_for($record)));
+            $out[$text] = ($out[$text] ?? 0) + 1;
+        }
+
+        return $out;
+    }
+
+    /** @var array<int, int> Effective maximum number of questions by run. */
+    protected static array $maxitems = [];
+
+    /**
+     * Forget the per-run lookups of this request — for tests, which reuse run ids.
+     *
+     * @return void
+     */
+    public static function reset_caches(): void {
+        self::$maxitems = [];
+        self::$detail = [];
+    }
+
+    /**
+     * A run's effective questions per subscale, as provisioned; -1 for none (#109).
+     *
+     * @param int $runid The run.
+     * @return int
+     */
+    public static function run_subscale_maxitems(int $runid): int {
+        global $DB;
+
+        $record = $DB->get_record('local_catquizlab_run', ['id' => $runid]);
+        $definition = $record ? run_registry::definition_for($record) : [];
+
+        return $definition === [] ? -1
+            : (int) test_provisioner::options_from_definition($definition)['maxquestionspersubscale'];
+    }
+
+    /**
+     * A run's effective maximum number of questions, as provisioned; -1 for none.
+     *
+     * @param int $runid The run.
+     * @return int
+     */
+    public static function run_maxitems(int $runid): int {
+        global $DB;
+
+        if (!isset(self::$maxitems[$runid])) {
+            $record = $DB->get_record('local_catquizlab_run', ['id' => $runid]);
+            $definition = $record ? run_registry::definition_for($record) : [];
+            self::$maxitems[$runid] = $definition === []
+                ? -1
+                : (int) test_provisioner::options_from_definition($definition)['maxquestions'];
+        }
+
+        return self::$maxitems[$runid];
+    }
+
+    /**
+     * A scale and every scale below it, in a run's provisioned tree (#109).
+     *
+     * @param int $runid The run.
+     * @param int $scaleid The catscale.
+     * @return int[]
+     */
+    public static function scale_subtree(int $runid, int $scaleid): array {
+        global $DB;
+
+        $children = [];
+        $rows = $DB->get_records('local_catquizlab_scalemap', ['runid' => $runid], 'id ASC', 'id, catscaleid, parentcatscaleid');
+        foreach ($rows as $row) {
+            $children[(int) $row->parentcatscaleid][] = (int) $row->catscaleid;
+        }
+        $subtree = [$scaleid];
+        for ($i = 0; $i < count($subtree); $i++) {
+            foreach ($children[$subtree[$i]] ?? [] as $child) {
+                if (!in_array($child, $subtree, true)) {
+                    $subtree[] = $child;
+                }
+            }
+        }
+
+        return $subtree;
+    }
+
+    /** @var array The counts of a pass before it has read anything. */
+    protected const EMPTY_COUNTS = [
+        'total' => 0, 'valid' => 0, 'invalid' => 0, 'designstops' => 0, 'reasons' => [], 'bystrategy' => [], 'bycell' => [],
+    ];
+
+    /** @var array<int, ?int> The engine's status number by engine attempt, for the batch being read. */
+    protected array $enginestatus = [];
+
+    /** @var array<int, array> What each run's design says about its end: min, max, SE target, strategy, pool. */
+    protected array $runfacts = [];
+
+    /** @var array Every collected sitting the last whole pass read, by validity and end — before any filter. */
+    protected array $validitycounts = self::EMPTY_COUNTS;
+
+    /**
+     * The facts of a run's design that decide whether an end is a regular one (#118).
+     *
+     * A run without a definition — from before definitions were kept — has no
+     * minimum to hold it to: nothing is assumed for it.
+     *
+     * @param int $runid The run.
+     * @return array
+     */
+    protected function run_facts(int $runid): array {
+        global $DB;
+
+        if (!isset($this->runfacts[$runid])) {
+            $record = $DB->get_record('local_catquizlab_run', ['id' => $runid]);
+            $definition = $record ? run_registry::definition_for($record) : [];
+            if ($definition === []) {
+                $this->runfacts[$runid] = [];
+            } else {
+                $options = test_provisioner::options_from_definition($definition);
+                $strategy = (string) ($definition['strategy'] ?? '');
+                $this->runfacts[$runid] = [
+                    'strategy' => $strategy,
+                    'minitems' => strategy_catalog::uses($strategy, 'globalmin') ? (int) $options['minquestions'] : 0,
+                    'maxitems' => (int) $options['maxquestions'],
+                    'semin' => strategy_catalog::uses_standard_error($strategy) ? (float) $options['se_min'] : null,
+                    'poolsize' => $DB->count_records('local_catquizlab_item', ['runid' => $runid]),
+                ];
+            }
+        }
+
+        return $this->runfacts[$runid];
+    }
+
+    /**
+     * The tier of a run row as the observation carries it.
+     *
+     * @param array $run A run row from runs().
+     * @return string
+     */
+    protected function tier_of_run(array $run): string {
+        return (string) ($run['tier'] ?? '');
+    }
+
+    /**
+     * The success of the stop rules: sittings that ended on a criterion, of all collected (#118).
+     *
+     * Of all, not of the valid ones: those are the ones that may enter the
+     * figures, and an end before the minimum is exactly a stop rule not met.
+     *
+     * @param string $level '' for the whole selection, 'bystrategy' or 'bycell'.
+     * @param string $key The strategy or the cell key.
+     * @return float|null Percent, null where nothing was collected.
+     */
+    public function stop_success(string $level = '', string $key = ''): ?float {
+        $counts = $this->validity_counts();
+        $node = $level === '' ? $counts : ($counts[$level][$key] ?? ['total' => 0, 'designstops' => 0]);
+
+        return (int) $node['total'] === 0 ? null : 100.0 * (int) $node['designstops'] / (int) $node['total'];
+    }
+
+    /**
+     * How many sittings the last whole pass read: valid, invalid, by end — before any filter (#118).
+     *
+     * @return array{total: int, valid: int, invalid: int, designstops: int, reasons: array<string, int>}
+     */
+    public function validity_counts(): array {
+        if ($this->validitycounts['total'] === 0) {
+            foreach ($this->each_observation() as $unused) {
+                // A pass for its counts.
+                continue;
+            }
+        }
+
+        return $this->validitycounts;
+    }
+
+    /** @var int[]|null Restrict the observations to these sittings, or null for all. */
+    protected ?array $onlyattempts = null;
+
+    /**
+     * The observations of some sittings only, fetched as themselves.
+     *
+     * @param int[] $attemptids The sittings.
+     * @return array[]
+     */
+    public function observations_of(array $attemptids): array {
+        $this->onlyattempts = array_values(array_unique(array_map('intval', $attemptids)));
+        try {
+            return iterator_to_array($this->each_observation(), false);
+        } finally {
+            $this->onlyattempts = null;
+        }
+    }
+
+    /** @var array<int, string> End reason codes of the batch being read, by sitting. */
+    protected array $endreasons = [];
+
+    /** @var int Observations beyond which an unfiltered selection is refused. */
+    public const TOO_MANY = 50000;
+
+    /**
+     * Whether this selection is larger than a page can honestly analyse.
+     *
+     * "All experiments" on an installation with a year of work behind it is
+     * not a question anybody means to ask, and answering it badly — a blank
+     * page after the tabs have already rendered, which is what a memory
+     * failure looks like mid-output — is worse than declining.
+     *
+     * @return array{toolarge: bool, count: int, limit: int}
+     */
+    public function size_check(): array {
+        global $DB;
+
+        $runs = $this->runs();
+        if ($runs === []) {
+            return ['toolarge' => false, 'count' => 0, 'limit' => self::TOO_MANY];
+        }
+
+        [$insql, $params] = $DB->get_in_or_equal(array_keys($runs), SQL_PARAMS_NAMED, 'run');
+        $params['collected'] = attempt_scheduler::STATUS_COLLECTED;
+        $params['validated'] = attempt_scheduler::STATUS_VALIDATED;
+
+        $count = (int) $DB->count_records_select(
+            'local_catquizlab_attempt',
+            'runid ' . $insql . ' AND status IN (:collected, :validated) AND tracejson IS NOT NULL',
+            $params
+        );
+
+        return [
+            'toolarge' => $count > self::TOO_MANY,
+            'count'    => $count,
+            'limit'    => self::TOO_MANY,
+        ];
+    }
+
+    /**
+     * The observations of the selection, as one array.
+     *
+     * For the analyses that need every observation at once. A page that only
+     * needs sums, means or quantiles walks {@see each_observation()} instead
+     * and never holds the rows.
+     *
+     * @return array[]
+     */
+    public function observations(): array {
         if ($this->observations !== null) {
             return $this->observations;
         }
 
+        return $this->observations = iterator_to_array($this->each_observation(), false);
+    }
+
+    /**
+     * What the overview needs, gathered in one pass without holding sittings.
+     *
+     * Each sitting contributes a handful of numbers and its group labels; its
+     * item list is counted into the exposure tally and then dropped. The
+     * medians and quartiles the overview reports need the values, so the
+     * values are kept — as numbers, not as observations.
+     *
+     * @param int $maxpoints The most points the scatter sample keeps.
+     * @return array Summaries (all, strategy, cell), itemcounts, points and n.
+     */
+    public function overview(int $maxpoints = 2000): array {
+        $all = new stream_summary();
+        $bystrategy = [];
+        $bycell = [];
+        $itemcounts = [];
+        $points = [];
+        $seen = 0;
+        // A second reservoir for the ability plots of the global tab (#99):
+        // true and estimated ability, error and run, never more than
+        // $maxpoints kept — and, in the same pass, how many true abilities lie
+        // outside the scale range of their run (#105).
+        $sample = [];
+        $sampled = 0;
+        $outside = 0;
+        $ranges = [];
+
+        foreach ($this->each_observation() as $observation) {
+            if ($observation['esttheta'] !== null && $observation['truetheta'] !== null) {
+                $sampled++;
+                $row = [
+                    'truetheta' => (float) $observation['truetheta'],
+                    'esttheta'  => (float) $observation['esttheta'],
+                    'error'     => (float) $observation['error'],
+                    'runid'     => (int) $observation['runid'],
+                ];
+                if (count($sample) < $maxpoints) {
+                    $sample[] = $row;
+                } else {
+                    $slot = random_int(0, $sampled - 1);
+                    if ($slot < $maxpoints) {
+                        $sample[$slot] = $row;
+                    }
+                }
+                $runid = (int) $observation['runid'];
+                if (!isset($ranges[$runid])) {
+                    $record = $GLOBALS['DB']->get_record('local_catquizlab_run', ['id' => $runid]);
+                    $ranges[$runid] = ability_distribution::of($record ? run_registry::definition_for($record) : []);
+                }
+                if (!ability_distribution::inside($ranges[$runid], (float) $observation['truetheta'])) {
+                    $outside++;
+                }
+            }
+
+            foreach ((array) ($observation['items'] ?? []) as $item) {
+                $key = (string) $item;
+                $itemcounts[$key] = ($itemcounts[$key] ?? 0) + 1;
+            }
+
+            $all->add($observation);
+
+            $strategy = (string) $observation['strategy'];
+            $bystrategy[$strategy] = $bystrategy[$strategy] ?? new stream_summary();
+            $bystrategy[$strategy]->add($observation);
+
+            $cell = implode('|', [
+                $observation['tier'], $observation['strategy'], $observation['model'],
+                $observation['variant'], $observation['stratum'], $observation['severity'],
+            ]);
+            $bycell[$cell] = $bycell[$cell] ?? new stream_summary();
+            $bycell[$cell]->add($observation);
+
+            // A reservoir sample for the scatter chart: an even chance for
+            // every sitting, never more than $maxpoints kept.
+            if ($observation['se'] !== null) {
+                $seen++;
+                $point = ['x' => $observation['nitems'], 'y' => $observation['se']];
+                if (count($points) < $maxpoints) {
+                    $points[] = $point;
+                } else {
+                    $slot = random_int(0, $seen - 1);
+                    if ($slot < $maxpoints) {
+                        $points[$slot] = $point;
+                    }
+                }
+            }
+        }
+
+        return [
+            'all'        => $all,
+            'strategy'   => $bystrategy,
+            'cell'       => $bycell,
+            'itemcounts' => $itemcounts,
+            'points'     => $points,
+            'sample'     => $sample,
+            'sampled'    => $sampled,
+            'outside'    => $outside,
+            'n'          => $all->count(),
+        ];
+    }
+
+    /**
+     * The observations of the selection, one at a time.
+     *
+     * Read from a recordset and yielded as they are built, so that what is in
+     * memory is one sitting rather than all of them. Fifty thousand sittings
+     * of a large experiment are an analysis, not an array.
+     *
+     * @return \Generator<array>
+     */
+    public function each_observation(): \Generator {
+        global $DB;
+
+        self::$detailfor = '';
+        self::$detail = [];
+        // The counts are those of this pass — of a whole one, not of the few
+        // sittings a comparison fetches as themselves.
+        if ($this->onlyattempts === null) {
+            $this->validitycounts = self::EMPTY_COUNTS;
+        }
+
         $runs = $this->runs();
         if ($runs === []) {
-            return $this->observations = [];
+            return;
         }
 
         [$insql, $params] = $DB->get_in_or_equal(array_keys($runs), SQL_PARAMS_NAMED, 'run');
-        $attempts = $DB->get_records_select(
-            'local_catquizlab_attempt',
-            'runid ' . $insql,
-            $params,
-            'runid ASC, id ASC'
-        );
 
+        // People are fetched as they are needed and kept in a small cache.
+        // Every person of every run used to be held at once, profile JSON
+        // included: nine thousand people at roughly three kilobytes each is
+        // twenty-five megabytes before a single number is computed, and with
+        // the sittings beside them the page ran out of memory. Only people who
+        // actually sat the test are read now.
         $persons = [];
-        foreach ($DB->get_records_select('local_catquizlab_person', 'runid ' . $insql, $params) as $person) {
-            $persons[(int) $person->id] = $person;
-        }
+        // Two fields, not the profile. The profile is three kilobytes of JSON
+        // per person and the row never reads it — detail() fetches it for the
+        // one observation that needs it. Caching it for every person of a run
+        // is what made the stream grow to 48 MB while keeping no rows.
+        $personfields = 'id, twinid, abilityglobal, stratum';
 
-        $rows = [];
-        foreach ($attempts as $attempt) {
-            $trace = json_decode((string) $attempt->tracejson, true) ?: [];
-            $person = $persons[(int) $attempt->personid] ?? null;
-            if ($person === null || $trace === []) {
-                // An attempt without a trace has no outcome to report. Counting
-                // it as a zero would quietly bias every mean it entered.
-                continue;
+        // A recordset, and only sittings that have something to report. Every
+        // sitting of every run used to be loaded at once — nine thousand rows
+        // carrying a full trace each — and the page died of exhausted memory
+        // before it computed anything. A recordset holds one row at a time;
+        // what stays is one small array per observation.
+        // Run by run, and within a run in batches of a few hundred by id. A
+        // single recordset over everything is not a stream: the database
+        // drivers buffer it — Moodle's PostgreSQL driver fetches up to a
+        // hundred thousand rows at a time by default — so walking nine
+        // thousand sittings peaked at 48 MB while keeping none of them. The
+        // person cache is per run for the same reason: across nine runs of a
+        // thousand people it was nine thousand profiles.
+        foreach (array_keys($runs) as $runid) {
+            $persons = [];
+            $lastid = 0;
+
+            do {
+                // Restricted to given sittings where asked (#99): a twin family
+                // of a few tests is fetched as itself, not found by reading all.
+                $where = 'runid = :runid AND id > :lastid AND status IN (:collected, :validated) AND tracejson IS NOT NULL';
+                $batchparams = [
+                    'runid'     => $runid,
+                    'lastid'    => $lastid,
+                    'collected' => attempt_scheduler::STATUS_COLLECTED,
+                    'validated' => attempt_scheduler::STATUS_VALIDATED,
+                ];
+                if ($this->onlyattempts !== null) {
+                    [$onlyin, $onlyparams] = $DB->get_in_or_equal($this->onlyattempts ?: [0], SQL_PARAMS_NAMED, 'only');
+                    $where .= ' AND id ' . $onlyin;
+                    $batchparams += $onlyparams;
+                }
+                $batch = $DB->get_records_select(
+                    'local_catquizlab_attempt',
+                    $where,
+                    $batchparams,
+                    'id ASC',
+                    'id, runid, personid, runtimems, tracejson, engineattemptid',
+                    0,
+                    self::BATCH
+                );
+
+                // The end reason of every sitting in the batch, in one query
+                // (#106): the latest code each one's history carries.
+                $this->endreasons = [];
+                // The engine's own end code of every sitting in the batch (#118):
+                // a number, whatever language the stop text was written in.
+                $this->enginestatus = [];
+                $engineids = array_filter(array_map(static fn($a): int => (int) ($a->engineattemptid ?? 0), $batch));
+                if ($engineids !== [] && $DB->get_manager()->table_exists('local_catquiz_attempts')) {
+                    [$inengine, $engineparams] = $DB->get_in_or_equal(array_values($engineids), SQL_PARAMS_NAMED, 'eng');
+                    $statuses = $DB->get_records_select_menu(
+                        'local_catquiz_attempts',
+                        "component = 'adaptivequiz' AND attemptid " . $inengine,
+                        $engineparams,
+                        '',
+                        'attemptid, status'
+                    );
+                    foreach ($statuses as $engineattemptid => $status) {
+                        $this->enginestatus[(int) $engineattemptid] = $status === null ? null : (int) $status;
+                    }
+                }
+                if ($batch !== [] && $DB->get_manager()->table_exists('local_catquizlab_attemptlog')) {
+                    [$inreason, $reasonparams] = $DB->get_in_or_equal(array_keys($batch), SQL_PARAMS_NAMED, 'att');
+                    $codes = $DB->get_records_select(
+                        'local_catquizlab_attemptlog',
+                        'attemptid ' . $inreason . ' AND reasoncode IS NOT NULL',
+                        $reasonparams,
+                        'id ASC',
+                        'id, attemptid, reasoncode'
+                    );
+                    foreach ($codes as $code) {
+                        $this->endreasons[(int) $code->attemptid] = (string) $code->reasoncode;
+                    }
+                }
+                foreach ($batch as $attempt) {
+                    $lastid = (int) $attempt->id;
+                    yield from $this->observation_row($attempt, $runs, $persons, $personfields);
+                }
+            } while (count($batch) === self::BATCH);
+        }
+    }
+
+    /** @var int Sittings read per query while streaming. */
+    public const BATCH = 500;
+
+    /**
+     * One observation from one sitting.
+     *
+     * @param \stdClass $attempt The sitting row.
+     * @param array $runs The runs of the selection.
+     * @param array $persons The person cache of the current run.
+     * @param string $personfields The person fields to read.
+     * @return \Generator<array>
+     */
+    protected function observation_row(\stdClass $attempt, array $runs, array &$persons, string $personfields): \Generator {
+        global $DB;
+
+        $trace = json_decode((string) $attempt->tracejson, true) ?: [];
+
+        $personid = (int) $attempt->personid;
+        if (!array_key_exists($personid, $persons)) {
+            $persons[$personid] = $DB->get_record(
+                'local_catquizlab_person',
+                ['id' => $personid],
+                $personfields
+            ) ?: null;
+        }
+        $person = $persons[$personid];
+        if ($person === null || $trace === []) {
+            // An attempt without a trace has no outcome to report. Counting
+            // it as a zero would quietly bias every mean it entered.
+            return;
+        }
+        $run = $runs[(int) $attempt->runid];
+
+        $truetheta = (float) $person->abilityglobal;
+        $esttheta = (float) ($trace['finaltheta'] ?? 0.0);
+        $se = isset($trace['finalse']) ? (float) $trace['finalse'] : null;
+
+        // How it ended and whether its result counts, decided here for every
+        // view alike (#118) — from the engine's code and the run's design, not
+        // from the code stored at collection, which knew neither the minimum
+        // number of questions nor the engine's code.
+        $run = $runs[(int) $attempt->runid];
+        $facts = $this->run_facts((int) $attempt->runid) + [
+            'played' => (int) ($trace['nitems'] ?? count((array) ($trace['items'] ?? []))),
+            'finalse' => $se,
+            'dropped' => count((array) ($trace['progress']['droppedscales'] ?? [])),
+            'enginestatus' => $trace['enginestatus']
+                ?? ($this->enginestatus[(int) ($attempt->engineattemptid ?? 0)] ?? null),
+        ];
+        $endcode = reason_catalog::outcome((string) ($trace['stopreason'] ?? ''), $facts);
+        $validity = result_validity::evaluate($endcode);
+        if ($this->onlyattempts === null) {
+            $this->validitycounts['total']++;
+            $this->validitycounts[$validity['valid'] ? 'valid' : 'invalid']++;
+            $this->validitycounts['designstops'] += $validity['criterionstop'] ? 1 : 0;
+            $this->validitycounts['reasons'][$endcode] = ($this->validitycounts['reasons'][$endcode] ?? 0) + 1;
+            // Per strategy and per cell as well: the success of the stop rules is
+            // a share of all sittings, invalid ones included, at every level.
+            // The cell as the overview keys it: tier, strategy, model, variant, stratum, severity.
+            $cell = implode('|', [$this->tier_of_run($run), $run['strategy'], $run['model'], $run['variant'],
+                $run['stratum'], $run['severity']]);
+            foreach (['bystrategy' => (string) $run['strategy'], 'bycell' => $cell] as $level => $key) {
+                $this->validitycounts[$level][$key]['total'] = ($this->validitycounts[$level][$key]['total'] ?? 0) + 1;
+                $this->validitycounts[$level][$key]['designstops'] = ($this->validitycounts[$level][$key]['designstops'] ?? 0)
+                    + ($validity['criterionstop'] ? 1 : 0);
             }
-            $run = $runs[(int) $attempt->runid];
-
-            $truetheta = (float) $person->abilityglobal;
-            $esttheta = (float) ($trace['finaltheta'] ?? 0.0);
-            $se = isset($trace['finalse']) ? (float) $trace['finalse'] : null;
-
-            $rows[] = [
-                'attemptid'   => (int) $attempt->id,
-                'runid'       => (int) $attempt->runid,
-                'personid'    => (int) $attempt->personid,
-                'twinid'      => (string) ($person->twinid ?? ''),
-                'experimentid' => $run['experimentid'],
-                'experiment'  => $run['experiment'],
-                'cellkey'     => $run['cellkey'],
-                'replication' => $run['replication'],
-                'tier'        => $run['tier'],
-                'strategy'    => $run['strategy'],
-                'model'       => $run['model'],
-                'variant'     => $run['variant'],
-                'strength'    => $run['strength'] ?? null,
-                // The budget as one comparable token. A study that varies the
-                // budget needs to filter on the condition, not on two numbers
-                // that only mean something together.
-                'budget'      => $run['budget'] ?? '',
-                'stratum'     => $run['stratum'],
-                'severity'    => $run['severity'],
-                'truetheta'   => $truetheta,
-                'esttheta'    => $esttheta,
-                'error'       => $esttheta - $truetheta,
-                'nitems'      => (int) ($trace['nitems'] ?? 0),
-                'se'          => $se,
-                'stopreason'  => (string) ($trace['stopreason'] ?? ''),
-                // The stop rule succeeded when the engine stopped on a
-                // criterion of its own rather than running out of items.
-                'stopreached' => self::stop_reached((string) ($trace['stopreason'] ?? '')),
-                'runtimems'   => (int) ($attempt->runtimems ?? 0),
-                'items'       => (array) ($trace['items'] ?? []),
-                'profile'     => json_decode((string) $person->profilejson, true) ?: [],
-                'trace'       => $trace,
-            ];
+        }
+        $mode = (string) ($this->filter['validity'] ?? result_validity::VALID);
+        if (
+            ($mode === result_validity::VALID && !$validity['valid'])
+            || ($mode === result_validity::INVALID && $validity['valid'])
+        ) {
+            return;
         }
 
-        return $this->observations = $rows;
+        yield [
+            'nscales'     => count((array) ($trace['scaleabilities'] ?? [])),
+            'attemptid'   => (int) $attempt->id,
+            'runid'       => (int) $attempt->runid,
+            'personid'    => (int) $attempt->personid,
+            'twinid'      => (string) ($person->twinid ?? ''),
+            // The person's own stratum: a run's people need not all share the run's.
+            'personstratum' => (string) ($person->stratum ?? ''),
+            'experimentid' => $run['experimentid'],
+            'experiment'  => $run['experiment'],
+            'cellkey'     => $run['cellkey'],
+            'replication' => $run['replication'],
+            'tier'        => $run['tier'],
+            'strategy'    => $run['strategy'],
+            'model'       => $run['model'],
+            'variant'     => $run['variant'],
+            'strength'    => $run['strength'] ?? null,
+            // The budget as one comparable token. A study that varies the
+            // budget needs to filter on the condition, not on two numbers
+            // that only mean something together.
+            'budget'      => $run['budget'] ?? '',
+            'stratum'     => $run['stratum'],
+            'severity'    => $run['severity'],
+            'truetheta'   => $truetheta,
+            'esttheta'    => $esttheta,
+            'error'       => $esttheta - $truetheta,
+            'nitems'      => (int) ($trace['nitems'] ?? count((array) ($trace['items'] ?? []))),
+            'se'          => $se,
+            'stopreason'  => (string) ($trace['stopreason'] ?? ''),
+            // The stop rule succeeded when the engine stopped on a
+            // criterion of its own rather than running out of items.
+            // A criterion met — what the stop rules' success counts — and,
+            // apart from it, any planned end, the maximum included (#118).
+            'stopreached' => $validity['criterionstop'],
+            'designstopreached' => $validity['designstop'],
+            'enginefinished' => $validity['enginefinished'],
+            'valid' => $validity['valid'],
+            'validityreason' => $validity['reason'],
+            'runtimems'   => (int) ($attempt->runtimems ?? 0),
+            // How it ended, as a code and in words, and where it ended (#106).
+            'endreasoncode'  => $endcode,
+            'storedreasoncode' => $this->endreasons[(int) $attempt->id] ?? '',
+            'endreasonlabel' => $endcode !== ''
+                ? reason_catalog::label($endcode)
+                : '',
+            'finalti'        => isset($trace['information']) && is_numeric($trace['information'])
+                ? (float) $trace['information']
+                : null,
+            'activescalesatend' => isset($trace['progress']['activescales'])
+                ? count((array) $trace['progress']['activescales'])
+                : null,
+            'items'       => (array) ($trace['items'] ?? []),
+        ];
     }
 
     /**
@@ -333,13 +924,63 @@ class results_query {
      * @return array The exposure statistics, including the concentration block.
      */
     public function exposure(): array {
-        $rows = $this->observations();
-        $attempts = [];
-        foreach ($rows as $row) {
-            $attempts[] = ['items' => $row['items']];
+        // Counted as the sittings pass (#99): what metrics::exposure() does,
+        // without holding every sitting and a copy of every item list — that
+        // was most of the global tab's 230 MB for 50,000 sittings.
+        $counts = [];
+        $n = 0;
+        foreach ($this->each_observation() as $row) {
+            $n++;
+            foreach ((array) ($row['items'] ?? []) as $item) {
+                $key = (string) $item;
+                $counts[$key] = ($counts[$key] ?? 0) + 1;
+            }
         }
 
-        return metrics::exposure($attempts, $this->pool_size());
+        return metrics::exposure_from_counts($counts, $n, $this->pool_size());
+    }
+
+    /**
+     * The decoded trace and person profile of one observation.
+     *
+     * Kept out of the observation itself: both are large once PHP has them as
+     * arrays — about 54 kB a row together for a hundred-subscale experiment —
+     * and most of the page computes means that need neither. Read here for the
+     * row being looked at, and cached for that row only, so the tabs that walk
+     * every observation hold one decoded pair at a time instead of all of them.
+     *
+     * @param array $observation One row of {@see observations()}.
+     * @return array{profile: array, trace: array}
+     */
+    public static function detail(array $observation): array {
+        global $DB;
+
+        // Keyed by sitting and person together, and forgotten whenever a new
+        // stream begins. Keyed by the sitting alone, a cache from an earlier
+        // selection answered for a later sitting that happened to reuse the
+        // id — twelve subscale rows went missing in a test run that way.
+        $attemptid = (int) ($observation['attemptid'] ?? 0);
+        $key = $attemptid . ':' . (int) ($observation['personid'] ?? 0);
+        if ($attemptid > 0 && $key === self::$detailfor) {
+            return self::$detail;
+        }
+
+        $trace = [];
+        $profile = [];
+
+        if ($attemptid > 0) {
+            $json = $DB->get_field('local_catquizlab_attempt', 'tracejson', ['id' => $attemptid]);
+            $trace = json_decode((string) $json, true) ?: [];
+        }
+        $personid = (int) ($observation['personid'] ?? 0);
+        if ($personid > 0) {
+            $json = $DB->get_field('local_catquizlab_person', 'profilejson', ['id' => $personid]);
+            $profile = json_decode((string) $json, true) ?: [];
+        }
+
+        self::$detailfor = $key;
+
+        return self::$detail = ['profile' => $profile, 'trace' => $trace];
     }
 
     /**
@@ -376,7 +1017,7 @@ class results_query {
      * @return array[] Rows from {@see local_analysis::rows()}.
      */
     public function subscale_observations(): array {
-        return local_analysis::rows($this->observations(), $this->scale_maps());
+        return local_analysis::rows($this->each_observation(), $this->scale_maps());
     }
 
     /**
@@ -428,15 +1069,21 @@ class results_query {
      * @return array{runs: int, attempts: int, replications: int, dispersion: string, computed: int}
      */
     public function provenance(): array {
-        $rows = $this->observations();
+        // Streamed: provenance is two counts and a set of replications, and
+        // it used to materialise every observation to get them — the reason
+        // the export tab and the JSON download still peaked above 150 MB on
+        // fifty thousand sittings after everything else streamed.
+        $rows = $this->each_observation();
+        $attempts = 0;
         $replications = [];
         foreach ($rows as $row) {
+            $attempts++;
             $replications[$row['replication']] = true;
         }
 
         return [
             'runs'         => count($this->runs()),
-            'attempts'     => count($rows),
+            'attempts'     => $attempts,
             'replications' => count($replications),
             'dispersion'   => self::DISPERSION_CI95,
             'computed'     => time(),

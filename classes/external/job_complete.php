@@ -54,9 +54,16 @@ class job_complete extends external_api {
             'runtimems' => new external_value(PARAM_INT, 'Wall-clock runtime of the attempt in milliseconds.', VALUE_DEFAULT, 0),
             'engineattemptid' => new external_value(PARAM_INT, 'The adaptivequiz_attempt id (0 when unknown).', VALUE_DEFAULT, 0),
             'message'         => new external_value(
-                PARAM_TEXT,
+                PARAM_RAW,
                 'The worker\'s own reason when the attempt did not finish, kept so a retried '
                     . 'attempt says why rather than only showing a rising try count.',
+                VALUE_DEFAULT,
+                ''
+            ),
+            'diagnostics'     => new external_value(
+                PARAM_RAW,
+                'What the browser saw, as JSON: navigation, console and request events, response statuses, '
+                    . 'transport errors, and where the artefacts of a failure were written (#100, #107).',
                 VALUE_DEFAULT,
                 ''
             ),
@@ -71,6 +78,7 @@ class job_complete extends external_api {
      * @param int $runtimems Wall-clock runtime in milliseconds.
      * @param int $engineattemptid The adaptivequiz_attempt id, when known.
      * @param string $message The worker's reason, when the attempt did not finish.
+     * @param string $diagnostics The browser's record, as JSON.
      * @return array The acknowledgement.
      */
     public static function execute(
@@ -78,7 +86,8 @@ class job_complete extends external_api {
         string $status,
         int $runtimems = 0,
         int $engineattemptid = 0,
-        string $message = ''
+        string $message = '',
+        string $diagnostics = ''
     ): array {
         global $DB;
 
@@ -88,6 +97,7 @@ class job_complete extends external_api {
             'runtimems'       => $runtimems,
             'engineattemptid' => $engineattemptid,
             'message'         => $message,
+            'diagnostics'     => $diagnostics,
         ]);
 
         $context = \context_system::instance();
@@ -140,10 +150,27 @@ class job_complete extends external_api {
             // Pull the engine trace into the attempt when possible (no-op without the engine).
             if ($engineattemptid > 0) {
                 attempt_collector::collect($attemptid);
+
+                // The sitting is in this plugin's tables now. The engine's
+                // person parameters for this simulated person go, so the next
+                // person is estimated from their own answers and not from the
+                // people before them — and so the context never fills with
+                // identical abilities whose standard deviation is zero.
+                \local_catquizlab\local\user_provisioner::forget_engine_person_params(
+                    (int) $attempt->runid,
+                    (int) $DB->get_field('local_catquizlab_person', 'moodleuserid', ['id' => $attempt->personid])
+                );
             }
         } else {
             // Requeue with backoff while tries remain, otherwise fail for good.
             attempt_scheduler::retry_or_fail($attemptid);
+
+            // A failed sitting leaves the engine's person parameters behind
+            // too, and they count towards the same prior.
+            \local_catquizlab\local\user_provisioner::forget_engine_person_params(
+                (int) $attempt->runid,
+                (int) $DB->get_field('local_catquizlab_person', 'moodleuserid', ['id' => $attempt->personid])
+            );
         }
 
         // Every terminal attempt asks the lifecycle whether the run is done.
@@ -159,14 +186,48 @@ class job_complete extends external_api {
             );
         }
 
+        // What this execution did, kept where a retry cannot erase it.
+        $logid = \local_catquizlab\local\attempt_history::record(
+            $attemptid,
+            $finished
+                ? \local_catquizlab\local\attempt_history::COLLECTED
+                : \local_catquizlab\local\attempt_history::FAILED,
+            [
+                // The worker is not a parameter of this call; it holds the
+                // lease, which is cleared just below. Read before it goes.
+                'workerid'        => (string) ($attempt->leaseowner ?? ''),
+                'engineattemptid' => (int) ($params['engineattemptid'] ?? 0),
+                'runtimems'       => (int) ($params['runtimems'] ?? 0),
+                'detail'          => (string) ($params['message'] ?? ''),
+                'tryno'           => (int) $attempt->tries,
+                // The browser's own record, kept with the diagnosis (#100).
+                'extra'           => (array) (json_decode((string) ($params['diagnostics'] ?? ''), true) ?: []),
+            ]
+        );
+
+        // A failure documented in moodledata beside the worker's artefacts,
+        // with the run's design, the reason code and a log excerpt (#107). A
+        // finished sitting is documented once its stop reason is collected.
+        if (!$finished && $logid > 0) {
+            \local_catquizlab\local\artefact_store::document(
+                $attemptid,
+                \local_catquizlab\local\attempt_history::FAILED,
+                (string) $DB->get_field('local_catquizlab_attemptlog', 'reasoncode', ['id' => $logid]),
+                (string) ($params['message'] ?? '')
+            );
+        }
+
         // The lease is over either way: the attempt is no longer being played.
         $DB->set_field('local_catquizlab_attempt', 'leaseowner', null, ['id' => $attemptid]);
         $DB->set_field('local_catquizlab_attempt', 'leaseexpires', 0, ['id' => $attemptid]);
 
         // A run failing the same way over and over does not improve by being
-        // retried; pausing it keeps the queue free for work that can succeed.
+        // retried. The breaker holds it as failed with the cause, blocks the
+        // experiment, and keeps the remaining sittings out of the pool — this is
+        // the path the worker actually reports through, so the breaker has to
+        // be here and not only on the scheduler's retry path.
         if (!$finished) {
-            \local_catquizlab\local\run_lifecycle::check_failure_streak((int) $attempt->runid);
+            \local_catquizlab\local\circuit_breaker::check((int) $attempt->runid);
         }
 
         \local_catquizlab\local\run_lifecycle::attempt_finished((int) $attempt->runid);
@@ -219,7 +280,10 @@ class job_complete extends external_api {
     public static function execute_returns(): external_single_structure {
         return new external_single_structure([
             'acknowledged' => new external_value(PARAM_BOOL, 'True when the report was accepted.'),
-            'message'      => new external_value(PARAM_TEXT, 'Human-readable status.'),
+            // Not PARAM_TEXT: the message can carry a replayed exception with
+            // angle brackets and newlines, and the input side already had to
+            // be widened for exactly that.
+            'message'      => new external_value(PARAM_RAW, 'Human-readable status.'),
         ]);
     }
 }

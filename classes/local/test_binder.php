@@ -40,7 +40,7 @@ namespace local_catquizlab\local;
  */
 class test_binder {
     /** @var string The component under which adaptivequiz CAT tests are registered. */
-    protected const TEST_COMPONENT = 'mod_adaptivequiz';
+    public const TEST_COMPONENT = 'mod_adaptivequiz';
 
     /**
      * Bind a run to an existing adaptivequiz CAT test.

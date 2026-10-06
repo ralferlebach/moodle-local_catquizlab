@@ -53,12 +53,32 @@ class pipeline_tick extends \core\task\scheduled_task {
      * @return void
      */
     public function execute(): void {
+        global $DB;
+
         // Announce which task this is, and continue the id of the click that
         // queued it: a failure inside a task otherwise reads as a failure from
         // nowhere.
         // A scheduled task starts its own sequence: nothing queued it, so
         // there is no id to continue.
         \local_catquizlab\local\debug_trace::enter_task('\\local_catquizlab\\task\\pipeline_tick');
+
+        // The switch comes first. A disabled plugin that still advanced its
+        // execution queue was starting experiments while saying it was off,
+        // which is the one thing a switch must not do.
+        if (!get_config('local_catquizlab', 'enabled')) {
+            return;
+        }
+
+        // Execution artefacts past their retention (#107).
+        \local_catquizlab\local\artefact_store::cleanup();
+
+        // Old lifecycle entries go by the same retention as the debug log. They
+        // were kept for ever: a year of runs is a table nobody reads and every
+        // log page has to filter through.
+        $keep = \local_catquizlab\local\debug_trace::retention();
+        if ($keep > 0) {
+            $DB->delete_records_select('local_catquizlab_runlog', 'timecreated < ?', [time() - $keep]);
+        }
 
         // The execution queue moves here, because this is the thing that runs
         // by itself. Somebody who queued five experiments before going home
@@ -67,10 +87,6 @@ class pipeline_tick extends \core\task\scheduled_task {
         $advanced = \local_catquizlab\local\execution_queue::advance();
         if ($advanced['started'] > 0) {
             mtrace('local_catquizlab: started queued experiment ' . $advanced['started'] . '.');
-        }
-
-        if (!get_config('local_catquizlab', 'enabled')) {
-            return;
         }
 
         // Dead workers first, then their claims, then the timeout fallback.
@@ -95,9 +111,34 @@ class pipeline_tick extends \core\task\scheduled_task {
             mtrace("local_catquizlab: reclaimed {$reclaimed} stale attempt(s).");
         }
 
+        // Old log entries, once an hour's worth of ticks. Cheap, and it keeps
+        // the debug store from growing without a ceiling.
+        if ((int) date('i') < 5) {
+            $pruned = \local_catquizlab\local\log_view::prune();
+            if ($pruned > 0) {
+                mtrace("local_catquizlab: removed {$pruned} old log entries.");
+            }
+        }
+
         $result = worker_launcher::launch_pool(worker_launcher::config_from_settings());
-        if ($result !== null) {
+
+        // Kept where the interface can read it. The tick's output goes to
+        // cron's own log, which the person looking at a page that says nothing
+        // is happening cannot see — and "nothing is happening" is exactly when
+        // they need to know what the tick decided and why.
+        set_config('lastdispatch', json_encode([
+            'time'     => time(),
+            'launched' => (int) ($result['launched'] ?? 0),
+            'reason'   => (string) ($result['reason'] ?? ''),
+            'claimable' => (int) \local_catquizlab\local\attempt_scheduler::queue_breakdown()['claimable'],
+        ]), 'local_catquizlab');
+
+        if ($result === null) {
+            mtrace('local_catquizlab: worker pool not dispatched.');
+        } else if ((int) $result['launched'] > 0) {
             mtrace("local_catquizlab: dispatched worker pool ({$result['launched']}).");
+        } else if ((string) $result['reason'] !== '') {
+            mtrace("local_catquizlab: no worker started: {$result['reason']}.");
         }
     }
 }

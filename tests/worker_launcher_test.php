@@ -123,7 +123,16 @@ final class worker_launcher_test extends \advanced_testcase {
      * @return void
      */
     public function test_launch_pool_guarded(): void {
-        $this->assertNull(worker_launcher::launch_pool(['enabled' => false]));
-        $this->assertNull(worker_launcher::launch_pool(['enabled' => true, 'concurrency' => 2]));
+        // Never null: null was what the tick printed nothing about, every five
+        // minutes, while the page said "stalled". A launch that cannot happen
+        // names what it is missing.
+        $off = worker_launcher::launch_pool(['enabled' => false]);
+        $this->assertSame(0, $off['launched']);
+        $this->assertStringContainsString('worker_exec_enabled', $off['reason']);
+
+        $bare = worker_launcher::launch_pool(['enabled' => true, 'concurrency' => 2]);
+        $this->assertSame(0, $bare['launched']);
+        $this->assertStringContainsString('worker_token', $bare['reason']);
+        $this->assertStringContainsString('worker_node_path', $bare['reason']);
     }
 }

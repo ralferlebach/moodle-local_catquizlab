@@ -403,6 +403,202 @@ function xmldb_local_catquizlab_upgrade($oldversion): bool {
         upgrade_plugin_savepoint(true, 2026091710, 'local', 'catquizlab');
     }
 
+    if ($oldversion < 2026091902) {
+        // The pipeline task used to ship disabled, and Moodle re-applies the
+        // shipped default whenever a plugin upgrade rewrites the task table.
+        // Every upgrade therefore switched the pipeline off on installations
+        // that had it on. The task ships enabled now; this restores it on any
+        // installation whose plugin is enabled, which is the state they had.
+        if (get_config('local_catquizlab', 'enabled')) {
+            $task = $DB->get_record('task_scheduled', [
+                'classname' => '\\local_catquizlab\\task\\pipeline_tick',
+            ]);
+            if ($task && (int) $task->disabled === 1) {
+                $DB->set_field('task_scheduled', 'disabled', 0, ['id' => $task->id]);
+            }
+        }
+
+        upgrade_plugin_savepoint(true, 2026091902, 'local', 'catquizlab');
+    }
+
+    if ($oldversion < 2026091903) {
+        // Room for the stop reason beside the state: "stopped:stop-requested"
+        // is longer than the twenty characters the column had.
+        $table = new xmldb_table('local_catquizlab_worker');
+        $field = new xmldb_field('workerstate', XMLDB_TYPE_CHAR, '40', null, null, null, null, 'currentattempt');
+        if ($dbman->field_exists($table, $field)) {
+            $dbman->change_field_precision($table, $field);
+        }
+
+        // Where the circuit breaker keeps the cause. It wrote lasterror to the
+        // run since 0.6.63, and Moodle dropped the field silently because the
+        // column did not exist — so the cause was never stored on the run and
+        // "Division by zero (×10)" was read from the attempts each time.
+        $table = new xmldb_table('local_catquizlab_run');
+        $field = new xmldb_field('lasterror', XMLDB_TYPE_TEXT, null, null, null, null, null);
+        if (!$dbman->field_exists($table, $field)) {
+            $dbman->add_field($table, $field);
+        }
+
+        upgrade_plugin_savepoint(true, 2026091903, 'local', 'catquizlab');
+    }
+
+    if ($oldversion < 2026092302) {
+        // Indexes the queue needs once it is large. On fifty thousand queued
+        // sittings a claim took 4.8 seconds and a live poll 6.9, because every
+        // question about "queued and due" or "this person is busy" scanned the
+        // whole table. With six workers claiming and a browser polling every
+        // two seconds, that is the server's whole capacity spent on finding
+        // work rather than doing it.
+        $table = new xmldb_table('local_catquizlab_attempt');
+        // Counting the queue groups by run within one status, so the status
+        // comes first: the other way round the database reads every row to
+        // answer "how many are queued, per run".
+        $indexes = [
+            'status-nextruntime'  => ['status', 'nextruntime'],
+            'personid-status'     => ['personid', 'status'],
+            'status-leaseexpires' => ['status', 'leaseexpires'],
+            'status-runid'        => ['status', 'runid'],
+        ];
+        foreach ($indexes as $name => $fields) {
+            $index = new xmldb_index($name, XMLDB_INDEX_NOTUNIQUE, $fields);
+            if (!$dbman->index_exists($table, $index)) {
+                $dbman->add_index($table, $index);
+            }
+        }
+
+        upgrade_plugin_savepoint(true, 2026092302, 'local', 'catquizlab');
+    }
+
+    if ($oldversion < 2026092310) {
+        // The history of a sitting's executions. A retry cleared tries,
+        // nextruntime and lasterror, so the diagnosis of the try before it was
+        // gone — exactly when somebody needs it, which is after a retry did not
+        // help either.
+        $table = new xmldb_table('local_catquizlab_attemptlog');
+        if (!$dbman->table_exists($table)) {
+            $table->add_field('id', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, XMLDB_SEQUENCE);
+            $table->add_field('attemptid', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL);
+            $table->add_field('runid', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL);
+            $table->add_field('tryno', XMLDB_TYPE_INTEGER, '4', null, XMLDB_NOTNULL, null, '0');
+            $table->add_field('outcome', XMLDB_TYPE_CHAR, '20', null, XMLDB_NOTNULL);
+            $table->add_field('workerid', XMLDB_TYPE_CHAR, '100');
+            $table->add_field('engineattemptid', XMLDB_TYPE_INTEGER, '10');
+            $table->add_field('runtimems', XMLDB_TYPE_INTEGER, '10');
+            $table->add_field('detail', XMLDB_TYPE_TEXT);
+            $table->add_field('timecreated', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL);
+            $table->add_key('primary', XMLDB_KEY_PRIMARY, ['id']);
+            $table->add_index('attemptid-id', XMLDB_INDEX_NOTUNIQUE, ['attemptid', 'id']);
+            $table->add_index('runid-outcome', XMLDB_INDEX_NOTUNIQUE, ['runid', 'outcome']);
+            $dbman->create_table($table);
+        }
+
+        upgrade_plugin_savepoint(true, 2026092310, 'local', 'catquizlab');
+    }
+
+    if ($oldversion < 2026092311) {
+        // What the log filters need to be more than free text: millisecond
+        // time, so two entries of the same second keep their order, and the
+        // sitting, worker and experiment an entry is about, as columns rather
+        // than as words inside a JSON blob that only a text search could find.
+        $debug = new xmldb_table('local_catquizlab_debug');
+        $fields = [
+            new xmldb_field('timecreatedms', XMLDB_TYPE_INTEGER, '13'),
+            new xmldb_field('attemptid', XMLDB_TYPE_INTEGER, '10'),
+            new xmldb_field('workerid', XMLDB_TYPE_CHAR, '100'),
+            new xmldb_field('experimentid', XMLDB_TYPE_INTEGER, '10'),
+        ];
+        foreach ($fields as $field) {
+            if (!$dbman->field_exists($debug, $field)) {
+                $dbman->add_field($debug, $field);
+            }
+        }
+        foreach (['workerid' => ['workerid'], 'attemptid' => ['attemptid']] as $name => $fields) {
+            $index = new xmldb_index($name, XMLDB_INDEX_NOTUNIQUE, $fields);
+            if (!$dbman->index_exists($debug, $index)) {
+                $dbman->add_index($debug, $index);
+            }
+        }
+
+        $runlog = new xmldb_table('local_catquizlab_runlog');
+        $field = new xmldb_field('timecreatedms', XMLDB_TYPE_INTEGER, '13');
+        if (!$dbman->field_exists($runlog, $field)) {
+            $dbman->add_field($runlog, $field);
+        }
+
+        upgrade_plugin_savepoint(true, 2026092311, 'local', 'catquizlab');
+    }
+
+    if ($oldversion < 2026092706) {
+        // The diagnosis of an execution in fields, and the request it came in
+        // on. A failure used to be one line of text: the phase, the page, the
+        // error code and the engine's exception were all in it, and none of
+        // them could be filtered, counted or linked.
+        $table = new xmldb_table('local_catquizlab_attemptlog');
+        $fields = [
+            new xmldb_field('diagnosis', XMLDB_TYPE_TEXT),
+            new xmldb_field('correlationid', XMLDB_TYPE_CHAR, '64'),
+        ];
+        foreach ($fields as $field) {
+            if (!$dbman->field_exists($table, $field)) {
+                $dbman->add_field($table, $field);
+            }
+        }
+
+        upgrade_plugin_savepoint(true, 2026092706, 'local', 'catquizlab');
+    }
+
+    if ($oldversion < 2026092806) {
+        // A normalised reason per execution (#107): countable and filterable
+        // where the reported text is neither.
+        $table = new xmldb_table('local_catquizlab_attemptlog');
+        $field = new xmldb_field('reasoncode', XMLDB_TYPE_CHAR, '40');
+        if (!$dbman->field_exists($table, $field)) {
+            $dbman->add_field($table, $field);
+        }
+        $index = new xmldb_index('runid-reasoncode', XMLDB_INDEX_NOTUNIQUE, ['runid', 'reasoncode']);
+        if (!$dbman->index_exists($table, $index)) {
+            $dbman->add_index($table, $index);
+        }
+
+        upgrade_plugin_savepoint(true, 2026092806, 'local', 'catquizlab');
+    }
+
+    if ($oldversion < 2026100100) {
+        // One claim per twin and run (#116). Existing people are left as they
+        // are — duplicates included, which only an operator may remove — but
+        // every (run, twin) already present is claimed, so that none of them
+        // can be materialised again.
+        $table = new xmldb_table('local_catquizlab_twinclaim');
+        if (!$dbman->table_exists($table)) {
+            $table->add_field('id', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, XMLDB_SEQUENCE, null);
+            $table->add_field('runid', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, null);
+            $table->add_field('twinid', XMLDB_TYPE_CHAR, '64', null, XMLDB_NOTNULL, null, null);
+            $table->add_field('personid', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, '0');
+            $table->add_field('timecreated', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, '0');
+            $table->add_key('primary', XMLDB_KEY_PRIMARY, ['id']);
+            $table->add_key('runid', XMLDB_KEY_FOREIGN, ['runid'], 'local_catquizlab_run', ['id']);
+            $table->add_index('runid-twinid', XMLDB_INDEX_UNIQUE, ['runid', 'twinid']);
+            $dbman->create_table($table);
+        }
+        $groups = $DB->get_recordset_sql(
+            "SELECT runid, twinid, MIN(id) AS personid
+               FROM {local_catquizlab_person}
+              WHERE twinid IS NOT NULL AND twinid <> ''
+           GROUP BY runid, twinid"
+        );
+        foreach ($groups as $group) {
+            if (!$DB->record_exists('local_catquizlab_twinclaim', ['runid' => $group->runid, 'twinid' => $group->twinid])) {
+                $DB->insert_record('local_catquizlab_twinclaim', (object) [
+                    'runid' => $group->runid, 'twinid' => $group->twinid,
+                    'personid' => $group->personid, 'timecreated' => time(),
+                ]);
+            }
+        }
+        $groups->close();
+        upgrade_plugin_savepoint(true, 2026100100, 'local', 'catquizlab');
+    }
+
     return true;
 }
 

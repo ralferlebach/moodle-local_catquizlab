@@ -44,7 +44,13 @@ class system_health {
     public const FAIL = 'fail';
 
     /** @var int The Node major version the worker needs. */
-    public const NODE_MAJOR = 20;
+    /**
+     * The oldest Node the worker runs on: Puppeteer 24's own floor.
+     *
+     * It was 20, which refused the Node Ubuntu 24.04 ships (18.19) with a
+     * red cross and no way forward, although nothing in the worker needs more.
+     */
+    public const NODE_MAJOR = 18;
 
     /**
      * The whole health picture.
@@ -299,7 +305,10 @@ class system_health {
     public static function worker_modules_installed(): bool {
         global $CFG;
 
-        return is_dir($CFG->dirroot . '/local/catquizlab/worker/node_modules/puppeteer');
+        // Either place: the dataroot is where they are installed now, and the
+        // plugin directory is where a developer's checkout still has them.
+        return is_dir(worker_launcher::runtime_dir() . '/node_modules/puppeteer')
+            || is_dir($CFG->dirroot . '/local/catquizlab/worker/node_modules/puppeteer');
     }
 
     /**

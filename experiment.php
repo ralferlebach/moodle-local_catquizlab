@@ -86,9 +86,7 @@ if ($action === 'delete' && $id > 0) {
 
     if (trim($typed) !== trim($preview['name'])) {
         $lines = [];
-        foreach ($preview['counts'] as $label => $count) {
-            $lines[] = $count . ' ' . get_string('purge:count' . $label, $component);
-        }
+        $lines[] = \local_catquizlab\local\purger::counts_line($preview['counts']);
 
         $message = html_writer::tag('p', get_string('purge:typename', $component, (object) [
             'counts' => implode(', ', $lines) ?: '-',
@@ -146,9 +144,7 @@ if ($action === 'delete' && $id > 0) {
     }
 
     $parts = [];
-    foreach ($result['removed'] as $label => $count) {
-        $parts[] = $count . ' ' . $label;
-    }
+    $parts[] = \local_catquizlab\local\purger::counts_line($result['removed']);
 
     redirect($manageurl, get_string('purge:done', $component, implode(', ', $parts) ?: '-'));
 }
@@ -296,8 +292,17 @@ if ($form->is_cancelled()) {
 $preview = null;
 $validation = null;
 $notes = [];
+$frozennotice = '';
 
 if ($data = $form->get_data()) {
+    // Every submission of a form is recorded with what was entered (#90),
+    // without the session key and anything that is a password or a token.
+    \local_catquizlab\local\debug_trace::record(
+        \local_catquizlab\local\debug_trace::UI,
+        'experiment_form_submitted',
+        \local_catquizlab\local\debug_trace::submitted((array) $data),
+        'ok'
+    );
     require_capability('local/catquizlab:edit', $context);
 
     $submitted = experiment_form::to_definition((array) $data);
@@ -319,8 +324,27 @@ if ($data = $form->get_data()) {
 
     // Remarks that are neither defects nor doubts: an experiment with runs is
     // read-only, and a cited building block is worth naming.
-    if (experiment_service::run_count($id) > 0) {
-        $notes[] = get_string('editor:hasruns', $component);
+    // An experiment with runs is read-only, and says so before anything is
+    // typed (#104), with the one action that does what the edit was for: a
+    // copy with the same definition, open for changes, from which a new sweep
+    // is created. The existing runs stay as they are.
+    if (($runcount = experiment_service::run_count($id)) > 0) {
+        $form->freeze_for_runs();
+        // The button beside the notice, not inside it: a notification's text is
+        // cleaned, and cleaning removes forms — the button with them.
+        $frozennotice = $OUTPUT->notification(
+            get_string('editor:frozen', $component, $runcount),
+            \core\output\notification::NOTIFY_WARNING
+        );
+        $duplicatebutton = new \core\output\single_button(
+            new moodle_url('/local/catquizlab/experiment.php', [
+                'id' => $id, 'action' => 'duplicate', 'sesskey' => sesskey(),
+            ]),
+            get_string('editor:duplicateandchange', $component),
+            'post',
+            \core\output\single_button::BUTTON_PRIMARY
+        );
+        $frozennotice .= \html_writer::div($OUTPUT->render($duplicatebutton), 'mb-3');
     }
     $normalisedfornotes = $validation['normalised'];
     foreach (['poolpreset' => 'preset:kindpool', 'personspreset' => 'preset:kindpersons'] as $field => $label) {
@@ -395,9 +419,16 @@ $previewcontext = false;
 if ($preview !== null && $preview['runs'] > 0) {
     $previewcontext = [
         'cells'        => $preview['cells'],
+        'budgetrows'   => $preview['budgetrows'] ?? [],
+        'hasbudgetrows' => !empty($preview['budgetrows']),
         'replications' => $preview['replications'],
         'runs'         => $preview['runs'],
         'attempts'     => $preview['attempts'],
+        // Twins, run-persons and sittings, apart (#117).
+        'twins'        => $preview['twins'] ?? null,
+        'twinsvary'    => !empty($preview['twinsvary']),
+        'runpersons'   => $preview['runpersons'] ?? 0,
+        'sittings'     => $preview['sittings'] ?? 0,
         'large'        => $preview['large'],
         'cansweep'     => has_capability('local/catquizlab:execute', $context),
         // What would stop a start, shown next to the button rather than after
@@ -431,7 +462,7 @@ if ($id > 0 && has_capability('local/catquizlab:export', $context)) {
 
 echo $OUTPUT->render_from_template('local_catquizlab/experiment_editor', [
     'sections'   => $sections,
-    'form'       => $form->render(),
+    'form'       => $frozennotice . $form->render(),
     'validation' => $validationcontext,
     'preview'    => $previewcontext,
     'exchange'   => $exchangecontext,

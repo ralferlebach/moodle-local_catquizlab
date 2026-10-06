@@ -37,6 +37,17 @@ use local_catquizlab\local\registry;
  */
 final class experiment_runner_test extends \advanced_testcase {
     /**
+     * Forget any readiness a test declared: it is a static, and the next test
+     * class expects the wizard to compute its answer.
+     *
+     * @return void
+     */
+    protected function tearDown(): void {
+        \local_catquizlab\local\setup_wizard::assume_ready_for_testing(null);
+        parent::tearDown();
+    }
+
+    /**
      * An experiment with nothing built from it is a draft, and can be prepared.
      *
      * @return void
@@ -173,6 +184,10 @@ final class experiment_runner_test extends \advanced_testcase {
         $this->resetAfterTest();
         $this->setAdminUser();
 
+        // The queue moves only on an installation that can run: this test has
+        // no browser to install, so it declares the readiness it would have.
+        \local_catquizlab\local\setup_wizard::assume_ready_for_testing(true);
+
         /** @var \local_catquizlab_generator $generator */
         $generator = $this->getDataGenerator()->get_plugin_generator('local_catquizlab');
 
@@ -232,6 +247,10 @@ final class experiment_runner_test extends \advanced_testcase {
         global $DB;
         $this->resetAfterTest();
         $this->setAdminUser();
+
+        // The queue moves only on an installation that can run: this test has
+        // no browser to install, so it declares the readiness it would have.
+        \local_catquizlab\local\setup_wizard::assume_ready_for_testing(true);
 
         /** @var \local_catquizlab_generator $generator */
         $generator = $this->getDataGenerator()->get_plugin_generator('local_catquizlab');

@@ -103,7 +103,10 @@ class person_generator {
         mt_srand($seed);
         $globals = [];
         for ($i = 1; $i <= $params['count']; $i++) {
-            $globals[$i] = self::normal($params['abilitymean'], $params['abilitysd']);
+            // The experiment's distribution and range (#102): truncated draws
+            // are drawn again, never clamped; a normal distribution may leave
+            // the range, and that is counted and reported.
+            $globals[$i] = ability_distribution::draw($params['distribution']);
         }
 
         mt_srand($deviationseed);
@@ -150,6 +153,26 @@ class person_generator {
     }
 
     /**
+     * The category and subscale deviation SDs in force for a definition (#102).
+     *
+     * Set explicitly in persons.variation, or the stratum's base scaled by the
+     * severity factor — the same rule the generator draws with.
+     *
+     * @param array $definition The definition.
+     * @return array{category: float, subscale: float, explicit: bool}
+     */
+    public static function deviation_sds(array $definition): array {
+        $params = self::read_params($definition);
+        $variation = (array) ($definition['persons']['variation'] ?? []);
+
+        return [
+            'category' => (float) $params['catsd'],
+            'subscale' => (float) $params['subsd'],
+            'explicit' => isset($variation['category']) || isset($variation['subscale']),
+        ];
+    }
+
+    /**
      * The multiplier a severity level applies to the stratum's base deviation.
      *
      * @param string $severity One of none, mild, medium, strong.
@@ -176,7 +199,27 @@ class person_generator {
      * @return int The number of persons written.
      */
     public static function generate_and_persist(int $runid, array $definition, int $seed, array $options = []): int {
-        return self::persist($runid, self::generate($definition, $seed, $options));
+        $persons = self::generate($definition, $seed, $options);
+
+        // Not generated unnoticed (#102): a normal distribution may leave the
+        // range the scales are provisioned with, and the run says how often.
+        $distribution = ability_distribution::of($definition);
+        $outside = 0;
+        foreach ($persons as $person) {
+            if (!ability_distribution::inside($distribution, (float) $person['abilityglobal'])) {
+                $outside++;
+            }
+        }
+        if ($outside > 0) {
+            run_log::record($runid, run_log::ABILITIES_OUTSIDE, [
+                'count'        => $outside,
+                'of'           => count($persons),
+                'range'        => ability_distribution::range_text($distribution),
+                'distribution' => ability_distribution::describe($distribution),
+            ]);
+        }
+
+        return self::persist($runid, $persons);
     }
 
     /**
@@ -193,7 +236,8 @@ class person_generator {
         $count = 0;
         $transaction = $DB->start_delegated_transaction();
         foreach ($persons as $person) {
-            $DB->insert_record('local_catquizlab_person', (object) [
+            $twinid = (string) ($person['twinid'] ?? '');
+            $record = (object) [
                 'runid'         => $runid,
                 'twinid'        => (string) ($person['twinid'] ?? ''),
                 'twinindex'     => (int) ($person['twinindex'] ?? 0),
@@ -207,12 +251,60 @@ class person_generator {
                 'moodleuserid'  => null,
                 'timecreated'   => $now,
                 'timemodified'  => $now,
+            ];
+            if ($twinid === '') {
+                $DB->insert_record('local_catquizlab_person', $record);
+                $count++;
+                continue;
+            }
+            // Each twin once in a run (#116). Claimed first: the claim table's
+            // unique index refuses a second claim of the same twin, whichever
+            // process makes it, so not even two setups at once can store it twice.
+            $claim = $DB->get_record('local_catquizlab_twinclaim', ['runid' => $runid, 'twinid' => $twinid]);
+            if ($claim) {
+                // Provisioned before: the same person is used again — if it is
+                // the same person. Ground truth is never changed silently.
+                $existing = $DB->get_record('local_catquizlab_person', ['id' => $claim->personid]);
+                if ($existing && !self::same_truth($existing, $record)) {
+                    throw new \moodle_exception('twinmismatch', 'local_catquizlab', '', (object) [
+                        'twin' => $twinid, 'run' => $runid,
+                    ]);
+                }
+                $count++;
+                continue;
+            }
+            $claimid = $DB->insert_record('local_catquizlab_twinclaim', (object) [
+                'runid' => $runid, 'twinid' => $twinid, 'personid' => 0, 'timecreated' => $now,
             ]);
+            $personid = $DB->insert_record('local_catquizlab_person', $record);
+            $DB->set_field('local_catquizlab_twinclaim', 'personid', $personid, ['id' => $claimid]);
             $count++;
         }
         $transaction->allow_commit();
 
         return $count;
+    }
+
+    /**
+     * Whether a stored person is the one about to be stored: the same ground truth.
+     *
+     * @param \stdClass $stored The stored person.
+     * @param \stdClass $new The person generated now.
+     * @return bool
+     */
+    protected static function same_truth(\stdClass $stored, \stdClass $new): bool {
+        return abs((float) $stored->abilityglobal - (float) $new->abilityglobal) < 1e-9
+            && json_decode((string) $stored->profilejson, true) == json_decode((string) $new->profilejson, true);
+    }
+
+    /**
+     * How many people a run of this definition is to have (#116).
+     *
+     * @param array $definition The definition.
+     * @return int
+     */
+    public static function planned_count(array $definition): int {
+        return (int) self::read_params($definition)['count'];
     }
 
     /**
@@ -251,6 +343,7 @@ class person_generator {
         $subsd = isset($variation['subscale']) ? (float) $variation['subscale'] : $base[1] * $factor;
 
         return [
+            'distribution'  => ability_distribution::of($definition),
             'count'       => (int) $persons['count'],
             'stratum'     => $stratum,
             'severity'    => $severity,
@@ -279,7 +372,7 @@ class person_generator {
 
         $categories = [];
         for ($c = 1; $c <= $params['categories']; $c++) {
-            $ctheta = $global + ($params['catsd'] > 0 ? self::normal(0.0, $params['catsd']) : 0.0);
+            $ctheta = ability_distribution::deviate($params['distribution'], $global, (float) $params['catsd']);
             $subscales = [];
             for ($s = 1; $s <= $params['subscales']; $s++) {
                 // The chaotic stratum is a stress condition, not just a noisier
@@ -289,7 +382,7 @@ class person_generator {
                 // hierarchical sigma, as before, kept the structure intact and
                 // so never actually stressed that assumption.
                 $anchor = $independent ? $global : $ctheta;
-                $stheta = $anchor + ($params['subsd'] > 0 ? self::normal(0.0, $params['subsd']) : 0.0);
+                $stheta = ability_distribution::deviate($params['distribution'], $anchor, (float) $params['subsd']);
                 $subscales[] = ['index' => $s, 'theta' => round($stheta, 5)];
             }
             $categories[] = ['index' => $c, 'theta' => round($ctheta, 5), 'subscales' => $subscales];

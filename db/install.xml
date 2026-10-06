@@ -41,6 +41,7 @@
         <FIELD NAME="usermodified" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
         <FIELD NAME="timecreated" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
         <FIELD NAME="timemodified" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
+        <FIELD NAME="lasterror" TYPE="text" NOTNULL="false" SEQUENCE="false" COMMENT="Why the run was last held: the cause the circuit breaker found, for the status card and the recovery advisor."/>
       </FIELDS>
       <KEYS>
         <KEY NAME="primary" TYPE="primary" FIELDS="id"/>
@@ -153,6 +154,22 @@
         <INDEX NAME="moodleuserid" UNIQUE="false" FIELDS="moodleuserid"/>
       </INDEXES>
     </TABLE>
+    <TABLE NAME="local_catquizlab_twinclaim" COMMENT="One claim per digital twin and run: the database's guarantee that a twin is materialised in a run once, however often or concurrently its people are provisioned (#116).">
+      <FIELDS>
+        <FIELD NAME="id" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="true"/>
+        <FIELD NAME="runid" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="false" COMMENT="The run."/>
+        <FIELD NAME="twinid" TYPE="char" LENGTH="64" NOTNULL="true" SEQUENCE="false" COMMENT="The twin's comparison key."/>
+        <FIELD NAME="personid" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false" COMMENT="The person row that embodies the twin in the run."/>
+        <FIELD NAME="timecreated" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
+      </FIELDS>
+      <KEYS>
+        <KEY NAME="primary" TYPE="primary" FIELDS="id"/>
+        <KEY NAME="runid" TYPE="foreign" FIELDS="runid" REFTABLE="local_catquizlab_run" REFFIELDS="id"/>
+      </KEYS>
+      <INDEXES>
+        <INDEX NAME="runid-twinid" UNIQUE="true" FIELDS="runid, twinid"/>
+      </INDEXES>
+    </TABLE>
 
     <TABLE NAME="local_catquizlab_attempt" COMMENT="One simulated CAT attempt played through the real mod_adaptivequiz UI: link to the engine attempt plus the collected trace.">
       <FIELDS>
@@ -178,6 +195,10 @@
       </KEYS>
       <INDEXES>
         <INDEX NAME="runid-status" UNIQUE="false" FIELDS="runid, status"/>
+        <INDEX NAME="status-nextruntime" UNIQUE="false" FIELDS="status, nextruntime"/>
+        <INDEX NAME="personid-status" UNIQUE="false" FIELDS="personid, status"/>
+        <INDEX NAME="status-leaseexpires" UNIQUE="false" FIELDS="status, leaseexpires"/>
+        <INDEX NAME="status-runid" UNIQUE="false" FIELDS="status, runid"/>
       </INDEXES>
     </TABLE>
 
@@ -275,7 +296,7 @@
         <FIELD NAME="jobsdone" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
         <FIELD NAME="lasterror" TYPE="text" NOTNULL="false" SEQUENCE="false"/>
         <FIELD NAME="currentattempt" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false" COMMENT="The attempt this worker is playing. A worker that is busy and one that is stuck look alike without it."/>
-        <FIELD NAME="workerstate" TYPE="char" LENGTH="20" NOTNULL="false" SEQUENCE="false" COMMENT="What the worker says it is doing: working, idle or stopping."/>
+        <FIELD NAME="workerstate" TYPE="char" LENGTH="40" NOTNULL="false" SEQUENCE="false" COMMENT="What the worker says it is doing: working, idle or stopping."/>
         <FIELD NAME="stoprequested" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false" COMMENT="When somebody asked it to finish its attempt and exit. Killing the process would strand the claim."/>
         <FIELD NAME="heartbeat" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false" COMMENT="Last sign of life. A worker that stops reporting is crashed, not merely slow."/>
         <FIELD NAME="timecreated" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
@@ -305,6 +326,7 @@
         <FIELD NAME="taskclassname" TYPE="char" LENGTH="120" NOTNULL="false" SEQUENCE="false" COMMENT="Which task class, so a failure names the thing that failed."/>
         <FIELD NAME="userid" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false" COMMENT="Who caused it, where a person did."/>
         <FIELD NAME="timecreated" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="false"/>
+        <FIELD NAME="timecreatedms" TYPE="int" LENGTH="13" NOTNULL="false" SEQUENCE="false" COMMENT="When, in milliseconds: two entries of one second are ordered by this."/>
       </FIELDS>
       <KEYS>
         <KEY NAME="primary" TYPE="primary" FIELDS="id"/>
@@ -327,6 +349,10 @@
         <FIELD NAME="taskclassname" TYPE="char" LENGTH="120" NOTNULL="false" SEQUENCE="false" COMMENT="The task that was running, where one was."/>
         <FIELD NAME="userid" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
         <FIELD NAME="timecreated" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="false"/>
+        <FIELD NAME="timecreatedms" TYPE="int" LENGTH="13" NOTNULL="false" SEQUENCE="false" COMMENT="When, in milliseconds: two entries of one second are ordered by this."/>
+        <FIELD NAME="attemptid" TYPE="int" LENGTH="10" NOTNULL="false" SEQUENCE="false" COMMENT="The sitting, where the entry is about one."/>
+        <FIELD NAME="workerid" TYPE="char" LENGTH="100" NOTNULL="false" SEQUENCE="false" COMMENT="The worker, where the entry is about one."/>
+        <FIELD NAME="experimentid" TYPE="int" LENGTH="10" NOTNULL="false" SEQUENCE="false" COMMENT="The experiment, where known."/>
       </FIELDS>
       <KEYS>
         <KEY NAME="primary" TYPE="primary" FIELDS="id"/>
@@ -354,6 +380,31 @@
       <INDEXES>
         <INDEX NAME="statepos" UNIQUE="false" FIELDS="state, position"/>
         <INDEX NAME="experimentid" UNIQUE="false" FIELDS="experimentid"/>
+      </INDEXES>
+    </TABLE>
+    <TABLE NAME="local_catquizlab_attemptlog" COMMENT="One row per execution of a test sitting: what was tried, by which worker, and how it ended. Append-only, so a retry does not erase the diagnosis of the try before it.">
+      <FIELDS>
+        <FIELD NAME="id" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="true"/>
+        <FIELD NAME="attemptid" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="false" COMMENT="The sitting."/>
+        <FIELD NAME="runid" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="false" COMMENT="Its run, so a run's history reads without a join."/>
+        <FIELD NAME="tryno" TYPE="int" LENGTH="4" NOTNULL="true" DEFAULT="0" SEQUENCE="false" COMMENT="Which execution this was."/>
+        <FIELD NAME="outcome" TYPE="char" LENGTH="20" NOTNULL="true" SEQUENCE="false" COMMENT="started, collected, failed, requeued or abandoned."/>
+        <FIELD NAME="workerid" TYPE="char" LENGTH="100" NOTNULL="false" SEQUENCE="false" COMMENT="Which worker played it."/>
+        <FIELD NAME="engineattemptid" TYPE="int" LENGTH="10" NOTNULL="false" SEQUENCE="false" COMMENT="The engine attempt it produced."/>
+        <FIELD NAME="runtimems" TYPE="int" LENGTH="10" NOTNULL="false" SEQUENCE="false" COMMENT="How long it took."/>
+        <FIELD NAME="detail" TYPE="text" NOTNULL="false" SEQUENCE="false" COMMENT="The error or note, as reported."/>
+        <FIELD NAME="timecreated" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="false"/>
+        <FIELD NAME="diagnosis" TYPE="text" NOTNULL="false" SEQUENCE="false" COMMENT="The reported error taken apart: phase, url, errorcode, exception, file, line, answers, slot. JSON."/>
+        <FIELD NAME="correlationid" TYPE="char" LENGTH="64" NOTNULL="false" SEQUENCE="false" COMMENT="The request this execution was reported in, to find it in the log."/>
+        <FIELD NAME="reasoncode" TYPE="char" LENGTH="40" NOTNULL="false" SEQUENCE="false" COMMENT="Normalised reason the execution ended: a technical failure or the test's own end."/>
+      </FIELDS>
+      <KEYS>
+        <KEY NAME="primary" TYPE="primary" FIELDS="id"/>
+      </KEYS>
+      <INDEXES>
+        <INDEX NAME="attemptid-id" UNIQUE="false" FIELDS="attemptid, id"/>
+        <INDEX NAME="runid-outcome" UNIQUE="false" FIELDS="runid, outcome"/>
+        <INDEX NAME="runid-reasoncode" UNIQUE="false" FIELDS="runid, reasoncode"/>
       </INDEXES>
     </TABLE>
   </TABLES>

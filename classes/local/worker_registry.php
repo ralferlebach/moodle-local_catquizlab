@@ -218,6 +218,121 @@ class worker_registry {
     }
 
     /**
+     * Release slots whose process no longer exists on this host.
+     *
+     * Only this host, and only where a pid was recorded: a pid from another
+     * machine says nothing here, and killing a slot whose worker is alive
+     * elsewhere would be worse than waiting.
+     *
+     * @return int How many were released.
+     */
+    public static function reap_dead_processes(): int {
+        global $DB;
+
+        if (!function_exists('posix_kill')) {
+            return 0;
+        }
+
+        $host = gethostname() ?: '';
+        if ($host === '') {
+            return 0;
+        }
+
+        [$insql, $params] = $DB->get_in_or_equal(
+            [self::STATUS_STARTING, self::STATUS_RUNNING],
+            SQL_PARAMS_NAMED,
+            'st'
+        );
+        $params['host'] = $host;
+
+        $released = 0;
+        $rows = $DB->get_records_select(
+            'local_catquizlab_worker',
+            'status ' . $insql . ' AND hostname = :host AND pid IS NOT NULL AND pid > 0',
+            $params
+        );
+
+        foreach ($rows as $row) {
+            // Signal 0 asks whether the process exists without touching it.
+            if (@posix_kill((int) $row->pid, 0)) {
+                continue;
+            }
+            // EPERM (errno 1) means the process exists but belongs to another
+            // user: alive, and not ours to declare dead.
+            if (posix_get_last_error() === 1) {
+                continue;
+            }
+
+            $DB->update_record('local_catquizlab_worker', (object) [
+                'id'           => $row->id,
+                'status'       => self::STATUS_CRASHED,
+                'workerstate'  => 'stopped:process-gone',
+                'lasterror'    => get_string('worker:processgone', 'local_catquizlab', $row->pid),
+                'timemodified' => time(),
+            ]);
+            $released++;
+        }
+
+        return $released;
+    }
+
+    /**
+     * Give a worker the registry did not start a slot of its own.
+     *
+     * @param string $workerid The worker.
+     * @return bool Whether a slot was free for it.
+     */
+    public static function adopt(string $workerid): bool {
+        $concurrency = max(1, (int) get_config('local_catquizlab', 'worker_concurrency'));
+
+        for ($slot = 1; $slot <= $concurrency; $slot++) {
+            if (self::acquire_slot($slot, $workerid) !== null) {
+                self::report($workerid, 0, 'starting');
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Keep why a worker stopped, where the interface and the log can read it.
+     *
+     * A fatal error is an error; the other three are a worker doing what it
+     * was told. Recording them the same way — as a stopped worker — is what
+     * made "finished; played 1 attempt" alarming and routine at once.
+     *
+     * @param string $workerid The worker.
+     * @param string $reason queue-empty, max-jobs, stop-requested or fatal-error.
+     * @return void
+     */
+    public static function record_stop(string $workerid, string $reason): void {
+        global $DB;
+
+        $worker = $DB->get_record('local_catquizlab_worker', ['workerid' => $workerid]);
+        if (!$worker) {
+            return;
+        }
+
+        $fatal = $reason === 'fatal-error';
+
+        $DB->update_record('local_catquizlab_worker', (object) [
+            'id'           => $worker->id,
+            'status'       => $fatal ? self::STATUS_CRASHED : self::STATUS_STOPPED,
+            'workerstate'  => 'stopped' . ($reason !== '' ? ':' . $reason : ''),
+            'lasterror'    => $fatal ? 'fatal-error' : $worker->lasterror,
+            'timemodified' => time(),
+        ]);
+
+        debug_trace::record(
+            debug_trace::WORKER,
+            'worker_stopped',
+            ['workerid' => $workerid, 'reason' => $reason],
+            $fatal ? 'error' : 'ok'
+        );
+    }
+
+    /**
      * Whether a worker's departure leaves work with nobody to do it.
      *
      * A rotation limit is a resource setting — how many sittings one browser
@@ -350,6 +465,12 @@ class worker_registry {
         global $DB;
 
         $now = time();
+        // A worker whose process is gone, whatever its heartbeat says. Waiting
+        // out the five-minute timeout meant a crashed worker held the only
+        // slot while the page reported "1 worker running" and the tick answered
+        // "all-slots-busy" — both true of the row, neither true of the machine.
+        self::reap_dead_processes();
+
         $cutoff = $now - self::HEARTBEAT_TIMEOUT;
 
         [$insql, $params] = $DB->get_in_or_equal(
@@ -389,6 +510,52 @@ class worker_registry {
      * The live workers, for the interface and for capacity decisions.
      *
      * @return array[] One entry per worker, most recently active first.
+     */
+    /**
+     * A worker state in words.
+     *
+     * @param int $status One of the STATUS_ constants.
+     * @return string
+     */
+    public static function status_label(int $status): string {
+        $keys = [
+            self::STATUS_STARTING => 'worker:statestarting',
+            self::STATUS_RUNNING  => 'worker:staterunning',
+            self::STATUS_STOPPED  => 'worker:statestopped',
+            self::STATUS_CRASHED  => 'worker:statecrashed',
+        ];
+
+        return get_string($keys[$status] ?? 'worker:stateunknown', 'local_catquizlab');
+    }
+
+    /**
+     * Every worker the registry knows, newest first.
+     *
+     * Not only the live ones. A central operations view that shows live
+     * workers only cannot answer "what happened to the worker that was
+     * running my experiment": a crash and an orderly stop look identical from
+     * there, namely absent.
+     *
+     * @param int $limit How many to return.
+     * @return \stdClass[]
+     */
+    public static function recent(int $limit = 20): array {
+        global $DB;
+
+        return array_values($DB->get_records(
+            'local_catquizlab_worker',
+            null,
+            'timemodified DESC, id DESC',
+            '*',
+            0,
+            $limit
+        ));
+    }
+
+    /**
+     * The workers that are reporting in and doing work.
+     *
+     * @return \stdClass[]
      */
     public static function live(): array {
         global $DB;

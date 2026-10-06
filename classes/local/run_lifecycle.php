@@ -87,11 +87,11 @@ class run_lifecycle {
             return ['started' => false, 'reason' => preflight::summary($preflight)];
         }
 
-        $DB->update_record('local_catquizlab_run', (object) [
+        self::update_run((object) [
             'id'           => $runid,
             'status'       => registry::STATUS_SCHEDULED,
             'timemodified' => time(),
-        ]);
+        ], 'start_requested');
         self::refresh_experiment($runid);
 
         \local_catquizlab\task\orchestrate_run::queue($runid, $options);
@@ -153,11 +153,11 @@ class run_lifecycle {
             return;
         }
 
-        $DB->update_record('local_catquizlab_run', (object) [
+        self::update_run((object) [
             'id'           => $runid,
             'status'       => registry::STATUS_READY,
             'timemodified' => time(),
-        ]);
+        ], 'provisioned');
         self::refresh_experiment($runid);
     }
 
@@ -170,7 +170,7 @@ class run_lifecycle {
      *
      * @var int
      */
-    public const FAILURE_STREAK_LIMIT = 10;
+    public const FAILURE_STREAK_LIMIT = circuit_breaker::THRESHOLD;
 
     /**
      * Hold a run's attempts back, or let them go again.
@@ -247,53 +247,196 @@ class run_lifecycle {
     }
 
     /**
-     * Pause a run that is failing its way through the queue.
+     * Put a run's sittings that gave up back in the queue.
      *
-     * Called after each failed attempt. The streak is counted over the most
-     * recent attempts rather than over all of them, so a run that failed early
-     * and recovered is not punished for its history.
+     * A sitting that failed three times stays failed, and its run never reaches
+     * its planned number: "896 of 1000 collected" on a run where the missing
+     * hundred will never arrive. Sometimes the cause was transient — a browser
+     * that died, a server under load — and the only thing needed is another
+     * try. Their counters are cleared, so they get the full three again.
      *
      * @param int $runid The run.
-     * @return bool Whether this call paused the run.
+     * @return int How many were requeued.
      */
-    public static function check_failure_streak(int $runid): bool {
+    public static function requeue_failed(int $runid): int {
         global $DB;
 
-        if (self::is_paused($runid)) {
-            return false;
+        $failed = $DB->count_records('local_catquizlab_attempt', [
+            'runid' => $runid,
+            'status' => attempt_scheduler::STATUS_FAILED,
+        ]);
+        if ($failed === 0) {
+            return 0;
         }
 
-        $recent = $DB->get_records_select(
+        // Their diagnosis first: clearing lasterror is what made a second
+        // failure unreadable, because the first one was gone by the time
+        // anybody looked.
+        $failedids = $DB->get_fieldset_select(
             'local_catquizlab_attempt',
-            'runid = :runid AND status IN (:collected, :failed)',
+            'id',
+            'runid = ? AND status = ?',
+            [$runid, attempt_scheduler::STATUS_FAILED]
+        );
+        foreach ($failedids as $failedid) {
+            attempt_history::record((int) $failedid, attempt_history::REQUEUED, [
+                'detail' => (string) $DB->get_field('local_catquizlab_attempt', 'lasterror', ['id' => $failedid]),
+            ]);
+        }
+
+        $DB->execute(
+            'UPDATE {local_catquizlab_attempt}
+                SET status = :queued, tries = 0, nextruntime = 0, lasterror = NULL,
+                    leaseowner = NULL, leaseexpires = 0, timemodified = :now
+              WHERE runid = :runid AND status = :failed',
             [
-                'runid'     => $runid,
-                'collected' => attempt_scheduler::STATUS_COLLECTED,
-                'failed'    => attempt_scheduler::STATUS_FAILED,
+                'queued' => attempt_scheduler::STATUS_QUEUED,
+                'failed' => attempt_scheduler::STATUS_FAILED,
+                'runid'  => $runid,
+                'now'    => time(),
+            ]
+        );
+
+        // The run has work again, so it may not stay finished.
+        self::reopen_for_work($runid);
+
+        run_log::record($runid, run_log::RUN_RESUMED, ['requeued' => $failed]);
+
+        return $failed;
+    }
+
+    /**
+     * Make a run hand out work again after sittings were put back.
+     *
+     * From every state a run reaches once it has run out of work: finished,
+     * failed — and aggregating, which is where it goes the moment the last
+     * sitting ends. Reopened from that state only, a requeued sitting waited
+     * for ever, because an aggregating run hands out nothing.
+     *
+     * @param int $runid The run.
+     * @return void
+     */
+    public static function reopen_for_work(int $runid): void {
+        global $DB;
+
+        $status = (int) $DB->get_field('local_catquizlab_run', 'status', ['id' => $runid]);
+        if (in_array($status, [registry::STATUS_FINISHED, registry::STATUS_FAILED, registry::STATUS_AGGREGATING], true)) {
+            self::set_status($runid, registry::STATUS_READY, 'reopened_for_work');
+        }
+    }
+
+    /** @var int Retries after which a sitting that keeps failing is left alone. */
+    public const MAX_FUTILE_RETRIES = 3;
+
+    /**
+     * Put every incomplete sitting of a run back, and leave the finished ones.
+     *
+     * Incomplete means failed, being played on an expired lease, or waiting
+     * out a retry delay. Collected sittings are not touched — their results
+     * are the experiment. A sitting that has already been put back and failed
+     * again three times is left where it is: the failure is deterministic, and
+     * requeueing it would only turn a bulk action into an endless loop. It can
+     * still be retried on its own, deliberately.
+     *
+     * @param int $runid The run.
+     * @return array{requeued: int, released: int, hurried: int, skipped: int}
+     */
+    public static function requeue_incomplete(int $runid): array {
+        global $DB;
+
+        $now = time();
+        $done = ['requeued' => 0, 'released' => 0, 'hurried' => 0, 'skipped' => 0];
+
+        $rows = $DB->get_records_select(
+            'local_catquizlab_attempt',
+            'runid = :runid AND (status = :failed
+                OR (status = :running AND leaseexpires < :now1)
+                OR (status = :queued AND nextruntime > :now2))',
+            [
+                'runid'   => $runid,
+                'failed'  => attempt_scheduler::STATUS_FAILED,
+                'running' => attempt_scheduler::STATUS_RUNNING,
+                'queued'  => attempt_scheduler::STATUS_QUEUED,
+                'now1'    => $now,
+                'now2'    => $now,
             ],
-            'timemodified DESC',
-            'id, status',
-            0,
-            self::FAILURE_STREAK_LIMIT
+            'id ASC',
+            'id, status, lasterror'
         );
 
-        if (count($recent) < self::FAILURE_STREAK_LIMIT) {
-            return false;
-        }
+        foreach ($rows as $row) {
+            $status = (int) $row->status;
 
-        foreach ($recent as $attempt) {
-            if ((int) $attempt->status !== attempt_scheduler::STATUS_FAILED) {
-                return false;
+            if ($status === attempt_scheduler::STATUS_QUEUED) {
+                // Waiting out a delay: brought forward, nothing else changes.
+                $DB->set_field('local_catquizlab_attempt', 'nextruntime', 0, ['id' => $row->id]);
+                $done['hurried']++;
+                continue;
             }
+
+            if (attempt_history::futile_retries((int) $row->id) >= self::MAX_FUTILE_RETRIES) {
+                $done['skipped']++;
+                continue;
+            }
+
+            attempt_history::record((int) $row->id, attempt_history::REQUEUED, [
+                'detail' => $status === attempt_scheduler::STATUS_RUNNING
+                    ? get_string('attempt:leaseexpired', 'local_catquizlab')
+                    : (string) $row->lasterror,
+            ]);
+            $DB->update_record('local_catquizlab_attempt', (object) [
+                'id' => $row->id,
+                'status' => attempt_scheduler::STATUS_QUEUED,
+                'tries' => 0, 'nextruntime' => 0, 'lasterror' => null,
+                'leaseowner' => null, 'leaseexpires' => 0, 'timemodified' => $now,
+            ]);
+            $done[$status === attempt_scheduler::STATUS_RUNNING ? 'released' : 'requeued']++;
         }
 
-        self::set_paused(
-            $runid,
-            true,
-            get_string('ops:autopaused', 'local_catquizlab', self::FAILURE_STREAK_LIMIT)
-        );
+        if ($done['requeued'] + $done['released'] > 0) {
+            self::reopen_for_work($runid);
+            run_log::record($runid, run_log::RUN_RESUMED, $done);
+        }
 
-        return true;
+        return $done;
+    }
+
+    /**
+     * Whether a run holds every sitting it was planned with.
+     *
+     * The one rule for "complete", used wherever completeness is shown or
+     * decided: every planned sitting collected, none failed, none still open.
+     * A run can be finished — nothing left to play — and still not be
+     * complete; the results say so rather than presenting a smaller sample
+     * as the designed one.
+     *
+     * @param int $runid The run.
+     * @return bool
+     */
+    public static function is_complete(int $runid): bool {
+        $counts = self::attempt_counts($runid);
+
+        return $counts['total'] > 0
+            && $counts['collected'] === $counts['total']
+            && $counts['failed'] === 0
+            && $counts['open'] === 0;
+    }
+
+    /**
+     * Stop a run that is failing the same way over and over.
+     *
+     * Delegates to the circuit breaker, which is the one place that decides
+     * this. Two implementations of "ten failures in a row" existed for a
+     * release: this one, reached by the worker's completion report, paused the
+     * run; the newer one, reached by the scheduler's retry path, held it as
+     * failed with the cause. The worker path is the one that fires in
+     * practice, so the newer behaviour never showed up where it mattered.
+     *
+     * @param int $runid The run.
+     * @return bool Whether this call tripped the breaker.
+     */
+    public static function check_failure_streak(int $runid): bool {
+        return (bool) circuit_breaker::check($runid)['tripped'];
     }
 
     /**
@@ -329,16 +472,12 @@ class run_lifecycle {
         // Conditional even so: callers hold a transaction that serialises the
         // claims, and the condition is what keeps that true if one ever does
         // not. An UPDATE that matches nothing is not an error here.
-        $DB->execute(
-            'UPDATE {local_catquizlab_run}
-                SET status = :running, timemodified = :now
-              WHERE id = :id AND status = :ready',
-            [
-                'running' => registry::STATUS_RUNNING,
-                'now'     => time(),
-                'id'      => $runid,
-                'ready'   => registry::STATUS_READY,
-            ]
+        self::set_status_if(
+            $runid,
+            registry::STATUS_READY,
+            registry::STATUS_RUNNING,
+            'first_sitting_claimed',
+            ['timemodified' => time()]
         );
 
         self::refresh_experiment($runid);
@@ -379,7 +518,7 @@ class run_lifecycle {
             return 'failed';
         }
 
-        $DB->set_field('local_catquizlab_run', 'status', registry::STATUS_AGGREGATING, ['id' => $runid]);
+        self::set_status($runid, registry::STATUS_AGGREGATING, 'all_sittings_done');
         self::refresh_experiment($runid);
 
         // Exactly once: the guard above means a second caller finds the run
@@ -411,7 +550,7 @@ class run_lifecycle {
             return;
         }
 
-        $DB->set_field('local_catquizlab_run', 'status', registry::STATUS_FINISHED, ['id' => $runid]);
+        self::set_status($runid, registry::STATUS_FINISHED, 'aggregated');
         $DB->set_field('local_catquizlab_run', 'timemodified', time(), ['id' => $runid]);
         self::refresh_experiment($runid);
     }
@@ -445,12 +584,12 @@ class run_lifecycle {
             $manifest['lifecycle']['readinessfacts'] = $readiness['facts'];
         }
 
-        $DB->update_record('local_catquizlab_run', (object) [
+        self::update_run((object) [
             'id'           => $runid,
             'status'       => registry::STATUS_FAILED,
             'manifestjson' => json_encode($manifest, JSON_UNESCAPED_SLASHES),
             'timemodified' => time(),
-        ]);
+        ], 'failed: ' . $reason);
 
         run_log::record($runid, run_log::RUN_FAILED, ['reason' => $reason]);
 
@@ -520,7 +659,10 @@ class run_lifecycle {
 
         $result = run_orchestrator::setup($runid);
 
-        self::provisioned($runid, !empty($result['ok']), (string) ($result['reason'] ?? ''));
+        // Set up by another process at the same time: not this call's to judge (#116).
+        if (empty($result['concurrent'])) {
+            self::provisioned($runid, !empty($result['ok']), (string) ($result['reason'] ?? ''));
+        }
 
         return [
             'ok'     => !empty($result['ok']),
@@ -554,7 +696,7 @@ class run_lifecycle {
 
         $run = $DB->get_record('local_catquizlab_run', ['id' => $runid]);
         if ($run && (int) $run->testcmid > 0) {
-            $counts['activity'] = 1;
+            $counts['activities'] = 1;
         }
 
         if ($DB->get_manager()->table_exists('local_catquizlab_item')) {
@@ -614,13 +756,8 @@ class run_lifecycle {
     public static function reset_preview_message(int $runid, string $component): string {
         $preview = self::preview_reset($runid);
 
-        $lines = [];
-        foreach ($preview['counts'] as $label => $count) {
-            $lines[] = $count . ' ' . get_string('purge:count' . $label, $component);
-        }
-
         return get_string('run:confirmreset', $component, $runid)
-            . \html_writer::tag('p', implode(', ', $lines) ?: '-', ['class' => 'mt-2'])
+            . \html_writer::tag('p', purger::counts_line($preview['counts']), ['class' => 'mt-2'])
             . \html_writer::tag('p', get_string('run:resetkeeps', $component), ['class' => 'small text-muted']);
     }
 
@@ -729,14 +866,14 @@ class run_lifecycle {
         $manifest = json_decode((string) $run->manifestjson, true) ?: [];
         unset($manifest['lifecycle']);
 
-        $DB->update_record('local_catquizlab_run', (object) [
+        self::update_run((object) [
             'id'           => $runid,
             'status'       => registry::STATUS_DRAFT,
             'testcmid'     => 0,
             'sectionid'    => 0,
             'manifestjson' => json_encode($manifest, JSON_UNESCAPED_SLASHES),
             'timemodified' => time(),
-        ]);
+        ], 'reset');
 
         self::refresh_experiment($runid);
 
@@ -804,12 +941,12 @@ class run_lifecycle {
             $manifest['lifecycle']['readinessfacts']
         );
 
-        $DB->update_record('local_catquizlab_run', (object) [
+        self::update_run((object) [
             'id'           => $runid,
             'status'       => registry::STATUS_READY,
             'manifestjson' => json_encode($manifest, JSON_UNESCAPED_SLASHES),
             'timemodified' => time(),
-        ]);
+        ], 'rechecked');
         self::refresh_experiment($runid);
 
         return ['ok' => true, 'reason' => '', 'requeued' => $reopened];
@@ -1020,5 +1157,148 @@ class run_lifecycle {
             'status'       => $status,
             'timemodified' => time(),
         ]);
+    }
+
+    /**
+     * A new run with exactly the configuration of an existing one (#96).
+     *
+     * The run's manifest, with the definition that was in force for it —
+     * strategy, model, every effective budget — is copied as it is: the new
+     * run is provisioned from that, not from the experiment as it reads now,
+     * which may have changed since. Same seeds; a new id; it says which run it
+     * reproduces.
+     *
+     * @param int $runid The run to reproduce.
+     * @return int The new run's id.
+     */
+    public static function reproduce(int $runid): int {
+        global $DB;
+
+        $run = $DB->get_record('local_catquizlab_run', ['id' => $runid], '*', MUST_EXIST);
+        $now = time();
+        $copy = clone $run;
+        unset($copy->id);
+        $copy->status = registry::STATUS_DRAFT;
+        // The new run says which run it came from, so a reproduction can be
+        // told from an original without comparing seeds by hand.
+        $manifest = json_decode((string) $run->manifestjson, true) ?: [];
+        $manifest['config']['reproducedfrom'] = (int) $run->id;
+        $copy->manifestjson = json_encode($manifest, JSON_UNESCAPED_SLASHES);
+        $copy->courseid = null;
+        $copy->testcmid = null;
+        $copy->timecreated = $now;
+        $copy->timemodified = $now;
+
+        return (int) $DB->insert_record('local_catquizlab_run', $copy);
+    }
+
+    /**
+     * A status by its name, for the log.
+     *
+     * @param int|null $status The status.
+     * @return string
+     */
+    protected static function status_name(?int $status): string {
+        $names = [
+            registry::STATUS_DRAFT => 'draft', registry::STATUS_SCHEDULED => 'scheduled',
+            registry::STATUS_READY => 'ready', registry::STATUS_RUNNING => 'running',
+            registry::STATUS_AGGREGATING => 'aggregating', registry::STATUS_FINISHED => 'finished',
+            registry::STATUS_FAILED => 'failed', registry::STATUS_CANCELLED => 'cancelled',
+        ];
+
+        return $status === null ? 'none' : ($names[$status] ?? (string) $status);
+    }
+
+    /**
+     * Record a change of a run's status, if it is one (#90).
+     *
+     * @param int $runid The run.
+     * @param int|null $from The status before.
+     * @param int $to The status after.
+     * @param string $why Why, in a word or two.
+     * @return void
+     */
+    protected static function record_status(int $runid, ?int $from, int $to, string $why): void {
+        if ($from === $to) {
+            return;
+        }
+        run_log::record($runid, run_log::STATUS_CHANGED, [
+            'from' => self::status_name($from),
+            'to'   => self::status_name($to),
+            'why'  => $why,
+        ]);
+    }
+
+    /**
+     * Set a run's status — the one way it is changed, so that every change is
+     * recorded: from, to, why (#90, "every status change is logged").
+     *
+     * @param int $runid The run.
+     * @param int $to The new status.
+     * @param string $why Why, in a word or two.
+     * @param array $fields Other fields written with it.
+     * @return void
+     */
+    public static function set_status(int $runid, int $to, string $why, array $fields = []): void {
+        global $DB;
+
+        $from = $DB->get_field('local_catquizlab_run', 'status', ['id' => $runid]);
+        $DB->update_record('local_catquizlab_run', (object) (['id' => $runid, 'status' => $to] + $fields));
+        self::record_status($runid, $from === false ? null : (int) $from, $to, $why);
+    }
+
+    /**
+     * Change a run's status only if it is the expected one — atomically, for
+     * transitions several processes may attempt at once — and record it if it
+     * happened.
+     *
+     * @param int $runid The run.
+     * @param int $from The status it must have.
+     * @param int $to The new status.
+     * @param string $why Why, in a word or two.
+     * @param array $fields Other fields written with it (name => value).
+     * @return bool Whether this call made the change.
+     */
+    public static function set_status_if(int $runid, int $from, int $to, string $why, array $fields = []): bool {
+        global $DB;
+
+        $sets = ['status = :to'];
+        $params = ['to' => $to, 'id' => $runid, 'from' => $from];
+        foreach ($fields as $name => $value) {
+            $sets[] = $name . ' = :f_' . $name;
+            $params['f_' . $name] = $value;
+        }
+        $before = $DB->count_records('local_catquizlab_run', ['id' => $runid, 'status' => $from]);
+        $DB->execute(
+            'UPDATE {local_catquizlab_run} SET ' . implode(', ', $sets) . ' WHERE id = :id AND status = :from',
+            $params
+        );
+        // This call changed it if the run had the expected status before and
+        // has the new one now — the update does not say how many rows it hit.
+        $changed = $before > 0 && (int) $DB->get_field('local_catquizlab_run', 'status', ['id' => $runid]) === $to;
+        if ($changed) {
+            self::record_status($runid, $from, $to, $why);
+        }
+
+        return $changed;
+    }
+
+    /**
+     * Write a run record, recording its status change if it carries one (#90).
+     *
+     * @param \stdClass $record The record, with its id.
+     * @param string $why Why, in a word or two.
+     * @return void
+     */
+    public static function update_run(\stdClass $record, string $why): void {
+        global $DB;
+
+        $from = isset($record->status)
+            ? $DB->get_field('local_catquizlab_run', 'status', ['id' => $record->id])
+            : false;
+        $DB->update_record('local_catquizlab_run', $record);
+        if (isset($record->status)) {
+            self::record_status((int) $record->id, $from === false ? null : (int) $from, (int) $record->status, $why);
+        }
     }
 }

@@ -138,7 +138,9 @@ class experiment_definition {
      * @return array
      */
     public function get_normalised(): array {
-        return self::apply_defaults($this->definition);
+        // Without what none of its strategies uses (#101): a saved definition
+        // describes the experiment, and a budget nothing reads is not part of it.
+        return strategy_parameters::strip(self::apply_defaults($this->definition));
     }
 
     /**
@@ -162,8 +164,20 @@ class experiment_definition {
         self::validate_schema($this->definition, $errors);
         self::validate_model($def, $errors, $warnings);
         self::validate_strategy($def, $errors);
+        self::validate_pilot($def, $errors);
+        self::validate_cell_budgets($def, $errors);
+
+        // The classical test plays every item of its scale: a swept question
+        // budget leaves its cells alike (#104).
+        $strategies = array_merge(
+            [(string) ($def['strategy'] ?? '')],
+            (array) ($def['sweep']['factors']['strategy'] ?? [])
+        );
+        if (!empty($def['sweep']['factors']['globalbudget']) && in_array('classic', $strategies, true)) {
+            $warnings[] = get_string('def:classicallitems', 'local_catquizlab');
+        }
         self::validate_pool($def, $errors);
-        self::validate_persons($def, $errors);
+        self::validate_persons($def, $errors, $warnings);
         self::validate_budgets($def, $errors);
 
         // Courses and CAT tests are specifiable per run (2.6.C): at least one each.
@@ -273,6 +287,83 @@ class experiment_definition {
     }
 
     /**
+     * The standard-error bounds, where a strategy uses them.
+     *
+     * @param mixed $se The budgets.se block.
+     * @param array $errors Collected errors.
+     * @return void
+     */
+    protected static function validate_se_bounds($se, array &$errors): void {
+        if (!is_array($se)) {
+            $errors[] = self::msg('def:missingblock', 'budgets.se');
+            return;
+        }
+        foreach (['min', 'max'] as $bound) {
+            if (!isset($se[$bound]) || !is_numeric($se[$bound])) {
+                $errors[] = self::msg('def:numeric', 'budgets.se.' . $bound);
+            } else if ((float) $se[$bound] <= 0.0) {
+                $errors[] = self::msg('def:positivefloat', 'budgets.se.' . $bound);
+            }
+        }
+        if (
+            isset($se['min'], $se['max']) && is_numeric($se['min']) && is_numeric($se['max'])
+                && (float) $se['min'] > (float) $se['max']
+        ) {
+            $errors[] = self::msg('def:mingtmax', 'budgets.se');
+        }
+    }
+
+    /**
+     * Budgets given to single cells of a sweep (#96): numbers, unlimited where
+     * a maximum is meant, and no minimum above its maximum.
+     *
+     * @param array $def The definition.
+     * @param array $errors Collected errors.
+     * @return void
+     */
+    protected static function validate_cell_budgets(array $def, array &$errors): void {
+        foreach ((array) ($def['budgetsbycell'] ?? []) as $cellkey => $levels) {
+            $levelfields = ['global' => ['minitems', 'maxitems'], 'subscale' => ['minitems', 'maxitems'], 'se' => ['min', 'max']];
+            foreach ($levelfields as $level => [$minfield, $maxfield]) {
+                $min = $levels[$level][$minfield] ?? null;
+                $max = $levels[$level][$maxfield] ?? null;
+                $path = 'budgetsbycell.' . $cellkey . '.' . $level;
+                foreach ([$minfield => $min, $maxfield => $max] as $field => $value) {
+                    if ($value === null || $value === '') {
+                        continue;
+                    }
+                    if ($field === 'maxitems' && self::is_unlimited($value)) {
+                        continue;
+                    }
+                    if (!is_numeric($value) || (float) $value < 0) {
+                        $errors[] = self::msg('def:negative', $path . '.' . $field);
+                    }
+                }
+                if (is_numeric($min) && is_numeric($max) && (float) $min > (float) $max) {
+                    $errors[] = self::msg('def:mingtmax', $path);
+                }
+            }
+        }
+    }
+
+    /**
+     * The pilot-question option, where a definition has one.
+     *
+     * @param array $def The definition.
+     * @param array $errors Collected errors.
+     * @return void
+     */
+    protected static function validate_pilot(array $def, array &$errors): void {
+        if (!isset($def['pilot'])) {
+            return;
+        }
+        $ratio = $def['pilot']['ratio'] ?? 0;
+        if (!is_numeric($ratio) || (float) $ratio < 0 || (float) $ratio > 100) {
+            $errors[] = self::msg('def:pilotratio', 'pilot.ratio');
+        }
+    }
+
+    /**
      * Validate the strategy choice against the catalogue.
      *
      * @param array $def The normalised definition.
@@ -281,6 +372,15 @@ class experiment_definition {
      */
     protected static function validate_strategy(array $def, array &$errors): void {
         self::require_enum($def, 'strategy', strategy_catalog::keys(), $errors);
+
+        // A known key the installed engine cannot play is refused by name. A
+        // definition from before this was checked — or from an installation
+        // with another engine — names "balanced" or "pilot", and it gets the
+        // reason rather than a run that fails every sitting (#97).
+        $named = [];
+        if (is_string($def['strategy'] ?? null)) {
+            $named[] = $def['strategy'];
+        }
 
         // A sweep may vary the strategy; every level has to be a known key too.
         $levels = $def['sweep']['factors']['strategy'] ?? null;
@@ -291,6 +391,22 @@ class experiment_definition {
                         . implode('|', strategy_catalog::keys()));
                     break;
                 }
+                $named[] = $level;
+            }
+        }
+
+        // Only where an engine is there to ask: without one, nothing can run
+        // anyway, and definitions still have to be editable and portable.
+        if (!environment::engine_available()) {
+            return;
+        }
+
+        foreach (array_unique($named) as $key) {
+            if (strategy_catalog::has($key) && !strategy_catalog::runnable($key)) {
+                $errors[] = get_string('readiness:strategynotinengine', 'local_catquizlab', (object) [
+                    'label' => strategy_catalog::label($key),
+                    'id'    => strategy_catalog::engine_id($key),
+                ]);
             }
         }
     }
@@ -340,9 +456,10 @@ class experiment_definition {
      *
      * @param array $def The normalised definition.
      * @param string[] $errors Error accumulator (by reference).
+     * @param string[] $warnings Warning accumulator (by reference).
      * @return void
      */
-    protected static function validate_persons(array $def, array &$errors): void {
+    protected static function validate_persons(array $def, array &$errors, array &$warnings = []): void {
         if (!isset($def['persons']) || !is_array($def['persons'])) {
             $errors[] = self::msg('def:missingblock', 'persons');
             return;
@@ -357,6 +474,17 @@ class experiment_definition {
         // there would be silently ignored — better to say so than to pretend.
         if (($persons['stratum'] ?? null) === 'conforming' && ($persons['severity'] ?? 'none') !== 'none') {
             $errors[] = self::msg('def:severitynotapplicable', 'persons.severity');
+        }
+
+        // Distribution, parameters and range of the simulated abilities (#102).
+        ability_distribution::validate($persons, $errors, $warnings);
+
+        // Category and subscale SD, where set explicitly (#102).
+        foreach (['category', 'subscale'] as $level) {
+            $value = $persons['variation'][$level] ?? null;
+            if ($value !== null && (!is_numeric($value) || (float) $value < 0)) {
+                $errors[] = self::msg('def:negative', 'persons.variation.' . $level);
+            }
         }
 
         foreach (['mild', 'medium', 'strong'] as $level) {
@@ -381,40 +509,43 @@ class experiment_definition {
         }
         $budgets = $def['budgets'];
 
-        foreach (['global', 'subscale'] as $level) {
+        // A subscale budget is required only where a strategy uses subscales.
+        // "fastest" with 0 per subscale was refused as "must be a positive
+        // integer" — for a number that strategy never reads.
+        $levels = self::uses_subscale_budget($def) ? ['global', 'subscale'] : ['global'];
+
+        foreach ($levels as $level) {
             $block = $budgets[$level] ?? null;
             if (!is_array($block)) {
                 $errors[] = self::msg('def:missingblock', 'budgets.' . $level);
                 continue;
             }
             self::require_positive_int($block, 'minitems', $errors, 'budgets.' . $level . '.minitems');
-            self::require_positive_int($block, 'maxitems', $errors, 'budgets.' . $level . '.maxitems');
-            if (
-                isset($block['minitems'], $block['maxitems'])
-                    && is_numeric($block['minitems']) && is_numeric($block['maxitems'])
-                    && (int) $block['minitems'] > (int) $block['maxitems']
-            ) {
-                $errors[] = self::msg('def:mingtmax', 'budgets.' . $level);
+
+            // A maximum may be UNLIMITED, which the engine already understands
+            // as -1 and stops applying. "Classic" with no ceiling and
+            // "allsubs" with eighty were not expressible before, because the
+            // maximum had to be a positive number.
+            if (!self::is_unlimited($block['maxitems'] ?? null)) {
+                self::require_positive_int($block, 'maxitems', $errors, 'budgets.' . $level . '.maxitems');
+
+                if (
+                    isset($block['minitems'], $block['maxitems'])
+                        && is_numeric($block['minitems']) && is_numeric($block['maxitems'])
+                        && (int) $block['minitems'] > (int) $block['maxitems']
+                ) {
+                    $errors[] = self::msg('def:mingtmax', 'budgets.' . $level);
+                }
             }
         }
 
-        $se = $budgets['se'] ?? null;
-        if (!is_array($se)) {
-            $errors[] = self::msg('def:missingblock', 'budgets.se');
-            return;
-        }
-        foreach (['min', 'max'] as $bound) {
-            if (!isset($se[$bound]) || !is_numeric($se[$bound])) {
-                $errors[] = self::msg('def:numeric', 'budgets.se.' . $bound);
-            } else if ((float) $se[$bound] <= 0.0) {
-                $errors[] = self::msg('def:positivefloat', 'budgets.se.' . $bound);
-            }
-        }
-        if (
-            isset($se['min'], $se['max']) && is_numeric($se['min']) && is_numeric($se['max'])
-                && (float) $se['min'] > (float) $se['max']
-        ) {
-            $errors[] = self::msg('def:mingtmax', 'budgets.se');
+        // Standard-error bounds only where a strategy stops or filters by them:
+        // a classical test has none, and asking for them asks for nothing. A
+        // condition, not an early return — the checks after this one apply to
+        // every strategy, and an early return here once skipped them for the
+        // classical test, accepting a minimum above its maximum.
+        if (strategy_parameters::any_uses($def, 'standarderror')) {
+            self::validate_se_bounds($budgets['se'] ?? null, $errors);
         }
 
         // A definition may still carry the flat schema-1 keys. They are part of
@@ -782,6 +913,55 @@ class experiment_definition {
         if (!isset($data[$key]) || !is_int($data[$key])) {
             $errors[] = self::msg('def:integer', $label);
         }
+    }
+
+    /**
+     * Whether any strategy this definition would run reads subscale budgets.
+     *
+     * The chosen strategy, every level of a swept one, and every strategy
+     * given its own budget.
+     *
+     * @param array $def The definition.
+     * @return bool
+     */
+    public static function uses_subscale_budget(array $def): bool {
+        return strategy_parameters::any_uses($def, 'subscalemax');
+    }
+
+    /** @var string What a definition writes when a maximum is not to apply. */
+    public const UNLIMITED = 'unlimited';
+
+    /** @var int What the engine reads as "stop applying this maximum". */
+    public const ENGINE_UNLIMITED = -1;
+
+    /**
+     * Whether a budget value means "no ceiling".
+     *
+     * Written as the word in a definition, because a definition is read by
+     * people; passed to the engine as -1, because that is what it reads.
+     *
+     * @param mixed $value The stored value.
+     * @return bool
+     */
+    public static function is_unlimited($value): bool {
+        return $value === self::UNLIMITED
+            || $value === self::ENGINE_UNLIMITED
+            || (is_numeric($value) && (int) $value === self::ENGINE_UNLIMITED);
+    }
+
+    /**
+     * A budget maximum as the engine wants it.
+     *
+     * @param mixed $value The stored value.
+     * @param int $default What to use when nothing is stored.
+     * @return int The number, or -1 for unlimited.
+     */
+    public static function engine_maximum($value, int $default): int {
+        if (self::is_unlimited($value)) {
+            return self::ENGINE_UNLIMITED;
+        }
+
+        return $value === null || $value === '' ? $default : (int) $value;
     }
 
     /**

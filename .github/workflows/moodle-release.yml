@@ -127,13 +127,13 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        moodle: [MOODLE_405_STABLE, MOODLE_500_STABLE, MOODLE_502_STABLE]
+        # Moodle 5.0 is out of support upstream and was dropped from the matrix.
+        moodle: [MOODLE_405_STABLE, MOODLE_502_STABLE]
         php: ['8.1', '8.2', '8.3']
         db:
           - { engine: mariadb, type: mariadb, port: 3306, user: root,   pass: root   }
           - { engine: pgsql,   type: pgsql,   port: 5432, user: moodle, pass: moodle }
         exclude:
-          - { moodle: MOODLE_500_STABLE, php: '8.1' }
           - { moodle: MOODLE_502_STABLE, php: '8.1' }
           - { moodle: MOODLE_502_STABLE, php: '8.2' }
 
@@ -208,7 +208,6 @@ jobs:
       matrix:
         include:
           - { moodle: MOODLE_405_STABLE, php: '8.2' }
-          - { moodle: MOODLE_500_STABLE, php: '8.2' }
           - { moodle: MOODLE_502_STABLE, php: '8.3' }
 
     services:

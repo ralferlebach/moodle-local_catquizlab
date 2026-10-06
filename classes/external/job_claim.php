@@ -77,6 +77,9 @@ class job_claim extends external_api {
             'quizcmid'  => 0,
             'userid'    => 0,
             'username'  => '',
+            'experimentid' => 0,
+            'execution' => 0,
+            'correlationid' => '',
             'message'   => get_string('job:none', 'local_catquizlab'),
         ];
 
@@ -84,14 +87,43 @@ class job_claim extends external_api {
         // cannot pick up the same one.
         $transaction = $DB->start_delegated_transaction();
 
-        // Attempts of paused runs are skipped rather than filtered out
-        // afterwards: a pause that still hands work out is not a pause, and
-        // checking here is what makes it one. The candidate window is small
-        // because runs are paused rarely.
+        // Runs that cannot hand out work are excluded in the query, not after
+        // it. Fetching fifty candidates and then skipping the unusable ones
+        // works only while the unusable ones are rare: on an installation with
+        // a few failed runs behind it, fifty attempts of dead runs fill the
+        // window and a perfectly good new run is never reached. The worker then
+        // reports an empty queue, which is true of what it was shown and false
+        // of the installation.
+        //
+        // A pause is still checked below, because it can change between this
+        // query and the claim.
+        // And never a person who is already sitting the test somewhere else.
+        // Two workers logging in as the same simulated person open the same
+        // adaptive quiz attempt, and Moodle rejects the second one's answers:
+        // "adaptivequiz/uniquenotpartofattempt". With a thousand people, two
+        // sittings each and a hundred workers, that is not a rare race — it is
+        // the normal case, and it cost a night of results on a live
+        // installation. A person sits the test once at a time, which is also
+        // what the experiment assumes.
         $queued = $DB->get_records_select(
             'local_catquizlab_attempt',
-            'status = :status AND nextruntime <= :now',
-            ['status' => attempt_scheduler::STATUS_QUEUED, 'now' => time()],
+            'status = :status AND nextruntime <= :now
+               AND runid IN (SELECT id FROM {local_catquizlab_run} WHERE status IN (:ready, :running))
+               AND personid NOT IN (
+                   SELECT DISTINCT busy.personid
+                     FROM {local_catquizlab_attempt} busy
+                    WHERE busy.status = :inflight
+                      AND busy.leaseexpires > :leasenow
+                      AND busy.personid > 0
+               )',
+            [
+                'status'   => attempt_scheduler::STATUS_QUEUED,
+                'now'      => time(),
+                'ready'    => \local_catquizlab\local\registry::STATUS_READY,
+                'running'  => \local_catquizlab\local\registry::STATUS_RUNNING,
+                'inflight' => attempt_scheduler::STATUS_RUNNING,
+                'leasenow' => time(),
+            ],
             'nextruntime ASC, timecreated ASC, id ASC',
             '*',
             0,
@@ -106,6 +138,17 @@ class job_claim extends external_api {
             // a failed or cancelled run must never hand out work again, however
             // its attempts got into the queue.
             if (\local_catquizlab\local\run_lifecycle::is_paused($runid)) {
+                continue;
+            }
+            // A run with a twin more than once is not executed (#117): its
+            // results would count people twice. It is failed, with the reason,
+            // rather than left to hand out nothing — which would look like a
+            // run that hangs. Runs damaged before 0.7.26 are caught here.
+            if (\local_catquizlab\local\person_integrity::has_duplicates($runid)) {
+                \local_catquizlab\local\run_lifecycle::fail(
+                    $runid,
+                    get_string('integrity:runblocked', 'local_catquizlab', $runid)
+                );
                 continue;
             }
             if (!\local_catquizlab\local\run_lifecycle::is_runnable($runid)) {
@@ -132,6 +175,14 @@ class job_claim extends external_api {
             'tries'        => (int) $attempt->tries + 1,
             'timemodified' => time(),
         ]);
+
+        // The execution starts here, and the history says so before anything
+        // can go wrong with it.
+        \local_catquizlab\local\attempt_history::record(
+            (int) $attempt->id,
+            \local_catquizlab\local\attempt_history::STARTED,
+            ['workerid' => $params['workerid'], 'tryno' => (int) $attempt->tries + 1]
+        );
 
         // The documented lifecycle is READY → first attempt claimed → RUNNING,
         // and this is the moment it happens. Inside the transaction with the
@@ -164,6 +215,14 @@ class job_claim extends external_api {
             'quizcmid'  => $run ? (int) $run->testcmid : 0,
             'userid'    => $userid,
             'username'  => $username,
+            // Where this execution's artefacts belong (#107): experiment, run,
+            // attempt and which try this is.
+            'experimentid' => $run ? (int) $run->experimentid : 0,
+            'execution' => (int) $attempt->tries + 1,
+            // The id the start of this execution was recorded under: the worker
+            // carries it in its artefacts and sends it with every request of the
+            // sitting, so that browser, server and history meet (#107, #110).
+            'correlationid' => \local_catquizlab\local\debug_trace::correlation_id(),
             'message'   => get_string('job:claimed', 'local_catquizlab'),
         ];
     }
@@ -186,6 +245,14 @@ class job_claim extends external_api {
                 VALUE_OPTIONAL,
                 ''
             ),
+            'experimentid' => new external_value(PARAM_INT, 'Experiment of the claimed run (0 when none).', VALUE_OPTIONAL, 0),
+            'correlationid' => new external_value(
+                PARAM_ALPHANUMEXT,
+                'Correlation id of this execution, as recorded in its history.',
+                VALUE_OPTIONAL,
+                ''
+            ),
+            'execution'    => new external_value(PARAM_INT, 'Which try of the sitting this is (0 when none).', VALUE_OPTIONAL, 0),
             'message'   => new external_value(PARAM_TEXT, 'Human-readable status.'),
         ]);
     }

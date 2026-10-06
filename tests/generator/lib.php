@@ -47,6 +47,10 @@ class local_catquizlab_generator extends component_generator_base {
                 unset($record[$key]);
             }
         }
+        // Several strategies at once, as a sweep: "fastest,classic,allsubs".
+        if (!empty($record['sweepstrategies'])) {
+            $definition['sweep']['factors']['strategy'] = array_map('trim', explode(',', (string) $record['sweepstrategies']));
+        }
         if (isset($record['name'])) {
             $definition['name'] = $record['name'];
         }

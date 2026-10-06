@@ -31,6 +31,11 @@ const PASSWORD = process.env.MOODLE_ADMIN_PASSWORD || 'Admin#12345';
 // real browser against a real Moodle.
 const RUN_TIMEOUT = 20 * 60 * 1000;
 
+// How many simulated people. The workflow offers this as an input and it was
+// never read here, so the number on the form was always five whatever the
+// person running the job had chosen.
+const PERSONS = process.env.PERSONS || '5';
+
 /**
  * Sign in as the administrator.
  *
@@ -84,38 +89,38 @@ test.describe('CatQuizLab, through the interface', () => {
         await page.goto('/local/catquizlab/index.php');
         await expect(page.locator('body')).toContainText('CAT experiment suite');
 
-        // 1. Preparation. Whatever is still open is opened from here, by the
-        //    buttons the step offers — not by setting config directly, because
-        //    the point is that those buttons work.
+        // 1. Preparation: one button. "Set up and start the pipeline" does
+        //    everything the installation can do for itself — course, worker
+        //    account and token, runtime, the switches — and reports what it
+        //    could not. This test used to press whatever buttons it found, up
+        //    to six times, and never checked whether any of it had worked;
+        //    that is how it walked past an installation that could not run
+        //    and reported the plugin's fault instead of its own.
         await openStep(page, /1\.\s*(Preparation|Vorbereitung)/);
 
-        for (let round = 0; round < 6; round++) {
-            // Only forms that post back into this plugin. The preparation step
-            // links out to Moodle's own settings and to the engine, and
-            // pressing one of those walks the test out of the thing it is
-            // testing.
-            const action = page.locator(
-                '#region-main form[action*="/local/catquizlab/"] button[type=submit]',
-                {hasText: /Run and enable|Set up|Create|Issue|Install|Ausführen|Einrichten|Anlegen/}
-            ).first();
+        const setup = page.locator(
+            '#region-main form[action*="/local/catquizlab/"] input[name="action"][value="wizardstart"]'
+        ).locator('xpath=..').locator('button[type=submit]').first();
+        await expect(setup, 'the setup button is offered').toBeVisible();
+        await setup.click();
+        await page.waitForLoadState('networkidle');
 
-            if (!(await action.count())) {
-                break;
-            }
+        // And then it has to be ready. Not "closer": ready. A preparation
+        // that leaves a switch off is one that has not prepared anything.
+        const readiness = page.locator('#region-main');
+        await expect(readiness).toContainText(/can run experiments|kann Experimente ausführen/);
+        await expect(readiness).not.toContainText(/still open|noch offen/i);
 
-            await action.click();
-            await page.waitForLoadState('networkidle');
-        }
-
-        // The self-test is the step's own answer to "does this actually work".
+        // The self-test is the step's own answer to "does this actually work":
+        // it starts the browser, calls the service, runs the task. Once.
         const selftest = page.locator(
             '#region-main form[action*="/local/catquizlab/"] button[type=submit]',
             {hasText: /self-test|Selbsttest/}
         ).first();
-        if (await selftest.count()) {
-            await selftest.click();
-            await page.waitForLoadState('networkidle');
-        }
+        await expect(selftest).toBeVisible();
+        await selftest.click();
+        await page.waitForLoadState('networkidle');
+        await expect(readiness).toContainText(/This installation actually runs|Diese Installation läuft tatsächlich/);
 
         // 2. Experiment plan: define the experiment in the form, with the
         //    parameters this test is about.
@@ -162,8 +167,8 @@ test.describe('CatQuizLab, through the interface', () => {
         await page.fill('#id_name', name);
         await page.fill('#id_replications', '1');
 
-        // Five people, so the profiles actually differ between sittings.
-        await page.fill('#id_personcount', '5');
+        // Several people, so the profiles actually differ between sittings.
+        await page.fill('#id_personcount', PERSONS);
 
         // A pool with room: the selection takes the item that suits the current
         // estimate, so a pool sized to the answer count runs out of suitable
@@ -176,11 +181,16 @@ test.describe('CatQuizLab, through the interface', () => {
         await page.fill('#id_globalmin', '15');
         await page.fill('#id_globalmax', '20');
 
-        // Questions per scale: 3 to 5.
-        await page.fill('#id_subscalemin', '3');
-        await page.fill('#id_subscalemax', '5');
+        // Questions per scale: not for this test's strategy. "fastest" (the
+        // default) does not count by subscale, so since #101 the fields are
+        // switched off and say why — the test used to fill them, and has failed
+        // on a disabled field ever since.
+        await expect(page.locator('#id_subscalemin')).toBeDisabled();
+        await expect(page.locator('#id_subscalemax')).toBeDisabled();
+        await expect(page.locator('[data-catquizlab-na="subscalemax"]')).toBeVisible();
 
-        // Standard error per scale: 0.3 to 2.5.
+        // Standard error: 0.3 to 2.5 — "fastest" does stop by it.
+        await expect(page.locator('#id_semin')).toBeEnabled();
         await page.fill('#id_semin', '0.3');
         await page.fill('#id_semax', '2.5');
 
@@ -245,11 +255,17 @@ test.describe('CatQuizLab, through the interface', () => {
 
             const text = await page.locator('body').innerText();
             const progress = text.match(/(\d+)\s*\/\s*(\d+)/);
+            let total = 0;
             if (progress) {
                 collected = parseInt(progress[1], 10);
+                total = parseInt(progress[2], 10);
             }
 
-            if (/Finished|Abgeschlossen/.test(text) && collected > 0) {
+            // Every sitting collected, not the first one. The earlier condition
+            // matched the word "Finished" anywhere on the page and moved on
+            // after one sitting of six, which passed a test that had not seen
+            // the experiment finish.
+            if (total > 0 && collected >= total) {
                 break;
             }
 

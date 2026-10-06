@@ -72,27 +72,37 @@ class live_status extends external_api {
         require_capability('local/catquizlab:view', $context);
 
         $workers = worker_registry::summary();
-        $verdict = situation::assess();
+        $breakdown = attempt_scheduler::queue_breakdown($experimentid);
+        $verdict = situation::assess($experimentid, $breakdown);
+
+        // Scoped to the experiment in view. Counting the whole installation
+        // beside a table that shows one experiment produced two truths on one
+        // page, and "0 waiting" for the site was read as "0 waiting" for the
+        // experiment somebody had just queued fifty sittings for. With no
+        // experiment in view the counts are the site's, and say so.
+        $scope = $experimentid > 0
+            ? 'runid IN (SELECT id FROM {local_catquizlab_run} WHERE experimentid = :experimentid) AND status = :status'
+            : 'status = :status';
+        $count = static function (int $status) use ($DB, $scope, $experimentid): int {
+            // Only the placeholders the SQL has. Passing experimentid to the
+            // site-wide form, which has no :experimentid, is a DML parameter
+            // mismatch.
+            $params = ['status' => $status];
+            if ($experimentid > 0) {
+                $params['experimentid'] = $experimentid;
+            }
+
+            return (int) $DB->count_records_select('local_catquizlab_attempt', $scope, $params);
+        };
 
         return [
+            'scope'          => $experimentid > 0 ? 'experiment' : 'site',
             'liveworkers'    => (int) $workers['live'],
             'crashedworkers' => (int) $workers['crashed'],
-            'queued'         => $DB->count_records(
-                'local_catquizlab_attempt',
-                ['status' => attempt_scheduler::STATUS_QUEUED]
-            ),
-            'running'        => $DB->count_records(
-                'local_catquizlab_attempt',
-                ['status' => attempt_scheduler::STATUS_RUNNING]
-            ),
-            'collected'      => $DB->count_records(
-                'local_catquizlab_attempt',
-                ['status' => attempt_scheduler::STATUS_COLLECTED]
-            ),
-            'failed'         => $DB->count_records(
-                'local_catquizlab_attempt',
-                ['status' => attempt_scheduler::STATUS_FAILED]
-            ),
+            'queued'         => $count(attempt_scheduler::STATUS_QUEUED),
+            'running'        => $count(attempt_scheduler::STATUS_RUNNING),
+            'collected'      => $count(attempt_scheduler::STATUS_COLLECTED),
+            'failed'         => $count(attempt_scheduler::STATUS_FAILED),
             'state'          => $verdict['state'],
             'headline'       => $verdict['headline'],
             'detail'         => $verdict['detail'],
@@ -102,7 +112,7 @@ class live_status extends external_api {
             // a second renderer disagreeing with the first.
             'changed'        => $verdict['state'],
             'shape'          => self::shape(),
-            'regions'        => self::regions(),
+            'regions'        => self::regions($experimentid),
             // The runs of the experiment in view, each carrying the same
             // verdict the page renders from. One snapshot, one source: the
             // header and the table disagreed because they asked two different
@@ -143,12 +153,19 @@ class live_status extends external_api {
             $total = (int) ($counts['total'] ?? 0);
             $done = (int) ($counts['collected'] ?? 0);
 
+            global $OUTPUT;
+
             $rows[] = [
                 'runid'   => (int) $run->id,
                 'cellkey' => (string) $run->cellkey,
                 'state'   => (string) $card['state'],
                 'level'   => (string) $card['level'],
                 'reason'  => (string) ($card['reason'] ?? ''),
+                // The card as the page renders it. The poll used to update two
+                // hidden spans beside the visible card, which therefore never
+                // changed — and there is no second status logic in JavaScript
+                // to do it with, by design.
+                'cardhtml' => $OUTPUT->render_from_template('local_catquizlab/statuscard', $card),
                 'done'    => $done,
                 'total'   => $total,
                 'percent' => $total > 0 ? (int) round(($done / $total) * 100) : 0,
@@ -222,12 +239,19 @@ class live_status extends external_api {
      * HTML for them would mean two places deciding what a status card looks
      * like.
      *
+     * @param int $experimentid The experiment in view, or 0 for the installation.
      * @return array[]
      */
-    protected static function regions(): array {
-        $queue = \local_catquizlab\local\status_report::queue();
+    protected static function regions(int $experimentid = 0): array {
+        // One count for the card and for the numbers beside it, and scoped to
+        // the experiment in view, so a poll answers for one thing. The worker
+        // pool and the pipeline below stay site-wide, because they are — the
+        // interface labels them as the execution environment rather than as
+        // part of this experiment.
+        $breakdown = \local_catquizlab\local\attempt_scheduler::queue_breakdown($experimentid);
+        $queue = \local_catquizlab\local\status_report::queue($breakdown);
         $pipeline = \local_catquizlab\local\status_report::pipeline();
-        $situation = \local_catquizlab\local\situation::assess();
+        $situation = \local_catquizlab\local\situation::assess($experimentid, $breakdown);
 
         return [
             // The situation names its sentence 'headline'; its 'state' is the
@@ -248,6 +272,7 @@ class live_status extends external_api {
      */
     public static function execute_returns(): external_single_structure {
         return new external_single_structure([
+            'scope'          => new external_value(PARAM_ALPHA, 'experiment or site: what the counts cover.'),
             'liveworkers'    => new external_value(PARAM_INT, 'Workers reporting in.'),
             'crashedworkers' => new external_value(PARAM_INT, 'Workers that stopped reporting.'),
             'queued'         => new external_value(PARAM_INT, 'Attempts waiting.'),
@@ -266,6 +291,7 @@ class live_status extends external_api {
                     'state'   => new external_value(PARAM_TEXT, 'What it is doing, in words.'),
                     'level'   => new external_value(PARAM_ALPHA, 'good, watch or bad.'),
                     'reason'  => new external_value(PARAM_TEXT, 'Why, where there is a why.'),
+                    'cardhtml' => new external_value(PARAM_RAW, 'The status card, rendered.'),
                     'done'    => new external_value(PARAM_INT, 'Attempts collected.'),
                     'total'   => new external_value(PARAM_INT, 'Attempts planned.'),
                     'percent' => new external_value(PARAM_INT, 'How far along.'),

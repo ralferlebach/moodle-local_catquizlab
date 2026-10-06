@@ -98,6 +98,12 @@ class aggregate_results extends \core\task\adhoc_task {
             // the whole point: the alternative is a run that sits in
             // AGGREGATING for ever with nobody able to say why.
             \local_catquizlab\local\run_lifecycle::aggregated($runid, false, $e->getMessage());
+            \local_catquizlab\local\debug_trace::exception(
+                \local_catquizlab\local\debug_trace::TASK,
+                'aggregation_failed',
+                $e,
+                $runid
+            );
             mtrace('local_catquizlab: aggregation failed for run ' . $runid . ': ' . $e->getMessage());
 
             return;

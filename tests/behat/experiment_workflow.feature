@@ -19,7 +19,7 @@ Feature: Defining and running CAT experiments from the web interface
     And I should see "Master seed"
     When I set the following fields to these values:
       | Name                        | Behat baseline |
-      | Persons per run             | 5              |
+      | Simulated DigiTwins per replication | 5      |
       | Minimum items (global)      | 10             |
       | Maximum items (global)      | 15             |
       | SE lower bound              | 0.35           |
@@ -27,6 +27,10 @@ Feature: Defining and running CAT experiments from the web interface
     And I press "Save experiment"
     Then I should see "Experiment saved."
     And I should see "Edit experiment"
+    # Twins, run-persons and sittings, apart (#117).
+    And I should see "5" in the "[data-region='catquizlab-plan-twins']" "css_element"
+    And I should see "Expected run-person rows" in the "[data-region='catquizlab-plan-runpersons']" "css_element"
+    And I should see "Expected test sittings" in the "[data-region='catquizlab-plan-sittings']" "css_element"
 
   Scenario: A contradictory budget is refused with a field-level message
     Given I navigate to "Reports > CAT experiment suite" in site administration
@@ -62,7 +66,7 @@ Feature: Defining and running CAT experiments from the web interface
       | name     | Behat labelled |
       | strategy | lowestsub      |
     When I navigate to "Reports > CAT experiment suite" in site administration
-    Then I should see "Detect weakest subscale"
+    Then I should see "Infer lowest skill gap"
 
   Scenario: Runs can be filtered and opened
     Given the following "local_catquizlab > experiment" exists:
@@ -139,7 +143,7 @@ Feature: Defining and running CAT experiments from the web interface
     And the experiment "Behat locked" has been expanded into runs
     And I navigate to "Reports > CAT experiment suite" in site administration
     When I follow "Behat locked"
-    Then I should see "already has runs"
+    Then I should see "cannot be changed here"
 
   Scenario: The results page offers the filter bar and the tabs
     Given the following "local_catquizlab > experiment" exists:
@@ -274,3 +278,302 @@ Feature: Defining and running CAT experiments from the web interface
     When I navigate to "Reports > CAT experiment suite" in site administration
     And I follow "4. Results"
     Then I should see "No run has been started yet"
+
+  @javascript
+  Scenario: Only strategies the engine can play are offered, in both lists
+    Given I navigate to "Reports > CAT experiment suite" in site administration
+    When I follow "New experiment"
+    # Opened first: a collapsed section's options have no visible text, and a
+    # "does not contain" check on invisible options passes for nothing.
+    And I expand all fieldsets
+    # Checked by value as well as by text, so that neither can pass alone.
+    Then the "CAT strategy" select box should contain "allsubs"
+    And the "CAT strategy" select box should not contain "balanced"
+    And the "CAT strategy" select box should not contain "pilot"
+    And the "Vary strategy" select box should contain "allsubs"
+    And the "Vary strategy" select box should contain "Infer all subscales (allsubs)"
+    And the "Vary strategy" select box should not contain "balanced"
+    And the "Vary strategy" select box should not contain "pilot"
+    And the "Vary strategy" select box should not contain "Balanced content control (balanced)"
+
+  @javascript
+  Scenario: A strategy without subscales needs no subscale budget
+    Given I navigate to "Reports > CAT experiment suite" in site administration
+    When I follow "New experiment"
+    And I set the following fields to these values:
+      | Name                   | Behat fastest only                       |
+      | CAT strategy           | CAT (fastest)                            |
+      | Minimum items (global) | 15                                       |
+      | Maximum items (global) | 35                                       |
+    # The subscale budgets mean nothing to "fastest": they are switched off,
+    # and saving must not demand them.
+    Then the "Minimum items per subscale" "field" should be disabled
+    And the "Maximum items per subscale" "field" should be disabled
+    And I press "Save experiment"
+    Then I should see "Experiment saved."
+    And I should not see "must be a positive integer"
+
+  @javascript
+  Scenario: Per-strategy budgets are labelled and follow the chosen strategies
+    Given I navigate to "Reports > CAT experiment suite" in site administration
+    When I follow "New experiment"
+    And I set the field "CAT strategy" to "Infer all subscales (allsubs)"
+    And I expand all fieldsets
+    Then I should see "Questions per sitting"
+    And I should see "per subscale"
+    # The chosen strategy's row is active, with subscale fields; a strategy not
+    # in play has its row switched off; "fastest" never has subscale fields.
+    And the "perstrategy_allsubs_globalmax" "field" should be enabled
+    And the "perstrategy_allsubs_subscalemax" "field" should be enabled
+    And the "perstrategy_fastest_globalmax" "field" should be disabled
+    And the "perstrategy_fastest_subscalemax" "field" should be disabled
+    # Choosing "fastest" as well switches its row on — but never its subscale fields.
+    When I set the field "Vary strategy" to "CAT (fastest),Infer all subscales (allsubs)"
+    Then the "perstrategy_fastest_globalmax" "field" should be enabled
+    And the "perstrategy_fastest_subscalemax" "field" should be disabled
+
+  @javascript
+  Scenario: Parameters a strategy does not use say so
+    Given I navigate to "Reports > CAT experiment suite" in site administration
+    When I follow "New experiment"
+    And I expand all fieldsets
+    And I set the field "CAT strategy" to "Classical test (classic)"
+    Then the "Minimum items per subscale" "field" should be disabled
+    And the "SE lower bound" "field" should be disabled
+    And the "Include pilot questions" "field" should be disabled
+    And I should see "Not applicable: none of the chosen strategies works with subscales."
+    And I should see "Not applicable: none of the chosen strategies stops by standard error"
+    And I should see "Not applicable: none of the chosen strategies can include pilot questions."
+    When I set the field "CAT strategy" to "Infer all subscales (allsubs)"
+    Then the "Minimum items per subscale" "field" should be enabled
+    And the "SE lower bound" "field" should be enabled
+    And I should not see "Not applicable: none of the chosen strategies works with subscales."
+    And I should not see "Not applicable: none of the chosen strategies stops by standard error"
+
+  Scenario: The results report only the stop rules each strategy actually had
+    Given the following "local_catquizlab > experiment" exists:
+      | name            | Behat stop rules         |
+      | sweepstrategies | fastest,classic,allsubs  |
+    And the experiment "Behat stop rules" has been expanded into runs
+    And the runs of "Behat stop rules" have 3 collected sittings each
+    When I open the results of "Behat stop rules"
+    Then I should see "Stop rules in force"
+    # The adaptive strategies stop at the shared maximum; the classical test
+    # plays every item unless given its own maximum (#104).
+    And I should see "every item of the scale" in the "[data-strategy='classic']" "css_element"
+    And I should see "stops after at most" in the "[data-strategy='fastest']" "css_element"
+    # The classical test has no precision target and no subscales: neither is listed.
+    And I should not see "standard error" in the "[data-strategy='classic']" "css_element"
+    And I should not see "per subscale" in the "[data-strategy='classic']" "css_element"
+    # "fastest" stops by precision but does not count by subscale.
+    And I should see "standard error" in the "[data-strategy='fastest']" "css_element"
+    And I should not see "per subscale" in the "[data-strategy='fastest']" "css_element"
+    # "allsubs" has both.
+    And I should see "standard error" in the "[data-strategy='allsubs']" "css_element"
+    And I should see "per subscale" in the "[data-strategy='allsubs']" "css_element"
+
+  Scenario: An experiment with runs is read-only and offers a copy to change
+    Given the following "local_catquizlab > experiment" exists:
+      | name | Behat frozen |
+    And the experiment "Behat frozen" has been expanded into runs
+    And I navigate to "Reports > CAT experiment suite" in site administration
+    When I follow "Behat frozen"
+    Then I should see "cannot be changed here"
+    And "Save experiment" "button" should not exist
+    # Frozen fields are shown read-only, not removed: visible, not editable.
+    And the "name" "field" should be disabled
+    When I press "Duplicate and change settings"
+    Then "Save experiment" "button" should exist
+    And the "name" "field" should be enabled
+
+  Scenario: A failed sitting shows its reason, its artefacts and a way to download them
+    Given the following "local_catquizlab > experiment" exists:
+      | name | Behat artefacts |
+    And the experiment "Behat artefacts" has been expanded into runs
+    And the first run of "Behat artefacts" has a failed sitting with artefacts
+    When I open the first run of "Behat artefacts"
+    # The normalised reason, as a filter and on the history line.
+    Then I should see "Browser: page replaced during a read (1)" in the "[data-region='catquizlab-reasons']" "css_element"
+    And "[data-reason='execution_context_destroyed']" "css_element" should exist
+    # Which artefacts exist and when they were written.
+    And I should see "Artefacts of try 1: dom.html, screenshot-last.jpg" in the "[data-region='catquizlab-artefacts']" "css_element"
+    # The downloads, for the run, its failed sittings, and the one sitting.
+    And "Download debug ZIP (run)" "button" should exist
+    And "Download debug ZIP (failed sittings)" "button" should exist
+    And "Download debug ZIP" "button" should exist
+    When I follow "Browser: page replaced during a read (1)"
+    Then I should see "Execution context was destroyed"
+
+  Scenario: Without the debug capability there is no download of debug artefacts
+    Given the following "users" exist:
+      | username | firstname | lastname | email               |
+      | nodebug  | No        | Debug    | nodebug@example.com |
+    And the following "role assigns" exist:
+      | user    | role    | contextlevel | reference |
+      | nodebug | manager | System       |           |
+    And the following "permission overrides" exist:
+      | capability              | permission | role    | contextlevel | reference |
+      | local/catquizlab:debug  | Prohibit   | manager | System       |           |
+    And the following "local_catquizlab > experiment" exists:
+      | name | Behat no debug |
+    And the experiment "Behat no debug" has been expanded into runs
+    And the first run of "Behat no debug" has a failed sitting with artefacts
+    And I log out
+    And I log in as "nodebug"
+    When I open the first run of "Behat no debug"
+    # The sitting and its reason are there; the screenshots and page snapshots are not to be had.
+    Then I should see "Execution context was destroyed"
+    And "Download debug ZIP (run)" "button" should not exist
+    And "Download debug ZIP (failed sittings)" "button" should not exist
+    And "Download debug ZIP" "button" should not exist
+
+  @javascript
+  Scenario: The simulated abilities are set explicitly, and an unbounded distribution is warned about
+    Given I navigate to "Reports > CAT experiment suite" in site administration
+    When I follow "New experiment"
+    And I expand all fieldsets
+    Then the field "Distribution of simulated abilities" matches value "Truncated normal"
+    And the field "Mean (μ)" matches value "0"
+    And the field "Standard deviation (σ)" matches value "1"
+    And the field "Ability lower bound" matches value "-3"
+    And the field "Ability upper bound" matches value "3"
+    # The standard deviation means nothing for a uniform distribution.
+    When I set the field "Distribution of simulated abilities" to "Uniform"
+    Then "Standard deviation (σ)" "field" should not be visible
+
+  Scenario: An experiment from before shows what it really draws, and says how much falls outside
+    Given the following "local_catquizlab > experiment" exists:
+      | name | Behat legacy abilities |
+    And I navigate to "Reports > CAT experiment suite" in site administration
+    When I follow "Behat legacy abilities"
+    Then I should see "About 13.4 % of simulated abilities will lie outside [-3.00, 3.00]"
+
+  Scenario: A single test in detail shows its standard error, test information and why it ended
+    Given the following "local_catquizlab > experiment" exists:
+      | name | Behat single test |
+    And the experiment "Behat single test" has been expanded into runs
+    And the first run of "Behat single test" has a collected sitting with a full trace
+    When I open the test flow of "Behat single test"
+    # The head: how the test ended, as words and as a code.
+    Then I should see "Test finished because: Maximum number of questions reached" in the "[data-region='catquizlab-flow-head']" "css_element"
+    And "[data-region='catquizlab-flow-head'] [data-reason='max_items_reached']" "css_element" should exist
+    And I should see "Final SE" in the "[data-region='catquizlab-flow-head']" "css_element"
+    And I should see "Final information of the items played" in the "[data-region='catquizlab-flow-head']" "css_element"
+    And I should see "Final TI@n" in the "[data-region='catquizlab-flow-head']" "css_element"
+    # The steps: standard error and information per step, and what the engine does not record, marked.
+    And I should see "SE after this step" in the "[data-region='catquizlab-flow-steps']" "css_element"
+    And I should see "Information of the items played" in the "[data-region='catquizlab-flow-steps']" "css_element"
+    And I should see "TI@n (global)" in the "[data-region='catquizlab-flow-steps']" "css_element"
+    And I should see "Remaining TI (max)" in the "[data-region='catquizlab-flow-steps']" "css_element"
+    And I should see "N/A" in the "[data-region='catquizlab-flow-steps']" "css_element"
+    And I should see "the test information of the n most informative items of the item pool"
+
+  Scenario: Twins of one simulated person are compared in one plot, and the simulated people are shown
+    Given the following "local_catquizlab > experiment" exists:
+      | name            | Behat twins      |
+      | sweepstrategies | fastest,allsubs  |
+    And the experiment "Behat twins" has been expanded into runs
+    And the runs of "Behat twins" share twin "r001-t00007" with full traces
+    When I open the test flow of "Behat twins"
+    Then I should see "Compare related tests"
+    # The twin family is chosen by default, and both of its tests are drawn, one colour per strategy.
+    And the field "Twin family" matches value "r001-t00007 (2 tests)"
+    And "[data-region='catquizlab-comparison'] polyline[data-region='series']" "css_element" should exist
+    And I should see "CAT (fastest)" in the "[data-region='catquizlab-comparison']" "css_element"
+    And I should see "Infer all subscales (allsubs)" in the "[data-region='catquizlab-comparison']" "css_element"
+    And "[data-download='svg']" "css_element" should exist
+    And "[data-download='csv']" "css_element" should exist
+    # Another metric.
+    When I set the field "Metric" to "SE after this step"
+    And I press "Compare"
+    Then "[data-region='catquizlab-comparison'] polyline[data-region='series']" "css_element" should exist
+    # The simulated people, each twin family once.
+    When I follow "Overview"
+    Then I should see "Simulated people"
+    And I should see "1 simulated people in this selection" in the "[data-region='catquizlab-people-stats']" "css_element"
+
+  Scenario: Every plot exports as SVG with its settings, and its axes follow a profile
+    Given the following "local_catquizlab > experiment" exists:
+      | name | Behat axes |
+    And the experiment "Behat axes" has been expanded into runs
+    And the runs of "Behat axes" have 3 collected sittings each
+    When I open the results of "Behat axes"
+    # Every plot can be exported: the drawing, its data, its settings.
+    Then "[data-region='catquizlab-plot-export'] [data-download='svg']" "css_element" should exist
+    And "[data-region='catquizlab-plot-export'] [data-download='csv']" "css_element" should exist
+    And "[data-region='catquizlab-plot-export'] [data-download='json']" "css_element" should exist
+    # A built-in profile, loaded onto one plot.
+    When I follow "Global metrics"
+    And I set the field "ax_recovery[profile]" to "Ability symmetric [-4, 4]"
+    And I click on "Apply" "button" in the "[data-plot='recovery']" "css_element"
+    Then the field "ax_recovery[profile]" matches value "Ability symmetric [-4, 4]"
+    And the field "ax_recovery[xmin]" matches value "-4"
+    And the field "ax_recovery[sym]" matches value "1"
+
+  Scenario: The logs read sittings in the same chronology, pick a line as a time bound, and tail live
+    Given the following "local_catquizlab > experiment" exists:
+      | name | Behat logs |
+    And the experiment "Behat logs" has been expanded into runs
+    And the first run of "Behat logs" has a failed sitting with artefacts
+    When I visit "/local/catquizlab/logs.php?hours=0&channel=attempt"
+    Then I should see "failed reason=execution_context_destroyed" in the "[data-region='catquizlab-log']" "css_element"
+    And "Sitting" "field" should exist
+    And "Use as from" "button" should exist
+    And "Use as to" "button" should exist
+    And "Live" "field" should exist
+    # From the failed sitting on the run page straight into the log, filtered to it.
+    When I open the first run of "Behat logs"
+    And I click on "a[title='Everything recorded about this sitting']" "css_element"
+    Then I should see "failed reason=execution_context_destroyed" in the "[data-region='catquizlab-log']" "css_element"
+    And the field "Sitting" does not match value ""
+    # What the live tail asks for: the lines after a moment, as JSON.
+    When I visit "/local/catquizlab/logs.php?hours=0&channel=attempt&tail=1&after=0"
+    Then the raw response should contain "{\"lines\":["
+    And the raw response should contain "execution_context_destroyed"
+
+  Scenario: Small multiples on shared axes, saved comparisons, local deviations, and PNG and PDF export
+    Given the following "local_catquizlab > experiment" exists:
+      | name            | Behat multiples  |
+      | sweepstrategies | fastest,allsubs  |
+    And the experiment "Behat multiples" has been expanded into runs
+    And the runs of "Behat multiples" share twin "r001-t00008" with full traces
+    When I open the test flow of "Behat multiples"
+    And I set the field "Layout" to "Small multiples (one plot per test, same axes)"
+    And I set the field "Save comparison as" to "Twins by strategy"
+    And I press "Compare"
+    # One plot per test of the family.
+    Then "[data-region='catquizlab-comparison'] [data-region='catquizlab-multiple']" "css_element" should exist
+    And the field "Load comparison" matches value "Twins by strategy"
+    # The saved comparison comes back after switching away from it.
+    When I set the field "Layout" to "One plot"
+    And I set the field "Load comparison" to "Twins by strategy"
+    And I press "Compare"
+    Then "[data-region='catquizlab-multiple']" "css_element" should exist
+    # Every plot: PNG in the browser, PDF from the server.
+    And "[data-download='png']" "css_element" should exist
+    And "[data-download='pdf']" "css_element" should exist
+    # The simulated people, and their local deviations.
+    When I follow "Overview"
+    Then I should see "Simulated local deviations"
+    When I click on "[data-region='catquizlab-people'] ~ div [data-download='pdf']" "css_element"
+    Then the raw response should contain "%PDF"
+
+  Scenario: Budgets are set per cell of the sweep, and the preview shows every parameter of each cell
+    Given the following "local_catquizlab > experiment" exists:
+      | name            | Behat cells      |
+      | sweepstrategies | fastest,allsubs  |
+    And I navigate to "Reports > CAT experiment suite" in site administration
+    When I follow "Behat cells"
+    And I expand all fieldsets
+    # The classical test plays every item of its scale: no number of questions to set.
+    Then the "perstrategy_classic_globalmin" "field" should be disabled
+    And the "perstrategy_classic_globalmax" "field" should be disabled
+    And the "perstrategy_allsubs_globalmax" "field" should be enabled
+    And I should see "Budgets per cell"
+    When I set cell budget "globalmax" of "allsubs" in "Behat cells" to "25"
+    And I set cell budget "semin" of "allsubs" in "Behat cells" to "0.3"
+    And I press "Save experiment"
+    # The preview: the cell, its model and SE bounds, and its own budget marked.
+    Then I should see "own cell budget"
+    And I should see "strategy allsubs"
+    And I should see "SE lower bound"

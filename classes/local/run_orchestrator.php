@@ -45,6 +45,9 @@ class run_orchestrator {
     /** @var string The adaptivequiz activity could not be created. */
     public const REASON_NO_TEST = 'test-not-created';
 
+    /** @var string The engine holds different settings than the run defines. */
+    public const REASON_ENGINE_MISMATCH = 'engine-settings-differ';
+
     /** @var string The effective configuration differs from the manifest. */
     public const REASON_MANIFEST_DRIFT = 'manifest-configuration-drift';
 
@@ -62,6 +65,12 @@ class run_orchestrator {
 
     /** @var string Generate persons and provision users, course and enrolment. */
     public const STAGE_PEOPLE = 'people';
+
+    /** @var string Another process is setting this run up: nothing was done (#116). */
+    public const REASON_SETUP_IN_PROGRESS = 'setup_in_progress';
+
+    /** @var string Another process has set this run up already: nothing was done (#116). */
+    public const REASON_ALREADY_SET_UP = 'already_set_up';
 
     /** @var string Queue the simulated attempts. */
     /**
@@ -124,6 +133,42 @@ class run_orchestrator {
     public static function setup(int $runid, array $options = []): array {
         global $DB;
 
+        // One setup of a run at a time (#116). Two did run at once — the
+        // queued task from cron and "provision now" from a page — and each
+        // people stage stored every twin, so a run of fifty had a hundred people
+        // and a hundred sittings. Whoever does not get the lock does nothing: it
+        // neither fails the run nor sets it up a second time.
+        $factory = \core\lock\lock_config::get_lock_factory('local_catquizlab_setup');
+        $lock = $factory->get_lock('run_' . $runid, 0);
+        if (!$lock) {
+            run_log::record($runid, run_log::SETUP_SKIPPED, ['why' => 'another setup of this run is in progress']);
+            return ['ok' => false, 'reason' => self::REASON_SETUP_IN_PROGRESS, 'stages' => [], 'concurrent' => true];
+        }
+        try {
+            // Asked again under the lock: the other one may just have finished it.
+            $status = (int) $DB->get_field('local_catquizlab_run', 'status', ['id' => $runid]);
+            $done = [registry::STATUS_READY, registry::STATUS_RUNNING, registry::STATUS_AGGREGATING, registry::STATUS_FINISHED];
+            if (in_array($status, $done, true)) {
+                run_log::record($runid, run_log::SETUP_SKIPPED, ['why' => 'already set up', 'status' => $status]);
+                return ['ok' => true, 'reason' => self::REASON_ALREADY_SET_UP, 'stages' => [], 'concurrent' => true];
+            }
+
+            return self::setup_locked($runid, $options);
+        } finally {
+            $lock->release();
+        }
+    }
+
+    /**
+     * Set up a run end to end, holding its setup lock.
+     *
+     * @param int $runid The run to set up.
+     * @param array $options 'questioncategoryid' for materialisation, 'template'. Polytomy follows the model.
+     * @return array{ok: bool, reason?: string, stages: array<string, mixed>}
+     */
+    protected static function setup_locked(int $runid, array $options = []): array {
+        global $DB;
+
         if (!environment::engine_available()) {
             return ['ok' => false, 'reason' => 'engine-unavailable', 'stages' => []];
         }
@@ -133,7 +178,7 @@ class run_orchestrator {
 
         $drift = self::manifest_drift($run, $definition);
         if ($drift !== []) {
-            $DB->set_field('local_catquizlab_run', 'status', registry::STATUS_FAILED, ['id' => $runid]);
+            run_lifecycle::set_status($runid, registry::STATUS_FAILED, 'setup_failed');
 
             return [
                 'ok'          => false,
@@ -183,7 +228,7 @@ class run_orchestrator {
 
         if ($failedstage !== null) {
             $reason = self::stage_reason($failedstage, $stages[$failedstage]);
-            $DB->set_field('local_catquizlab_run', 'status', registry::STATUS_FAILED, ['id' => $runid]);
+            run_lifecycle::set_status($runid, registry::STATUS_FAILED, 'setup_failed');
 
             return [
                 'ok'          => false,
@@ -193,7 +238,7 @@ class run_orchestrator {
             ];
         }
 
-        $DB->set_field('local_catquizlab_run', 'status', registry::STATUS_SCHEDULED, ['id' => $runid]);
+        run_lifecycle::set_status($runid, registry::STATUS_SCHEDULED, 'setup_complete');
 
         \local_catquizlab\event\run_scheduled::create([
             'objectid' => $runid,
@@ -275,6 +320,14 @@ class run_orchestrator {
             return true;
         }
         if (is_array($result) && !empty($result['failed'])) {
+            return true;
+        }
+        // A stage that answers ok => false has failed. Readiness and access
+        // answered that way and were logged as failed — and then provisioning
+        // carried on, because only stages that also set 'failed' were stopped.
+        // Six runs on a live installation reached "ready" past a readiness
+        // refusal that said, in words, why they could not work.
+        if (is_array($result) && array_key_exists('ok', $result) && empty($result['ok'])) {
             return true;
         }
         if ($stage === self::STAGE_MATERIALISE && is_array($result)) {
@@ -503,6 +556,7 @@ class run_orchestrator {
             $result = self::dispatch_stage($stage, $context);
         } catch (\Throwable $e) {
             run_log::finish_step($token, false, ['reason' => $e->getMessage()]);
+            debug_trace::exception(debug_trace::LIFECYCLE, 'stage_exception', $e, (int) ($context['runid'] ?? 0));
             throw $e;
         }
 
@@ -577,12 +631,38 @@ class run_orchestrator {
                 // call cat_readiness directly rather than through the stage.
                 $readiness = cat_readiness::check((int) $context['runid']);
 
+                if (!$readiness['ok']) {
+                    return [
+                        'ok'     => false,
+                        'reason' => cat_readiness::summary($readiness),
+                        // The counts travel with the stage so the interface can
+                        // show what was actually found rather than only that it
+                        // failed.
+                        'facts'  => $readiness['facts'],
+                    ];
+                }
+
+                // Configuration can be right and the engine can still throw on
+                // the first question. Every check above reads settings; this one
+                // asks the engine for an item exactly as the attempt page would,
+                // inside a transaction it rolls back, and catches what it throws
+                // — with the file and the line a production error page hides.
+                $dryrun = engine_dryrun::first_question((int) $context['runid']);
+                if (!$dryrun['ok']) {
+                    return [
+                        'ok'     => false,
+                        'reason' => get_string('readiness:enginethrew', 'local_catquizlab', $dryrun['reason']),
+                        'facts'  => $readiness['facts'] + [
+                            'code'      => 'engine-dryrun-failed',
+                            'exception' => $dryrun['exception'],
+                        ],
+                    ];
+                }
+
                 return [
-                    'ok'     => $readiness['ok'],
-                    'reason' => $readiness['ok'] ? '' : cat_readiness::summary($readiness),
-                    // The counts travel with the stage so the interface can show
-                    // what was actually found rather than only that it failed.
-                    'facts'  => $readiness['facts'],
+                    'ok'     => true,
+                    'reason' => '',
+                    'facts'  => $readiness['facts'] + ['firstquestionid' => $dryrun['questionid']],
                 ];
 
             case self::STAGE_ATTEMPTS:
@@ -665,6 +745,15 @@ class run_orchestrator {
         global $DB;
         $existingcmid = (int) ($context['run']->testcmid ?? 0);
         if ($existingcmid > 0 && $DB->record_exists('course_modules', ['id' => $existingcmid])) {
+            // A reused activity is held to the same postcondition as a new one.
+            $check = provisioning_check::compare($runid);
+            if (!$check['ok']) {
+                return [
+                    'failed'   => true,
+                    'reason'   => self::REASON_ENGINE_MISMATCH . ': ' . implode(' ', $check['differences']),
+                    'testcmid' => $existingcmid,
+                ];
+            }
             return [
                 'failed'   => false,
                 'testcmid' => $existingcmid,
@@ -688,6 +777,20 @@ class run_orchestrator {
             return ['failed' => true, 'reason' => self::REASON_NO_TEST, 'testcmid' => 0];
         }
 
+        // Postcondition (#104): the engine holds what the run defines. Read
+        // back from the engine's own record of the test and compared field by
+        // field; a difference fails the stage and names what differs, rather
+        // than letting a run test something other than its manifest says.
+        $DB->set_field('local_catquizlab_run', 'testcmid', (int) $testcmid, ['id' => $runid]);
+        $check = provisioning_check::compare($runid);
+        if (!$check['ok']) {
+            return [
+                'failed'   => true,
+                'reason'   => self::REASON_ENGINE_MISMATCH . ': ' . implode(' ', $check['differences']),
+                'testcmid' => (int) $testcmid,
+            ];
+        }
+
         return ['failed' => false, 'testcmid' => (int) $testcmid, 'section' => $container['sectionnum']];
     }
 
@@ -699,6 +802,14 @@ class run_orchestrator {
      */
     protected static function stage_people(array $context): array {
         $runid = (int) $context['runid'];
+        // A run with a twin more than once is not provisioned further (#116):
+        // its population is not the planned one, and every extra row would get
+        // a sitting of its own. Removing them is the operator's decision.
+        $before = person_integrity::check_run($runid);
+        if ($before['duplicates'] !== []) {
+            return ['failed' => true, 'reason' => person_integrity::REASON_DUPLICATE_TWINS,
+                'duplicates' => $before['duplicates']];
+        }
         $persons = person_generator::generate_and_persist(
             $runid,
             $context['definition'],
@@ -708,12 +819,29 @@ class run_orchestrator {
                 'replication'   => (int) ($context['run']->replication ?? 1),
             ]
         );
+        // The stage's postcondition (#116, POP-005): as many people as planned,
+        // each a different twin. Without it, the attempts stage is not reached.
+        $planned = person_generator::planned_count($context['definition']);
+        $after = person_integrity::check_run($runid, $planned);
+        if (!$after['ok']) {
+            return ['failed' => true, 'reason' => person_integrity::REASON_POPULATION_MISMATCH,
+                'planned' => $planned, 'rows' => $after['rows'], 'distinct' => $after['distinct'],
+                'duplicates' => $after['duplicates']];
+        }
         $users = user_provisioner::provision($runid);
 
-        // The starting ability of every simulated person on every scale of the
-        // run. The engine needs one before it can choose a first question, and
-        // a person the worker drops straight into an attempt has none.
-        $seeded = user_provisioner::seed_person_parameters($runid);
+        // No starting abilities are written. They used to be: one row per
+        // person per scale, all at 0.0, on the belief that the engine needed a
+        // value before it could choose a first question. It does not — and
+        // once a context held fifty of them (the engine's threshold), it took
+        // their standard deviation as the prior for every estimate. Fifty
+        // identical values have a standard deviation of zero, and the first
+        // answer of every sitting divided by it. That is what "Division by
+        // zero" on the live installation was, for every run with fifty people.
+        //
+        // A person nobody knows anything about should have no prior. The
+        // engine's own default for an empty context is sd = 1, which is one.
+        $seeded = user_provisioner::remove_seeded_parameters($runid);
 
         $course = course_provisioner::provision($runid);
 
@@ -724,7 +852,7 @@ class run_orchestrator {
         return [
             'persons' => $persons,
             'users'   => $users,
-            'seeded'  => $seeded,
+            'unseeded' => $seeded,
             'course'  => $course,
         ];
     }
@@ -736,7 +864,19 @@ class run_orchestrator {
      * @return array
      */
     protected static function stage_attempts(array $context): array {
-        return ['scheduled' => attempt_scheduler::schedule((int) $context['runid'])];
+        global $DB;
+
+        $runid = (int) $context['runid'];
+        $scheduled = attempt_scheduler::schedule($runid);
+        // One sitting per planned person, no more and no fewer (#117).
+        $planned = person_generator::planned_count($context['definition']);
+        $sittings = $DB->count_records('local_catquizlab_attempt', ['runid' => $runid]);
+        if ($sittings !== $planned) {
+            return ['failed' => true, 'reason' => population_plan::SITTINGS_MISMATCH,
+                'planned' => $planned, 'sittings' => $sittings, 'scheduled' => $scheduled];
+        }
+
+        return ['scheduled' => $scheduled, 'sittings' => $sittings];
     }
 
     /**

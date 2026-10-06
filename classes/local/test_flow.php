@@ -115,12 +115,17 @@ class test_flow {
                     ? (int) ($question['id'] ?? $question['questionid'] ?? 0)
                     : (int) ($items[$index] ?? 0),
                 'scaleid'    => $question !== null ? (int) ($question['catscaleid'] ?? 0) : 0,
-                'fraction'   => ($question !== null && isset($question['fraction']))
-                    ? (float) $question['fraction']
-                    : null,
+                // The score is kept with the responses, not with the question:
+                // read from the question alone, it was always empty (#106).
+                'fraction'   => self::score_of($question, $progress),
                 'ability'    => self::ability_at($path, $index),
+                // How many scales had an estimate after this step: what the
+                // engine's ability path records. Which were active, dropped or
+                // locked at that moment it does not record — only at the end.
+                'scalesestimated' => isset($path[$index]['abilities']) ? count((array) $path[$index]['abilities']) : null,
             ];
         }
+        $metrics = self::information_path($steps, $played, $trace);
 
         $scales = [];
         if ($progress !== []) {
@@ -138,9 +143,315 @@ class test_flow {
             // The trajectory is what distinguishes a full flow from a bare item
             // list, so it decides which source the view reports.
             'source' => $path !== [] ? self::SOURCE_PROGRESS : self::SOURCE_DEBUG,
-            'steps'  => $steps,
+            'steps'  => $metrics['steps'],
             'scales' => $scales,
+            'final'  => $metrics['final'],
         ];
+    }
+
+    /** @var string[] The metrics a trace can be compared by (#109). */
+    public const METRICS = ['ability', 'se', 'ti', 'tiatn', 'tiremainingmin', 'tiremaining', 'scales'];
+
+    /**
+     * TI@n and the remaining potential per step, from the engine.
+     *
+     * TI@n: the information of the n most informative items of the run's pool
+     * at the estimate after step n — the most n items could contribute there.
+     * Beside the information of the n items actually played ('ti'), it says
+     * how close the item selection came to that. Remaining TI (max): what the
+     * items not yet played could still add, as the engine's own
+     * test-information filter computes it. Both null where the engine or the
+     * pool is not there.
+     *
+     * @param array $flow What steps() returned.
+     * @param array $trace The collected trace.
+     * @param int $runid The run.
+     * @param int $maxitems The run's maximum number of questions, -1 for none.
+     * @return array The flow, its steps with tiatn and tiremaining.
+     */
+    public static function with_engine_information(array $flow, array $trace, int $runid, int $maxitems = -1): array {
+        global $DB;
+
+        $played = array_values((array) ($trace['progress']['playedquestions'] ?? []));
+        $model = (string) ($played[0]['model'] ?? '');
+        $root = (int) $DB->get_field_sql(
+            'SELECT catscaleid FROM {local_catquizlab_scalemap} WHERE runid = ? AND parentcatscaleid = 0 ORDER BY generation DESC',
+            [$runid],
+            IGNORE_MULTIPLE
+        );
+        $pool = engine_information::pool($runid, $root, $model);
+        $poolsize = $pool === null ? 0 : count($pool);
+
+        // The items played so far, carried from step to step rather than
+        // rebuilt at each one: rebuilding is quadratic in the test length.
+        $ids = [];
+        foreach ($flow['steps'] as $index => $step) {
+            $flow['steps'][$index]['tiatn'] = null;
+            $flow['steps'][$index]['tiremaining'] = null;
+            $flow['steps'][$index]['tiremainingmin'] = null;
+            if (isset($played[$index])) {
+                $ids[] = (int) ($played[$index]['componentid'] ?? $played[$index]['id'] ?? 0);
+            }
+            if ($pool === null || $step['ability'] === null) {
+                continue;
+            }
+            $n = (int) $step['step'];
+            $allowed = $maxitems < 0 ? $poolsize - $n : $maxitems - $n;
+            // One pass over the pool for both values: the engine's arithmetic,
+            // computed once per step (#99).
+            $metrics = engine_information::step((float) $step['ability'], $pool, $n, $ids, $allowed);
+            $flow['steps'][$index]['tiatn'] = $metrics['tiatn'];
+            $flow['steps'][$index]['tiremaining'] = $metrics['remaining'];
+            $flow['steps'][$index]['tiremainingmin'] = $metrics['remainingmin'];
+        }
+        $last = $flow['steps'] === [] ? [] : $flow['steps'][count($flow['steps']) - 1];
+        $flow['final']['tiatn'] = $last['tiatn'] ?? null;
+        $flow['final']['poolsize'] = $poolsize;
+
+        return $flow;
+    }
+
+    /**
+     * One metric of one sitting, step by step, globally or for one scale (#109).
+     *
+     * For a scale: its estimate after each step from the ability path, and
+     * its test information from the items in its subtree at that estimate —
+     * the engine's own arithmetic, checked on the last step against the
+     * standard error the engine reports for the scale (a leaf from its own
+     * items, a parent from all items below it). Where the check fails the
+     * scale's SE and information are null. Which scales were active at a given
+     * step the engine does not record: that metric has no per-step values for
+     * a scale.
+     *
+     * @param array $flow What steps() returned.
+     * @param array $trace The collected trace.
+     * @param string $metric One of METRICS.
+     * @param int $scaleid 0 for the global ability, else a catscale id.
+     * @param int[] $subtree The scale and every scale below it.
+     * @param int $runid The run, for the engine's item pool (TI@n of a scale).
+     * @param int $subscalemax The run's questions per subscale, -1 for no limit.
+     * @return array{points: array[], consistent: bool, status: string}
+     */
+    public static function series(
+        array $flow,
+        array $trace,
+        string $metric,
+        int $scaleid = 0,
+        array $subtree = [],
+        int $runid = 0,
+        int $subscalemax = -1
+    ): array {
+        $points = [];
+        if ($scaleid === 0) {
+            $field = ['ability' => 'ability', 'se' => 'se', 'ti' => 'ti', 'tiatn' => 'tiatn',
+                'tiremainingmin' => 'tiremainingmin', 'tiremaining' => 'tiremaining',
+                'scales' => 'scalesestimated'][$metric] ?? 'ability';
+            foreach ($flow['steps'] as $step) {
+                $points[] = ['x' => $step['step'], 'y' => $step[$field] ?? null];
+            }
+            return ['points' => $points, 'consistent' => (bool) ($flow['final']['consistent'] ?? false), 'status' => ''];
+        }
+
+        $path = array_values((array) ($trace['abilitypath'] ?? []));
+        $played = array_values((array) ($trace['progress']['playedquestions'] ?? []));
+        $subtree = array_map('intval', $subtree === [] ? [$scaleid] : $subtree);
+        $values = [];
+        foreach ($flow['steps'] as $index => $step) {
+            $abilities = (array) ($path[$index]['abilities'] ?? []);
+            $theta = isset($abilities[$scaleid]) ? (float) $abilities[$scaleid] : null;
+            $ti = null;
+            if ($theta !== null) {
+                $ti = 0.0;
+                for ($j = 0; $j <= $index && $j < count($played); $j++) {
+                    if (!in_array((int) ($played[$j]['catscaleid'] ?? 0), $subtree, true)) {
+                        continue;
+                    }
+                    $information = self::item_information((array) $played[$j], $theta);
+                    if ($information === null) {
+                        $ti = null;
+                        break;
+                    }
+                    $ti += $information;
+                }
+            }
+            $values[] = ['step' => $step['step'], 'theta' => $theta, 'ti' => $ti,
+                'se' => ($ti !== null && $ti > 0) ? 1.0 / sqrt($ti) : null];
+        }
+
+        $engine = $trace['scalestandarderrors'][$scaleid] ?? null;
+        $last = $values === [] ? null : $values[count($values) - 1];
+        $consistent = is_numeric($engine) && $last !== null && $last['se'] !== null
+            && abs($last['se'] - (float) $engine) / max((float) $engine, 1e-9) < 0.01;
+
+        $scalepool = (in_array($metric, ['tiatn', 'tiremaining', 'tiremainingmin'], true) && $runid > 0 && $played !== [])
+            ? engine_information::pool($runid, $scaleid, (string) ($played[0]['model'] ?? ''))
+            : null;
+        // What may still be played on this scale (#109): a single subscale is
+        // bounded by the questions per subscale; a category of several is not
+        // bounded by one number, and the rest of its items is what remains.
+        $poolsize = $scalepool === null ? 0 : count($scalepool);
+        $bounded = count($subtree) === 1 && $subscalemax > 0;
+        $inscale = 0;
+        $scaleplayed = [];
+        foreach ($values as $index => $value) {
+            if (isset($played[$index]) && in_array((int) ($played[$index]['catscaleid'] ?? 0), $subtree, true)) {
+                $inscale++;
+                $scaleplayed[] = (int) ($played[$index]['componentid'] ?? $played[$index]['id'] ?? 0);
+            }
+            $metrics = ($scalepool !== null && $value['theta'] !== null && $inscale > 0)
+                ? engine_information::step(
+                    (float) $value['theta'],
+                    $scalepool,
+                    $inscale,
+                    $scaleplayed,
+                    $bounded ? $subscalemax - $inscale : $poolsize - $inscale
+                )
+                : ['tiatn' => null, 'remaining' => null, 'remainingmin' => null];
+            $values[$index]['tiatn'] = $metrics['tiatn'];
+            $values[$index]['tiremaining'] = $metrics['remaining'];
+            $values[$index]['tiremainingmin'] = $metrics['remainingmin'];
+        }
+
+        foreach ($values as $value) {
+            $y = null;
+            if (in_array($metric, ['tiatn', 'tiremaining', 'tiremainingmin'], true)) {
+                $y = $value[$metric];
+            } else if ($metric === 'ability') {
+                $y = $value['theta'];
+            } else if ($metric === 'se' && $consistent) {
+                $y = $value['se'];
+            } else if ($metric === 'ti' && $consistent) {
+                $y = $value['ti'];
+            }
+            $points[] = ['x' => $value['step'], 'y' => $y];
+        }
+
+        $progress = (array) ($trace['progress'] ?? []);
+        $status = '';
+        foreach (['active' => 'activescales', 'dropped' => 'droppedscales', 'locked' => 'lockedscales'] as $label => $key) {
+            if (in_array($scaleid, array_map('intval', (array) ($progress[$key] ?? [])), true)) {
+                $status = $label;
+            }
+        }
+
+        return ['points' => $points, 'consistent' => $consistent, 'status' => $status];
+    }
+
+    /**
+     * The score of a played question, from wherever the engine kept it.
+     *
+     * @param array|null $question The played question.
+     * @param array $progress The progress snapshot.
+     * @return float|null
+     */
+    protected static function score_of(?array $question, array $progress): ?float {
+        if ($question === null) {
+            return null;
+        }
+        if (isset($question['fraction']) && is_numeric($question['fraction'])) {
+            return (float) $question['fraction'];
+        }
+        $id = (string) ($question['id'] ?? $question['questionid'] ?? '');
+        foreach ((array) ($progress['responses'] ?? []) as $key => $response) {
+            if ((string) $key === $id || (string) ($response['questionid'] ?? '') === $id) {
+                return isset($response['fraction']) && is_numeric($response['fraction']) ? (float) $response['fraction'] : null;
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * Test information and standard error after every step (#106).
+     *
+     * The engine keeps the item parameters of every question played and the
+     * estimate after every step, but neither the information nor the standard
+     * error per step. Both follow from those: TI@n is the sum of the item
+     * informations at the estimate after step n, and SE = 1/√TI@n. Whether this
+     * is the engine's own arithmetic is checked on the last step against the
+     * information and standard error the engine does report; where they do not
+     * agree — a model whose information is not computed here, a missing
+     * estimate — every computed value is withheld (null, shown as N/A) rather
+     * than shown unconfirmed.
+     *
+     * @param array[] $steps The steps built so far.
+     * @param array[] $played The played questions, in order, with their parameters.
+     * @param array $trace The collected trace.
+     * @return array{steps: array[], final: array}
+     */
+    public static function information_path(array $steps, array $played, array $trace): array {
+        $enginetime = isset($trace['information']) && is_numeric($trace['information']) ? (float) $trace['information'] : null;
+        $enginese = isset($trace['finalse']) && is_numeric($trace['finalse']) ? (float) $trace['finalse'] : null;
+
+        foreach ($steps as $index => $step) {
+            $ti = null;
+            if ($step['ability'] !== null && count($played) > $index) {
+                $ti = 0.0;
+                for ($j = 0; $j <= $index; $j++) {
+                    $information = self::item_information((array) $played[$j], (float) $step['ability']);
+                    if ($information === null) {
+                        $ti = null;
+                        break;
+                    }
+                    $ti += $information;
+                }
+            }
+            $steps[$index]['ti'] = $ti;
+            $steps[$index]['se'] = ($ti !== null && $ti > 0) ? 1.0 / sqrt($ti) : null;
+        }
+
+        $last = $steps === [] ? null : $steps[count($steps) - 1];
+        $computed = $last['ti'] ?? null;
+        $consistent = $computed !== null && $enginetime !== null && $enginetime > 0
+            && abs($computed - $enginetime) / $enginetime < 0.001;
+
+        if (!$consistent) {
+            foreach ($steps as $index => $step) {
+                $steps[$index]['ti'] = null;
+                $steps[$index]['se'] = null;
+            }
+        }
+
+        return [
+            'steps' => $steps,
+            'final' => [
+                'ti'         => $consistent ? $computed : $enginetime,
+                'se'         => $enginese ?? ($consistent ? 1.0 / sqrt((float) $computed) : null),
+                'engine_ti'  => $enginetime,
+                'engine_se'  => $enginese,
+                'consistent' => $consistent,
+            ],
+        ];
+    }
+
+    /**
+     * Fisher information of a dichotomous logistic item at an ability.
+     *
+     * For the models whose parameters are a, b and c — Rasch, Birnbaum (2PL)
+     * and their three-parameter form: I = a² · ((P − c)² / (1 − c)²) · (1 − P) / P.
+     * Anything else returns null and is not guessed at.
+     *
+     * @param array $question A played question with model, discrimination, difficulty, guessing.
+     * @param float $theta The ability.
+     * @return float|null
+     */
+    public static function item_information(array $question, float $theta): ?float {
+        $model = (string) ($question['model'] ?? '');
+        if (!in_array($model, ['rasch', 'raschbirnbaum', 'mixedraschbirnbaum'], true)) {
+            return null;
+        }
+        $a = $model === 'rasch' ? 1.0 : (float) ($question['discrimination'] ?? 1.0);
+        $b = (float) ($question['difficulty'] ?? 0.0);
+        $c = $model === 'mixedraschbirnbaum' ? (float) ($question['guessing'] ?? 0.0) : 0.0;
+        if ($c < 0.0 || $c >= 1.0) {
+            return null;
+        }
+        $p = $c + (1.0 - $c) / (1.0 + exp(-$a * ($theta - $b)));
+        if ($p <= 0.0 || $p >= 1.0) {
+            return 0.0;
+        }
+
+        return $a * $a * (($p - $c) ** 2 / (1.0 - $c) ** 2) * ((1.0 - $p) / $p);
     }
 
     /**

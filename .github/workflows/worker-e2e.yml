@@ -33,7 +33,10 @@ on:
       run_e2e:
         description: 'Also run the end-to-end job (needs the CAT engine)'
         type: boolean
-        default: false
+        # Ticked by default: somebody starting this by hand almost always wants
+        # the end-to-end run, and having to remember the box means the run that
+        # would have caught something is the one that skipped it.
+        default: true
         required: false
 
 jobs:
@@ -106,7 +109,15 @@ jobs:
 
       - name: Check out the CAT engine and its host activity
         run: |
-          git clone --depth 1 https://github.com/ralferlebach/moodle-local_catquiz.git \
+          # The branch the live installation runs, not main: catquiz 1.2.1 on
+          # ALiSe-v-1.2.0-legacy dropped local_catquiz_attemptscale and stopped
+          # writing debug_info, and a CI testing against main tested an engine
+          # nobody uses. Its two hub subplugins are git submodules; a plain
+          # clone leaves their directories empty, and Moodle then fails on a
+          # plugin without a version.php.
+          git clone --depth 1 --recurse-submodules --shallow-submodules \
+              -b "${CATQUIZ_BRANCH:-ALiSe-v-1.2.0-legacy}" \
+              https://github.com/ralferlebach/moodle-local_catquiz.git \
               moodle/local/catquiz
           git clone --depth 1 https://github.com/ralferlebach/moodle-mod_adaptivequiz.git \
               moodle/mod/adaptivequiz
@@ -171,7 +182,13 @@ jobs:
       - name: Start the web server
         working-directory: moodle
         run: |
-          nohup php -S 127.0.0.1:8000 -t . > /tmp/webserver.log 2>&1 &
+          # More than one worker. PHP's development server answers one request
+          # at a time by default, and the self-test makes an HTTP call to this
+          # very server from inside a request — which then waits for itself
+          # until it times out and reports the token as not answering. On a
+          # real web server this never happens, which is why the same self-test
+          # is green on a production site and red here.
+          PHP_CLI_SERVER_WORKERS=4 nohup php -S 127.0.0.1:8000 -t . > /tmp/webserver.log 2>&1 &
           for i in $(seq 1 20); do
             if curl -sf -o /dev/null http://127.0.0.1:8000/; then exit 0; fi
             sleep 1
@@ -186,10 +203,13 @@ jobs:
 
       - name: Play one attempt through the real UI
         working-directory: moodle/local/catquizlab/worker
+        # The token in the environment, not on the command line, where every
+        # process listing shows it (#111).
+        env:
+          CATQUIZLAB_WORKER_TOKEN: ${{ steps.prepare.outputs.token }}
         run: |
           node run_attempt.js \
               --base-url=http://127.0.0.1:8000 \
-              --token='${{ steps.prepare.outputs.token }}' \
               --max-jobs=1
 
       - name: Verify the queue reports the attempt as finished
@@ -208,6 +228,31 @@ jobs:
           MINUTES: 4
         run: bash local/catquizlab/cli/smoke_all.sh
 
+
+      - name: Issue 100 — load test, several hundred sittings without a navigation failure
+        working-directory: moodle
+        timeout-minutes: 35
+        env:
+          MOODLE_ROOT: ${{ github.workspace }}/moodle
+        # 300 sittings, four workers, some 6000 question transitions. Every
+        # execution is counted, including ones a retry later covered: a single
+        # "Execution context was destroyed", "did not reach the finish page" or
+        # "fetch failed" fails the step.
+        run: >-
+          php local/catquizlab/cli/smoke.php --strategy=fastest --persons=300
+          --concurrency=4 --minutes=30 --no-navigation-failures
+
+      - name: Issue 102 — the ability range reaches the engine's root scale
+        working-directory: moodle
+        # A truncated N(0, 1.5) within [-4, 4]: the root scale the engine holds
+        # must have exactly that range, read back from local_catquiz_catscales.
+        run: php local/catquizlab/cli/smoke.php --strategy=fastest --case=102 --provisioning-only
+
+      - name: Issue 104 — effective parameters reach the created activities
+        working-directory: moodle
+        # classic unlimited, allsubs 80, relsubs 40: read back from the engine's
+        # record of each created test, not from the definition.
+        run: php local/catquizlab/cli/smoke.php --case=104 --provisioning-only
       - name: Collect logs on failure
         if: failure()
         run: |

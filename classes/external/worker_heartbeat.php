@@ -56,6 +56,12 @@ class worker_heartbeat extends external_api {
                 VALUE_DEFAULT,
                 'working'
             ),
+            'reason'    => new external_value(
+                PARAM_ALPHAEXT,
+                'Why it is stopping: queue-empty, max-jobs, stop-requested or fatal-error.',
+                VALUE_DEFAULT,
+                ''
+            ),
         ]);
     }
 
@@ -65,13 +71,20 @@ class worker_heartbeat extends external_api {
      * @param string $workerid The worker instance.
      * @param int $attemptid The attempt being played, or 0.
      * @param string $state What the worker is doing.
+     * @param string $reason Why it is stopping, when it is: queue-empty, max-jobs, stop-requested or fatal-error.
      * @return array
      */
-    public static function execute(string $workerid, int $attemptid = 0, string $state = 'working'): array {
+    public static function execute(
+        string $workerid,
+        int $attemptid = 0,
+        string $state = 'working',
+        string $reason = ''
+    ): array {
         $params = self::validate_parameters(self::execute_parameters(), [
             'workerid'  => $workerid,
             'attemptid' => $attemptid,
             'state'     => $state,
+            'reason'    => $reason,
         ]);
 
         $context = \context_system::instance();
@@ -84,15 +97,28 @@ class worker_heartbeat extends external_api {
             (string) $params['state']
         );
 
-        // A worker on its way out, with work still claimable and nobody left to
-        // claim it. Waiting for the next scheduled tick would stop an
-        // experiment for up to five minutes because a browser process reached
-        // its rotation limit — a resource setting deciding a scientific run.
-        if (in_array((string) $params['state'], ['stopping', 'stopped'], true)) {
-            $replacement = worker_registry::replacement_needed();
+        // A worker the registry has never seen, presenting a valid token: it
+        // was started by hand, or by a CI job, rather than by the launcher.
+        // Telling it to stop made every such worker play exactly nothing. It
+        // takes a free slot instead; only when none is free does it stop, since
+        // the slot count is the one limit that has to hold.
+        if (!$known && (string) $params['state'] !== 'stopping') {
+            $known = worker_registry::adopt((string) $params['workerid']);
+        }
 
-            if ($replacement['needed']) {
-                worker_launcher::launch_pool(worker_launcher::config_from_settings(), 1);
+        $stopping = in_array((string) $params['state'], ['stopping', 'stopped'], true);
+        $why = (string) $params['reason'];
+
+        if ($stopping) {
+            worker_registry::record_stop((string) $params['workerid'], $why);
+
+            // Replaced only when it left because of its rotation limit: that is
+            // a resource setting ending a process, and the work goes on. A
+            // worker that stopped because it was asked to, or because the
+            // queue was empty, is not replaced — starting one then would undo
+            // the stop somebody requested, which it did for a release.
+            if ($why === 'max-jobs' && worker_registry::replacement_needed()['needed']) {
+                worker_launcher::launch_pool(worker_launcher::config_from_settings());
             }
         }
 

@@ -53,6 +53,14 @@ class worker_launcher {
         if (!empty($config['workerid'])) {
             $argv[] = '--worker-id=' . $config['workerid'];
         }
+        // Where a failed execution leaves its screenshots, DOM and events, in
+        // moodledata (#107).
+        if (!empty($config['artefactdir'])) {
+            $argv[] = '--artefact-dir=' . $config['artefactdir'];
+        }
+        if (!empty($config['captureall'])) {
+            $argv[] = '--capture=all';
+        }
         $maxjobs = (int) ($config['maxjobs'] ?? 0);
         if ($maxjobs > 0) {
             $argv[] = '--max-jobs=' . $maxjobs;
@@ -85,6 +93,8 @@ class worker_launcher {
             'token'   => (string) get_config('local_catquizlab', 'worker_token'),
             'maxjobs' => (int) get_config('local_catquizlab', 'worker_max_jobs'),
             'workerid' => 'catquizlab-exec',
+            'artefactdir' => artefact_store::root(),
+            'captureall'  => (bool) get_config('local_catquizlab', 'artefacts_capture_all'),
             'loginmode' => (string) get_config('local_catquizlab', 'worker_login_mode'),
             'loginurltemplate' => (string) get_config('local_catquizlab', 'worker_login_url_template'),
             'loginsuffix' => (string) get_config('local_catquizlab', 'worker_login_suffix'),
@@ -145,17 +155,26 @@ class worker_launcher {
         global $CFG;
 
         $node = (string) ($config['node'] ?? get_config('local_catquizlab', 'worker_node_path'));
-        $npx = dirname($node) . '/npx';
-        if (!is_executable($npx)) {
+
+        // Puppeteer's own command line, from the packages npm just installed,
+        // run by Node directly. This used npx found beside the Node binary: it
+        // failed the same way npm did when npx was a link into somebody's home
+        // directory, and where it worked it downloaded Puppeteer a second time
+        // because it ran in the plugin directory, where no packages are.
+        $cli = self::runtime_dir() . '/node_modules/puppeteer/lib/cjs/puppeteer/node/cli.js';
+        if (!is_readable($cli)) {
+            $cli = $CFG->dirroot . '/local/catquizlab/worker/node_modules/puppeteer/lib/cjs/puppeteer/node/cli.js';
+        }
+        if (!is_readable($cli)) {
             return [
                 'exitcode' => 127,
-                'output'   => get_string('ops:nonpx', 'local_catquizlab', $npx),
+                'output'   => get_string('runtime:nopuppeteercli', 'local_catquizlab'),
                 'command'  => '',
             ];
         }
 
-        $argv = [$npx, '--yes', 'puppeteer', 'browsers', 'install', 'chrome'];
-        $command = 'cd ' . escapeshellarg($CFG->dirroot . '/local/catquizlab/worker') . ' && '
+        $argv = [$node, $cli, 'browsers', 'install', 'chrome'];
+        $command = 'cd ' . escapeshellarg(self::runtime_dir()) . ' && '
             . self::command_with_environment($config, $argv);
 
         $output = [];
@@ -366,15 +385,52 @@ class worker_launcher {
             }
         }
 
-        $environment = [
+        $environment = [];
+
+        // Moodle's proxy, for npm and for Puppeteer's browser download. Without
+        // it a site behind a proxy — the normal case at a university — could
+        // reach the internet from Moodle and not from the installation it
+        // started, and the failure read as npm's network error.
+        $proxy = worker_runtime::proxy_url();
+        if ($proxy !== '') {
+            $names = ['HTTPS_PROXY', 'HTTP_PROXY', 'https_proxy', 'http_proxy', 'npm_config_proxy', 'npm_config_https_proxy'];
+            foreach ($names as $name) {
+                $environment[] = $name . '=' . $proxy;
+            }
+            $bypass = trim((string) ($CFG->proxybypass ?? ''));
+            if ($bypass !== '') {
+                $environment[] = 'NO_PROXY=' . $bypass;
+                $environment[] = 'no_proxy=' . $bypass;
+            }
+        }
+
+        $environment = array_merge($environment, [
             'HOME=' . $home,
             'PUPPETEER_CACHE_DIR=' . $cache,
+            // Where the worker's dependencies live: in the dataroot, which
+            // survives a plugin upgrade. In the plugin directory they did not —
+            // every upgrade replaced the folder, the modules vanished, and an
+            // installation that was ready on Friday was not on Monday. Node
+            // falls back to NODE_PATH for anything it cannot find beside the
+            // script, so the script itself needs no change.
+            'NODE_PATH=' . self::runtime_dir() . '/node_modules',
             'XDG_CACHE_HOME=' . $home . '/.cache',
             'XDG_CONFIG_HOME=' . $home . '/.config',
             'XDG_DATA_HOME=' . $home . '/.local/share',
-        ];
+        ]);
 
         return $environment;
+    }
+
+    /**
+     * The directory the worker's dependencies are installed in.
+     *
+     * @return string
+     */
+    public static function runtime_dir(): string {
+        global $CFG;
+
+        return $CFG->dataroot . '/local_catquizlab/worker-runtime';
     }
 
     /**
@@ -426,8 +482,20 @@ class worker_launcher {
      * @return array|null ['launched' => int, 'exitcode' => int, 'output' => string]
      */
     public static function launch_pool(array $config): ?array {
-        if (empty($config['enabled']) || !self::is_configured($config)) {
-            return null;
+        // Never a silent null. The tick called this every five minutes for
+        // fifteen minutes on an installation whose worker switch was off, got
+        // null back, printed nothing, and the page said "stalled" with no word
+        // about what was missing.
+        $missing = self::missing($config);
+        if ($missing !== []) {
+            return [
+                'launched' => 0,
+                'skipped'  => 0,
+                'reason'   => 'not-configured: ' . implode(', ', $missing),
+                'failures' => [],
+                'exitcode' => 0,
+                'output'   => '',
+            ];
         }
 
         $concurrency = max(1, (int) ($config['concurrency'] ?? 1));
@@ -574,10 +642,33 @@ class worker_launcher {
      * @return bool
      */
     protected static function is_configured(array $config): bool {
-        return !empty($config['node'])
-            && !empty($config['script'])
-            && !empty($config['baseurl'])
-            && !empty($config['token'])
-            && is_readable((string) $config['script']);
+        return self::missing($config) === [];
+    }
+
+    /**
+     * What a launch would need and does not have, by name.
+     *
+     * @param array $config The launch configuration.
+     * @return string[]
+     */
+    public static function missing(array $config): array {
+        $missing = [];
+        if (empty($config['enabled'])) {
+            $missing[] = 'worker_exec_enabled';
+        }
+        if (empty($config['node'])) {
+            $missing[] = 'worker_node_path';
+        }
+        if (empty($config['baseurl'])) {
+            $missing[] = 'worker_base_url';
+        }
+        if (empty($config['token'])) {
+            $missing[] = 'worker_token';
+        }
+        if (empty($config['script']) || !is_readable((string) $config['script'])) {
+            $missing[] = 'worker script';
+        }
+
+        return $missing;
     }
 }

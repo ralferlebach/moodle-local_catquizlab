@@ -6,6 +6,2707 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.7.28] — 2026-10-05 — #118: an end before the minimum is not a regular one
+
+### What Experiment 12 showed, and more
+22 of 50 `fastest` sittings ended after 5 to 14 questions — the minimum was 15 —
+with the engine out of questions, many with a standard error below the target.
+The results counted them as precision successes. Checking the cause found more:
+
+- **"No remaining questions" was not recognised in any language.** The engine's
+  text is "You ran out of questions" in English, "Keine weiteren Fragen" in
+  German; the patterns matched neither. Every such end fell to the SE target, a
+  subscale or pool rule, or "finished_other".
+- **The classification knew no minimum number of questions** and asked the SE
+  target before the engine's own reason.
+- **`results_query` dropped two filters without a word:** `runid` — a query for
+  one run read every run (107 sittings instead of 15 locally) — and the new
+  `validity`.
+
+### The engine's code, not its text
+The engine keeps a language-independent end code beside its stop text, in
+`local_catquiz_attempts.status` (1 = out of questions, 4 = maximum reached, …).
+New traces carry it; for traces collected before, the results read it from the
+engine's table, batch by batch — so existing results, Experiment 12 included,
+are classified anew without collecting again. Where there is no number, the
+text is matched against the engine's strings in every installed language.
+
+### The classification
+Before the minimum number of questions no end is a regular one: not a standard
+error at its target, since the design does not allow a stop there. Out of
+questions before it is `no_eligible_item_before_minimum`, any other end
+`ended_before_minimum`; both make a result invalid. Strategies without a
+minimum — the classical test — are not held to one.
+
+### Three things kept apart
+Per sitting: did the engine finish it, did it end as the design planned (a stop
+rule met), may its result go into the figures (`result_validity`). In the
+export and the raw data as `enginefinished`, `designstopreached`, `valid`,
+`validityreason`, appended.
+
+### The results
+Every aggregated view uses valid sittings only by default; the raw data shows
+all, marked; `validity=valid|invalid|all` chooses. Above every view: "Valid
+sittings: 28 / 50 (56.0 %) · excluded — No eligible item left before the
+minimum number of questions: 22 / 50 (44.0 %)". The test-length plot says what
+it leaves out. The success of the stop rules is a share of all sittings — in the
+overview, per strategy and per cell — so 22 ends before the minimum can no
+longer read as 100 %. The aggregator and the collector classify the same way;
+the aggregator stores `validshare` with the reasons.
+
+### Stop-rule success keeps its meaning
+"Stopped on a criterion, not on exhaustion", as documented: the standard error
+at its target, a subscale rule, the full fixed form — not the maximum number of
+questions, not running out of items. A first version of this release counted the
+maximum as a success, changing a documented metric silently; it was taken back.
+What #118 adds is kept apart: `designstopreached` marks any planned end, the
+maximum included.
+
+### Found while making the existing tests pass
+- The stop keys of older traces (`standarderror`, `maxquestions`, `nomoreitems`,
+  …), which the old list of stop texts knew, are recognised as aliases — without
+  them they would have fallen to "finished_other".
+- The aggregator now reads its sittings from the same place as every view; per
+  stratum it keeps the person's stratum, as before, and the item count falls
+  back to the item list where a trace has no count.
+- Test data whose runs had a minimum of 10 questions and traces of 2 or 3 items
+  — invalid under the new rule, rightly — were given a minimum they meet, and a
+  test run with an adaptive test's stop reasons an adaptive strategy; the rule
+  itself was not softened for them.
+
+### Tests
+The issue's cases (SE 0.20 after 7 of 15 and after 15, out of questions after
+17, maximum after 35); the engine's text whatever its language; and Experiment
+12's run as a regression test — the observed lengths of the 22, one of them
+from before with its code only in the engine's table: 28 valid, 22 excluded,
+stop rules met in 56 %, said above the figures.
+
+---
+
+## [0.7.27] — 2026-10-02 — #117: people, twins and sittings, apart; plan against actual
+
+### The plan, before anything is created
+The preview shows three numbers instead of "estimated test attempts": simulated
+DigiTwins per replication (or "differs by cell"), expected run-person rows and
+expected test sittings — each derived from the definition, and the sweep's own
+count checked against it. The field is "Simulated DigiTwins per replication",
+with help: the same twins in every cell, which pairs the comparison — not the
+number of sittings, which is twins × cells × replications.
+
+### The actual, run by run
+`population_plan::actual()`: per run the planned people, the rows stored, the
+distinct twins and the sittings, with a state — as planned, twins more than
+once, people missing or extra, sittings not one per person. The progress page
+and the results' provenance say the same sentence from the same numbers, and
+where the experiment is not as planned, a warning above everything else names
+the runs and what is wrong — on the results even before there are any.
+
+### No execution when it does not match
+- The attempts stage: one sitting per planned person, no more, no fewer, or it
+  fails.
+- The claim: a run with a twin more than once is failed with its reason instead
+  of handing out its sittings — runs damaged before 0.7.26 included, rather than
+  left to look as if they hang.
+
+### Experiment 12's case, as a regression test
+Six strategies of fifty twins, relsubs with every twin stored twice and each
+copy given a sitting — 350 sittings for 300 planned: recognised as inconsistent
+without anybody looking, with relsubs named as the one run (100 rows for 50
+twins, 100 sittings) and every other run as planned.
+
+### #116, the rest
+A test that an interrupted people stage is continued — the rows already there
+kept, the missing ones added — and the worker end-to-end test now checks every
+run's population after scheduling: planned people, each twin once, one sitting
+each.
+
+---
+
+## [0.7.26] — 2026-10-02 — #116: each digital twin once per run
+
+### The cause: two setups of one run at once
+A run's log showed two complete setups interleaved within the same second —
+scales, materialise, people, twice over. A run is set up by the queued task (from
+cron) or by "provision now" (from a page); neither held a lock, and the status
+check before them is not atomic. Both people stages stored every twin: five
+planned, ten people, ten sittings. The local installation had eight runs like
+that, among them the interface end-to-end run of the morning — the "ten sittings
+for five people" read then as twins twice was this. Experiment 12's
+"relsubs = 100 instead of 50" fits the same pattern.
+
+### What prevents it now
+- **One setup of a run at a time:** `run_orchestrator::setup()` takes a lock per
+  run. Whoever does not get it does nothing — no second setup, no failed run —
+  and the log says so (`setup_skipped`); under the lock the status is asked
+  again, and a run another process has just set up is left as it is.
+- **The database's guarantee:** a new table `local_catquizlab_twinclaim` with a
+  unique key on (run, twin). Every person claims its twin first; a second claim
+  fails in the database itself, whichever process makes it. A twin already
+  claimed is reused — if its ground truth is the same; a different one is
+  refused, never changed silently. The upgrade claims every (run, twin) present,
+  so that damaged runs grow no further. (A unique key on the person table
+  itself would make the upgrade fail wherever duplicates exist, and removing
+  them is not the plugin's to do.)
+- **The people stage's postcondition:** person rows = distinct twins = planned
+  people, or the stage fails and no sitting is scheduled. A run with a twin twice
+  is refused before anything is stored.
+- **The scheduler:** no sittings for a run with a twin twice.
+
+### Existing duplicates
+Not deleted — that is an operator's decision, and their sittings may hold
+results. The run page says how many twins are there more than once, how many
+extra rows and which twins; `person_integrity::runs_with_duplicates()` lists
+every such run with the sittings on the extra rows.
+
+### Tests
+Storing twice stores once; a different ground truth is refused; the database
+refuses a second claim; a concurrent setup does nothing and does not fail the
+run (with file locks, which within one process behave as two processes do —
+PostgreSQL's advisory locks are re-entrant within a session); a damaged run is
+blocked and diagnosed; fewer people than planned fails the postcondition.
+
+---
+
+## [0.7.25] — 2026-10-02 — #109: remaining TI per scale
+
+"For the selected scale: estimate, SE, TI@n, remaining TI min/max, status"
+(#109, criterion 10): the remaining TI was there for the test as a whole only.
+The comparison offers "Remaining TI (max)" and "(min)" as metrics now, globally
+and for a selected scale — the scale's own pool from the engine, the items of
+its subtree played so far, and as many as may still be played: a single
+subscale is bounded by its questions per subscale, a category of several by
+the items left in it. Checked on a real sitting: values on exactly the steps the
+engine has an estimate of the scale for, the minimum never above the maximum.
+Where every item left may still be played the two are equal — not a fault; the
+comparison says so beneath the plot.
+
+The status of a scale (active, locked, dropped) and "active scales" as a metric
+per step wait for the engine (ralferlebach/moodle-local_catquiz#133), as for
+#106; the status at the end is shown.
+
+---
+
+## [0.7.24] — 2026-10-02 — #107: a correlation id from claim to artefact
+
+"Artefacts are referenced by experiment, run, sitting, execution, worker,
+correlation id and time" (#107, criterion 2): the correlation id was missing.
+The server already records the start of an execution under the id of the claim
+request; `job_claim` now returns it. The worker writes it into its artefacts'
+metadata and sends it with every request of the sitting as
+`X-CatQuizLab-Correlation` — the hook for finding a server-side error by it
+(#110). Tested: the id returned is the one the start was recorded under.
+
+#106: criteria 16, 17, 18 and 29 — active, dropped and locked scales per step —
+wait for the engine to record when a scale's state changes; filed as
+ralferlebach/moodle-local_catquiz#133 (`scalestatetrace`).
+
+---
+
+## [0.7.23] — 2026-10-02 — #106: what checking its criteria found missing
+
+- Remaining TI (min) beside the maximum (#106, criterion 19): the least the
+  items still allowed could add — the weakest of them, by the same engine
+  arithmetic. Column in the single-test view, `ti_remaining_min` in the step
+  export, tested against the sum of the weakest unplayed items.
+- Final TI@n in the sitting export (#106, criterion 23): `finaltiatn`, the n
+  most informative pool items at the final estimate, from the engine — appended,
+  no column moves. `finalti` is the information of the items played. Checked on
+  a real sitting: the export's value equals the last step of its test flow.
+  Found on the way: the observation carries the plugin's model key ("2pl"), the
+  engine its own name ("raschbirnbaum"); without the catalogue's mapping the
+  value came out empty, silently.
+- Dropped / locked scales per step: N/A on every step, as the engine records
+  them at the end only — now with their numbers on the last step, where the
+  engine's values are known.
+
+---
+
+## [0.7.22] — 2026-10-02 — #111: a failed report no longer hides the failure
+
+"A secondary reporting error no longer hides the original attempt failure"
+(#111): with the parameters in the body, the 414 is gone — but a report can
+still fail for other reasons, the network for one. The report was sent in a
+`finally` block, and an exception thrown there replaces the one it was
+reporting: the worker's log said only that the report failed. Now the report's
+failure is caught: the worker logs the attempt's own outcome first and the
+report's failure after it, keeps both beside the artefacts as
+`report-failed.json`, and the error it raises names both. The lease then
+expires, and the retry is recorded with its reason (0.7.19).
+
+---
+
+## [0.7.21] — 2026-10-02 — #111: reports in the body, never cut silently
+
+### Every web service parameter in the body — HTTP 414 gone, the token out of URLs
+The worker POSTed to `webservice/rest/server.php` but put every parameter into
+the query string: the token, the function and the failure report with its
+diagnosis. A large diagnosis made the request line too long; the web server
+answered 414, and the report of a failure failed in turn — the original failure
+never reached Moodle. The token, meanwhile, stood in every access log line.
+Everything now goes in the body as `application/x-www-form-urlencoded` — Moodle's
+REST server reads token, function and parameters from POST (checked against the
+real endpoint); the URL is the same for every call.
+
+### Never cut silently
+The diagnosis used to be cut at 60,000 bytes in the middle of its JSON — leaving
+text that is not JSON, which the server then dropped entirely — and the message
+at 2,000 characters without a word. Now: the message is cut at 4,000 characters
+with a marker saying how much was cut; the diagnosis is cut by its structure —
+long strings shortened, the oldest browser events dropped — stays valid JSON,
+says in `truncated` how large it was, and the full one is written beside the
+artefacts as `diagnosis-full.json`, its path sent along. The server keeps the
+`truncated` entry. Limits documented in `worker/README.md`.
+
+### The token not on a command line
+Moodle's launcher already passes it in the environment; the CI workflow passed
+it as `--token=…`, visible in every process listing, and the worker's usage
+text recommended that. Both use `CATQUIZLAB_WORKER_TOKEN` now.
+
+### Tests
+Worker: the request carries everything in its body and its URL nothing; values
+escaped; a 400 KB diagnosis cut to the limit, valid JSON, newest events kept; a
+long message cut visibly; against a server with Apache's request-line limit the
+old way gets 414 and the new one arrives whole. Moodle: a failure report with a
+large diagnosis is stored whole, with its failure message and the path of the
+full diagnosis.
+
+### #105 — a test for the plot that is not drawn
+The local-deviation plot is suppressed when the true deviation does not vary; no
+test said so. `local_deviation_variation_test`: without variation the note and
+no plot, with variation the plot with y = x.
+
+---
+
+## [0.7.20] — 2026-10-02 — #90: from a worker into its log
+
+"An error link from a run, a sitting or a worker opens the Logs tab with its
+filter" (#90, criterion 26): runs and sittings had one, workers had none. Every
+worker in the progress view now links to the log filtered to it — the last
+criterion of #90 found missing while checking them against the code.
+
+---
+
+## [0.7.19] — 2026-10-02 — #90: every status change, every retry decision
+
+### Every change of a run's status is recorded — from, to, why
+A run's status was written in more than a dozen places — `set_field`,
+`update_record`, one SQL update — and only some of them recorded it. There is
+one way now: `run_lifecycle::set_status()`, `update_run()` for a record that
+carries other fields too, and `set_status_if()` for the conditional
+ready → running of the first claim, which stays atomic and records only the call
+that made the change. Each records `status_changed` with from, to and why
+(`cancelled_by_user`, `failed: <reason>`, `circuit_breaker_tripped`,
+`first_sitting_claimed`, …), which the Logs tab shows in its chronology. A test
+guards the source: a run's status written anywhere else fails it.
+
+### Every retry decision is recorded
+A failed execution was recorded; what was decided about it was not — and a
+sitting whose lease expired or was released left no trace at all. The decision
+is recorded where it is made: requeued, with the reason, the retry delay and
+when, or given up after its tries (`abandoned`, shown as an error in the
+Logs tab, and kept apart from `failed` so that failures are not counted twice).
+
+---
+
+## [0.7.18] — 2026-10-02 — The classical test plays every item (#104)
+
+The classical test plays every item of the chosen scale; only its evaluation is
+by IRT — ability and standard error, not points. It has no number of questions.
+Since 0.7.3 it could be given its own maximum, and a swept question budget
+reached it: both were wrong. Now:
+
+- the catalogue: `classic` uses no question budget;
+- the engine always gets "every item" (`maxquestions = -1`), whatever budget is
+  named for it — shared, swept, per strategy, per cell;
+- the form: its question fields — in the per-strategy row and in the cell
+  budgets — are disabled and say "all items"; the shared question budget is
+  disabled when the classical test is the only strategy in play; values sent
+  for it anyway are not taken;
+- the manifest and the run's parameter table say "all items of the scale", the
+  stop rules "every item of the scale (classical test)";
+- a definition sweeping the question budget over the classical test is warned
+  that its cells are alike.
+
+Found on the way: a first minimum of 0 for the classical test made every one of
+its sweep cells invalid ("must be a positive integer"); it is 1 — with no
+maximum the engine plays every item either way. Tests that held the old
+behaviour were changed to the right one; two tests that read the engine's
+strategy catalogue now reset the database, since the catalogue records the
+engine's fingerprint in the plugin's config on its first read.
+
+---
+
+## [0.7.17] — 2026-10-01 — #100 and #102, found while ticking
+
+### #100 — a navigation after the login is no longer swallowed
+"Navigation timeouts are not swallowed wholesale" (#100, criterion 4): the
+login still caught the navigation after submitting with `.catch(() => {})` — the
+one place left in the worker. Click and navigation are now settled together as
+everywhere else; a navigation that does not come is recorded
+(`navigation-failed`) and named in the error should the login fail.
+
+### #90 — exceptions with their root cause; form submissions recorded
+`debug_trace::exception()` existed but was called nowhere. It now records the
+whole chain — the outer exception and the innermost cause — and for Moodle's
+own exceptions the errorcode and debug information. It is called where an
+exception is turned into a state: a provisioning stage that throws, an
+aggregation that fails, and the oracle's question lookup, which fell back to 0
+without a trace. Saving the experiment form, the import form and the settings
+was not recorded — only actions with an `action` parameter were; every
+submission now is, with what was entered, the session key, passwords and
+tokens redacted.
+
+Not yet: "every status change is recorded" (#90, criterion 18). A run's status
+is written in more than a dozen places, and only some of them record it; that
+needs one place all of them go through, and comes next.
+
+### #102 — the export says how the true abilities were drawn
+"Manifest and export contain the distribution and the effective scale bounds"
+(#102, criterion 8): the manifest did, the export did not. Every sitting row now
+carries its run's `abilitydistribution`, `abilitymean`, `abilitysd`,
+`abilitymin`, `abilitymax` — so that a CSV without metadata says it — appended
+after the existing columns, none of which moves. The JSON metadata carries each
+run's full ability block as in its manifest, with the engine's scale range.
+
+---
+
+## [0.7.16] — 2026-09-30 — #96 completed, #97 test, #99 JSON measured
+
+Found while checking the issues' criteria against the code, before ticking them.
+
+### #96 — budgets per concrete cell, editable in the preview
+The effective CAT parameters could be set per strategy, not per cell of a sweep,
+and the run preview could not be edited; it also lacked the model and the SE
+bounds. Now:
+
+- "Budgets per cell" in the experiment form: one row per cell of the saved
+  experiment's sweep, named by its factors (strategy, model, …), with fields for
+  questions min/max, per subscale min/max and SE min/max. Empty follows the
+  strategy's and the shared budgets, shown as placeholders; a value applies to
+  that cell alone — over its strategy's budget, and over the classical test's
+  "unlimited". "n/a" where the cell's strategy does not use a parameter.
+- The preview lists every cell with its factors, strategy, model, question and
+  subscale budgets and SE bounds, marking a cell's own budget.
+- Validated: numbers, "unlimited" for a maximum, no minimum above its maximum.
+- Reproduction moved from the page into `run_lifecycle::reproduce()`, and tested:
+  a reproduction is provisioned with exactly its original's effective
+  parameters, however the experiment was changed afterwards.
+
+### #97 — a historic strategy refused by name, tested
+The code refused a definition naming a strategy the engine no longer plays; no
+test said so. `test_a_historic_strategy_is_refused_by_name`: as the strategy and
+as a sweep level, with the strategy's name in the error.
+
+### CI: the interface end-to-end test, red since 0.7.2
+`experiment.spec.js` filled the subscale budget fields, which #101 switched off
+when no strategy in play counts by subscale — the test's strategy, "fastest",
+does not. It waited 60 s on a disabled field. The workflow runs only when
+started by hand, so this surfaced only now. The test now checks what #101
+intends — subscale fields disabled and marked not applicable, SE fields enabled —
+and fills the SE bounds. Run locally against real pages from the form to the
+results: passed (11.6 min, no failed execution). The plot checks of #105 passed
+in CI already.
+
+### Worker: a transient "Invalid login" is retried once
+A sitting's first execution failed with "Invalid login" while its password was
+correct — verified against the account — and the same credentials succeeded on
+the retried execution minutes later. Moodle logs reason 3 (AUTH_LOGIN_FAILED),
+which it gives for a wrong password and for a login token the session no longer
+holds; the second is transient. The worker now:
+
+- retries the login once with a freshly loaded login page (a fresh token); a
+  second refusal is reported as before, so a wrong password is not hidden;
+- sets the username and password fields instead of typing into them — typing
+  appends to a value the page put there (Moodle refills the username after a
+  failure) and follows the focus, which the page's own script may move;
+- records the retry as a browser event (`login-retried`).
+
+Tested against a login page that refuses once, and one that refuses always.
+
+### Load test: every failed execution by reason
+The CI load test of #100 passed — 264 of 300 sittings collected in 30 min, 305
+executions — with 37 failed executions, none of them navigation or transport.
+What they were, it did not say: it only counted navigation failures. It now
+lists every failed execution by reason code, with examples.
+
+### #99 — JSON export measured
+Attempt and subscale level as JSON in the scale benchmark, checked to be one valid
+document with every row: 1.2 MB at 50,000 sittings for both.
+
+---
+
+## [0.7.15] — 2026-09-30 — #99 for everything added since: memory and time at 50,000 sittings
+
+The scale benchmark (#99) covered the overview, raw data and exports; the paths
+added since 0.7.7 had never been measured. Added to it: the export tab, the step
+export, the global tab and the test-flow tab. Two of them failed.
+
+### The global tab held every sitting — 230 MB for 50,000
+One pass now, as the overview: figures (bias, RMSE, correlation, cell table) from
+every sitting, streamed; the two ability plots from a random sample of at most
+2,000 tests, said beneath them; values outside the scale range counted in the
+same pass. Item exposure is counted as the sittings pass instead of holding them
+and a copy of every item list. Same numbers — the same pairs, the same function.
+
+### The test-flow tab held every sitting — 152 MB for 50,000
+One pass: feasibility as counts, the first 300 sittings for the pickers, the
+chosen and the first sitting, twin families as sitting ids. The comparison fetches
+the members of the chosen family — or the tests picked — as themselves
+(`results_query::observations_of()`, restricted in SQL), not by reading all.
+
+### TI@n: the same values, at less than half the cost
+`engine_information::step()` computes TI@n and the remaining potential from one
+pass over the pool per step — each item's own model and `fisher_info()`, sorted
+descending, summed — instead of two engine calls, a copy of the pool and a linear
+search per played item. Identical to `catscale::get_testpotential()` (800
+comparisons, largest difference 0), 2.4 times faster. The items played are
+carried from step to step, not rebuilt at each: that was quadratic in the test
+length.
+
+### What a step export with TI@n would take, said before it starts
+TI@n means every pool item's information at every step: for 50,000 tests with a
+pool of 500 items about nine minutes. The export tab estimates it from the
+selection — steps × pool size × the measured cost per item — and above one minute
+offers the step export without TI@n by default and with TI@n explicitly, with
+the estimate; above the download's time limit it does not offer it and says to
+narrow the selection, rather than ending in half a file.
+
+### Measured, 50,000 sittings (35 items, 12 subscales each)
+
+    overview          12.1 MB  10.7 s
+    raw data           2.0 MB   2.0 s
+    subscale csv       1.2 MB  13.2 s
+    export tab         1.8 MB   3.4 s     new
+    step csv           1.3 MB  19.7 s     new
+    global tab        13.3 MB   8.0 s     was 230 MB
+    test flow tab      2.0 MB   8.9 s     was 152 MB
+    csv download       1.2 MB   0.7 s
+
+The benchmark prints these per step now, not only whether they stay below the
+bound.
+
+---
+
+## [0.7.14] — 2026-09-30 — The optional parts of #102, #105, #108, #109
+
+### #102 — local deviations set by the experiment
+"Category SD" and "Subscale SD": empty follows the stratum and the severity, a
+number sets it outright. The severity factors for mild, medium and strong are
+editable (0.5 / 1 / 2 by default). The manifest records the SDs in force, whether
+set or derived. Measured: an explicit category SD of 0.8 is drawn as 0.8 ± 0.03
+over 2000 people.
+
+### #105 §5 — values outside the scale range, said in the plot
+Beneath estimated-against-true: how many tests have a true ability outside the
+scale range of their own run — each run with its own range.
+
+### #105 §6 — a robust range
+"Robust range (1st–99th percentile)" in every plot's axis settings. Points outside
+the displayed range — robust or set by hand — are not drawn at the edge, where
+they would read as values there; they are counted beneath the plot ("2 of 202
+points lie outside the displayed range"). Recorded in the metadata.
+
+### #105 §10 — Playwright
+`tests/playwright/plots.spec.js`, on data from `cli/seed_results.php`: symmetric
+axes with 0 as the middle tick, the same ticks on x and y, integers or halves,
+the identity line at 45° measured on the drawing, an integer step axis, all five
+exports, small multiples on the same axes. Passed locally against real pages;
+seeded and run by the interface workflow, which stays manual.
+
+### #108 — PNG and PDF, profiles per experiment
+PNG: drawn in the browser from the plot's own SVG, at twice the size. PDF: on the
+server with Moodle's TCPDF, the drawing as vectors (tested: no embedded image).
+The PDF endpoint renders only drawings the plugin made for the user in this
+session, kept under a key — never SVG sent by a browser. Axis profiles can be
+saved for an experiment ("for this experiment"), for everyone working on it;
+built-in profiles stay untouched.
+
+### #109 — small multiples, saved comparisons, local deviations
+Small multiples: one plot per test, every one on the axes the overlay of all of
+them would have. A comparison — metric, colouring, subscale, layout, axes — can be
+saved by name and loaded again. The overview shows the simulated local deviations
+(true subscale − true global ability, the quantity the local-deviation plot
+compares) with n, mean, SD, min, max, or says that there are none by design.
+
+---
+
+## [0.7.13] — 2026-09-29 — Issue #90, the remaining criteria
+
+### Sittings in the same chronology
+The sittings' histories (#98) are a fourth source of the Logs tab, channel
+`attempt`: every execution — started, failed with its reason code, collected,
+put back — beside worker, task and lifecycle lines, in one order.
+
+### Filter by sitting
+A "Sitting" filter. The sitting id used to be filed under `attemptno`, which is
+the lifecycle attempt of a run — another thing, now kept apart. The link on the run
+page that opens the log filtered to a failed sitting passed the sitting as
+`attemptno`; it passes `attemptid` now — an existing test caught that it would
+otherwise have found nothing, and a Behat step now follows the link.
+
+### Filter by experiment, for worker and debug lines too
+Filtering by an experiment used to drop its worker and debug lines: the debug
+log records the experiment, but it was not asked. It is now, directly or through
+the run.
+
+### A line as the start or end of the time filter
+Click a line; "Use as from" or "Use as to" sets the filter to its time and
+applies it. The log stays one block of text: what is copied is the text.
+
+### Live tail without a reload
+"Live" polls every three seconds for lines newer than the last one shown — same
+filters, same redaction — appends them, and scrolls along while the reader is at
+the end.
+
+### Redaction in free text
+`sesskey=…` was removed only after `?` or `&`, as in a URL. In a parameter list
+or free text it went through; so did JSON fields like `"sesskey":"…"`. Both are
+redacted now — and `mysesskey=` is left alone.
+
+### CI: the end-to-end job has never run for these releases
+The worker end-to-end job of `worker-e2e.yml` runs only when started by hand
+with `run_e2e` — on every push it is skipped. Its steps for #100 (load test),
+#101, #102 and #104 were therefore not run in CI, contrary to what the notes of
+0.7.2 to 0.7.11 said; they were checked locally against real activities only.
+The token used here may not start workflows (HTTP 403): Actions → "Worker CI" →
+"Run workflow", branch `development`, with `run_e2e`.
+
+---
+
+## [0.7.12] — 2026-09-29 — TI@n corrected (#106, #109)
+
+### What TI@n is
+TI@n is the test information of the n most informative items of the item pool
+at the current ability estimate — what n items could at most contribute there.
+Since 0.7.8 this plugin showed under that name something else: the information
+of the n items actually played. That quantity was computed correctly and agrees
+with the engine; its name was wrong.
+
+### Now, from the engine
+`engine_information` uses the engine's own methods: the run's item pool through
+`model_item_param_list::get()` (the scale and its subscales), and
+`catscale::get_testpotential()` — the same method the engine's
+test-information filter uses — with the Fisher information of each item's own
+model:
+
+- TI@n (global): the n most informative items of the pool at θ̂ₙ.
+- Remaining TI (max): the most the items not yet played could still add, up to
+  the number still allowed — as the engine's filter computes it.
+- Information of the items played: the former "TI@n", correctly named.
+
+Checked on real sittings: TI@n is at or above the information of the items
+played on every step (80 of 80 rows); the ratio shows how close the item
+selection came to the best possible (80–98 % in the local runs). With a maximum
+of 20 items the remaining potential is 0 after item 20.
+
+### Where
+The single-test view (columns and head: "Final TI@n"), the comparison (TI@n as a
+metric, globally and for a subscale — n being the items of that subscale), and
+the step export: `ti_global` is renamed `ti_played`, and `ti_at_n` and
+`ti_remaining_max` are added. Anyone reading step exports of 0.7.8–0.7.11:
+their `ti_global` is the information of the items played, not TI@n.
+
+---
+
+## [0.7.11] — 2026-09-29 — Issue #108
+
+Every plot exportable as SVG, and axes under the reader's control.
+
+### SVG export — every plot
+All eight plots — test length against precision, recovery, error over truth,
+a single test, strength, local deviation, item exposure, comparison — and the
+people histogram: "Download graphic (SVG)", "Download data (CSV)" and
+"Download plot settings (JSON)" beneath each. The SVG is a file of its own
+(xmlns set), text as text, points and lines as vectors, nothing rasterised. Its
+settings are embedded as `<metadata>`: plot type, data source, filters, and per
+axis the mode, range, ticks and tick spacing, the manual ranges and the profile.
+File names: `catquizlab-<plot type>-<context>-<YYYYMMDD-HHMMSS>`, e.g.
+`catquizlab-recovery-exp12-20260929-163012.svg`.
+
+### Axis control, per plot
+"Axis settings and export" beneath each plot: auto scale (the conventions of
+#105), manual scale (x/y min and max, tick spacing), or the shared scale for
+compared plots — one scale saved once and used by every plot set to it, so plots
+of different strategies, runs or experiments share their axes. "Force symmetry
+around 0" makes y — and x, unless it counts items — symmetric. Settings of the
+other plots on the page are kept when one is changed. On a comparison plot a
+manual range applies to both axes at once, keeping y = x the diagonal (tested).
+
+### Axis profiles
+Saved per user; the four from the issue built in: "Ability symmetric [-4, 4]",
+"Error symmetric [-2, 2]", "Integer test length", "Shared comparison axes".
+Built-in profiles cannot be overwritten.
+
+### Found on the way
+A manual tick spacing was ignored whenever a manual range was also set: the
+range recomputed the ticks afterwards. The spacing is applied last. The
+comparison plot of #109 would have shown its downloads twice; it now passes its
+richer data to the common export instead.
+
+### Not done
+PNG and PDF (optional in the issue); profiles per experiment (optional; per user
+is done).
+
+### Release names
+From here on counting 0.7.10, 0.7.11 … 0.7.99. The release delivered as 0.8.0
+(#109) is listed as 0.7.10.
+
+---
+
+## [0.7.10] — 2026-09-29 — Issue #109 (delivered as "0.8.0"; the release names count on as 0.7.x)
+
+Related tests side by side, and the simulated people behind the numbers.
+
+### Twin families
+A twin family is one simulated person — same replication, same index — in
+several runs, typically under different strategies. The Test flow tab compares
+them: a family (the first with more than one test is chosen by default) or tests
+picked one by one, coloured by twin family, strategy, run or replication, with a
+legend naming each group once, one plot.
+
+### Metrics, globally or for one subscale
+Ability, SE after each step, TI@n, or scales estimated. For a selected subscale:
+its estimate after each step, and its SE and information from the items in its
+subtree at that estimate — checked against the engine: for a leaf the engine's
+scale SE is exactly that from its own items, for a parent from every item below
+it (verified on real sittings for a leaf, a category and the root). Where the
+check fails, SE and information are withheld. The scale's status is the engine's
+at the end of the test, said as such. For a strategy without subscales:
+"Not applicable for this strategy/run".
+
+### Axes
+The comparison follows the plot conventions of #105; x and y ranges can be set by
+hand to put several plots on one scale.
+
+### The simulated people
+The overview shows the true global abilities of the selection — each twin family
+once — as a histogram with the ability bounds as dashed lines: n, mean, SD, min,
+max and the distribution they were drawn from. Read as a stream.
+
+### Export
+Comparison and people: the graphic as SVG and the data as CSV — attempt, twin
+family, run, strategy, replication, metric, scale, step, value.
+
+### Found on the way
+The first version of the Behat step that creates twins changed the wrong line —
+in the step the stop-rule scenario uses — which left the twin unset and a
+variable undefined there. Both scenarios run together now.
+
+### Not done
+Small multiples (optional); saving comparison templates; remaining TI min/max
+and per-step scale status, which the engine does not record.
+
+---
+
+## [0.7.9] — 2026-09-29 — Issue #105 §3–9, #106 completed
+
+Plots a reader can use: symmetric logit axes, integer counts, a real 45°
+diagonal, and what each plot is based on.
+
+### Axis conventions (§3, §4) — `axis_scale`
+Axes used to run from the data's minimum to its maximum plus 5 %, with five
+evenly spaced ticks: "−6.65 −2.99 0.66 4.32 7.98" for an ability, "4.55 12.53
+20.5 28.48 36.45" for a number of items. Now:
+
+    ability −6.65 … 7.98        −8 −6 −4 −2 0 2 4 6 8
+    error −0.8 … 0.6            −1 −0.5 0 0.5 1
+    test length 4.55 … 36.45    0 10 20 30 40
+
+Logit quantities symmetric around 0 with 0 as the middle tick, ticks integers
+or halves, counts integers only (with a slight reproducible jitter on the test
+length axis). Ability axes cover at least the configured ability range (#102).
+"Test length (number of items)".
+
+### Comparison plots (§5, AXIS-003)
+Estimated against true ability, and estimated against true local deviation: one
+symmetric range for both axes and a square plotting area. The area had been
+560 × 310, so y = x stood at about 29°; it is 45.0° now (tested).
+
+### Local deviation (§7) — the vertical line explained
+Verified against the data: in the conforming stratum the simulated people have
+no local deviation by design (category and subscale variation 0), so Δs,true is 0
+on every subscale and every point sat on x = 0. The values were read correctly.
+The plot is shown only where Δs,true varies; otherwise the page says so and why.
+Every point carries a tooltip: person, subscale, true and estimated deviation.
+
+### A single test in detail (§8, and #106's optional plot)
+"Step (items administered)" as an integer axis, the estimates joined in order,
+the simulated truth as a labelled line, the estimate ± its standard error as a
+shaded band where the SE per step is known (#106), and a sentence above the plot
+saying what it shows.
+
+### What each plot is based on (§9)
+Beneath every plot: experiment, runs, strategy, model, sittings, the simulated
+abilities (distribution, μ, σ, range), the filter, and the stop rules in force —
+effective item budget and SE rule per strategy.
+
+### #106 completed
+A Behat scenario opens a single test with a full engine-shaped trace and checks
+the end reason with its code, final SE and test information, the SE and TI@n
+columns, the N/A column, and the statement that the computation agrees with
+the engine.
+
+### Not done in #105
+§6's optional robust range for outliers; §5's optional note on values outside
+the engine's range (the validation and the run log carry it since 0.7.7); §10's
+Playwright checks.
+
+---
+
+## [0.7.8] — 2026-09-29 — Issue #106
+
+A single test in detail: standard error, test information and why it ended.
+
+### SE and TI@n per step — computed, and checked against the engine
+The engine keeps the parameters of every item played and the estimate after
+every step, but neither the information nor the standard error per step. Both
+follow from those: TI@n = Σ Iᵢ(θ̂ₙ) over the items so far, SE = 1/√TI@n, with
+the Fisher information of the logistic models (Rasch, 2PL, 3PL). Checked against
+six real sittings from two runs: the computed final information agrees with the
+engine's to within 0.0003 %. Every sitting is checked the same way; where the
+last step does not agree — a model not computed here, a missing estimate — no
+computed value is shown, only "N/A" and the engine's own final numbers.
+
+### The view
+A diagnostic head: sitting, digital twin and person, run, strategy, model, items
+administered, final ability, final SE, final test information, active scales at
+the end, technical retries, and the end reason — "Test finished because …" or
+"Test failed because …", with its code — followed by every execution in the
+history. The step table adds "SE after this step", "TI@n (global)", "Scales
+estimated after this step", and "Dropped / locked after this step" as N/A: the
+engine records that only at the end, and the column says so rather than being
+left out. The response column was always empty — the score is kept with the
+responses, not with the question; it is read from there now.
+
+### End reasons from facts
+The engine reports "maximum reached", "time exceeded" — spelt "Time exeeded" —
+or "no remaining questions", which covers several ends. They are told apart from
+what is known: the classical test → `fixed_form_complete`; final SE at or below
+the run's lower SE bound → `target_se_reached`; a subscale strategy that dropped
+scales → `subscale_rule_satisfied`; every pool item played → `pool_exhausted`;
+otherwise `no_eligible_item_remaining`. `subscale_rule_blocked` is not claimed:
+the engine does not record it.
+
+### Export
+Attempt level: `endreasoncode`, `endreasonlabel`, `finalti`, `activescalesatend`
+(final ability and SE were there). New step level, CSV and JSON: attempt, run,
+strategy, step, question, subscale, score, estimate, SE, TI@n, scales estimated
+— streamed row by row. The attempt level had two column lists, one per path; the
+second drifted at once and the rectangular-export test caught it. One list now.
+
+### Not done
+A second line for SE or TI@n in the ability plot (optional in the issue); the
+values are in the table and the export. Information of a selected scale
+(`ti_scale`) and remaining TI min/max: not recorded by the engine, not computed.
+
+PHPUnit 750 tests, worker 18, Behat 42 scenarios / 354 steps, phpcs and PHPDoc
+clean — one run.
+
+---
+
+## [0.7.7] — 2026-09-29 — Issue #102, Issue #105 §1–2, #107 completed, CI without Moodle 5.0
+
+### The finding (#102, #105)
+The simulated abilities came from N(μ = 0, σ = 2), unbounded, while every CAT
+scale this plugin provisioned was hard-wired to [−3, +3]. Measured with 5000
+people: 13.4 % of the global abilities — and 73,590 category and subscale
+abilities — lay outside what the engine could estimate. The results' saturation
+of estimates at about ±3 is that, not a property of any strategy.
+
+### The distribution is part of the experiment
+`ability_distribution`, one place for: the distribution (truncated normal,
+normal, uniform), mean (μ), standard deviation (σ), and one ability range used
+twice — the simulated abilities are drawn within it, and every provisioned CAT
+scale gets it as its minimum and maximum scale value.
+
+- Truncated means drawn again, never clamped: no value lies on a bound.
+  Category and subscale abilities stay within the range too.
+- σ is the parameter before truncation: a truncated N(0, 2) within ±3 has a
+  realised standard deviation of about 1.48.
+- A normal distribution may leave the range. Validation names the expected share
+  before anything is generated ("About 13.4 % … outside [−3, 3]"), and the run's
+  log records the actual count as a warning.
+- New experiments start with truncated normal, μ = 0, σ = 1, within [−3, 3].
+  Definitions saved before keep what they did — normal, μ = 0, σ = 2, ±3 — so
+  their results stay reproducible, now recorded explicitly and warned about. The
+  first person of such a definition is drawn exactly as before (tested).
+
+### Visible and recorded
+The experiment form has the fields, named "Mean (μ)" and "Standard deviation
+(σ)" — never "N(0, 2)". The manifest records distribution, mean, standard
+deviation, both bounds, the engine scale range and the expected share outside.
+The results name the distribution of the selected runs beside the stop rules.
+
+### End to end
+`provisioning_check` reads the root scale's range back from
+`local_catquiz_catscales`. `smoke.php --case=102` provisions a truncated
+N(0, 1.5) within [−4, 4]; the engine's root scale is [−4, 4]. A step of the
+worker end-to-end workflow.
+
+### #107 completed
+The ZIP download is built through one method that requires the debug
+capability. Tested both ways: a manager with debugging prohibited gets an
+exception from the method, and no download button on the run page.
+
+### CI
+Moodle 5.0 is out of the matrix: out of support upstream. It was the only job
+running the plugin without an engine; that condition is no longer covered by CI.
+
+---
+
+## [0.7.6] — 2026-09-29 — CI: the plugin without an engine
+
+The CI's Moodle 5.0 jobs, which since 0.7.5 run without an engine (the 1.3 set
+requires Moodle 5.1), were red: ten PHPUnit tests and five Behat scenarios. The
+Moodle 5.2 jobs against local_catquiz 1.3.0 were green.
+
+### A regression of #103, found by it
+Since 0.7.1 the strategy catalogue asks the engine what it can play. Without an
+engine the answer was "nothing": the experiment editor offered no strategy at
+all, every historic strategy was labelled "not available", and an installation
+without the engine — which the plugin explicitly supports — could not define an
+experiment. Without an engine there is nobody to ask, so the catalogue now falls
+back to the reference set: strategies 1, 3, 4, 5, 7, 8 with the names both
+local_catquiz 1.2.1 and 1.3.0 give them. With an engine, the engine answers, as
+before.
+
+### Readiness: the definition before the engine
+Without an engine the readiness check answered "fine" before it had looked at
+the run's definition. A missing definition is a verdict with or without an
+engine; it is checked first now.
+
+### Tests that need an engine say so
+Five tests created an adaptive quiz through mod_adaptivequiz's generator, one
+read an engine table, one expected the setup to switch the pipeline on — none of
+which exists or applies without an engine. They skip there, by name.
+
+### Reproduced before delivery
+The 5.0 condition locally: engine, mod_adaptivequiz, its catmodel and
+wunderbyte_table set aside, PHPUnit and Behat initialised and run without them,
+then restored.
+
+    without engine   PHPUnit 741 tests (40 skipped), Behat 39 / 324 — green
+    with engine      PHPUnit 741 tests, Behat 39 / 324 — green
+
+---
+
+## [0.7.5] — 2026-09-28 — Issue #107
+
+Debug artefacts: why every execution ended, kept in moodledata, downloadable.
+
+### Normalised reason codes
+`reason_catalog`: one code per kind of end, for failures and for the ends a test
+is designed to reach — `target_se_reached`, `max_items_reached`,
+`pool_exhausted`, `execution_context_destroyed`, `navigation_error`,
+`fetch_failed`, `http_error`, `login_failed`, `engine_exception`,
+`worker_timeout`, `circuit_breaker_pause`, `manual_stop`. Each execution in the
+history carries its code: a failure when it is reported, a finished sitting once
+the collector knows its stop reason. The run page filters by code, with how
+often each occurs, and shows it on every history line. Classified from the real
+reports of the live installation; a test holds them.
+
+### In moodledata
+Beside the worker's screenshots, DOM and events, every failed execution gets a
+`reason.json`: sitting, run, strategy, model, variant, stratum, reason code and
+label, the raw message, the correlation id and a lifecycle log excerpt. Every
+execution — failed or finished — adds a line to its run's `reasons.jsonl`.
+
+### As a ZIP
+"Download debug ZIP" for one sitting, a whole run, or a run's failed sittings,
+for the debug capability only:
+
+    manifest.json
+    attempt-<id>/attempt.json     metadata and history
+    attempt-<id>/logs.json        history and run log excerpt
+    attempt-<id>/screenshots/     execution-<n>-screenshot-previous.jpg, -last.jpg
+    attempt-<id>/html/            execution-<n>-dom.html
+    attempt-<id>/network/         execution-<n>-events.json, -error.json, -reason.json
+
+The run page lists which artefacts exist per try and when they were written.
+
+### Redaction
+Every text in a download passes through redaction; session keys are removed from
+HTML as well — Moodle embeds the sesskey in `M.cfg`, in hidden form fields and in
+logout links — and the worker already writes the page snapshot that way. HTML
+snapshots can be left out of downloads by a setting.
+
+### Retention
+A setting, 14 days by default, 0 to keep; the pipeline tick removes older
+executions. A second setting captures successful executions too, for debugging.
+
+### CI: the engine set follows the Moodle release
+The PHPUnit and Behat jobs fetched the engine from `ALiSe-v-1.2.0-legacy` for
+every Moodle release. On 5.0 and 5.2 they therefore ran local_catquiz 1.2.1 and
+its host activity — the set built for Moodle 4.5, never deployed on 5.x. The
+failure of 0.7.3's test on 5.x was that mix, not the plugin.
+
+`.github/scripts/fetch-engine.sh` now picks the set by release:
+
+    Moodle 4.5   local_catquiz 1.2.1   ALiSe-v-1.2.0-legacy (all three)
+    Moodle 5.0   none — the 1.3 set requires Moodle 5.1; the plugin is tested stand-alone
+    Moodle 5.2   local_catquiz 1.3.0   migration-zu-moodle-5.x; mod_adaptivequiz and catmodel v-3.0
+
+Run for all three releases against the real repositories. The release table in
+the script also had Moodle 5.1's version (2025100600) under 5.2; corrected.
+
+The 5.2 job now tests this plugin against local_catquiz 1.3 for the first time.
+A failure there is a real finding about 1.3 — the CI could not show one before.
+
+PHPUnit 741 tests / 4098 assertions, worker 18 tests, Behat 39 scenarios / 324
+steps, phpcs and PHPDoc clean — one run.
+
+---
+
+## [0.7.4] — 2026-09-28 — Issue #100, Issue #107 (capture), CI fix
+
+The worker no longer races the page it is driving.
+
+### The race (#100)
+The worker clicked "submit" and only then started waiting for the navigation
+the click caused. Moodle sometimes answers a submission with an intermediate
+page that forwards on its own: the worker's wait ended on that page, and the
+answer loop — "while a question is visible" — took it for the end of the test.
+That is the reported "did not reach the finish page"; reading the page while
+the second navigation replaced it is "Execution context was destroyed".
+
+Reproduced in `worker/test/navigation.test.js` with a server that imitates an
+attempt, random delays of 0–400 ms and an intermediate forwarding page on every
+other submission. Three runs:
+
+    old pattern (until 0.7.3)   1 of 40 questions answered, finish page not reached
+    new pattern                 40 of 40, finish page reached
+
+### The fix — `worker/navigation.js`
+- `clickAndSettle()`: the wait for the navigation is registered before the
+  click, then exactly one expected state is awaited — a question, the finish
+  page or a Moodle error page. The document clicked on is marked, and only a
+  state on a new document counts: a question read on the old one is the
+  question just answered.
+- `withContextRetry()`: a lost execution context during an expected navigation
+  is retried once; anything else, or the same error twice, is reported.
+- Navigation timeouts are no longer swallowed: the outcome is recorded and
+  reported when no expected state follows.
+- The answer loop follows the state each click leads to.
+- `fetch failed` now says which web service, where (without the token), HTTP
+  status, network error code (ECONNRESET, ETIMEDOUT, …), cause, duration,
+  worker and sitting.
+- Browser events — navigations, console errors, page errors, failed requests,
+  lost contexts — and the last response statuses go with every report into the
+  sitting's history, and show on the run page.
+
+### Artefacts of a failed execution (#107, capture)
+On a technical failure the worker writes to moodledata, under
+`local_catquizlab/artefacts/experiment-…/run-…/attempt-…/execution-…/`: the
+screenshot before the failure and the one at it, the DOM, the events and
+response statuses, and the error with URL, title and stack. The path goes into
+the history. Tried in earnest: a single "Invalid login" during a local run was
+placed in seconds from its screenshot and DOM.
+
+`job_claim` now returns the experiment and the execution number the path needs.
+Its return description had first lacked them, and Moodle removes undescribed
+fields; the test called `execute()` directly and missed it. It goes through the
+web service's return cleaning now.
+
+### CI: PHPUnit on Moodle 5.0 and 5.2
+A test of 0.7.3 created an adaptive quiz through `mod_adaptivequiz`'s generator,
+which needs a question category Moodle 5.x no longer provides that way. The test
+only needs a course module and the engine's record: it writes those directly.
+
+### Tests
+Worker: 17 tests, among them the navigation race against a real browser and the
+artefacts written. Local end to end with the new worker: fastest 3 and allsubs 4
+sittings, each at least 20 questions, no failure. The load test — 300 sittings,
+four workers, every execution counted — is a step of the worker end-to-end
+workflow and runs in CI.
+
+### Still open in #107
+The correlation id in the artefact metadata, the ZIP download in the interface,
+configurable retention and cleanup, and a switch in the interface for capturing
+successful executions too (`--capture=all` exists as a worker option).
+
+---
+
+## [0.7.3] — 2026-09-28 — Issue #104, with the rest of #101
+
+Effective parameters reach the created activity, provably — and the classical
+test has no artificial ceiling.
+
+### The classical test plays every item (#104, criterion 1)
+A shared maximum of 35 in a sweep over the classical test and adaptive
+strategies turned the fixed form into a 35-item test, and the comparison into
+one of lengths. The classical test's maximum is now unlimited by default; a
+maximum given to it in its own budgets still applies. Where the global budget is
+itself a swept factor, it is the variable under study and applies to the
+classical test too — otherwise its levels would be identical cells (two existing
+tests caught that first version of the rule).
+
+### Postcondition: the engine holds what the run defines (criteria 4, 5)
+After the test stage creates — or reuses — the activity, `provisioning_check`
+reads the engine's record back from `local_catquiz_tests` and compares it field
+by field with the run's definition. A difference fails the stage with the field,
+the expected and the found value:
+
+    stage:test (engine-settings-differ: Engine setting maxquestions:
+    expected 80, found 35.)
+
+### Visible per run (criteria 3, 8)
+The run page shows the run's parameters twice — as defined, and as the CAT
+engine holds them — with "n/a" where the strategy does not use one, and says
+whether the two agree. The results list the stop rules in force per strategy,
+with how many runs each covers.
+
+### An experiment with runs is read-only, visibly (criteria 6, 7)
+The form was editable, and saving was refused only afterwards — the situation
+the issue describes. It is frozen now, with a notice that the settings document
+what the runs did and that changing them would not change the runs, and a
+"Duplicate and change settings" button that opens an editable copy.
+
+The browser test found that the button, first placed inside the notice, was
+never shown: a notification's text is cleaned, and cleaning removes forms. It
+sits under the notice.
+
+### End to end (criterion 9)
+`smoke.php --case=104 --provisioning-only`: a sweep over classic, allsubs and
+relsubs with a shared maximum of 35 and 80 and 40 given to the latter, prepared
+into real activities and read back:
+
+    allsubs  engine maxquestions 80   (expected 80)
+    classic  engine maxquestions -1   (expected -1)
+    relsubs  engine maxquestions 40   (expected 40)
+
+Run as a step of the worker end-to-end workflow.
+
+### #101, criterion 8 in the browser
+A Behat scenario with collected sittings opens the results and checks, line by
+line per strategy, which stop rules are listed. Each line carries its
+strategy's key for that.
+
+### Tooling
+The test runner's lock was held by PostgreSQL, which inherited its file
+descriptor when started by the runner; every later run was refused. Services
+are started with the descriptor closed.
+
+PHPUnit 727 tests / 4029 assertions, Behat 38 scenarios / 311 steps, phpcs and
+PHPDoc clean — one run.
+
+---
+
+## [0.7.2] — 2026-09-28 — Issue #101
+
+Parameters apply only where the engine uses them.
+
+A budget a strategy never reads is not a harmless extra: stored, it reads as a
+design decision; provisioned, it can become a limit the engine applies after
+all; reported, it describes a stop rule that did not exist.
+`strategy_parameters` is now the one place that decides, from
+`strategy_catalog::CAPABILITIES`, what is stored, what the engine receives, and
+what a run and its results report.
+
+### Capability matrix
+Accessors named as in the issue: `uses_global_min`, `uses_global_max`,
+`uses_subscale_min`, `uses_subscale_max`, `uses_standard_error`,
+`supports_pilot_items`, `uses_first_question_policy`, `fixed_form`.
+
+### Stored
+A saved definition drops what none of its strategies uses; each run's own
+definition holds exactly what its strategy uses, with per-strategy budgets
+applied and then removed. For a sweep over fastest, classic and allsubs:
+
+    allsubs  subscale and SE kept
+    fastest  no subscale budget; its SE target kept
+    classic  neither
+
+### Sent to the engine
+Neutral stand-ins where a strategy does not use a parameter: 0 / −1 per
+subscale, SE 0.00 / 1.00 for the classical test (whose strategy replaces the
+SE filter with a no-op; the engine's form requires numbers there). The run's
+manifest records each as `N/A (neutralised)`.
+
+### Shown
+In the form, fields a chosen strategy does not use are switched off and say so:
+"Not applicable: none of the chosen strategies works with subscales" — for
+subscale budgets, standard-error bounds and pilot questions, following the
+selection as it changes. The budget preview shows "n/a" instead of an empty cell.
+The results show, per strategy, only the stop rules in force.
+
+### Read back from the engine
+`provisioning_check` reads a run's test from `local_catquiz_tests` and compares
+it field by field with what the run defines. `cli/smoke.php` runs it after
+preparing and fails on any difference; `--provisioning-only` stops there.
+Checked locally against real activities for all six strategies: all match.
+The CI's worker end-to-end job plays all six with the same check before each.
+
+### Found on the way
+- An early `return` in the new SE validation skipped every check after it for
+  the classical test — a definition with a minimum above its maximum passed.
+- The budget preview lost its "own budget" badge once runs stopped carrying
+  their per-strategy block.
+- The stop rules would have looked for the run's definition at the manifest's
+  top level instead of `config.definition`, and shown nothing.
+
+### Tests
+`strategy_parameters_test` (matrix accessors, what a run stores, neutral engine
+values, manifest markers, stop rules in force, a classical test without SE
+bounds); a Behat scenario for the "not applicable" notes. Four existing tests
+pinned the old behaviour — a classical test with a subscale budget, "fastest"
+sending per-subscale limits — and now pin the new one.
+
+PHPUnit 725 tests / 4015 assertions, Behat 36 scenarios / 286 steps, phpcs and
+PHPDoc clean — one run.
+
+---
+
+## [0.7.1] — 2026-09-28 — Issue #103
+
+The strategy catalogue comes from the engine: no phantom strategies, no names of
+our own in their place.
+
+### What the engine says a strategy is called
+`strategy_catalog::label()` returns the engine's `get_description()`: "CAT",
+"Infer all subscales", "Infer lowest skill gap", "Infer greatest strength",
+"Classical test", "Infer relevant subscales". The names this plugin used —
+"Estimate global ability (MFI)", "Fixed-form baseline" and so on — were a second,
+independent source; they remain only as `alias()`, marked as such.
+
+### A stale cache cannot bring a strategy back
+The engine caches its strategy list and keeps it until its own invalidation
+event fires. The catalogue now:
+- computes a fingerprint from the engine version and its strategy classes, and
+  purges the engine's cache when it differs from the one stored;
+- drops any cached object whose class the engine no longer has, even where the
+  fingerprint matches;
+- checks each class's `ACTIVE` flag itself (see the engine finding below).
+
+### Readiness compares the two catalogues
+A new step lists the engine's release and version and every strategy with id,
+class, engine name, key and CatQuizLab alias, and turns red when the engine plays
+a strategy this plugin has no key for, or when the form would offer one the
+engine does not play. It compares against what the form actually offers — the
+place where "balanced" and "pilot" had survived.
+
+### Historic definitions
+A strategy the engine no longer plays is shown as its alias with "not available
+in the installed engine", not renamed and not hidden.
+
+### Pilot questions, separately
+An option of their own — include, and a share of 0–100 % — provisioned as
+`catquiz_includepilotquestions` / `catquiz_pilotratio`. For the classical test,
+which cannot include them, they are switched off and the run records
+"N/A (neutralised)".
+
+### Capability matrix
+`strategy_catalog::CAPABILITIES`: global min/max, subscale min/max, standard
+error, pilot questions, first-question policy, fixed form — per strategy, read
+from the engine's own form code. A test compares it against
+`local_catquiz/classes/teststrategy/info.php`, so it cannot drift unnoticed.
+This is the basis for #101.
+
+### Finding in the engine
+`info::return_available_strategies()` caches under the key `all` whatever
+`$onlyactive` was when the list was built. A first call with `false` puts
+inactive strategies into the cache, and every later call with `true` returns
+them. Handled here by checking `ACTIVE`; in the engine the key should include
+`$onlyactive`.
+
+### Tests
+`strategy_engine_catalog_test`: a stale cache with a changed fingerprint and a
+poisoned cache with a matching one; readiness turning red on an unknown engine
+strategy; names from the engine; the matrix against the engine source; pilot
+questions provisioned, neutralised and validated. Label assertions elsewhere read
+the expected name from the catalogue rather than hard-coding it.
+
+PHPUnit 719 tests / 3978 assertions, Behat 35 scenarios / 270 steps, phpcs and
+PHPDoc clean — one run, freshly built environment (Moodle 4.5.14+, local_catquiz
+aede4c2 / 2026092616).
+
+---
+
+## [0.7.0] — 2026-09-28
+
+The experiment form, checked in a browser this time.
+
+### Two phantom strategies in the sweep
+0.6.94 filtered `strategy_catalog::menu()` down to what the engine can play.
+The form does not use that function: it builds both selects — the strategy and
+"Vary strategy" — with its own `experiment_form::strategy_menu()`, which still
+listed all eight. "balanced" and "pilot" stayed on offer in the sweep, came
+preselected, and validation then refused them against the main strategy —
+a form that offered a choice and rejected it on submit. Both selects offer only
+what the engine can play now.
+
+### A subscale budget demanded of a strategy without subscales
+"fastest" with 0 per subscale was refused: "budgets.subscale.minitems must be a
+positive integer" — for a number that strategy never reads. Subscale budgets are
+required only where a strategy in play uses subscales; for one that does not, an
+empty maximum reaches the engine as -1, no ceiling per subscale, rather than 0.
+
+### Per-strategy budgets, labelled and live
+Each row now says what its fields are — "Questions per sitting [from] – [to] ·
+per subscale [from] – [to]" — instead of four boxes and an order given in a
+paragraph above. Empty fields show in grey what they inherit from the shared
+budgets. A row is active only while its strategy is chosen above or in the
+sweep; subscale fields only for strategies that use subscales. All of it follows
+the selection as it changes, and the server enforces the same rule.
+
+### Browser tests for exactly this
+Three Behat scenarios: both selects without "balanced" and "pilot"; "fastest"
+saved with the subscale fields switched off; rows and subscale fields switching
+with the selection. Writing them found that a check on a collapsed section's
+options passes for nothing — hidden options have no text — so the sections are
+opened first and options are checked by value as well as by text.
+
+PHPUnit 714 tests / 3934 assertions; Behat: the full run green except the two
+test-wording steps fixed since, the experiment feature (29 scenarios / 235
+steps) green after them; phpcs and PHPDoc clean.
+
+---
+
+## [0.6.99] — 2026-09-27
+
+#98 finished: the interface test, and what it found.
+
+### The interface test (criterion 11, Playwright)
+`cli/seed_failed_attempt.php` creates a run with one sitting that failed the way
+the live installation's did; `tests/playwright/recovery.spec.js` opens it in the
+real interface, checks the diagnosis field by field, retries every incomplete
+sitting, and checks the history afterwards. The UI end-to-end workflow seeds
+the run before Playwright starts, so the test runs on every CI push.
+
+### What it found
+- **A session key on the run page and in the database.** The worker reports the
+  URL of the page it was on, and some carry `sesskey`. 0.6.98 stripped it from
+  the history; the sitting's own last error, shown in the table, still had it.
+  `attempt_history::redact()` now removes session keys and tokens when an
+  error is stored, when a history entry is written, and when either is shown.
+- **A retried sitting vanished from its own diagnosis.** The "needed attention"
+  filter read the fields a retry clears — status, tries, last error — so the
+  moment a sitting was put back, the page that exists to show its history no
+  longer listed it. It reads the history now: ever failed, or ever put back.
+
+### On catquiz 1.2.1 aede4c2
+0.6.97 reported that `progress::save()` could not find its CAT attempt because
+the attempts are stored as `adaptivequiz` and looked up as `mod_adaptivequiz`.
+The current branch resolves both names (`catquiz::component_names()`); that
+report is settled upstream.
+
+PHPUnit 714 tests / 3934 assertions, Behat 32 scenarios / 235 steps, Playwright
+recovery test passing locally, phpcs and PHPDoc clean.
+
+---
+
+## [0.6.98] — 2026-09-27
+
+#98: a failed sitting, diagnosed, retried and completed.
+
+### Structured diagnosis (criterion 3)
+Every recorded execution now carries its failure taken apart — phase, answers
+given, question slot, page, error, Moodle error code, exception, file and line —
+plus the worker and the correlation id of the request it was reported in. Tried
+on the real reports from the live installation:
+
+    {"phase":"answering","answers":1,"slot":2,"page":"attempt.php",
+     "error":"Fehler: Division by zero","exception":"DivisionByZeroError",
+     "file":"local/catquiz/classes/local/model/model_raschmodel.php","line":734}
+
+Two things the parsing found about the reports themselves: the worker sends the
+text of Moodle's "more information about this error" link as `errorcode` — it
+is discarded, and a real code in brackets is taken instead — and one form of the
+report carries the page URL **with its session key**, which is now stripped
+before anything is stored.
+
+The worker id comes from the sitting's lease, read before the lease is cleared:
+`job_complete` has no worker parameter, and the history had it empty.
+
+### Every incomplete sitting at once (criteria 6, 7, 9)
+"Try every incomplete test sitting of this run again": failed ones and ones
+stuck on an expired lease go back, ones waiting out a retry delay are brought
+forward. Collected sittings are not touched — a test compares them before and
+after. A sitting that has been put back three times and failed the same way each
+time is left alone and counted: the failure is deterministic, and a bulk action
+must not loop on it. It can still be retried on its own.
+
+### Complete is one rule (criterion 8)
+`run_lifecycle::is_complete()`: every planned sitting collected, none failed,
+none open. The finished card uses it.
+
+### Log links (criterion 10)
+Each entry of a sitting's history links to the log by its correlation id.
+
+### Found by the scenario test
+A requeued sitting in a run whose last sitting had just ended **waited for
+ever**. The run goes to AGGREGATING at that moment, every requeue reopened it
+only from FINISHED or FAILED, and an aggregating run hands out nothing. All
+requeues now go through `reopen_for_work()`, which covers all three.
+
+### The scenario (criterion 11, PHPUnit)
+Three sittings through the real web services: two finish, one fails with the
+live installation's report; the diagnosis is checked field by field; every
+incomplete sitting is retried with the collected ones unchanged; the retry
+finishes; the run is complete; the history still holds the failure, the retry
+and the success. A second test runs four failure cycles and asserts the fourth
+is refused.
+
+PHPUnit 714 tests / 3934 assertions, Behat 32 scenarios / 235 steps, phpcs and
+PHPDoc clean.
+
+---
+
+## [0.6.97] — 2026-09-27
+
+The engine's longest progress retention — and why it does not help yet.
+
+### Correction to 0.6.93
+0.6.93 said catquiz 1.2.1 empties `debug_info` and deletes the progress row
+when an attempt ends. Both are defaults, not the engine's design:
+`store_debug_info` is off unless switched on, and `progressretention` is
+`minimal` (issue #56, data minimisation). The `trace` level exists precisely so
+an ability path can be rebuilt without `store_debug_info`.
+
+### What this release does
+- **The setup sets the engine to `trace` with unlimited retention** (0 days).
+  Site-wide, because the engine asks the site level when it records —
+  `set_ability()` calls `should_trace()` without a test level — and a test's own
+  level is capped by the site's. It is a step of its own in the preparation
+  checklist, so an installation that discards the path does not report ready.
+- **Every provisioned test asks for `trace`** in its own settings too.
+- **The collector reads the engine's `abilitytrace` first**: every scale's
+  estimate after every answer, turned into the same step → abilities shape the
+  debug_info path had. It had been read from the progress row and thrown away,
+  because it was not in the list of keys kept.
+- **The collector looks the progress row up by the CAT attempt**
+  (`local_catquiz_attempts.id`), which is what `local_catquiz_progress.attemptid`
+  holds in 1.2.1, and no longer by the activity's attempt id.
+
+### Found on the way: the engine does not persist progress at all
+Measured with `trace` set and a sitting played to the end: no progress row, no
+trace. The reason is not retention. The CAT attempts are stored with
+`component = 'adaptivequiz'`; `progress::save()` resolves its CAT attempt with
+`get_cat_attempt_id($attemptid, 'mod_adaptivequiz')`, finds none, keeps
+`catattemptid` null, and therefore only ever caches the progress — the database
+branch is never reached. The one progress row on the test installation has
+`attemptid = 0`.
+
+This is in `local_catquiz`, not here, and is reported rather than patched. Until
+it is fixed, the collector falls back to the attempt summary
+(`graphicalsummary_data`), which is complete for steps and gives each step the
+ability of the question's own scale.
+
+PHPUnit 711 tests / 3903 assertions, Behat 32 scenarios / 235 steps, phpcs and
+PHPDoc clean.
+
+---
+
+## [0.6.96] — 2026-09-27
+
+#99's two open points, as tests the CI runs on every push.
+
+### The message on a real exhaustion
+0.6.95 said the shutdown message was the right mechanism but had not been
+seen to work under a real out-of-memory error. It has now, and on every CI run.
+
+`resource_guard` is the handler, with its classification free of Moodle calls
+so that it can run in a process that is already dying. `resource_guard_test`
+starts a child PHP process with a 16 MB limit that loads the real class, grows
+until PHP stops it, and reads what it wrote:
+
+    PHP Fatal error:  Allowed memory size of 16777216 bytes exhausted
+    <div class="alert alert-danger mt-3">… limit=16M</div>
+
+The texts are resolved while there is memory to resolve them; at shutdown there
+is only the small reserve PHP keeps.
+
+### The subscale export under load
+The scale test now builds a real scale map — three categories of four
+subscales — and people whose profiles name them, and counts the subscale rows
+the CSV export actually writes: **exactly twelve per sitting plus a header**,
+600 001 lines at fifty thousand sittings, within the same memory and time
+budget. That also proves the fix to 0.6.79's empty subscale export.
+
+### What it found
+Run on its own the test passed; in the full suite twelve rows were missing —
+one sitting's subscales. `results_query::detail()` cached the last sitting by
+its id alone, and PHPUnit resets id sequences between tests: a sitting of this
+test got the profile of a sitting from the test before. In a single request
+that cannot happen, but a cache that answers for the wrong record is worse
+than none. It is keyed by sitting and person, and cleared when a stream begins.
+
+Both tests run in the existing PHPUnit jobs, on PostgreSQL and MariaDB, whose
+drivers buffer differently — which is what the memory budget is about.
+
+PHPUnit 709 tests / 3894 assertions, Behat 32 scenarios / 235 steps, phpcs and
+PHPDoc clean.
+
+---
+
+## [0.6.95] — 2026-09-27
+
+#99: the evaluation at the size of a real experiment.
+
+Measured with fifty thousand sittings of thirty-five items and twelve subscales,
+each page in its own process:
+
+                  before              after
+    overview      174 MB              59 MB
+    raw data      built the export    28 MB   (the same at 9 000)
+    export tab    154 MB              24 MB
+    CSV           the export twice    32 MB
+    JSON          186 MB              54 MB   (most of it the test holding the output)
+
+### What held the memory
+- **The observations**, all of them, for every tab. `results_query` now yields
+  them one at a time (`each_observation()`), reading run by run and in batches
+  of five hundred: a single recordset over everything is not a stream, because
+  the database drivers buffer it.
+- **A person cache with every profile.** The rows read two fields of a person;
+  the cache held the three-kilobyte profile of every person of every run. It
+  holds the two fields now, per run.
+- **The overview's tables.** Grouped by strategy and by cell, each group a copy
+  of its rows, each quantile a sorted copy of those. `stream_summary` keeps a
+  group's numbers packed as eight-byte floats and its running sums for bias,
+  RMSE and correlation; medians and quartiles come from the same function as
+  before, so the figures do not change.
+- **The scatter chart** drew a point per sitting. It draws a reservoir sample of
+  two thousand; the summary beside it is computed from every sitting.
+- **Provenance and metadata** materialised the selection to count it.
+
+The raw data view reads one page from the stream and counts the rest in passing.
+The export tab counts rows by count query or by stream. Downloads write rows as
+they are produced.
+
+### A regression of mine, found on the way
+Since 0.6.79 the subscale rows were built from observations that no longer carry
+the profile and the trace, so the **subscale tab and the subscale export were
+empty on real data**. They fetch both per observation again.
+
+### When a limit is hit anyway
+A fatal error is not catchable, but it reaches the shutdown handlers. The
+results page says what happened — memory or time, the limit, and what to do —
+instead of stopping after its tabs.
+
+### Criteria as tests
+`results_scale_test` builds nine thousand and fifty thousand sittings and fails if
+the overview, the raw data, the export sizes or the CSV download exceeds its
+memory or time budget, measured from a reset peak. Both pass in fifteen seconds.
+
+PHPUnit 706 tests / 3871 assertions, Behat 32 scenarios / 235 steps, phpcs and
+PHPDoc clean.
+
+---
+
+## [0.6.94] — 2026-09-27
+
+Issues #97 and #98, checked criterion by criterion against GitHub.
+
+### #97 — the strategy catalogue follows the engine
+- Validated against `\local_catquiz\teststrategy\info::return_available_strategies(true)`,
+  the engine's own API, rather than a scan of its classes. It also leaves out
+  strategies an administrator has switched off, which a class scan cannot know.
+- The menu offers only the strategies the engine can play. 0.6.85 kept the
+  other two in the menu with a note; the issue asks for them not to be offered,
+  and it is right: a choice that can only fail is not a choice.
+- A stored definition naming `balanced` or `pilot` — from before this was
+  checked, or from another installation — fails validation with the reason,
+  for the chosen strategy and for every level of a swept one.
+
+Measured on catquiz 1.2.1: the engine reports 1, 3, 4, 5, 7, 8; the menu offers
+fastest, allsubs, lowestsub, highestsub, classic, relsubs.
+
+### #98 — filters and a way into the log
+- The run's sitting table filters by what is wrong: needed attention, failed,
+  waiting out a retry delay, being played, lease expired, waiting, without an
+  engine attempt, collected without a trace.
+- Each sitting's number links to the execution log, filtered to that run and
+  that sitting.
+
+### Still open on these issues
+#97: pilot questions modelled separately from selection strategies; one
+catalogue verified across import, manifest, filter and export.
+#98: structured exception fields (errorcode, phase, URL, slot) instead of the
+reported text; a bulk retry of *all* incomplete sittings rather than failed
+ones; the completeness rule `collected == planned && failed == 0 && open == 0`
+as a tested invariant; the Playwright path error → diagnosis → retry → success.
+
+PHPUnit 704 tests / 3854 assertions, Behat 32 scenarios / 235 steps, phpcs and
+PHPDoc clean, all 1290 string identifiers present in both languages.
+
+---
+
+## [0.6.93] — 2026-09-27
+
+catquiz 1.2.1 and the worker CI.
+
+### The engine changed under the collector
+catquiz 1.2.1 on `ALiSe-v-1.2.0-legacy` (2026092612) dropped
+`local_catquiz_attemptscale`. This plugin never touched that table — the break
+was indirect. In 1.2.1 `debug_info` is empty, and the progress row is deleted
+when an attempt ends; those were the two sources of the step count and the
+ability path. Sittings were played and collected with fifteen items, a step
+count of zero and an empty path, and the smoke test refused them with
+"answered fewer than 15 questions (shortest: 0)".
+
+The engine now keeps the path in `graphicalsummary_data`: one entry per
+question with `personability_after`. The collector reads it where the old
+sources are empty and gives it the shape the old path had — step, and a
+scale → ability map — so the test-flow view and the export read it unchanged.
+Measured: fifteen steps, ability from −0.40 after the first question to −1.86
+after the last.
+
+The step count now falls back in order of trust: the engine's summary, its
+debug step count, and last the items read back from the question usage, which
+exist whatever the engine version because they are Moodle's own record of what
+was asked.
+
+### The worker CI
+- It cloned `main` (9 September) while the live installation runs
+  `ALiSe-v-1.2.0-legacy`. Both workflows clone that branch now, overridable
+  through `CATQUIZ_BRANCH`.
+- The engine's two hub subplugins are git submodules. A plain clone leaves
+  their directories empty and Moodle fails on a plugin without a `version.php`.
+  The workflows clone with `--recurse-submodules`.
+- `smoke_all.sh` carried a fixed list with `balanced` in it, which this engine
+  has no class for; readiness refused it, correctly, and the job failed. The
+  list is now asked of the engine: `smoke.php --list-strategies`.
+
+Against the legacy engine:
+
+    fastest PASS   allsubs PASS   lowestsub PASS
+    highestsub PASS   classic PASS   relsubs PASS
+
+A regression test builds an engine row the way 1.2.1 writes it — no
+debug_info, no progress row, a per-question summary — and asserts the path and
+the step count come from it.
+
+PHPUnit 704 tests / 3852 assertions, Behat 32 scenarios / 235 steps, phpcs and
+PHPDoc clean, both workflows parse.
+
+---
+
+## [0.6.92] — 2026-09-23
+
+#90: what the log could not do because the data did not allow it.
+
+0.6.82 said plainly that millisecond timestamps and worker or task filters
+needed schema changes rather than filters. They are made.
+
+**Milliseconds.** The debug and lifecycle tables gain `timecreatedms`, and the
+merged log sorts by it. Two entries of the same second used to keep only the
+order their sources happened to be merged in; a heartbeat and the failure it
+preceded could appear the wrong way round.
+
+    2026-09-26 23:23:36.501  heartbeat      exec-7
+    2026-09-26 23:23:36.506  job_complete   exec-3  error
+    2026-09-26 23:23:36.511  heartbeat      exec-7
+
+**Structured ids.** The debug table gains `attemptid`, `workerid` and
+`experimentid` as indexed columns, lifted from the parameters every entry
+already carried. A worker or a sitting was findable before only as words inside
+a JSON blob, by free-text search. The log page filters by worker, task id and
+sitting.
+
+**Retention.** A site setting, seven days by default, zero to keep everything.
+It governs the debug log, as the fixed seven days did, and now the run
+lifecycle too, which was kept forever — a year of runs is a table nobody reads
+and every log page has to filter through.
+
+**A channel filter that filtered.** Choosing "worker" also showed the whole run
+lifecycle; the lifecycle source ignored the channel. It answers only to
+"lifecycle" or to no channel at all.
+
+PHPUnit 703 tests / 3846 assertions, Behat 32 scenarios / 235 steps, phpcs and
+PHPDoc clean.
+
+---
+
+## [0.6.91] — 2026-09-23
+
+Audit section 7: what was tried on a sitting, kept.
+
+### The critical finding
+`requeue_failed()` cleared `tries`, `nextruntime` and `lasterror`. The
+diagnosis of the try before it was therefore gone — exactly when somebody
+needs it, which is after the retry did not help either.
+
+A sitting's executions are now recorded append-only in
+`local_catquizlab_attemptlog`: one row per execution, written when a worker
+claims it, when it finishes or fails, and when anybody puts it back. Measured:
+
+    before the retry: lasterror = "Division by zero at model_raschmodel.php:734"
+    after the retry:  lasterror = (cleared)
+
+    history:
+      try 1  started                w-1
+      try 1  failed                 w-1   timeout after 33 answers
+      try 2  started                w-2
+      try 2  failed                 w-2   Division by zero at model_raschmodel.php:734
+      try 3  put back in the queue        Division by zero at model_raschmodel.php:734
+
+Both failures stay readable, and they differ — which is the whole point: a
+timeout and an engine exception on the same sitting are two different problems.
+
+### The diagnostic view
+A run's page lists the sittings that needed more than one try, with the columns
+the audit asked for: sitting, person, status, tries, engine attempt, worker,
+last change, what happened, and an action. Sittings that simply worked are not
+listed; a thousand collected rows have nothing to say.
+
+### Selective retry
+"Try this one again" puts a single sitting back — its own diagnosis recorded
+first — without touching the run's other sittings. Collected sittings are never
+affected, which is the recovery goal stated in the audit.
+
+### Two missing strings, found by Behat
+`export:sizeunknown` from 0.6.89 and `results:run` from the worker overview:
+both written into the code, neither into the language files, and the unit tests
+do not render those templates. A scan of all 935 identifiers used across PHP,
+templates and JavaScript now comes back clean.
+
+PHPUnit 702 tests / 3833 assertions, Behat 32 scenarios / 235 steps, phpcs and
+PHPDoc clean.
+
+---
+
+## [0.6.90] — 2026-09-23
+
+RESULTS-003: a download no longer exists twice.
+
+`send_file()` takes a finished string, so an export held the dataset and the
+formatted file at the same time — the export twice over in memory, to send it
+once. `results_export::stream()` writes rows to the output as they are
+formatted; the JSON form is assembled piece by piece rather than through one
+`json_encode()` of everything, which would build the very string this exists to
+avoid.
+
+Measured on five thousand sittings:
+
+    assembled  20.8 MB
+    streamed   13.5 MB
+
+The remainder is the dataset itself, which is RESULTS-001 and still materialised.
+
+The method writes; `results.php` sends the headers. That keeps one job in one
+place and makes the writing testable — a test asserts the CSV has a header and
+one line per sitting (a stream that goes wrong produces a prefix, not a short
+file), that the columns match the assembled dataset, and that the JSON parses
+and carries all its rows.
+
+PHPUnit 701 tests / 3824 assertions, phpcs and PHPDoc clean.
+
+---
+
+## [0.6.89] — 2026-09-23
+
+Audit section 8: the export tab, and a selection nobody can analyse.
+
+**RESULTS-002.** Opening the export tab built all four datasets — run, sitting,
+subscale, item — so that four row counts could be printed beside four download
+links. On a large experiment that is the whole export, four times over, to
+answer "how big is it". `results_export::row_count()` answers from the
+observations instead; where a level's size cannot be known cheaply, the table
+says "known when exported" rather than building megabytes to find out.
+Measured: **155 ms and 16 MB** for the tab, where it used to be four exports.
+
+**RESULTS-004.** "All experiments" had no ceiling. The page counts the
+selection first — one query, before anything is read — and declines above fifty
+thousand sittings with the number and a way forward: pick an experiment, narrow
+the filter, or export per experiment and combine. Rendering until the memory
+runs out looks like a page that simply stops after the tabs, which is exactly
+what was reported.
+
+Still open from this section: `observations()` materialises the selection
+(RESULTS-001) and the downloads hold dataset and formatted string at once
+(RESULTS-003). The ceiling bounds both for now; streaming is the real answer
+and it is not in this release.
+
+PHPUnit 700 tests / 3817 assertions, phpcs and PHPDoc clean.
+
+---
+
+## [0.6.88] — 2026-09-23
+
+A budget a strategy cannot satisfy is refused while it is typed.
+
+Readiness has caught this since 0.6.72 — but only once the run is being
+provisioned, by which time a course, two and a half thousand questions and a
+thousand accounts exist for a run that was never going to start. The reported
+run 21 went exactly that way.
+
+The form does the same arithmetic on submit, for every strategy the experiment
+would run — the chosen one and every level of a swept strategy factor — against
+whichever budget each will actually use, its own or the shared one. Measured:
+
+    allsubs, 10×10 subscales, min 3, max 35     refused: "300 questions … above 35"
+    the same with max 400                       accepted
+    the same, allsubs' own maximum unlimited    accepted
+    classic (serves no subscale floor), max 35  accepted
+    swept: classic + allsubs, 3×3, min 5, max 20  refused: "45 questions …"
+
+The error lands on the field that can fix it: the strategy's own maximum where
+one is set, the shared maximum otherwise.
+
+PHPUnit 700 tests / 3816 assertions, phpcs and PHPDoc clean.
+
+---
+
+## [0.6.87] — 2026-09-23
+
+The per-run budgets are editable, and the preview shows what each run will use.
+
+0.6.86 put per-strategy budgets and "unlimited" into the schema and the sweep,
+and said plainly that the form did not edit them. It does now.
+
+**Editing.** A collapsed section, one row per strategy the installed engine can
+play, four fields each: fewest and most questions overall, then per subscale.
+An empty field means "use the budgets above", so a strategy nobody touched
+does not gain an override. A maximum accepts the word `unlimited`. Measured
+through the form and back:
+
+    classic  global 20..unlimited     → perstrategy_classic_globalmax = "unlimited"
+    allsubs  global   ..80, sub ..5   → two fields, nothing else
+    fastest  (left empty)             → no override at all
+
+**Preview.** The plan already said how many runs there would be. It now also
+says what each of them will use, computed the same way provisioning will
+compute it — after the factors, after the per-strategy budgets:
+
+    Cover all subscales       10..80         subscale 3..5   own budget
+    Fixed-form baseline       20..unlimited  subscale 3..4   own budget
+    Cover relevant subscales  10..250        subscale 3..4
+
+A count of runs does not answer "did classic keep its unlimited ceiling",
+which is the thing somebody is checking before pressing the button.
+
+Still open from audit section 5: refusing a budget a strategy cannot use —
+`allsubs` with a hundred subscales and a global maximum of 35 is caught by
+readiness, but only once the run is being provisioned, not while it is being
+typed.
+
+PHPUnit 699 tests / 3809 assertions, Behat 32 scenarios / 235 steps, phpcs and
+PHPDoc clean.
+
+---
+
+## [0.6.86] — 2026-09-23
+
+Audit section 5: CAT parameters per run, and "unlimited".
+
+### A maximum that does not apply
+The engine has understood `-1` as "stop applying this ceiling" all along;
+this plugin refused it, because every budget had to be a positive integer. A
+definition writes the word — `"maxitems": "unlimited"` — because a definition is
+read by people, and it reaches the engine as -1.
+
+### Budgets that belong to one strategy
+A sweep is a cartesian product, so a budget swept as a factor is applied to
+every strategy. "Classic without a ceiling, allsubs at eighty, relsubs at
+forty" could not be said: saying it produced six more cells nobody asked for.
+
+An optional block says it directly:
+
+    "budgetsbystrategy": {
+        "classic": {"global": {"minitems": 20, "maxitems": "unlimited"}},
+        "allsubs": {"global": {"maxitems": 80}, "subscale": {"maxitems": 5}},
+        "relsubs": {"global": {"maxitems": 40}, "subscale": {"maxitems": 8}}
+    }
+
+It is applied to the cell after the factors, so it narrows rather than
+multiplies. Measured — three strategies, three runs:
+
+    allsubs   global 10..80        subscale 3..5   engine maximum 80
+    classic   global 20..unlimited subscale 3..4   engine maximum -1
+    relsubs   global 10..40        subscale 3..8   engine maximum 40
+
+Only the levels named are replaced; the rest of the cell keeps what it had. The
+cell's own definition carries the result, so the manifest and the
+reproducibility package document the values the run actually used.
+
+What this does not yet include, from the same audit section: an editable
+per-run preview in the interface, and refusing a budget a strategy cannot use.
+The schema and the sweep carry it; the form does not edit it yet.
+
+PHPUnit 698 tests / 3801 assertions, phpcs and PHPDoc clean.
+
+---
+
+## [0.6.85] — 2026-09-23
+
+Audit 2026092303: #94 closed, and a strategy that could never have run.
+
+### #94 — the last three site-wide places
+`progress_view` took the situation without the experiment, so the first render
+could describe the installation while the first poll two seconds later
+described the experiment. Inside `situation::assess()`, `running` and
+`failedruns` stayed site-wide whatever scope was asked for.
+
+All three follow the scope now, and the first render uses the same count the
+first poll will. Measured against the audit's acceptance case — A idle, B with
+five sittings in flight and a held run:
+
+    Experiment A: running=0  "Nothing is queued and nothing is wrong."
+    Experiment B: running=5  "5 attempt(s) in progress"
+
+A regression test asserts A's snapshot mentions nothing of B's, and that the
+render and the poll agree.
+
+### Six strategies, eight offered
+`local_catquiz` defines eight strategy constants and this fork ships six
+classes. The compatibility check asked whether the **constant** was defined —
+which it always is — so "balanced" and "pilot" could be chosen, provisioned
+completely, and then fail every single sitting, because nothing on the engine
+side answers to strategy 2 or 6. Run 27 of the reported installation was a
+`pilot` run.
+
+The catalogue now reads the engine's own classes, the same way the engine does:
+
+    Engine can play: 1, 3, 4, 5, 7, 8
+      fastest, allsubs, lowestsub, highestsub, classic, relsubs  runnable
+      balanced (2), pilot (6)                                    not runnable
+
+They stay in the menu, marked "not available in the installed engine" — a
+strategy vanishing without explanation is its own puzzle — and readiness
+refuses them by name before a single course is built. A fork with more
+strategies is described correctly too, because nothing is hard-coded.
+
+PHPUnit 697 tests / 3793 assertions, phpcs and PHPDoc clean.
+
+---
+
+## [0.6.84] — 2026-09-23
+
+The worker end-to-end job: the last open step was cron.
+
+0.6.83's smoke test prepares its own installation, and the job's log shows it
+doing so — course, worker account, token, browser, pipeline. One step stayed
+open: "Cron has run recently". On a fresh CI installation cron has never run,
+and the script stopped there.
+
+The honest fix is to run one cron pass, not to write the timestamp readiness
+looks at. `cli/smoke.php` does that, once, only while something is still open:
+the first strategy pays the minute it takes and the four after it find the
+timestamp already there.
+
+Measured from factory state — cron timestamps deleted, plugin switch and worker
+switch off:
+
+    == CatQuizLab smoke test: classic ==
+      Setup: course, pipeline
+      Cron: one pass run.
+      …
+    PASS: 2 attempts played, 2 with estimates, 28 result rows.
+
+PHPUnit 695 tests / 3772 assertions, phpcs and PHPDoc clean.
+
+---
+
+## [0.6.83] — 2026-09-23
+
+Measured at fifty thousand queued sittings, because small runs prove nothing.
+
+The end-to-end tests show the chain works on a handful of sittings. They say
+nothing about an installation with a real experiment on it. Measured here, on
+50 000 queued sittings with 200 in flight:
+
+    claim a sitting     4843 ms  →    39 ms
+    live poll           6916 ms  →  1060 ms
+    queue counts        1338 ms  →   480 ms
+    run status card     1296 ms  →   477 ms
+
+A claim took nearly five seconds because every question about "queued and due"
+or "is this person busy" read the whole table. With six workers claiming and a
+browser polling, that was the server's capacity spent on finding work rather
+than doing it — and it is the shape of the collapse the reported installation
+saw at 112 workers.
+
+- Four indexes on the sitting table: (status, nextruntime), (personid, status),
+  (status, leaseexpires), (status, runid).
+- The person-busy exclusion reads the two hundred people currently playing
+  once, instead of asking per candidate row.
+- One count per poll, threaded into the situation, the queue card and the run
+  cards, instead of each taking its own.
+- One grouped query for the terminal states instead of three full counts.
+
+What is still not fast: the queue counts themselves, about half a second at
+this size, because counting fifty thousand rows is counting fifty thousand
+rows. With a two-second poll that is a quarter of a core per open browser. If
+you leave a page open overnight on a large experiment, close it.
+
+### Does it keep running when you switch your computer off?
+Yes. The pipeline is a Moodle scheduled task and the workers are server-side
+processes started detached by it — nothing here depends on a browser being
+open. Your own log is the evidence: `pipeline tick: started 112 worker(s)` at
+02:18. The interface only reads state; progress is there the next morning.
+
+PHPUnit 695 tests / 3772 assertions, phpcs and PHPDoc clean.
+
+---
+
+## [0.6.82] — 2026-09-23
+
+Two workers played the same person.
+
+    Attempt did not reach the finish page after 1 answer(s).
+    error="Während der Verarbeitung Ihrer Antworten ist ein Fehler aufgetreten
+    (adaptivequiz/uniquenotpartofattempt)"
+
+Two workers logging in as the same simulated person open the same adaptive quiz
+attempt, and Moodle rejects the second one's answers. Claiming excluded nothing
+about people: with a thousand people, two sittings each and — as the reported
+installation's log shows — a hundred and twelve workers, this was not a race
+that might happen, it was the normal case. It cost a night of results.
+
+A sitting is no longer handed out while that person has another in flight. The
+claim query excludes them, so there is no window between checking and claiming.
+Measured: the second sitting of a busy person is not handed out, a free
+person's is, and the moment the first sitting ends the second becomes
+claimable. A test asserts all three.
+
+This is also what the experiment assumes. A simulated person sits the test
+alone; two of their sittings overlapping would share an ability estimate
+between observations that are supposed to be independent.
+
+### Also in this release, from the audit
+**#94** — the live snapshot answers for one thing. `queue_breakdown()`,
+`situation::assess()` and the queue card take the experiment in view;
+`live_status` passes it through to all of them. The worker pool and the
+pipeline stay site-wide, and the page now says so: "Queue of this experiment"
+against "Execution environment (whole installation)".
+
+**#56** — the worker overview shows every worker, not only the live ones, with
+its slot, what it is playing, sittings done, last heartbeat, uptime and last
+error; STOPPED, CRASHED and stale are visible states. Ad-hoc tasks waiting out
+a failure delay can be tried again from the page. The event history stays on
+step 5 on purpose — one log surface, not two — and step 3 links into it.
+
+**#90** — the log gained an explicit from/to window, a severity on every line
+with a "at least this severe" filter, filters for action or event, correlation
+id and attempt number, a newest-first toggle, a JSON download of exactly what
+is filtered, and a copy-to-clipboard button.
+
+What #90 asks for and the stored data cannot give: millisecond timestamps, and
+worker or task id filters. The log tables have second resolution and no such
+columns; adding them is a schema change and a writing change, not a filter, and
+I have not made it. That part of the issue is still open, and I would rather
+say so than ship a filter that quietly matches nothing.
+
+PHPUnit 695 tests / 3770 assertions, Behat 32 scenarios / 235 steps, phpcs and
+PHPDoc clean.
+
+---
+
+## [0.6.81] — 2026-09-22
+
+One card, two queues.
+
+    7074 claimable, 90 in progress        Claimable now: 7134
+    Waiting for a retry delay: 60         Waiting for a retry delay: 86
+
+The headline and the list three lines below it counted the queue separately, a
+fraction of a second apart, and on a queue with twenty workers moving through
+it they disagreed by sixty sittings. Both were right when they were taken;
+neither matched the other.
+
+The count is taken once now and handed to the card that describes it —
+`status_report::queue($breakdown)` — on the progress page and in the live poll.
+A test asserts the card reports the count it was given, and that a queue moving
+between the two reads cannot make them disagree.
+
+### A correction to what 0.6.80 said
+I wrote that runs stop short because sittings fail for good. On the reported
+installation they do not: "Failed: 0". The sittings that are missing from a
+run's total are waiting out a retry delay after a failed try, and they come
+back by themselves. What 0.6.80 added — naming sittings that gave up, and the
+button to try them again — is right for runs that do have failures, and it was
+not the explanation for these.
+
+PHPUnit 694 tests / 3764 assertions, Behat 32 scenarios / 235 steps, phpcs and
+PHPDoc clean.
+
+---
+
+## [0.6.80] — 2026-09-22
+
+Runs that stop short, and a CI job that reported its own setup.
+
+### "896 of 1000 collected" on a run that will never reach 1000
+A sitting that fails three times is failed for good. It stays that way, nothing
+requeues it, and its run never reaches the number it was designed for. The
+status card showed only what had been collected, so the hundred-odd sittings
+that had given up were invisible: the card read as work still in hand.
+
+The card names them now — "104 gave up after repeated failures" — a finished
+run with failures is amber rather than green, and it offers **"Try the 104
+failed sittings again"**. That clears their counters, so they get their three
+tries afresh, and puts the run back to ready. Measured on a thousand sittings:
+104 requeued, run ready, no sitting left failed.
+
+This is deliberately not the same action as continuing a held run. A held run
+was stopped by the circuit breaker and needs its cause dealt with; these runs
+were never held, they simply lost sittings along the way — a browser that died,
+a server under load — and the observations are recoverable by trying again.
+
+### The worker end-to-end job
+The smoke test only checked whether the installation was ready and relied on
+whatever the surrounding job had arranged. That stopped being enough when
+readiness grew to cover the worker switch, the PHP binary and the browser
+cache: the job reported fifteen open steps and stopped, which is a report about
+the job's setup rather than about the plugin.
+
+`cli/smoke.php` prepares its own installation now: base URL and Node path from
+the environment (`CATLAB_BASE_URL`, `CATLAB_NODE`, or whatever is on the path),
+then the setup itself, then the worker runtime — packages and browser into the
+dataroot, where the worker looks for them.
+
+PHPUnit 693 tests / 3760 assertions, Behat 32 scenarios / 235 steps, phpcs and
+PHPDoc clean, both workflows parse.
+
+---
+
+## [0.6.79] — 2026-09-22
+
+The evaluation still ran out of memory, further along.
+
+0.6.78 stopped the page reading every row. What it did not stop was what each
+surviving row carried: every observation held the **decoded** trace and the
+**decoded** person profile. A hundred-subscale profile is three kilobytes as
+JSON and about thirty as PHP arrays, so an observation weighed 54 kB and 577 of
+them weighed 30 MB — on a page whose overview computes means.
+
+Measured per tab before: 46 MB peak. After: **16 to 24 MB**, all tabs, at a
+128 MB limit.
+
+The two heavy structures left the row. `results_query::detail()` reads them for
+the one observation being looked at and caches that one, so the tabs that need
+them — subscales, deficits, robustness, test flow — hold one decoded pair at a
+time instead of all of them. The row keeps the two ids it takes to fetch them.
+
+The page also asks for the headroom Moodle gives its own reports
+(`raise_memory_limit(MEMORY_EXTRA)`). An evaluation over every sitting of a
+large experiment is a report, and a default web request is not sized for one.
+
+The regression test now also asserts that observations carry neither structure,
+that `detail()` supplies both for a row, and that a hundred observations
+serialise to under half a megabyte.
+
+PHPUnit 692 tests / 3752 assertions, Behat 32 scenarios / 235 steps, phpcs and
+PHPDoc clean.
+
+---
+
+## [0.6.78] — 2026-09-22
+
+The evaluation ran out of memory on a real experiment.
+
+    Allowed memory size of 134217728 bytes exhausted
+      in lib/dml/mysqli_native_moodle_database.php on line 1368
+
+Nine runs of a thousand people each: `results_query::observations()` read every
+sitting of every run — nine thousand rows, trace JSON and all — and then every
+person, profile JSON and all, before computing a single figure. Measured on the
+same shape of data: **54 MB for the two reads alone**, on top of everything a
+Moodle page already holds. It died before the first mean.
+
+Both reads are now proportional to what is actually reported:
+
+- The sittings come through a recordset, one row at a time, restricted to those
+  that were collected and carry a trace. What stays in memory is one small
+  array per observation, not one database row per sitting.
+- People are fetched as they are needed and cached. A person who never sat the
+  test is never read. In the reported experiment that is 8423 of 9000.
+
+Measured after the change, same data, PHP's memory limit left at 128 MB:
+**577 observations, 44 MB peak, 0.1 seconds.** Before: no answer at all.
+
+A test builds two hundred people of whom ten sat the test, and asserts that the
+evaluation returns ten observations and reads fewer than forty times — a count
+that cannot grow with the people who did not sit.
+
+PHPUnit 692 tests / 3745 assertions, Behat 32 scenarios / 235 steps, phpcs and
+PHPDoc clean.
+
+---
+
+## [0.6.77] — 2026-09-22
+
+Debug recording switched itself off.
+
+It never switched on. The settings form offered the setting and read it back,
+but the code that saves the form iterated a hand-written list of field names
+that did not include `debuglevel`. Choosing a level, saving, and finding "Off"
+again was the form discarding the choice in silence — on every save, for
+everyone.
+
+There is one list now, `settings_form::saved_fields()`, used both to save the
+form and to fill it, so the two cannot drift apart. A test walks the form's
+own elements and asserts that each one is in that list: a field added to the
+form and forgotten in the saving code fails the test rather than the user.
+
+PHPUnit 691 tests / 3743 assertions, Behat 32 scenarios / 235 steps, phpcs and
+PHPDoc clean.
+
+---
+
+## [0.6.76] — 2026-09-22
+
+Division by zero, the second cause — and the worker that held its slot while
+dead.
+
+### It never needed the seeding. Fifty people are enough.
+`updatepersonability::calculate_sd_from_past_attempts()` takes the standard
+deviation of the abilities already in the CAT context as the prior for the next
+estimate, once **fifty** of them are there (`NUM_ESTIMATION_THRESHOLD`).
+`model_raschmodel.php:734` then divides by its square.
+
+Simulated people all start from the same value. The engine writes one ability
+per person as each sitting begins, so a run with fifty people fills the context
+with fifty identical numbers, and their standard deviation is zero. Removing the
+seeding in 0.6.71 removed one source of identical values; the engine's own were
+the other. A run that was provisioned, played, reset and provisioned again kept
+the previous round's fifty — which is why every sitting after the reset failed
+immediately.
+
+My own fifty-person run had reached twenty-nine collected sittings when I
+called it a success. It would have failed at the fiftieth. That was luck, not
+evidence.
+
+**The fix is not a workaround.** The engine's person parameters for a simulated
+person are removed once their sitting has been read back into this plugin's
+tables — on collection, and on terminal failure. Person fifty-one being
+estimated partly from persons one to fifty is a dependency between observations
+that an experiment must not have: each simulated person sits the test once,
+alone. Provisioning clears the run's contexts entirely for the same reason.
+
+Recommended to the engine, and not changed here: a standard deviation of zero
+is not a prior. A floor in `calculate_sd_from_past_attempts()` would have made
+this a biased estimate rather than an error page.
+
+### A crashed worker held the only slot for five minutes
+The worker died on a web service error without reporting anything. Its registry
+row kept a fresh heartbeat, so the page said "1 worker running", the run card
+said "waiting for a worker", and the tick answered "all-slots-busy" — all three
+true of the row, none true of the machine.
+
+The worker now hands its slot back before exiting, with `fatal-error` as the
+reason. And the registry checks whether the process still exists on this host
+rather than waiting out the timeout: signal 0, this host only, a pid that
+belongs to somebody else left alone. Measured both ways — a dead pid releases
+the slot at once, a live one is untouched.
+
+### `job_complete` refused the diagnosis it had asked for
+The reply's `message` was `PARAM_TEXT` and the replayed exception carries angle
+brackets, so the worker crashed while reporting why it had failed. `PARAM_RAW`,
+as the request side already was.
+
+### Verification
+PHPUnit 690 tests / 3734 assertions, Behat 32 scenarios / 235 steps, phpcs and
+PHPDoc clean, worker JS syntax clean.
+
+What is measured: the mechanism (fifty identical abilities produce a standard
+deviation of zero), the cleanup (per person on collection, whole context on
+provisioning), and the slot release. What is not: a complete fifty-sitting run
+past the threshold. One sitting of that experiment takes about two minutes here
+and fifty of them exceed the time I had. The threshold is 50; it is now
+impossible to reach, but I have not watched it not happen.
+
+---
+
+## [0.6.75] — 2026-09-22
+
+The reset preview asked for a string that did not exist.
+
+    Invalid get_string() identifier: 'purge:countactivity'
+      line 586 of run_lifecycle.php: reset_preview_message()
+
+The run reset preview counted the test activity under `activity`; the
+experiment preview, written earlier, counted it under `activities`, and only
+that string existed. Every reset of a run with a test showed the notice.
+
+It was one of six places that turned a set of counts into text, each with its
+own idea of which keys existed. The other five — reset and deletion results in
+`runs.php` and `experiment.php` — printed the internal keys to the person:
+"3 enginescales, 50 enrolments". `purger::count_label()` and `counts_line()` are
+the one place now; the reset preview uses `activities`; and the sixteen keys that
+had no name have one in both languages. An unknown key reads as itself rather
+than failing.
+
+### Checked across the plugin, not only here
+All 886 string identifiers used literally in PHP, templates and JavaScript
+exist. The 31 places that build an identifier from a variable were enumerated
+against their actual value sets: this family was the only one with a gap.
+
+A test names every count key, asserts each renders as its translated name, and
+renders the reset preview of a run with a test activity — a debugging notice
+fails a PHPUnit test by itself, so the reported notice cannot come back
+unnoticed.
+
+PHPUnit 688 tests / 3724 assertions, Behat 32 scenarios / 235 steps, phpcs and
+PHPDoc clean.
+
+---
+
+## [0.6.74] — 2026-09-22
+
+Everything green, nothing running, no logs — and why.
+
+### "Stalled" was the wrong word
+Every run on the reported installation had been held by the circuit breaker
+after "Division by zero" (the seeded starting abilities fixed in 0.6.71). Held
+runs keep their sittings queued and out of reach. The situation counted those
+sittings as waiting for a worker and said "stalled — start workers"; the
+launcher knew there was nothing a worker could take, answered
+`no-claimable-work`, and started nothing. Both were right. Only the page was
+wrong, and nothing anywhere said so.
+
+Reproduced here, then: "5 attempts waiting, no worker running → Start workers",
+with 0 claimable and 5 blocked.
+
+The situation now counts only claimable work as waiting, and when queued work
+belongs to a held run it says so, with the cause:
+
+    Run #215 was stopped after repeated failures; 5 test sittings are held back.
+    Cause: … Division by zero                                [Show and continue]
+
+It comes before the not-ready check: held runs prove the installation has run.
+
+### One press for all held runs
+Step 3 offers "Clear the errors of all N runs and continue" when more than one
+run is held. The reset removes the seeded starting abilities as well, so runs
+held by the old Division by zero are repaired by the same press. Measured: five
+held runs continued, 37 sittings claimable, and the situation moves on.
+
+### The pipeline says what it decided
+Each tick keeps its decision — workers started, sittings claimable, reason —
+where step 5 shows it, whether or not debug recording is on. It used to exist
+only in cron's output, which is exactly where the person looking at a page that
+says nothing is happening cannot look. An empty log window now names the time
+of the most recent entry and offers to show everything.
+
+### Audit finding: live status for the whole site
+The site-wide poll passed `:experimentid` to SQL that had no such placeholder.
+Only the parameters the query uses are passed now; a test calls the poll with
+and without an experiment and validates both against the return structure.
+
+### Verification
+PHPUnit 687 tests / 3670 assertions, Behat 32 scenarios / 235 steps, phpcs and
+PHPDoc clean.
+
+---
+
+## [0.6.73] — 2026-09-22
+
+"No npm found" on a server where npm was installed.
+
+`/usr/bin/npm` existed and ran in the administrator's shell, and the plugin said
+there was no npm next to Node. The candidate was checked with `is_executable()`,
+which on a symlink answers for the link and not for where it points. An npm
+linked into a personal home directory — nvm puts it there — works for that
+person and not for the web server user, who cannot enter that home directory.
+Telling that administrator to install npm sent them to apt, which refused
+because npm was already there.
+
+Each candidate is now actually run as the web server user, with the Node it will
+be run with, and only a version answer counts. When none works, the message says
+what was found and why it did not count:
+
+    /usr/bin/npm exists, but points to /home/…/.nvm/…/npm, which the web server
+    user "www-data" cannot read. This is typical of an npm installed with nvm in
+    a personal home directory.
+
+followed by how to install Node and npm system-wide as a pair. Reproduced as
+`www-data` with a link into a mode-700 home directory; the search reports it and
+falls back to a working npm where one exists.
+
+The same fault a second time, for npx: the browser installation looked for npx
+beside the Node binary with `is_executable()`, and its "no npx found next to the
+configured Node binary" is the message that looks exactly like the old npm one.
+It no longer uses npx at all. Puppeteer's own command line comes from the
+packages npm has just installed and is run by Node directly, from the runtime
+directory — where the previous version, running in the plugin directory, would
+have downloaded Puppeteer a second time. Measured with no npx and no packages in
+the plugin directory: `npm ci` 10 s, then the browser in 5 s.
+
+PHPUnit 685 tests / 3665 assertions; phpcs and PHPDoc clean.
+
+---
+
+## [0.6.72] — 2026-09-22
+
+Setting up the worker runtime on a server nobody prepared for it.
+
+### Before anything is downloaded, the server is asked
+The preparation step shows, and "Set up the worker runtime" checks first:
+
+- **Writable directories.** Every directory the installation and the worker
+  write to is created if missing and actually written to — not just checked
+  with `is_writable()`, which answers for permission bits and not for a full
+  disk, a read-only mount or an ACL. The message names the operating-system
+  user and gives the command:
+
+      The PHP process runs as user "www-data" and cannot write to: …/worker-runtime,
+      …/worker-home, … Ask your server administrator to run:
+      sudo chown -R www-data /…/moodledata/local_catquizlab
+
+  Measured by running the check as `www-data` against directories owned by root.
+- **Disk space.** About 600 MB for the packages and a browser.
+- **The npm registry and the browser download**, through Moodle's own HTTP
+  client so that the site's proxy settings apply. Checked only while something
+  still has to be downloaded, and cached for ten minutes so a page load does
+  not wait for the network.
+
+If any of it fails, the setup stops before npm starts — measured: refused in
+0.0 s, rather than two minutes of npm followed by an error written for npm's
+developers.
+
+### Moodle's proxy reaches npm and Puppeteer
+It was not passed on at all. A server behind a proxy — the normal case at a
+university — could reach the internet from Moodle and not from the installation
+Moodle started, and the failure read as npm's network error. `HTTPS_PROXY`,
+`HTTP_PROXY`, the npm equivalents and `NO_PROXY` now come from the site's web
+proxy settings. The proxy password never appears in a message.
+
+### From the round before, also in this release
+The setup button crashed on `implode()`: it read a key `ensure()` never
+returned, and the crash hid npm's output. Node 18 was refused although Puppeteer
+24 supports it — it is what Ubuntu 24.04 ships; 18.19.1 now plays a full
+sitting (measured, fifteen questions). npm is looked for on the path as well as
+beside Node, and its absence says `sudo apt install npm`. "Knoten.js" is Node.js
+again in the four strings about the runtime.
+
+The dependencies install into the dataroot and the worker finds them through
+`NODE_PATH`. I had a development `node_modules` in my plugin directory that hid
+every fault in this path; it was removed for these measurements, and a fresh
+setup through the button installed 98 packages and a browser in 10 seconds, after
+which a worker started by the pipeline played sittings of a fifty-person
+experiment on MariaDB.
+
+### Verification
+PHPUnit 685 tests / 3665 assertions, Behat 32 scenarios / 235 steps, phpcs and
+PHPDoc clean.
+
+---
+
+## [0.6.71] — 2026-09-22
+
+The Division by zero, found and removed. It was mine.
+
+### Where it was
+Reproduced on a fresh MariaDB installation with the reported experiment —
+fastest, ten by ten subscales of 25 items, fifty people — and located by both
+the browser with debug display and the server-side replay, independently:
+
+    DivisionByZeroError at local/catquiz/classes/local/model/model_raschmodel.php:734
+      ← model_raschmodel::get_ability_tr_jacobian()   catcalc.php:188
+      ← mathcat::newton_raphson()                      catcalc.php:200
+
+Line 734 divides by the square of a standard deviation: the prior of the trusted
+region around the ability estimate. That standard deviation comes from
+`updatepersonability::calculate_sd_from_past_attempts()`, which — once a context
+holds **fifty** person parameters — takes the standard deviation of their
+abilities as the prior. Fifty identical values have a standard deviation of
+zero.
+
+### Where the identical values came from
+This plugin. `seed_person_parameters()` wrote one row per simulated person per
+scale, all at 0.0, before any sitting — on the belief, documented in the code,
+that the engine needed a value before it could choose a first question. Fifty
+people, 111 scales: 5550 rows, all 0.0000, in every context of every run.
+
+Every experiment I tested had one to five people. Below fifty, the engine
+answers 1.0 and never computes the standard deviation. The reported experiment
+had exactly fifty. The hunt through subscale counts, database families and
+engine versions was a hunt in the wrong place: it was the head count.
+
+### The fix
+Provisioning writes no starting abilities. The engine chooses a first question
+without them — verified server-side and in a browser — and writes its own
+parameters as it measures. A person nobody knows anything about should have no
+prior; the engine's default for an empty context is sd = 1.
+
+`remove_seeded_parameters()` strips the rows an earlier version left in a run's
+contexts — status 0, no standard error, nothing measured — and leaves anything
+the engine wrote. It runs during provisioning and inside "Clear the errors and
+continue", so a run prepared by 0.6.70 or earlier is repaired by the same button
+that resumes it. Measured on MariaDB: 5527 seeded rows removed, then nine of ten
+sittings with fifty people finished at 7–14 questions, no division. The tenth
+was the first after a cache purge and fails a different, retried way.
+
+A regression test seeds fifty people at 0.0 beside one measured parameter and
+asserts the fifty go and the one stays.
+
+### Recommended to the engine, not changed here
+`calculate_sd_from_past_attempts()` should never return 0 — a prior with zero
+variance is not a prior. A floor at line 528 would have turned this into a
+biased estimate rather than an error page. That is a one-line change in the
+`ALiSe-v-1.2.0-legacy` branch, and it is not made in this plugin. No file under
+`local/catquiz` or `mod/adaptivequiz` is modified by this repository; I checked.
+
+### Two CI jobs, both mine
+The structure job: one `</div>` too many in the recovery section of
+`progress.mustache`, left from wrapping the card in a `<details>` — every tag
+now balances. The worker end-to-end job: `--verify` counted attempts with
+`registry::STATUS_FINISHED`, a run status whose value means "validated" for an
+attempt, a state no worker reaches. The job played its sitting to the end and
+was counted as having finished nothing. Attempt statuses now.
+
+### Also
+`job_complete`'s message is `PARAM_RAW`: the replay trace contains `<` and
+`PARAM_TEXT` refused it, which would have discarded exactly the information the
+replay exists to keep.
+
+### Verification
+PHPUnit 684 tests / 3657 assertions, Behat 32 scenarios / 235 steps, phpcs with
+the Moodle standard clean, PHPDoc clean, every template tag balanced. Fifty
+people, MariaDB, real browser: nine of ten sittings finished, none divided.
+
+---
+
+## [0.6.70] — 2026-09-21
+
+Why no run ever started on any installation but mine.
+
+### The switch nothing flipped
+`worker_exec_enabled` ships as 0. Nothing in the setup checked it and nothing
+set it — not the wizard, not the self-test, not "Start workers". The pipeline
+tick called `launch_pool()`, got `null`, and printed nothing. That is the whole
+of "stalled": every fresh installation, and every CI job, prepared experiments
+that could never be played, and no line anywhere said which switch was off.
+
+On my installation the switch was on. I had set it by hand at some point and
+forgotten. Every smoke test and every interface run I reported passed on a
+machine in a state the product cannot reach by itself. Those reports were true
+of that machine and worthless for yours.
+
+### One press, now
+`enable_pipeline()` sets `worker_exec_enabled` and detects `pathtophp` along with
+the plugin switch and the scheduled task. Measured from factory state — every
+switch off, no token, no PHP path, task disabled, six blockers:
+
+    run(true): changed [course, storedtoken, pipeline]   0.3 s
+    after:     ready, nothing open
+    worker_exec_enabled=1   pathtophp=/usr/bin/php
+
+The wizard lists the switch as a step, so an installation with it off cannot
+report itself ready. A regression test starts from factory state and asserts
+all of it.
+
+### Nothing is silent any more
+`launch_pool()` never returns `null`: a launch that cannot happen names what it
+is missing — `not-configured: worker_exec_enabled, worker_token` — the tick
+prints it, and the "stalled" card says which switch is off and points at the
+button that flips it, instead of offering "Start workers" for a start that
+cannot happen.
+
+### The interface run, from factory state
+The Playwright test used to press whatever setup buttons it found, up to six
+times, and never checked whether any of it had worked — which is how it walked
+past an installation that could not run and blamed the plugin. It presses the
+one setup button once now and then asserts readiness: not "closer", ready.
+And it waits until every sitting is collected rather than moving on at the
+first.
+
+Run with every switch off first: **1 passed (2.6 min)** — setup, self-test,
+definition, preparation, start, sittings collected, results shown. That is the
+run that was missing.
+
+### `php -S` answered one request at a time
+The self-test makes an HTTP call to the site it runs on, from inside a request.
+PHP's development server serves one request at a time, so the call waited for
+itself and reported the token as not answering — red in CI, green on a real
+web server, for the same code. `PHP_CLI_SERVER_WORKERS=4` in both workflows.
+
+### Carried from 0.6.69, now with 685 tests green
+Readiness refusals block provisioning; typed floats are localised and validated;
+`run.lasterror` exists; the circuit breaker is wired where the worker reports;
+rotation carries its reason and a stop is never replaced; the runtime survives
+upgrades; the live page swaps the visible card; `engine_dryrun` replays a failed
+selection server-side and returns the exception with file, line and trace.
+
+### Verification
+PHPUnit 685 tests / 3654 assertions, Behat 32 scenarios / 235 steps, phpcs with
+the Moodle standard clean, PHPDoc clean, both workflows parse, interface run from
+factory state passes.
+
+---
+
+## [0.6.69] — 2026-09-21
+
+The four audit findings, four defects found on the way, and a diagnostic for
+the failure on the live installation that this plugin could not see.
+
+### The failure it could not see
+Six runs on a live installation failed every sitting with "Division by zero"
+for two days. Every check this plugin had said they were ready — the checks
+read configuration, and the failure was in what the engine did with it. The
+browser saw an error page; the site shows no debug information; so the worker
+reported the words and not the place.
+
+Why the words reached a Moodle error page at all: the engine's own error
+handling catches `Exception`, and `DivisionByZeroError` is an `Error`. It falls
+through every catch block the engine has.
+
+**`engine_dryrun`** asks the engine for a question exactly as the attempt page
+does, in PHP, inside a transaction it rolls back, and catches `Throwable` — with
+file, line and trace. It runs as the last part of readiness, so a run that
+would fail on its first sitting is held before one is queued. And the worker
+calls `local_catquizlab_diagnose_attempt` on every page error, which replays
+the selection for that sitting server-side and appends
+`DivisionByZeroError at local/catquiz/…/x.php:123` to the failure. The next
+failure on that installation will say where it is.
+
+I could not reproduce the failure here: the same configuration — ten by ten
+subscales, three hundred items — plays twenty-five questions and finishes, on
+an engine identical to that installation's `main`. The diagnostic is the honest
+answer to that.
+
+### A readiness refusal that did not refuse
+The run log for that installation shows `stage_failed stage=readiness` — "300
+questions, over the global maximum of 25" — followed by `provisioning_ready`.
+`stage_failed()` looked for a `failed` key that only the container stage set;
+readiness and access answered `ok => false`, were logged as failed, and were
+then ignored. Any stage answering `ok => false` stops provisioning now.
+
+### "0,3" was 0
+The experiment form used `PARAM_FLOAT` for twelve typed numbers. Moodle's own
+documentation says not to: on a site whose language writes decimals with a
+comma, "0,3" becomes 0 and "2,5" becomes 2. A standard-error floor of 0 is a
+different experiment from the one designed, silently. `PARAM_LOCALISEDFLOAT`
+now, with the form rejecting what it cannot read rather than storing zero, and
+values written back the way the person's language writes them.
+
+### The breaker wrote the cause into a column that did not exist
+`local_catquizlab_run` had no `lasterror`; Moodle dropped the field without a
+word, so the cause was never on the run. The column exists now, and a test
+reads it back.
+
+### The audit findings
+**Circuit breaker, wired where it fires.** The worker reports through
+`job_complete`, which reached an older streak check that paused the run. The
+breaker is there now, and the old method delegates to it. A regression test
+reports ten terminal failures through `job_complete` itself and asserts the
+run held, the five waiting sittings untouched and unclaimable, the ten causes
+grouped as one, and the experiment BLOCKED.
+
+**Rotation with a reason.** The worker's last heartbeat carries why it stopped.
+A replacement is launched only for `max-jobs`; a worker that stopped because it
+was asked to is not replaced — which it was, for a release, undoing the stop
+somebody requested. `fatal-error` is recorded as a crash; the other three as a
+worker doing what it was told. `launch_pool()` is called with the one argument
+it takes.
+
+**A worker the launcher did not start is adopted, not stopped.** It
+authenticated; it takes a free slot. Telling it to stop made every CI worker
+play nothing, reported as "played 1 attempt, 0 finished".
+
+**The runtime survives an upgrade.** `node_modules` install into the dataroot
+and are found through `NODE_PATH`; `package-lock.json` is versioned; the
+pipeline task ships enabled and the upgrade restores it where the plugin is
+enabled; the `enabled` switch is checked before the execution queue moves.
+
+**The live page updates what is visible.** The poll returns each run's status
+card rendered, and the page swaps it in — there is no status logic in
+JavaScript to disagree with the server's. Counts are scoped to the experiment
+in view and say so. An interrupted poll offers to resume.
+
+### Preparing needs the engine; running needs the rest
+`Prepare experiment` refused on any installation without a browser installed.
+Preparation builds courses and questions and needs neither. It requires the
+engine and somewhere to build now; the browser, worker and pipeline are checked
+when an experiment is queued — with what is missing named — and again when its
+turn comes.
+
+### Verification
+PHPUnit 683 tests / 3634 assertions, Behat 32 scenarios / 235 steps, phpcs with
+the Moodle standard clean, PHPDoc clean, both workflows parse. Run against this
+instance: all five strategies pass the 15-answer smoke test; the interface
+end-to-end run passes (6.7 minutes, three people).
+
+---
+
+## [0.6.67] — 2026-09-19
+
+Both end-to-end jobs, run locally until they passed.
+
+### The interface run: two passwords in one file
+    Sign-in failed for admin: Invalid login, please try again
+
+The workflow installed Moodle with `Admin123!` and told the test to sign in with
+`Admin#12345`. Two literals in one file drift apart the moment either is
+touched, and these already had. There is one now, named in `env:` and used by
+both the installer and the test.
+
+Worth noting that the failure said what it was. The sign-in check added in
+0.6.61 turned this from "the plugin's page does not contain the words it should"
+— which sends somebody looking at the plugin — into "the sign-in failed", which
+is where the problem actually was.
+
+Run locally afterwards: **1 passed (2.6m)**.
+
+### The worker run: four faults, one behind the other
+Reproduced locally by running the workflow's own steps in order, which is the
+only way each of these became visible — every one of them was hidden behind the
+one before it.
+
+**The service account was incomplete.** `create_user_record()` makes an account
+with no name and no address, which Moodle calls "not fully set up" and for which
+it refuses every web service call — reported as `Access control exception`, the
+same words it uses for a missing capability. So the search went to the service
+list and the plugin's capabilities and found nothing wrong with either. It never
+showed before because the worker's only heartbeat was inside an attempt, wrapped
+in error handling that swallowed it.
+
+**`webservice/rest:use` was never granted.** Without it the account may not speak
+the protocol at all, and every call is refused before the function is looked at.
+Proved by calling `job_claim` — a function nobody had touched — over HTTP and
+getting the identical message.
+
+**The run stayed SCHEDULED.** Attempts of a run that is only scheduled count as
+blocked rather than claimable, so the worker connected, authenticated, asked for
+work and was correctly told there was none. That reads as an empty queue rather
+than as a run nobody released.
+
+**And a real one, found on the way:** `job_claim` fetched fifty candidate
+attempts and then skipped the unusable ones. That works while unusable ones are
+rare; on an installation with a few failed runs behind it, their attempts fill
+the window and a perfectly good new run is never reached. The worker reports an
+empty queue — true of what it was shown, false of the installation. Runs that
+cannot hand out work are excluded in the query now.
+
+### The end-to-end box is ticked by default
+Somebody starting the worker workflow by hand almost always wants the end-to-end
+job. Having to remember the box means the run that would have caught something
+is the one that skipped it.
+
+### Verification
+PHPUnit 679 tests / 3599 assertions, Behat 32 scenarios / 235 steps, phpcs with
+the Moodle standard clean, PHPDoc clean, both workflows parse, and the interface
+run passes locally.
+
+---
+
+## [0.6.66] — 2026-09-18
+
+The interface end-to-end job skipped itself.
+
+### A condition for an input that does not exist
+    if: github.event_name == 'workflow_dispatch' && inputs.run_e2e
+
+I built this workflow from the worker job's scaffolding, which is how the
+installation steps stay identical between the two — and the condition came with
+it. The worker workflow has a `run_e2e` input; this one does not, so
+`inputs.run_e2e` was always empty and the job skipped every time it was started.
+
+It runs only on `workflow_dispatch`, so starting it is the consent the condition
+was there to check. Removed rather than reproduced.
+
+### Two inputs that did nothing
+`persons` was offered on the form and never read by the test, which filled in
+five whatever the person had chosen. It reaches the form now.
+
+`keepvideo` controlled nothing and is gone. Video and trace are kept for every
+run, with a comment saying why there is no switch: a recording that only exists
+after a failure cannot answer "does the interface still work", which is the
+question somebody starts this job to ask.
+
+---
+
 ## [0.6.65] — 2026-09-18
 
 Issue #85: everyday operation and technical recovery, kept apart.

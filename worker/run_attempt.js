@@ -13,7 +13,10 @@
  * depends on the deployment and is provided via --login-* options.
  *
  * Invocation (as the ad-hoc task calls it):
- *   node run_attempt.js --base-url=<wwwroot> --token=<wstoken> [--worker-id=<id>]
+ *   CATQUIZLAB_WORKER_TOKEN=<wstoken> node run_attempt.js --base-url=<wwwroot> [--worker-id=<id>]
+ *
+ * The token comes from the environment. `--token=<wstoken>` still works, but a
+ * command line is visible to every user of the machine in a process listing.
  *                       [--max-jobs=<n>] [--login-suffix=<pw>]
  *
  * This is a reference implementation. The DOM interaction is written defensively
@@ -66,6 +69,11 @@ const LOGIN_MODE = args['login-mode'] || 'password';
 const LOGIN_URL_TEMPLATE = args['login-url-template'] || '';
 
 const SELF_TEST = args['self-test'] === true;
+// Where a failed execution leaves its screenshots, DOM and events (#107), and
+// whether successful ones do too ('all', for explicit debugging only).
+const ARTEFACT_DIR = args['artefact-dir'] || '';
+const CAPTURE = args.capture === 'all' ? 'all' : 'failure';
+const nav = require('./navigation.js');
 
 // The self test never talks to Moodle, so it must not demand credentials.
 if (require.main === module && !SELF_TEST && (!BASE_URL || !TOKEN)) {
@@ -81,14 +89,39 @@ if (require.main === module && !SELF_TEST && (!BASE_URL || !TOKEN)) {
  * @returns {Promise<object>} The decoded response.
  */
 async function callWs(wsfunction, params) {
-    const url = buildWsUrl(BASE_URL, TOKEN, wsfunction, params);
-    const response = await fetch(url, {method: 'POST'});
-    const data = await response.json();
+    const {url, body} = buildWsRequest(BASE_URL, TOKEN, wsfunction, params);
+    const started = Date.now();
+    let response = null;
+    let data = null;
+    try {
+        response = await fetch(url, {
+            method: 'POST',
+            headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+            body,
+        });
+        if (!response.ok) {
+            throw new Error(`HTTP ${response.status}`);
+        }
+        data = await response.json();
+    } catch (error) {
+        // "fetch failed" on its own said that something went wrong between
+        // here and Moodle, and nothing else. What was called, where, with
+        // which status or network error, after how long, and for whom — the
+        // difference between a server under load and a worker misconfigured.
+        const transport = describeTransportError(wsfunction, url, error, Date.now() - started,
+            response ? response.status : 0, {workerid: WORKER_ID, attemptid: currentAttemptId});
+        const wrapped = new Error(transport.message);
+        wrapped.transport = transport.detail;
+        throw wrapped;
+    }
     if (data && data.exception) {
         throw new Error(`${wsfunction}: ${data.message}`);
     }
     return data;
 }
+
+/** @type {number} The attempt being played, for transport diagnoses. */
+let currentAttemptId = 0;
 
 /**
  * Claim the next queued attempt, or null when the queue is empty.
@@ -125,16 +158,31 @@ async function playAttempt(browser, job) {
     let status = 'failed';
     let failure = '';
 
-    try {
-        await login(page, job.userid, job.username);
-        await gotoSettle(page, `${BASE_URL}/mod/adaptivequiz/view.php?id=${job.quizcmid}`);
-        await startAttempt(page);
+    // What the browser sees, kept for the attempt history and — on failure —
+    // written out as screenshots, DOM and events (#107).
+    const recorder = new nav.Recorder(page, {capture: CAPTURE});
+    // Every request of this sitting carries the execution's correlation id, so
+    // that a server-side error can be found by it (#107, #110).
+    if (job.correlationid) {
+        await page.setExtraHTTPHeaders({'X-CatQuizLab-Correlation': String(job.correlationid)});
+    }
+    let transport = null;
+    let artefacts = null;
+    currentAttemptId = job.attemptid;
 
-        // Answer loop: while a question is on screen, ask the oracle and submit.
+    try {
+        await login(page, job.userid, job.username, recorder);
+        await gotoSettle(page, `${BASE_URL}/mod/adaptivequiz/view.php?id=${job.quizcmid}`);
+        let state = await startAttempt(page, recorder);
+
+        // Answer loop, driven by the state each click leads to: a question, the
+        // finish page, or an error page — nothing in between (#100). The loop
+        // used to run "while a question is visible", and an intermediate page
+        // on the way to the next question ended it as if the test were over.
         let guard = 0;
         let answeredCount = 0;
-        while (await hasQuestion(page) && guard++ < 1000) {
-            const {qubaid, slot} = await currentQuestionRef(page);
+        while (state === nav.STATE.QUESTION && guard++ < 1000) {
+            const {qubaid, slot} = await nav.withContextRetry(page, () => currentQuestionRef(page), 'read question', recorder);
             const decision = await callWs('local_catquizlab_oracle_answer', {
                 runid: job.runid,
                 // The page identifies a question by usage and slot; the browser
@@ -149,12 +197,26 @@ async function playAttempt(browser, job) {
             if (!decision.ready) {
                 throw new Error(`Oracle not ready for usage ${qubaid} slot ${slot}: ${decision.message}`);
             }
-            const answered = await answerQuestion(page, decision);
+            const answered = await nav.withContextRetry(page, () => answerQuestion(page, decision), 'answer', recorder);
             if (!answered) {
                 throw new Error(`No answer option found for usage ${qubaid} slot ${slot}.`);
             }
-            await submitQuestion(page);
+            await recorder.snapshot();
+            const result = await nav.clickAndSettle(page, SUBMIT_SELECTORS, QUESTION_SELECTORS, {
+                label: `submit answer ${answeredCount + 1}`,
+                timeout: NAV_TIMEOUT,
+                recorder,
+            });
+            if (!result.clicked) {
+                throw new Error(`No way to submit the answer to usage ${qubaid} slot ${slot} was found.`);
+            }
+            state = result.state;
             answeredCount++;
+        }
+
+        if (state === nav.STATE.ERROR) {
+            const detail = await describePage(page);
+            throw new Error(`Moodle showed an error page after ${answeredCount} answer(s). ${detail}`);
         }
 
         engineAttemptId = await readEngineAttemptId(page);
@@ -164,47 +226,82 @@ async function playAttempt(browser, job) {
         // completed experiment: the queue drains, every job reports success and
         // no trace is ever collected.
         if (answeredCount === 0) {
-            // What the page actually said. "No question was presented" names
-            // the symptom and nothing else, and the cause is almost always on
-            // the screen the worker was looking at: a misconfigured pool, an
-            // engine error, a login that silently failed. Carrying that back
-            // saves the round trip through the browser by hand.
             const diagnosis = await collectZeroQuestionDiagnosis(page, engineAttemptId);
             throw new Error(
                 'No question was presented; the attempt never started. ' + diagnosis
             );
         }
 
-        // The absence of a question is not evidence that the attempt finished.
-        // A failure page, a redirect, or a page that simply has not rendered
-        // yet all look the same from here, and treating them alike turns any of
-        // them into a successful run. Only the activity's own finish page
-        // counts, and anything else is reported with where the browser stood.
+        // Only the activity's own finish page counts as finished.
         if (!(await onFinishPage(page))) {
             const detail = await describePage(page);
             throw new Error(`Attempt did not reach the finish page after ${answeredCount} answer(s). ${detail}`);
         }
-        // A missing engine attempt id is not a failure of the attempt: the
-        // finish page does not always render one, and the server can look it up
-        // from the run and the person. What matters is that questions were
-        // answered, which the check above establishes.
         status = 'finished';
+
+        if (CAPTURE === 'all' && ARTEFACT_DIR) {
+            artefacts = await saveArtefacts(recorder, job, null);
+        }
     } catch (error) {
         failure = error.message;
+        transport = error.transport || null;
         console.error(`Attempt ${job.attemptid} failed: ${error.message}`);
+
+        // Screenshots, DOM and events of the moment it failed, in moodledata
+        // (#107): structured log lines rarely say what the page showed.
+        if (ARTEFACT_DIR) {
+            artefacts = await saveArtefacts(recorder, job, error);
+        }
+
+        // The page said what went wrong and not where: a production site shows
+        // no debug information, so "Division by zero" arrived without a file
+        // or a line for two days. The server can replay the selection this
+        // sitting was making and catch the exception itself.
+        if (/Fehler|Error|error=/.test(String(error.message))) {
+            try {
+                const where = await callWs('local_catquizlab_diagnose_attempt', {attemptid: job.attemptid});
+                if (where && where.file) {
+                    failure += ` | server replay: ${where.class} at ${where.file}:${where.line}`;
+                    if (where.trace) {
+                        failure += ` | trace: ${String(where.trace).split('\n').slice(0, 4).join(' <- ')}`;
+                    }
+                    console.error(`Attempt ${job.attemptid} located: ${where.class} at ${where.file}:${where.line}`);
+                } else if (where && where.reason) {
+                    failure += ` | server replay: ${where.reason}`;
+                }
+            } catch (diagnoseError) {
+                failure += ` | (diagnosis unavailable: ${diagnoseError.message})`;
+            }
+        }
     } finally {
         await page.close();
         await context.close();
-        await callWs('local_catquizlab_job_complete', {
-            // The reason travels with the report. Without it the server sees a
-            // failed attempt and no explanation, and the retry count is all
-            // anyone has to go on.
-            message: failure ? String(failure).slice(0, 500) : '',
-            attemptid: job.attemptid,
-            status,
-            runtimems: Date.now() - started,
-            engineattemptid: engineAttemptId,
-        });
+        const diagnosis = {browser: recorder.summary(), transport, artefacts};
+        const fullpath = writeFullDiagnosis(diagnosis, job);
+        // A report that fails must not hide what it was reporting (#111): an
+        // exception thrown here replaced the attempt's own failure, and only
+        // the transport error was left. Both are said, and kept beside the
+        // artefacts; the lease then expires and the retry is recorded.
+        try {
+            await callWs('local_catquizlab_job_complete', {
+                // The reason travels with the report. Without it the server sees a
+                // failed attempt and no explanation, and the retry count is all
+                // anyone has to go on. Cut visibly if it is long (#111).
+                message: failure ? fitMessage(failure) : '',
+                attemptid: job.attemptid,
+                status,
+                runtimems: Date.now() - started,
+                engineattemptid: engineAttemptId,
+                // The browser's record for the attempt history (#100, #107).
+                diagnostics: fitDiagnostics(diagnosis, DIAGNOSTICS_LIMIT, fullpath),
+            });
+        } catch (reportError) {
+            const both = reportFailureMessage(job.attemptid, status, failure, reportError);
+            console.error(both);
+            keepUnreported(job, {status, failure, diagnosis: fitDiagnostics(diagnosis), report: reportError.message});
+            throw new Error(both);
+        }
+        currentAttemptId = 0;
     }
 }
 
@@ -221,42 +318,72 @@ async function playAttempt(browser, job) {
  * @param {string} username The username the server supplied for this job.
  * @returns {Promise<void>}
  */
-async function login(page, userid, username) {
+async function login(page, userid, username, recorder = null, base = BASE_URL) {
     if (LOGIN_MODE === 'urltemplate' && LOGIN_URL_TEMPLATE) {
         await gotoSettle(page, loginUrlFor(LOGIN_URL_TEMPLATE, userid));
         return;
     }
 
-    await gotoSettle(page, `${BASE_URL}/login/index.php`);
+    const name = username || usernameFor(userid);
+    const password = passwordFor(userid, LOGIN_SUFFIX);
 
-    // No username field means a session is already open. With an isolated
-    // context that should not happen, so it is reported rather than worked
-    // around: silently continuing would run the test as whoever is logged in.
-    if (!(await page.$('#username'))) {
-        throw new Error('The login page offered no username field; a session is already open.');
-    }
+    // Twice at most. Moodle answers "Invalid login" for a wrong password and
+    // for a login token its session no longer holds — and the latter is
+    // transient: the same credentials succeeded minutes later on a retried
+    // execution, which cost a whole execution and its retry delay. A fresh
+    // login page brings a fresh token. A second refusal is real and reported.
+    for (let round = 1; round <= 2; round++) {
+        await gotoSettle(page, `${base}/login/index.php`);
 
-    // The server supplies the username, because the provisioner chooses it and
-    // makes it unique per run. Deriving it here produced catlab_user_<id> and
-    // no such account ever existed. The fallback keeps this working against an
-    // older server that does not send one yet.
-    await page.type('#username', username || usernameFor(userid));
-    await page.type('#password', passwordFor(userid, LOGIN_SUFFIX));
-    await Promise.all([
-        clickFirst(page, ['#loginbtn', 'button[type="submit"]', 'input[type="submit"]']),
-        page.waitForNavigation({waitUntil: 'networkidle2'}).catch(() => {}),
-    ]);
+        // No username field means a session is already open. With an isolated
+        // context that should not happen, so it is reported rather than worked
+        // around: silently continuing would run the test as whoever is logged in.
+        if (!(await page.$('#username'))) {
+            throw new Error('The login page offered no username field; a session is already open.');
+        }
 
-    // A failed login left the worker on the login page, where its start-attempt
-    // selectors then matched the login button itself: it clicked away, found no
-    // question and reported that the attempt never started. The real cause —
-    // wrong credentials — never appeared anywhere.
-    if (page.url().includes('/login/')) {
+        // Set, not typed: typing appends to whatever the field holds — Moodle
+        // refills the username after a failed login — and keystrokes follow
+        // the focus, which the page's own script may move while they arrive.
+        await page.$eval('#username', (el, value) => {
+            el.value = value;
+        }, name);
+        await page.$eval('#password', (el, value) => {
+            el.value = value;
+        }, password);
+        // Click and navigation together, and a navigation that does not come
+        // is said, not swallowed (#100): it is recorded, and named in the
+        // error should the login fail.
+        const [navigation] = await Promise.allSettled([
+            page.waitForNavigation({waitUntil: 'networkidle2', timeout: 30000}),
+            clickFirst(page, ['#loginbtn', 'button[type="submit"]', 'input[type="submit"]']),
+        ]);
+        const stalled = navigation.status === 'rejected'
+            ? (navigation.reason && navigation.reason.message) || 'no navigation'
+            : '';
+        if (stalled && recorder) {
+            recorder.event('navigation-failed', `login: ${stalled}`);
+        }
+
+        // A failed login left the worker on the login page, where its start-attempt
+        // selectors then matched the login button itself: it clicked away, found no
+        // question and reported that the attempt never started. The real cause —
+        // wrong credentials — never appeared anywhere.
+        if (!page.url().includes('/login/')) {
+            return;
+        }
         const notice = await page.evaluate(() => {
             const el = document.querySelector('.loginerrors, .alert-danger, #loginerrormessage');
             return el ? el.innerText.trim() : '';
         });
-        throw new Error(`Login as ${username || usernameFor(userid)} failed${notice ? ': ' + notice : '.'}`);
+        if (round === 1) {
+            if (recorder) {
+                recorder.event('login-retried', `${name}: ${notice || 'still on the login page'}`);
+            }
+            continue;
+        }
+        throw new Error(`Login as ${name} failed${notice ? ': ' + notice : '.'}`
+            + (stalled ? ` (navigation after submit: ${stalled})` : ''));
     }
 }
 
@@ -266,25 +393,20 @@ async function login(page, userid, username) {
  * @param {object} page The Puppeteer page.
  * @returns {Promise<void>}
  */
-async function startAttempt(page) {
-    // Only navigate if there is no question yet (the view page shows a start form).
+async function startAttempt(page, recorder) {
+    // Already on a question (a resumed attempt): nothing to start.
     if (await hasQuestion(page)) {
-        return;
+        return nav.STATE.QUESTION;
     }
-    const clicked = await clickFirst(page, START_SELECTORS);
-    if (!clicked) {
+    const result = await nav.clickAndSettle(page, START_SELECTORS, QUESTION_SELECTORS, {
+        label: 'start attempt',
+        timeout: NAV_TIMEOUT,
+        recorder,
+    });
+    if (!result.clicked) {
         throw new Error('No way to start the attempt was found on the activity page.');
     }
-
-    await page.waitForNavigation({waitUntil: 'networkidle2'}).catch(() => {});
-
-    // Waiting for navigation alone is not enough: the catch swallows a timeout,
-    // and on a slow instance the check for a question then runs before the page
-    // has rendered one. The attempt looked as if it had presented nothing, and
-    // the worker moved on with an empty answer loop. Wait for the question
-    // itself, which is the thing the next step actually needs.
-    await page.waitForSelector(QUESTION_SELECTORS.join(', '), {timeout: NAV_TIMEOUT})
-        .catch(() => {});
+    return result.state;
 }
 
 /**
@@ -461,19 +583,6 @@ async function answerQuestion(page, decision) {
 }
 
 /**
- * Submit the current question and advance.
- *
- * @param {object} page The Puppeteer page.
- * @returns {Promise<void>}
- */
-async function submitQuestion(page) {
-    const clicked = await clickFirst(page, SUBMIT_SELECTORS);
-    if (clicked) {
-        await page.waitForNavigation({waitUntil: 'networkidle2'}).catch(() => {});
-    }
-}
-
-/**
  * Read the adaptivequiz_attempt id from the finished attempt page/URL.
  *
  * @param {object} page The Puppeteer page.
@@ -571,6 +680,32 @@ async function clickFirst(page, selectors) {
     return true;
 }
 
+/**
+ * Write an execution's artefacts to moodledata (#107).
+ *
+ * @param {object} recorder The attempt's recorder.
+ * @param {object} job The claimed job.
+ * @param {?Error} error What went wrong, or null for a debug capture.
+ * @returns {Promise<?object>} Where they went and what was written.
+ */
+async function saveArtefacts(recorder, job, error) {
+    const relative = artefactPath(job);
+    try {
+        const files = await recorder.save(require('path').join(ARTEFACT_DIR, relative), {
+            experimentid: job.experimentid || 0,
+            runid: job.runid,
+            attemptid: job.attemptid,
+            execution: job.execution || 0,
+            workerid: WORKER_ID,
+            correlationid: job.correlationid || '',
+        }, error);
+        return {path: relative, files};
+    } catch (saveError) {
+        console.error(`Artefacts of attempt ${job.attemptid} could not be written: ${saveError.message}`);
+        return {path: relative, files: [], error: saveError.message};
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Pure helpers (no Puppeteer / no network) — exported for unit testing.
 // ---------------------------------------------------------------------------
@@ -611,15 +746,98 @@ function normaliseBaseUrl(value) {
  * @param {object} params The function parameters.
  * @returns {string}
  */
-function buildWsUrl(baseUrl, token, wsfunction, params) {
-    const url = new URL(`${normaliseBaseUrl(baseUrl)}/webservice/rest/server.php`);
-    url.searchParams.set('wstoken', token);
-    url.searchParams.set('wsfunction', wsfunction);
-    url.searchParams.set('moodlewsrestformat', 'json');
+function buildWsRequest(baseUrl, token, wsfunction, params) {
+    // Everything in the body (#111): the parameters — a diagnosis can be tens
+    // of kilobytes, which as a query string made the server answer 414 and the
+    // report of a failure fail in turn — and the token, which in a URL ends up
+    // in every access log. Moodle's REST server reads all of them from POST.
+    const body = new URLSearchParams();
+    body.set('wstoken', token);
+    body.set('wsfunction', wsfunction);
+    body.set('moodlewsrestformat', 'json');
     for (const [k, v] of Object.entries(params || {})) {
-        url.searchParams.set(k, String(v));
+        body.set(k, String(v));
     }
-    return url.toString();
+    return {
+        url: `${normaliseBaseUrl(baseUrl)}/webservice/rest/server.php`,
+        body: body.toString(),
+    };
+}
+
+/** @type {number} The largest diagnosis sent with a report, in bytes; larger ones are cut by structure. */
+const DIAGNOSTICS_LIMIT = 60000;
+
+/** @type {number} The longest failure message sent with a report, in characters. */
+const MESSAGE_LIMIT = 4000;
+
+/**
+ * A failure message within the limit — cut visibly, never silently (#111).
+ *
+ * @param {string} message The message.
+ * @param {number} limit The limit in characters.
+ * @returns {string}
+ */
+function fitMessage(message, limit = MESSAGE_LIMIT) {
+    const text = String(message || '');
+    if (text.length <= limit) {
+        return text;
+    }
+    const note = ` … [truncated: ${text.length - limit + 80} of ${text.length} characters cut; full text in the artefacts]`;
+    return text.slice(0, limit - note.length) + note;
+}
+
+/**
+ * A diagnosis within the limit, cut by its structure and saying so (#111).
+ *
+ * Cutting a JSON text at a byte count leaves a text that is not JSON, and the
+ * server dropped the whole diagnosis: that is what the old slice did. Here the
+ * long strings are shortened and the oldest browser events dropped until it
+ * fits; what was cut is said in the diagnosis itself, and the full one is
+ * written beside the artefacts, its path sent instead.
+ *
+ * @param {object} diagnosis The diagnosis.
+ * @param {number} limit The limit in bytes.
+ * @param {?string} fullpath Where the full diagnosis was written, if it was.
+ * @returns {string} JSON, at most the limit long.
+ */
+function fitDiagnostics(diagnosis, limit = DIAGNOSTICS_LIMIT, fullpath = null) {
+    const full = JSON.stringify(diagnosis);
+    if (Buffer.byteLength(full) <= limit) {
+        return full;
+    }
+    const copy = JSON.parse(full);
+    const shorten = (value, max) => {
+        if (typeof value === 'string') {
+            return value.length > max ? value.slice(0, max) + ` … [${value.length - max} characters cut]` : value;
+        }
+        if (Array.isArray(value)) {
+            return value.map((v) => shorten(v, max));
+        }
+        if (value && typeof value === 'object') {
+            const out = {};
+            for (const [k, v] of Object.entries(value)) {
+                out[k] = shorten(v, max);
+            }
+            return out;
+        }
+        return value;
+    };
+    let fitted = copy;
+    for (const max of [4000, 1000, 300, 100]) {
+        fitted = shorten(copy, max);
+        fitted.truncated = {originalbytes: Buffer.byteLength(full), limit, full: fullpath};
+        // The oldest browser events go first: the last ones are nearest the failure.
+        const events = fitted.browser && Array.isArray(fitted.browser.events) ? fitted.browser.events : null;
+        while (Buffer.byteLength(JSON.stringify(fitted)) > limit && events && events.length > 20) {
+            events.splice(0, Math.ceil(events.length / 4));
+            fitted.truncated.eventsdropped = true;
+        }
+        if (Buffer.byteLength(JSON.stringify(fitted)) <= limit) {
+            return JSON.stringify(fitted);
+        }
+    }
+    // Still too large: the marker and the path, which always fit.
+    return JSON.stringify({truncated: {originalbytes: Buffer.byteLength(full), limit, full: fullpath, structure: 'dropped'}});
 }
 
 /**
@@ -846,9 +1064,9 @@ async function selfTest() {
     check('argument parsing', parsed['base-url'] === 'http://example.test/moodle/' && parsed.headless === true);
     check('base url normalisation', normaliseBaseUrl('http://x/moodle///') === 'http://x/moodle');
 
-    const url = buildWsUrl('http://x/', 'tok', 'local_catquizlab_job_claim', {workerid: 'w1'});
-    check('web service url', url.startsWith('http://x/webservice/rest/server.php?')
-        && url.includes('wsfunction=local_catquizlab_job_claim'));
+    const request = buildWsRequest('http://x/', 'tok', 'local_catquizlab_job_claim', {workerid: 'w1'});
+    check('web service request', request.url === 'http://x/webservice/rest/server.php'
+        && request.body.includes('wsfunction=local_catquizlab_job_claim'));
 
     check('dichotomous choice', chooseOptionIndex({fraction: 1.0, choice: -1}, 4) === 0);
     check('polytomous choice', chooseOptionIndex({fraction: 0.5, choice: 2}, 4) === 2);
@@ -955,10 +1173,14 @@ async function main() {
     // ended normally should not hold a place for the length of the heartbeat
     // timeout, and a crashed one should not look like this.
     try {
+        // The reason travels with the last report. Without it the server saw
+        // "stopping" and started a replacement whatever the cause — including
+        // for a worker it had itself just asked to stop.
         await callWs('local_catquizlab_worker_heartbeat', {
             workerid: WORKER_ID,
             attemptid: 0,
             state: 'stopping',
+            reason: reason,
         });
     } catch (error) {
         // Nothing to do about it here; the reaper will notice in its own time.
@@ -969,17 +1191,163 @@ async function main() {
 
 if (require.main === module) {
     const entry = SELF_TEST ? selfTest : main;
-    entry().catch((error) => {
+    entry().catch(async (error) => {
         console.error(error);
+
+        // Hand the slot back before dying. A worker that crashed — as this one
+        // did on a web service error — kept its slot until its heartbeat
+        // lapsed five minutes later, during which the page said "1 worker
+        // running", the pipeline said "all-slots-busy", and nothing ran.
+        if (!SELF_TEST) {
+            try {
+                await callWs('local_catquizlab_worker_heartbeat', {
+                    workerid: WORKER_ID,
+                    attemptid: 0,
+                    state: 'stopping',
+                    reason: 'fatal-error',
+                });
+                console.error(`Worker ${WORKER_ID} released its slot after a fatal error.`);
+            } catch (reportError) {
+                // The web service is the thing that just failed, so this may
+                // fail too. The registry's own check for a vanished process
+                // covers what this cannot.
+                console.error(`Worker ${WORKER_ID} could not release its slot: ${reportError.message}`);
+            }
+        }
+
         process.exit(1);
     });
 }
 
+/**
+ * The directory of one execution's artefacts, below the artefact root.
+ *
+ * @param {object} job The claimed job.
+ * @returns {string}
+ */
+/**
+ * Write the full diagnosis beside the artefacts when it is larger than a report carries (#111).
+ *
+ * @param {object} diagnosis The diagnosis.
+ * @param {object} job The job.
+ * @returns {?string} The path relative to the artefact root, or null.
+ */
+function writeFullDiagnosis(diagnosis, job) {
+    const text = JSON.stringify(diagnosis, null, 1);
+    if (Buffer.byteLength(text) <= DIAGNOSTICS_LIMIT || !ARTEFACT_DIR) {
+        return null;
+    }
+    try {
+        const path = require('path');
+        const relative = path.join(artefactPath(job), 'diagnosis-full.json');
+        require('fs').mkdirSync(path.dirname(path.join(ARTEFACT_DIR, relative)), {recursive: true});
+        require('fs').writeFileSync(path.join(ARTEFACT_DIR, relative), text);
+        return relative;
+    } catch (error) {
+        console.error(`The full diagnosis of attempt ${job.attemptid} could not be written: ${error.message}`);
+        return null;
+    }
+}
+
+/**
+ * What to say when the report of an attempt fails: the attempt's own outcome first.
+ *
+ * @param {number} attemptid The attempt.
+ * @param {string} status Its outcome.
+ * @param {string} failure Its failure, if it failed.
+ * @param {Error} reportError Why the report failed.
+ * @returns {string}
+ */
+function reportFailureMessage(attemptid, status, failure, reportError) {
+    return `Attempt ${attemptid} ${status}${failure ? ': ' + failure : ''} — and its report to Moodle failed: `
+        + `${reportError && reportError.message ? reportError.message : String(reportError)}`;
+}
+
+/**
+ * Keep an outcome that could not be reported, beside the attempt's artefacts.
+ *
+ * @param {object} job The job.
+ * @param {object} record What was to be reported, and why it was not.
+ * @returns {void}
+ */
+function keepUnreported(job, record) {
+    if (!ARTEFACT_DIR) {
+        return;
+    }
+    try {
+        const path = require('path');
+        const file = path.join(ARTEFACT_DIR, artefactPath(job), 'report-failed.json');
+        require('fs').mkdirSync(path.dirname(file), {recursive: true});
+        require('fs').writeFileSync(file, JSON.stringify(record, null, 1));
+    } catch (error) {
+        console.error(`The unreported outcome of attempt ${job.attemptid} could not be kept: ${error.message}`);
+    }
+}
+
+function artefactPath(job) {
+    return [
+        `experiment-${job.experimentid || 0}`,
+        `run-${job.runid || 0}`,
+        `attempt-${job.attemptid || 0}`,
+        `execution-${job.execution || 0}`,
+    ].join('/');
+}
+
+/**
+ * What a failed web service call can say about itself, without its token.
+ *
+ * @param {string} wsfunction The function called.
+ * @param {string} url The URL called.
+ * @param {Error} error What fetch threw.
+ * @param {number} elapsedms How long it took.
+ * @param {number} status The HTTP status, 0 when there was no response.
+ * @param {object} who workerid and attemptid.
+ * @returns {{message: string, detail: object}}
+ */
+function describeTransportError(wsfunction, url, error, elapsedms, status, who) {
+    const cause = (error && error.cause) || {};
+    const code = cause.code || (error && error.code) || '';
+    let where = '';
+    try {
+        const parsed = new URL(url);
+        where = `${parsed.origin}${parsed.pathname}`;
+    } catch (parseError) {
+        where = '(unparseable URL)';
+    }
+    const detail = {
+        wsfunction,
+        url: where,
+        status,
+        error: error ? error.message : '',
+        code,
+        cause: cause.message || '',
+        elapsedms,
+        workerid: who.workerid || '',
+        attemptid: who.attemptid || 0,
+    };
+    const parts = [`${wsfunction} failed after ${elapsedms} ms`, `at ${where}`];
+    if (status) {
+        parts.push(`HTTP ${status}`);
+    }
+    if (code) {
+        parts.push(code);
+    }
+    parts.push(`: ${detail.error}${detail.cause ? ` (${detail.cause})` : ''}`);
+    return {message: parts.join(' '), detail};
+}
+
 module.exports = {
+    login,
+    describeTransportError,
+    artefactPath,
     selfTest,
     parseArgs,
     normaliseBaseUrl,
-    buildWsUrl,
+    buildWsRequest,
+    reportFailureMessage,
+    fitDiagnostics,
+    fitMessage,
+    DIAGNOSTICS_LIMIT,
     parseQuestionId,
     parseEngineAttemptId,
     usernameFor,

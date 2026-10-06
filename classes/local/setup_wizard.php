@@ -47,6 +47,24 @@ class setup_wizard {
     /** @var string The scheduled task that moves the pipeline along. */
     public const TASK = '\local_catquizlab\task\pipeline_tick';
 
+    /** @var bool|null Readiness as a test declares it, or null to compute it. */
+    protected static $assumed = null;
+
+    /**
+     * Declare readiness, for tests that cannot install a browser.
+     *
+     * Honoured only under PHPUnit or Behat. Production never reaches this.
+     *
+     * @param bool|null $ready What to answer, or null to compute again.
+     * @return void
+     */
+    public static function assume_ready_for_testing(?bool $ready): void {
+        if (!defined('PHPUNIT_TEST') && !defined('BEHAT_SITE_RUNNING')) {
+            return;
+        }
+        self::$assumed = $ready;
+    }
+
     /**
      * The state of every stage, without changing anything.
      *
@@ -54,6 +72,10 @@ class setup_wizard {
      */
     public static function state(): array {
         $component = 'local_catquizlab';
+
+        if (self::$assumed !== null) {
+            return ['ready' => self::$assumed, 'stages' => [], 'blockers' => self::$assumed ? [] : ['assumed']];
+        }
 
         // Six steps, each answering one thing once. They used to be four
         // stages beside six separate diagnostic cards that repeated them —
@@ -78,6 +100,33 @@ class setup_wizard {
         }
 
         return ['ready' => $blockers === [], 'stages' => $stages, 'blockers' => $blockers];
+    }
+
+    /**
+     * Whether an experiment can be prepared: built, not yet run.
+     *
+     * Preparation makes a course, questions, a scale tree and simulated
+     * people. None of that needs a browser or a worker process, and requiring
+     * them here refused to build anything until the whole runtime was in
+     * place — so a person could not prepare on Friday and sort out the worker
+     * on Monday, and a CI job that had not downloaded a browser yet could not
+     * prepare at all. Running is what needs the rest, and running checks it.
+     *
+     * @return array{ready: bool, blockers: string[]}
+     */
+    public static function preparation_state(): array {
+        $component = 'local_catquizlab';
+
+        $blockers = [];
+        foreach ([self::engine_stage($component), self::environment_stage($component)] as $stage) {
+            foreach ($stage['steps'] as $step) {
+                if (empty($step['ok'])) {
+                    $blockers[] = $step['label'];
+                }
+            }
+        }
+
+        return ['ready' => $blockers === [], 'blockers' => $blockers];
     }
 
     /**
@@ -142,11 +191,52 @@ class setup_wizard {
      * @return bool Whether anything changed.
      */
     public static function enable_pipeline(): bool {
+        global $CFG;
+
         $changed = false;
 
         if ((int) get_config('local_catquizlab', 'enabled') !== 1) {
             set_config('enabled', 1, 'local_catquizlab');
             $changed = true;
+        }
+
+        // The switch that lets the pipeline start a worker at all. It shipped
+        // off, nothing in the setup turned it on, and nothing reported that it
+        // was off — so every fresh installation prepared experiments that then
+        // sat at "stalled" for as long as anybody watched. The one installation
+        // where they ran was the one where I had flipped it by hand.
+        if ((int) get_config('local_catquizlab', 'worker_exec_enabled') !== 1) {
+            set_config('worker_exec_enabled', 1, 'local_catquizlab');
+            $changed = true;
+        }
+
+        // The engine's longest progress retention. Since catquiz 1.2.1 the
+        // default is "minimal": the progress row is deleted when an attempt
+        // ends, and debug_info is written only when store_debug_info is on —
+        // so a sitting was collected with its items and no path. "trace"
+        // records every scale's estimate after every answer, which is what an
+        // experiment reads; zero days keeps it until somebody removes it.
+        //
+        // Site-wide on purpose: the engine asks the site level when it
+        // records (set_ability() calls should_trace() without a test level),
+        // and a test's own level is capped by the site's.
+        if (self::engine_retention_available() && !self::engine_keeps_trace()) {
+            set_config('progressretention', 'trace', 'local_catquiz');
+            set_config('progressretentiondays', 0, 'local_catquiz');
+            $changed = true;
+        }
+
+        // The PHP binary the scheduler uses to spawn tasks. Detected and
+        // stored here, so the setup does it rather than leaving it as the one
+        // amber line a person has to go and find a settings page for.
+        $php = trim((string) ($CFG->pathtophp ?? ''));
+        if ($php === '' || !is_executable($php)) {
+            $found = self::find_php_cli();
+            if ($found !== null) {
+                set_config('pathtophp', $found);
+                $CFG->pathtophp = $found;
+                $changed = true;
+            }
         }
 
         $task = \core\task\manager::get_scheduled_task(self::TASK);
@@ -485,6 +575,28 @@ class setup_wizard {
                 get_string('wizard:task', $component),
                 $task !== false && !$task->get_disabled()
             ),
+            // The engine's strategies against what the form offers (#103): red
+            // when one side offers what the other cannot play.
+            self::step(
+                'enginecatalog',
+                get_string('wizard:enginecatalog', $component),
+                ($catalogue = strategy_catalog::catalogue_check())['ok'],
+                self::catalogue_detail($catalogue)
+            ),
+            // The path of every sitting, kept by the engine (catquiz 1.2.1+).
+            self::step(
+                'enginetrace',
+                get_string('wizard:enginetrace', $component),
+                self::engine_keeps_trace()
+            ),
+            // The switch the pipeline needs to start a worker. It was checked
+            // nowhere, so an installation could pass every step here and still
+            // never play a sitting — "stalled", with nothing saying why.
+            self::step(
+                'workerexec',
+                get_string('wizard:workerexec', $component),
+                (int) get_config($component, 'worker_exec_enabled') === 1
+            ),
             // Without cron the task exists and never runs, which looks exactly
             // like a task that is disabled.
             self::step('cron', get_string('wizard:cron', $component), self::cron_recent()),
@@ -497,6 +609,61 @@ class setup_wizard {
                 self::php_cli_detail($php, $component)
             ),
         ], get_string('wizard:pipelinehint', $component));
+    }
+
+    /**
+     * The engine catalogue in words: version, strategies, differences.
+     *
+     * @param array $catalogue What strategy_catalog::catalogue_check() returned.
+     * @return string
+     */
+    protected static function catalogue_detail(array $catalogue): string {
+        $component = 'local_catquizlab';
+        $lines = [get_string('wizard:engineversion', $component, $catalogue['engineversion'])];
+
+        foreach ($catalogue['engine'] as $strategy) {
+            $lines[] = get_string('wizard:enginestrategy', $component, (object) [
+                'id'          => $strategy['id'],
+                'class'       => substr((string) strrchr('\\' . $strategy['class'], '\\'), 1),
+                'description' => $strategy['description'],
+                'key'         => $strategy['key'] ?? '—',
+                'alias'       => $strategy['key'] !== null ? strategy_catalog::alias($strategy['key']) : '—',
+                'state'       => $strategy['active']
+                    ? get_string('wizard:strategyactive', $component)
+                    : get_string('wizard:strategyinactive', $component),
+            ]);
+        }
+        if ($catalogue['unknown'] !== []) {
+            $lines[] = get_string('wizard:strategyunknown', $component, implode(', ', $catalogue['unknown']));
+        }
+        if ($catalogue['phantom'] !== []) {
+            $lines[] = get_string('wizard:strategyphantom', $component, implode(', ', $catalogue['phantom']));
+        }
+
+        return implode("\n", $lines);
+    }
+
+    /**
+     * Whether the installed engine has progress retention at all.
+     *
+     * @return bool
+     */
+    public static function engine_retention_available(): bool {
+        return class_exists('\\local_catquiz\\local\\progress_retention');
+    }
+
+    /**
+     * Whether the engine records the path and keeps it without a time limit.
+     *
+     * @return bool True too where the engine predates retention: it kept everything.
+     */
+    public static function engine_keeps_trace(): bool {
+        if (!self::engine_retention_available()) {
+            return true;
+        }
+
+        return \local_catquiz\local\progress_retention::site_level() === 'trace'
+            && \local_catquiz\local\progress_retention::retention_days() === 0;
     }
 
     /**

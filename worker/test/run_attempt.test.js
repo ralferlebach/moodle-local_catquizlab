@@ -27,13 +27,18 @@ test('normaliseBaseUrl strips trailing slashes', () => {
     assert.strictEqual(worker.normaliseBaseUrl(undefined), '');
 });
 
-test('buildWsUrl assembles the REST endpoint with params', () => {
-    const url = worker.buildWsUrl('http://x/', 'tok', 'local_catquizlab_job_claim', {workerid: 'w1'});
-    assert.ok(url.startsWith('http://x/webservice/rest/server.php?'));
-    assert.match(url, /wstoken=tok/);
-    assert.match(url, /wsfunction=local_catquizlab_job_claim/);
-    assert.match(url, /moodlewsrestformat=json/);
-    assert.match(url, /workerid=w1/);
+test('a web service request carries everything in its body, the URL nothing (#111)', () => {
+    const request = worker.buildWsRequest('http://x/', 'tok', 'local_catquizlab_job_claim', {workerid: 'w1'});
+    assert.strictEqual(request.url, 'http://x/webservice/rest/server.php');
+    const body = new URLSearchParams(request.body);
+    assert.strictEqual(body.get('wstoken'), 'tok');
+    assert.strictEqual(body.get('wsfunction'), 'local_catquizlab_job_claim');
+    assert.strictEqual(body.get('moodlewsrestformat'), 'json');
+    assert.strictEqual(body.get('workerid'), 'w1');
+    // The URL does not grow with the diagnosis, and never carries the token.
+    const large = worker.buildWsRequest('http://x/', 'tok', 'local_catquizlab_job_complete', {diagnostics: 'x'.repeat(200000)});
+    assert.strictEqual(large.url, request.url);
+    assert.ok(!large.url.includes('tok'));
 });
 
 test('parseQuestionId extracts the first number', () => {
@@ -89,10 +94,112 @@ test('chooseOptionIndex clamps a polytomous choice to the options on screen', ()
     assert.strictEqual(worker.chooseOptionIndex({choice: -1, fraction: 0}, 4), 1);
 });
 
-test('buildWsUrl escapes parameter values', () => {
-    const url = worker.buildWsUrl('http://x', 't o k', 'fn', {q: 'a&b=c'});
-    // URLSearchParams encodes a space as "+", which is what a query string
-    // wants; the point here is that separators cannot leak through unescaped.
-    assert.ok(url.includes('wstoken=t+o+k'));
-    assert.ok(url.includes('q=a%26b%3Dc'));
+test('a web service request escapes parameter values in its body', () => {
+    const request = worker.buildWsRequest('http://x', 't o k', 'fn', {q: 'a&b=c'});
+    // Separators cannot leak through unescaped; the body decodes to the values.
+    const body = new URLSearchParams(request.body);
+    assert.strictEqual(body.get('wstoken'), 't o k');
+    assert.strictEqual(body.get('q'), 'a&b=c');
+});
+
+test('a large diagnosis is cut by its structure, visibly, and stays valid JSON (#111)', () => {
+    const events = [];
+    for (let i = 0; i < 3000; i++) {
+        events.push({at: i, type: 'console', detail: 'e'.repeat(200) + i});
+    }
+    const diagnosis = {browser: {events, statuses: []}, transport: {message: 'm'.repeat(50000)}, artefacts: {path: 'p'}};
+    const text = worker.fitDiagnostics(diagnosis, worker.DIAGNOSTICS_LIMIT, 'experiment-1/run-2/diagnosis-full.json');
+    assert.ok(Buffer.byteLength(text) <= worker.DIAGNOSTICS_LIMIT);
+    const fitted = JSON.parse(text);
+    assert.strictEqual(fitted.truncated.full, 'experiment-1/run-2/diagnosis-full.json');
+    assert.ok(fitted.truncated.originalbytes > worker.DIAGNOSTICS_LIMIT);
+    // The newest events are kept: they are nearest the failure.
+    const kept = fitted.browser.events;
+    assert.strictEqual(kept[kept.length - 1].at, 2999);
+    assert.match(fitted.transport.message, /characters cut\]$/);
+    // A diagnosis within the limit is sent as it is.
+    assert.strictEqual(worker.fitDiagnostics({a: 1}), '{"a":1}');
+});
+
+test('a long failure message is cut visibly, not silently (#111)', () => {
+    const cut = worker.fitMessage('x'.repeat(10000), 4000);
+    assert.ok(cut.length <= 4000);
+    assert.match(cut, /\[truncated: \d+ of 10000 characters cut; full text in the artefacts\]$/);
+    assert.strictEqual(worker.fitMessage('short'), 'short');
+});
+
+test('a server that refuses long URLs receives the report in the body (#111)', async() => {
+    const http = require('http');
+    let received = null;
+    // A web server's limit on the request line, as Apache's 8 KB.
+    // Node's own header limit would refuse first (431); raised, so that the
+    // web server's request-line limit is what is tested.
+    const server = http.createServer({maxHeaderSize: 1024 * 1024}, (request, response) => {
+        if (request.url.length > 8190) {
+            response.writeHead(414);
+            response.end();
+            return;
+        }
+        let body = '';
+        request.on('data', (chunk) => {
+            body += chunk;
+        });
+        request.on('end', () => {
+            received = new URLSearchParams(body);
+            response.writeHead(200, {'Content-Type': 'application/json'});
+            response.end('{"ok":true}');
+        });
+    });
+    await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const base = `http://127.0.0.1:${server.address().port}`;
+    try {
+        const diagnosis = JSON.stringify({browser: {events: Array(200).fill({detail: 'd'.repeat(200)})}});
+        // The old way — the diagnosis in the query — is refused.
+        const old = new URL(`${base}/webservice/rest/server.php`);
+        old.searchParams.set('diagnostics', diagnosis);
+        assert.strictEqual((await fetch(old, {method: 'POST'})).status, 414);
+        // The new way arrives, the diagnosis whole.
+        const request = worker.buildWsRequest(base, 'tok', 'local_catquizlab_job_complete', {diagnostics: diagnosis});
+        const response = await fetch(request.url, {method: 'POST', body: request.body,
+            headers: {'Content-Type': 'application/x-www-form-urlencoded'}});
+        assert.strictEqual(response.status, 200);
+        assert.strictEqual(received.get('diagnostics'), diagnosis);
+    } finally {
+        server.close();
+    }
+});
+
+test('a failed web service call describes itself without its token (#100)', () => {
+    const cause = new Error('read ECONNRESET');
+    cause.code = 'ECONNRESET';
+    const error = new TypeError('fetch failed', {cause});
+    const url = 'https://moodle.example.org/webservice/rest/server.php?wstoken=SECRET&wsfunction=local_catquizlab_job_claim';
+    const {message, detail} = worker.describeTransportError('local_catquizlab_job_claim', url, error, 1234, 0,
+        {workerid: 'catquizlab-exec-3', attemptid: 17});
+
+    assert.ok(!message.includes('SECRET'), 'the token leaked into the message');
+    assert.ok(!JSON.stringify(detail).includes('SECRET'), 'the token leaked into the detail');
+    assert.strictEqual(detail.code, 'ECONNRESET');
+    assert.strictEqual(detail.url, 'https://moodle.example.org/webservice/rest/server.php');
+    assert.strictEqual(detail.elapsedms, 1234);
+    assert.strictEqual(detail.attemptid, 17);
+    assert.ok(message.includes('local_catquizlab_job_claim') && message.includes('ECONNRESET'));
+
+    const http = worker.describeTransportError('x', url, new Error('HTTP 503'), 50, 503, {workerid: 'w', attemptid: 1});
+    assert.ok(http.message.includes('HTTP 503'));
+});
+
+test('artefacts of an execution have a place of their own (#107)', () => {
+    assert.strictEqual(
+        worker.artefactPath({experimentid: 4, runid: 36, attemptid: 1052, execution: 2}),
+        'experiment-4/run-36/attempt-1052/execution-2'
+    );
+});
+
+test('a failed report does not hide the attempt it was reporting (#111)', () => {
+    const message = worker.reportFailureMessage(42, 'failed', 'Attempt did not reach the finish page: HTTP 500',
+        new Error('local_catquizlab_job_complete: fetch failed (ECONNRESET)'));
+    // The attempt's own failure first, then the report's.
+    assert.ok(message.indexOf('HTTP 500') < message.indexOf('ECONNRESET'));
+    assert.match(message, /^Attempt 42 failed: .*HTTP 500 — and its report to Moodle failed: .*ECONNRESET/);
 });

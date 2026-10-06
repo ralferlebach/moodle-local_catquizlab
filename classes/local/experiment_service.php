@@ -141,6 +141,103 @@ class experiment_service {
     }
 
     /**
+     * A cell's factors in words: "strategy fastest · model 2pl".
+     *
+     * @param array $factors Factor => level.
+     * @return string
+     */
+    public static function factor_text(array $factors): string {
+        $parts = [];
+        foreach ($factors as $name => $level) {
+            $parts[] = $name . ' ' . (is_array($level) ? json_encode($level) : (string) $level);
+        }
+
+        return implode(' · ', $parts);
+    }
+
+    /**
+     * The effective budgets of every planned run, one row each.
+     *
+     * @param array $expansion What sweep::expand() returned.
+     * @param array $overrides The experiment's per-strategy budgets.
+     * @param array $cellbudgets The experiment's per-cell budgets.
+     * @return array[]
+     */
+    protected static function budget_preview(array $expansion, array $overrides = [], array $cellbudgets = []): array {
+        $rows = [];
+        $seen = [];
+        $factors = [];
+        foreach ((array) ($expansion['cells'] ?? []) as $cell) {
+            $factors[(string) $cell['cellkey']] = (array) ($cell['factors'] ?? []);
+        }
+
+        foreach ((array) ($expansion['runs'] ?? []) as $run) {
+            $definition = (array) ($run['definition'] ?? []);
+            $key = (string) ($run['cellkey'] ?? '');
+
+            // One row per cell: replications of the same cell share budgets.
+            if ($key === '' || isset($seen[$key])) {
+                continue;
+            }
+            $seen[$key] = true;
+
+            $global = (array) ($definition['budgets']['global'] ?? []);
+            $subscale = (array) ($definition['budgets']['subscale'] ?? []);
+            $se = (array) ($definition['budgets']['se'] ?? []);
+            $strategy = (string) ($definition['strategy'] ?? '');
+            $na = get_string('form:na_short', 'local_catquizlab');
+
+            $rows[] = [
+                'cellkey'      => $key,
+                'strategy'     => strategy_catalog::has($strategy)
+                    ? strategy_catalog::label($strategy)
+                    : $strategy,
+                // The classical test plays every item: no number, in words.
+                'globalmin'    => strategy_catalog::uses($strategy, 'globalmax')
+                    ? (string) ($global['minitems'] ?? '') : get_string('form:allitems_short', 'local_catquizlab'),
+                'globalmax'    => strategy_catalog::uses($strategy, 'globalmax')
+                    ? self::budget_text($global['maxitems'] ?? null) : get_string('form:allitems_short', 'local_catquizlab'),
+                // Marked n/a where the strategy has no subscale budget: an empty cell
+                // would read as "not set", which is a different statement.
+                'subscalemin'  => strategy_catalog::uses_subscales($strategy)
+                    ? (string) ($subscale['minitems'] ?? '')
+                    : get_string('form:na_short', 'local_catquizlab'),
+                'subscalemax'  => strategy_catalog::uses_subscales($strategy)
+                    ? self::budget_text($subscale['maxitems'] ?? null)
+                    : get_string('form:na_short', 'local_catquizlab'),
+                // The model and the precision target of the cell (#96), n/a
+                // where the strategy has none.
+                'model'        => (string) ($definition['model'] ?? ''),
+                'semin'        => strategy_catalog::uses_standard_error($strategy) && isset($se['min'])
+                    ? format_float((float) $se['min'], 2) : $na,
+                'semax'        => strategy_catalog::uses_standard_error($strategy) && isset($se['max'])
+                    ? format_float((float) $se['max'], 2) : $na,
+                'factors'      => self::factor_text($factors[$key] ?? []),
+                // From the experiment: a run's own definition holds the applied
+                // result, not the per-strategy block it came from (#101).
+                'overridden'   => isset($overrides[$strategy]),
+                'cellbudget'   => isset($cellbudgets[$key]),
+            ];
+        }
+
+        return $rows;
+    }
+
+    /**
+     * A budget maximum as the preview shows it.
+     *
+     * @param mixed $value The stored value.
+     * @return string
+     */
+    protected static function budget_text($value): string {
+        if (experiment_definition::is_unlimited($value)) {
+            return get_string('budget:unlimited', 'local_catquizlab');
+        }
+
+        return $value === null ? '' : (string) $value;
+    }
+
+    /**
      * Duplicate an experiment as a fresh draft.
      *
      * @param int $id The experiment to copy.
@@ -222,13 +319,35 @@ class experiment_service {
             $warnings[] = get_string('sweep:large', 'local_catquizlab', number_format($runs));
         }
 
+        // People, run-persons and sittings, kept apart (#117) — each derived
+        // from the definition, and the sweep's own count checked against it.
+        $population = population_plan::plan($expansion);
+        if ((int) ($capacity['attempts'] ?? 0) !== $population['sittings']) {
+            $warnings[] = get_string('plan:capacitymismatch', 'local_catquizlab', (object) [
+                'capacity' => (int) ($capacity['attempts'] ?? 0), 'plan' => $population['sittings'],
+            ]);
+        }
+
         return [
             'cells'        => count($expansion['cells'] ?? []),
             'replications' => (int) ($normalised['replications'] ?? 1),
             'runs'         => $runs,
-            'attempts'     => (int) ($capacity['attempts'] ?? 0),
+            'attempts'     => $population['sittings'],
+            'twins'        => $population['twins'],
+            'twinsvary'    => $population['twins'] === null && $population['runs'] > 0,
+            'runpersons'   => $population['runpersons'],
+            'sittings'     => $population['sittings'],
             'large'        => $runs > self::LARGE_SWEEP_RUNS,
             'excluded'     => (int) ($expansion['excluded'] ?? 0),
+            // What each run would actually use, after the factors and after
+            // the per-strategy budgets. A preview that shows only how many
+            // runs there will be does not say whether "classic" kept its
+            // unlimited ceiling — which is the thing somebody is checking.
+            'budgetrows'   => self::budget_preview(
+                $expansion,
+                (array) ($normalised['budgetsbystrategy'] ?? []),
+                (array) ($normalised['budgetsbycell'] ?? [])
+            ),
             'errors'       => [],
             'warnings'     => $warnings,
             'factors'      => (array) ($normalised['sweep']['factors'] ?? []),

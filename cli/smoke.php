@@ -56,6 +56,11 @@ use local_catquizlab\local\worker_registry;
     'minutes'  => 5,
     'minanswers' => 15,
     'keep'     => false,
+    'list-strategies' => false,
+    'provisioning-only' => false,
+    'case' => '',
+    'concurrency' => 0,
+    'no-navigation-failures' => false,
 ], ['h' => 'help']);
 
 if ($options['help']) {
@@ -78,12 +83,18 @@ $GLOBALS['USER'] = get_admin();
 // share the worker slots, so each waits out its timeout on the other's work and
 // reports a failure about the test rather than about the plugin. That happened,
 // and it cost a strategy an undeserved FAIL.
-$lock = $CFG->dataroot . '/local_catquizlab/smoke.lock';
-@mkdir(dirname($lock), 0777, true);
-$lockhandle = fopen($lock, 'c');
-if ($lockhandle === false || !flock($lockhandle, LOCK_EX | LOCK_NB)) {
+// Moodle's own lock, not flock: a file lock is inherited by every process this
+// script starts, and the worker it launches kept it for as long as it lived —
+// so the second strategy found the first one "still running" after it had
+// passed and printed its result.
+$lockfactory = \core\lock\lock_config::get_lock_factory('local_catquizlab');
+$lock = $lockfactory->get_lock('smoke', 5);
+if (!$lock) {
     cli_error('Another smoke test is running. They cannot share an installation.');
 }
+register_shutdown_function(static function () use ($lock): void {
+    $lock->release();
+});
 
 $strategy = (string) $options['strategy'];
 $persons = max(1, (int) $options['persons']);
@@ -102,7 +113,60 @@ function step(string $line, float $since = 0.0): void {
     cli_writeln('  ' . $line . $suffix);
 }
 
+// The strategies the installed engine can actually play, one per line. The
+// runner used to carry a fixed list with "balanced" in it, which this fork of
+// the engine has no class for: readiness refused it, correctly, and the job
+// failed for a strategy nobody could have run.
+if (!empty($options['list-strategies'])) {
+    foreach (\local_catquizlab\local\strategy_catalog::keys() as $key) {
+        if (\local_catquizlab\local\strategy_catalog::runnable($key)) {
+            cli_writeln($key);
+        }
+    }
+    exit(0);
+}
+
 cli_heading('CatQuizLab smoke test: ' . $strategy);
+
+// Set the installation up, then ask whether it is ready. This script used to
+// only ask, and relied on whatever the surrounding job had arranged — which
+// stopped being enough when readiness grew to cover the worker switch, the PHP
+// binary and the browser cache. A test script that cannot prepare its own
+// installation reports the job's setup, not the plugin.
+$base = getenv('CATLAB_BASE_URL') ?: ($CFG->wwwroot ?: 'http://127.0.0.1:8000');
+set_config('worker_base_url', rtrim($base, '/'), 'local_catquizlab');
+
+$node = getenv('CATLAB_NODE') ?: trim((string) @exec('command -v node 2>/dev/null'));
+if ($node !== '' && is_executable($node)) {
+    set_config('worker_node_path', $node, 'local_catquizlab');
+}
+
+$setup = \local_catquizlab\local\setup_wizard::run(true);
+step('Setup: ' . ($setup['changed'] === [] ? 'nothing to change' : implode(', ', $setup['changed'])));
+
+// The worker's packages and its browser, installed into the dataroot where the
+// worker looks for them.
+$runtimeready = \local_catquizlab\local\system_health::worker_modules_installed()
+    && \local_catquizlab\local\worker_runtime::browser_present();
+
+if (!$runtimeready) {
+    $started = microtime(true);
+    $runtime = \local_catquizlab\local\worker_runtime::ensure();
+    step('Runtime: ' . ($runtime['ok'] ? implode(', ', $runtime['changed']) ?: 'already there'
+        : 'FAILED — ' . implode(' | ', array_slice((array) ($runtime['log'] ?? []), 0, 2))), $started);
+}
+
+// Cron, really run rather than asserted. Readiness asks whether cron runs at
+// all, and on a fresh CI installation it never has — the job drives everything
+// itself, so the honest way to satisfy that is to run one pass, not to write
+// the timestamp it looks at.
+if (!\local_catquizlab\local\setup_wizard::state()['ready']) {
+    $started = microtime(true);
+    ob_start();
+    \core\cron::run_main_process(0);
+    ob_end_clean();
+    step('Cron: one pass run.', $started);
+}
 
 // Can this installation run anything at all. Asking after building an
 // experiment is asking too late.
@@ -161,6 +225,31 @@ $definition['budgets']['subscale'] = [
 // precision no real experiment would.
 $definition['budgets']['se'] = ['min' => 0.35, 'max' => 1.0];
 
+// Issue #104's case: a shared maximum of 35 for a sweep over the classical
+// test and two adaptive strategies, with 80 and 40 given to the latter as their
+// own. The classical test must reach the engine unlimited, the others at 80
+// and 40 — checked against the activities actually created.
+$case104 = ['classic' => -1, 'allsubs' => 80, 'relsubs' => 40];
+if ($options['case'] === '104') {
+    $definition['strategy'] = 'classic';
+    $definition['sweep']['factors']['strategy'] = array_keys($case104);
+    $definition['budgets']['global'] = ['minitems' => 10, 'maxitems' => 35];
+    $definition['budgetsbystrategy'] = [
+        'allsubs' => ['global' => ['maxitems' => 80]],
+        'relsubs' => ['global' => ['maxitems' => 40]],
+    ];
+}
+
+// Issue #102's case: a range other than the ±3 that used to be hard-wired,
+// with a truncated normal distribution. The root scale the engine holds must
+// have exactly this range — read back, not assumed.
+if ($options['case'] === '102') {
+    $definition['persons']['distribution'] = 'truncated_normal';
+    $definition['persons']['abilitymean'] = 0.0;
+    $definition['persons']['abilitysd'] = 1.5;
+    $definition['persons']['abilityrange'] = ['min' => -4.0, 'max' => 4.0];
+}
+
 $experimentid = (int) experiment_service::save($definition)['id'];
 step('Defined experiment ' . $experimentid . '.', $started);
 
@@ -176,6 +265,62 @@ if (!$prepared['ok']) {
 }
 step('Prepared ' . $prepared['prepared'] . '/' . $prepared['total'] . ' runs.', $started);
 
+// What the engine actually holds for each run's test, read back and compared
+// with what the definition asks for (#101, #104). A parameter this strategy
+// does not use must have reached the engine as its neutral stand-in, and one it
+// does use as the definition's value — anything else is a run that tests
+// something other than what its manifest says.
+$started = microtime(true);
+foreach ($DB->get_records('local_catquizlab_run', ['experimentid' => $experimentid], 'id ASC', 'id') as $run) {
+    $check = \local_catquizlab\local\provisioning_check::compare((int) $run->id);
+    if ($options['case'] === '104') {
+        $runstrategy = (string) (\local_catquizlab\local\run_registry::definition_for(
+            $DB->get_record('local_catquizlab_run', ['id' => $run->id])
+        )['strategy'] ?? '');
+        $actualmax = $check['checked']['maxquestions']['actual'] ?? null;
+        cli_writeln(sprintf(
+            '  case 104: %-8s engine maxquestions %s (expected %d)',
+            $runstrategy,
+            json_encode($actualmax),
+            $case104[$runstrategy] ?? 0
+        ));
+        if ($actualmax !== ($case104[$runstrategy] ?? null)) {
+            cli_error('Case 104: ' . $runstrategy . ' reached the engine with maxquestions '
+                . json_encode($actualmax) . ', expected ' . ($case104[$runstrategy] ?? '?') . '.');
+        }
+    }
+    foreach ($check['checked'] as $field => $pair) {
+        cli_writeln(sprintf('  engine %-24s %s', $field, json_encode($pair['actual'])));
+    }
+    if ($options['case'] === '102') {
+        $scalemin = $check['checked']['scale_min']['actual'] ?? null;
+        $scalemax = $check['checked']['scale_max']['actual'] ?? null;
+        cli_writeln(sprintf(
+            '  case 102: engine root scale [%s, %s] (expected [-4, 4])',
+            json_encode($scalemin),
+            json_encode($scalemax)
+        ));
+        if ($scalemin !== -4.0 || $scalemax !== 4.0) {
+            cli_error('Case 102: the root scale reached the engine as [' . json_encode($scalemin) . ', '
+                . json_encode($scalemax) . '], expected [-4, 4].');
+        }
+    }
+    if (!$check['ok']) {
+        foreach ($check['differences'] as $difference) {
+            cli_writeln('  DIFFERENCE: ' . $difference);
+        }
+        cli_error('The engine holds different settings than the run defines.');
+    }
+}
+step('Engine settings read back and match the definition.', $started);
+
+if (!empty($options['provisioning-only'])) {
+    \local_catquizlab\local\purger::delete_experiment($experimentid, true, true);
+    cli_writeln('');
+    cli_writeln('PASS (provisioning only): engine settings match for ' . $strategy . '.');
+    exit(0);
+}
+
 $queued = $DB->count_records_select(
     'local_catquizlab_attempt',
     'runid IN (SELECT id FROM {local_catquizlab_run} WHERE experimentid = ?)',
@@ -185,6 +330,35 @@ if ($queued === 0) {
     cli_error('No attempts were queued.');
 }
 step($queued . ' attempts queued.');
+
+// Every run exactly its planned twins, each once, each with one sitting (#116):
+// a setup done twice at once used to store every twin twice and give each copy
+// a sitting — ten sittings for five people, and nothing said so.
+$populations = [];
+foreach ($DB->get_records('local_catquizlab_run', ['experimentid' => $experimentid], 'id ASC') as $run) {
+    $planned = \local_catquizlab\local\person_generator::planned_count(
+        \local_catquizlab\local\run_registry::definition_for($run)
+    );
+    $check = \local_catquizlab\local\person_integrity::check_run((int) $run->id, $planned);
+    $sittings = $DB->count_records('local_catquizlab_attempt', ['runid' => $run->id]);
+    if (!$check['ok'] || $sittings !== $planned) {
+        cli_error(sprintf(
+            'Run %d: planned %d people, has %d rows for %d twins and %d sittings%s.',
+            $run->id,
+            $planned,
+            $check['rows'],
+            $check['distinct'],
+            $sittings,
+            $check['duplicates'] === [] ? '' : ' — twins more than once: ' . count($check['duplicates'])
+        ));
+    }
+    $populations[] = $planned;
+}
+step(sprintf(
+    'Population: %d runs, each its %s planned twins once, each with one sitting.',
+    count($populations),
+    implode('/', array_unique($populations))
+));
 
 // 4. Run it: a real browser, against real questions.
 //
@@ -205,9 +379,15 @@ $otherwork = $DB->execute(
 );
 step('Other queued work deferred for the duration.');
 
+// For a load test, several workers at once: the race of #100 showed under
+// load, not in a single browser.
+if ((int) $options['concurrency'] > 0) {
+    set_config('worker_concurrency', (int) $options['concurrency'], 'local_catquizlab');
+}
+
 $started = microtime(true);
 worker_registry::reap();
-$launch = worker_launcher::launch_pool(worker_launcher::config_from_settings(), 1);
+$launch = worker_launcher::launch_pool(worker_launcher::config_from_settings());
 
 if ((int) $launch['launched'] > 0) {
     step('Worker started and reported.', $started);
@@ -217,6 +397,13 @@ if ((int) $launch['launched'] > 0) {
     // attempts up exactly as a new one would. Refusing to continue here would
     // fail the test for the system working.
     step('Using the ' . worker_registry::summary()['live'] . ' worker(s) already running.', $started);
+} else if (smoke_work_taken($experimentid) > 0) {
+    // The work was already taken up — by a worker the preparation or the
+    // pipeline started before this one. This worker found the queue empty and
+    // left, which is correct, and the check above only asks who is running
+    // now. Failing here reported a test as broken whose sittings were being
+    // played or already collected.
+    step('Work already taken up by an earlier worker.', $started);
 } else {
     cli_writeln('  worker output: ' . substr((string) $launch['output'], -400));
     cli_error('No worker started and none running (' . $launch['reason'] . ').');
@@ -245,6 +432,69 @@ while (time() < $deadline) {
     }
 }
 step($collected . ' collected, ' . $failed . ' failed.', $started);
+
+// Every execution counts, not only the final state (#100). A navigation failure
+// that a retry covered up is still a navigation failure: under load it is the
+// one that, ten times over, stops a run.
+if (!empty($options['no-navigation-failures'])) {
+    [$insql, $inparams] = $DB->get_in_or_equal(
+        array_keys($DB->get_records('local_catquizlab_run', ['experimentid' => $experimentid], '', 'id')) ?: [0],
+        SQL_PARAMS_NAMED,
+        'run'
+    );
+    $executions = $DB->get_records_select(
+        'local_catquizlab_attemptlog',
+        'runid ' . $insql . ' AND outcome = :failed',
+        $inparams + ['failed' => \local_catquizlab\local\attempt_history::FAILED],
+        'id ASC',
+        'id, attemptid, tryno, detail'
+    );
+    $started = microtime(true);
+    $navigation = 0;
+    foreach ($executions as $execution) {
+        $pattern = '/Execution context was destroyed|did not reach the finish page|No expected state|fetch failed/i';
+        if (preg_match($pattern, (string) $execution->detail)) {
+            $navigation++;
+            cli_writeln('  navigation failure: sitting ' . $execution->attemptid . ' try ' . $execution->tryno
+                . ': ' . substr((string) $execution->detail, 0, 200));
+        }
+    }
+    $total = (int) $DB->count_records_select(
+        'local_catquizlab_attemptlog',
+        'runid ' . $insql . ' AND outcome = :started',
+        $inparams + ['started' => \local_catquizlab\local\attempt_history::STARTED]
+    );
+    step($total . ' executions, ' . count($executions) . ' failed, ' . $navigation . ' of them navigation or transport.', $started);
+    // Every failed execution by its reason (#107), not only the navigation
+    // ones: a load test that passes on navigation can still hide failures of
+    // another kind, retried until they succeeded.
+    $reasons = $DB->get_records_sql(
+        "SELECT COALESCE(reasoncode, 'none') AS reason, COUNT(1) AS n
+           FROM {local_catquizlab_attemptlog}
+          WHERE runid $insql AND outcome = :failed
+       GROUP BY COALESCE(reasoncode, 'none')
+       ORDER BY COUNT(1) DESC",
+        $inparams + ['failed' => \local_catquizlab\local\attempt_history::FAILED]
+    );
+    foreach ($reasons as $reason) {
+        cli_writeln(sprintf('    %-28s %d', $reason->reason, $reason->n));
+    }
+    $samples = $DB->get_records_select(
+        'local_catquizlab_attemptlog',
+        'runid ' . $insql . ' AND outcome = :failed',
+        $inparams + ['failed' => \local_catquizlab\local\attempt_history::FAILED],
+        'id ASC',
+        'id, reasoncode, detail',
+        0,
+        3
+    );
+    foreach ($samples as $sample) {
+        cli_writeln('    e.g. ' . ($sample->reasoncode ?? 'none') . ': ' . substr((string) $sample->detail, 0, 220));
+    }
+    if ($navigation > 0) {
+        cli_error($navigation . ' execution(s) failed on navigation or transport.');
+    }
+}
 
 if ($failed > 0) {
     $errors = $DB->get_records_select(
@@ -375,3 +625,25 @@ cli_writeln('');
 cli_writeln('PASS: ' . $collected . ' attempts played, ' . $withestimate
     . ' with estimates, ' . $results . ' result rows.');
 exit(0);
+
+/**
+ * Sittings of this experiment already being played or collected.
+ *
+ * @param int $experimentid The smoke experiment.
+ * @return int
+ */
+function smoke_work_taken(int $experimentid): int {
+    global $DB;
+
+    return (int) $DB->count_records_sql(
+        'SELECT COUNT(1)
+           FROM {local_catquizlab_attempt} a
+           JOIN {local_catquizlab_run} r ON r.id = a.runid
+          WHERE r.experimentid = :experimentid AND a.status IN (:running, :collected)',
+        [
+            'experimentid' => $experimentid,
+            'running'      => attempt_scheduler::STATUS_RUNNING,
+            'collected'    => attempt_scheduler::STATUS_COLLECTED,
+        ]
+    );
+}

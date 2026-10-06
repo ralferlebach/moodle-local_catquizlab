@@ -79,16 +79,47 @@ class progress_view {
             ];
         }
 
+        // Every worker, not only the live ones, with what the operations view
+        // needs to answer "what happened to the one that was running this":
+        // its slot, what it is playing, when it last reported, how much it has
+        // done, how long it has been at it, and why it stopped.
         $workers = [];
-        foreach (worker_registry::live() as $worker) {
+        foreach (worker_registry::recent() as $worker) {
+            $state = (int) $worker->status;
+            $stale = $state === worker_registry::STATUS_RUNNING
+                && (int) $worker->heartbeat < time() - worker_registry::HEARTBEAT_TIMEOUT;
+
             $workers[] = [
-                'workerid' => $worker->workerid,
-                'status'   => status_report::worker($worker),
-                'log'      => worker_launcher::log_tail((string) $worker->workerid, 10),
+                'workerid'   => $worker->workerid,
+                // Straight into the log, filtered to this worker (#90).
+                'logurl'     => (new \moodle_url('/local/catquizlab/logs.php', [
+                    'workerid' => $worker->workerid, 'hours' => 24,
+                ]))->out(false),
+                'status'     => status_report::worker($worker),
+                'slot'       => (int) $worker->slot,
+                'statename'  => $stale
+                    ? get_string('worker:statestale', 'local_catquizlab')
+                    : worker_registry::status_label($state),
+                'stale'      => $stale,
+                'attemptid'  => (int) $worker->currentattempt,
+                'runid'      => (int) $worker->currentattempt > 0
+                    ? (int) $DB->get_field('local_catquizlab_attempt', 'runid', ['id' => $worker->currentattempt])
+                    : 0,
+                'jobsdone'   => (int) $worker->jobsdone,
+                'heartbeat'  => (int) $worker->heartbeat > 0 ? userdate((int) $worker->heartbeat) : '-',
+                'heartbeatago' => (int) $worker->heartbeat > 0
+                    ? duration::ago((int) $worker->heartbeat)
+                    : '-',
+                'uptime'     => duration::human(max(0, (int) $worker->timemodified - (int) $worker->timecreated)),
+                'lasterror'  => (string) ($worker->lasterror ?? ''),
+                'haserror'   => trim((string) ($worker->lasterror ?? '')) !== '',
+                'log'        => worker_launcher::log_tail((string) $worker->workerid, 10),
             ];
         }
 
-        $breakdown = attempt_scheduler::queue_breakdown();
+        // The queue of the experiment in view, not of the installation. The
+        // page used to show A's progress over B's blocked sittings.
+        $breakdown = attempt_scheduler::queue_breakdown($experimentid);
 
         // Runs owning more than one scale tree. A data defect rather than a
         // state, so it is shown where somebody is already asking why nothing
@@ -106,7 +137,11 @@ class progress_view {
         $candebug = has_capability('local/catquizlab:debug', \context_system::instance());
         $debug = ($candebug && debug_trace::enabled()) ? debug_trace::entries([], 60) : [];
 
+        // The population, as the results report it (#117): the same numbers.
+        $population = $experimentid > 0 ? population_plan::describe($experimentid) : null;
+
         return [
+            'population'  => $population,
             // The two actions the whole interface reduces to, and the line of
             // experiments waiting their turn.
             'runner'      => $experimentid > 0
@@ -134,14 +169,24 @@ class progress_view {
                 'rows'    => $debug,
             ],
             'ambiguous'   => ['hasany' => $ambiguous !== [], 'rows' => $ambiguous],
-            'situation'   => situation::assess(),
+            // The same scope and the same count as the first live poll, so the
+            // page does not change its mind two seconds after it is drawn.
+            'situation'   => situation::assess($experimentid, $breakdown),
             'runs'        => ['hasany' => $runs !== [], 'rows' => $runs],
             'tasks'       => task_overview::state(),
             'workers'     => ['hasany' => $workers !== [], 'rows' => $workers],
             // Named so the live updater knows where to write; the other cards
             // on this page are per-row and are refreshed by a reload when the
             // rows change.
-            'queuestatus' => status_report::queue() + ['region' => 'catquizlab-queue'],
+            // The same counts the list below the card shows, taken once.
+            'queuestatus' => status_report::queue($breakdown) + ['region' => 'catquizlab-queue'],
+            // The event log lives on step 5, on purpose: one log surface, not
+            // two. This is the way into it for whatever is being looked at
+            // here, already filtered.
+            'logsurl'     => (new \moodle_url('/local/catquizlab/logs.php', array_filter([
+                'experimentid' => $experimentid ?: null,
+                'hours'        => 24,
+            ])))->out(false),
             'queue'       => $breakdown + [
                 // Shown individually because each needs a different response,
                 // and one "queued" number conflated all four.

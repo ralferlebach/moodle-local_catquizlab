@@ -53,6 +53,17 @@ final class outcome_pipeline_test extends \advanced_testcase {
         /** @var \local_catquizlab_generator $generator */
         $generator = $this->getDataGenerator()->get_plugin_generator('local_catquizlab');
         $run = $generator->create_run();
+        // An adaptive run, as its stop reasons are (#118): the experiment's
+        // baseline is the classical test, whose every end is the full form.
+        $definition = \local_catquizlab\local\experiment_definition::example_baseline();
+        $definition['strategy'] = 'fastest';
+        $definition['budgets']['global']['minitems'] = 1;
+        $DB->set_field(
+            'local_catquizlab_run',
+            'manifestjson',
+            json_encode(['config' => ['definition' => $definition]]),
+            ['id' => $run->id]
+        );
 
         // Three attempts: two stop on the precision criterion, one runs out of
         // items, so the success rate has a value other than 0 or 1.
@@ -183,9 +194,11 @@ final class outcome_pipeline_test extends \advanced_testcase {
         ]);
         $reasons = json_decode((string) $detail, true);
 
-        // A rate of 0.67 says nothing about why the remaining third failed.
-        $this->assertSame(2, $reasons['standarderror']);
-        $this->assertSame(1, $reasons['maxquestions']);
+        // A rate of 0.67 says nothing about why the remaining third failed. The
+        // reasons by their codes since 0.7.28, not by the stop text, which is in
+        // the language of the moment.
+        $this->assertSame(2, $reasons['target_se_reached']);
+        $this->assertSame(1, $reasons['max_items_reached']);
     }
 
     /**

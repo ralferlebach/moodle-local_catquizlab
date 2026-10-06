@@ -80,8 +80,12 @@ final class external_test extends \advanced_testcase {
             'status' => \local_catquizlab\local\attempt_scheduler::STATUS_QUEUED,
             'timecreated' => $now, 'timemodified' => $now,
         ]);
+        // A second person: two sittings of the same person are deliberately
+        // never handed out at once, which is what this test would otherwise
+        // trip over while testing queue order.
+        $secondperson = $generator->create_person(['runid' => $run->id]);
         $second = $DB->insert_record('local_catquizlab_attempt', (object) [
-            'runid' => $run->id, 'personid' => $person->id,
+            'runid' => $run->id, 'personid' => $secondperson->id,
             'status' => \local_catquizlab\local\attempt_scheduler::STATUS_QUEUED,
             'timecreated' => $now + 1, 'timemodified' => $now + 1,
         ]);
@@ -180,5 +184,149 @@ final class external_test extends \advanced_testcase {
 
         $this->expectException(\required_capability_exception::class);
         oracle_answer::execute(1, 2);
+    }
+
+    /**
+     * Ten terminal failures reported through the worker's own path trip the breaker.
+     *
+     * @return void
+     */
+    public function test_ten_failures_through_job_complete_hold_the_run(): void {
+        global $DB;
+        $this->resetAfterTest();
+        $this->setAdminUser();
+
+        /** @var \local_catquizlab_generator $generator */
+        $generator = $this->getDataGenerator()->get_plugin_generator('local_catquizlab');
+        $run = $generator->create_run();
+        $person = $generator->create_person(['runid' => $run->id]);
+        $runid = (int) $run->id;
+        $DB->set_field('local_catquizlab_run', 'status', \local_catquizlab\local\registry::STATUS_RUNNING, ['id' => $runid]);
+
+        // Ten sittings that will fail for good, and five that will wait.
+        $failing = [];
+        for ($i = 0; $i < 10; $i++) {
+            $failing[] = (int) $DB->insert_record('local_catquizlab_attempt', (object) [
+                'runid' => $runid, 'personid' => $person->id,
+                'status' => \local_catquizlab\local\attempt_scheduler::STATUS_RUNNING,
+                // Claimed for the last time: the claim counts the try, so this
+                // is the third, and its failure is terminal.
+                'tries' => \local_catquizlab\local\attempt_scheduler::MAX_TRIES,
+                'leaseowner' => 'w', 'leaseexpires' => time() + 600,
+                'timecreated' => time(), 'timemodified' => time(),
+            ]);
+        }
+        for ($i = 0; $i < 5; $i++) {
+            $DB->insert_record('local_catquizlab_attempt', (object) [
+                'runid' => $runid, 'personid' => $person->id,
+                'status' => \local_catquizlab\local\attempt_scheduler::STATUS_QUEUED,
+                'tries' => 0, 'timecreated' => time(), 'timemodified' => time(),
+            ]);
+        }
+
+        // Reported exactly as the worker reports them: through job_complete,
+        // which is the path that fires in practice. The breaker used to be
+        // wired only to the scheduler's retry path, and never tripped here.
+        foreach ($failing as $index => $attemptid) {
+            job_complete::execute($attemptid, 'failed', 0, 0, 'Division by zero at attempt ' . $index);
+
+            if ($index < 9) {
+                $this->assertNotSame(
+                    \local_catquizlab\local\registry::STATUS_FAILED,
+                    (int) $DB->get_field('local_catquizlab_run', 'status', ['id' => $runid]),
+                    'held after only ' . ($index + 1) . ' failures'
+                );
+            }
+        }
+
+        $held = $DB->get_record('local_catquizlab_run', ['id' => $runid]);
+        $this->assertSame(\local_catquizlab\local\registry::STATUS_FAILED, (int) $held->status);
+        $this->assertStringContainsString('Division by zero', (string) $held->lasterror);
+
+        // The five waiting sittings stay queued and out of reach.
+        $this->assertSame(5, $DB->count_records('local_catquizlab_attempt', [
+            'runid' => $runid, 'status' => \local_catquizlab\local\attempt_scheduler::STATUS_QUEUED,
+        ]));
+        $this->assertFalse(job_claim::execute('worker-b')['hasjob']);
+
+        // Ten reports of one fault read as one fault.
+        $causes = \local_catquizlab\local\circuit_breaker::causes($runid);
+        $this->assertCount(1, $causes);
+        $this->assertSame(10, $causes[0]['count']);
+
+        $experimentid = (int) $held->experimentid;
+        $this->assertSame(
+            \local_catquizlab\local\experiment_runner::STATE_BLOCKED,
+            \local_catquizlab\local\experiment_runner::state($experimentid)['state']
+        );
+    }
+
+    /**
+     * The engine dry run returns a question for a sound run and a located
+     * failure for a broken one.
+     *
+     * @return void
+     */
+    public function test_the_dry_run_locates_an_engine_failure(): void {
+        $this->resetAfterTest();
+        $this->setAdminUser();
+
+        /** @var \local_catquizlab_generator $generator */
+        $generator = $this->getDataGenerator()->get_plugin_generator('local_catquizlab');
+        $run = $generator->create_run();
+
+        // No test instance, no people: the dry run says so rather than
+        // throwing, because "cannot even try" is a different answer from
+        // "tried and failed".
+        $verdict = \local_catquizlab\local\engine_dryrun::first_question((int) $run->id);
+        $this->assertFalse($verdict['ok']);
+        $this->assertContains($verdict['reason'], ['no-test-instance', 'no-simulated-person', 'engine-missing']);
+        $this->assertNull($verdict['exception']);
+    }
+
+    /**
+     * A failure report with a large diagnosis is stored whole, with what was cut and where the rest is (#111).
+     *
+     * @return void
+     */
+    public function test_a_large_diagnosis_is_stored_with_its_failure(): void {
+        global $DB;
+        $this->resetAfterTest();
+        $this->setAdminUser();
+
+        /** @var \local_catquizlab_generator $generator */
+        $generator = $this->getDataGenerator()->get_plugin_generator('local_catquizlab');
+        $run = $generator->create_run();
+        $attemptid = (int) $DB->insert_record('local_catquizlab_attempt', (object) [
+            'runid' => $run->id, 'personid' => 0, 'status' => 10,
+            'tries' => 1, 'timecreated' => time(), 'timemodified' => time(),
+        ]);
+        // About the size the worker sends at most, as it sends it: cut by structure, the full one referenced.
+        $events = [];
+        for ($i = 0; $i < 250; $i++) {
+            $events[] = ['at' => $i, 'type' => 'console', 'detail' => str_repeat('e', 200)];
+        }
+        $diagnostics = json_encode([
+            'browser' => ['events' => $events],
+            'transport' => ['message' => 'HTTP 500 on mod/adaptivequiz/attempt.php'],
+            'truncated' => ['originalbytes' => 412345, 'limit' => 60000, 'full' => 'experiment-1/run-2/diagnosis-full.json'],
+        ]);
+        $this->assertGreaterThan(50000, strlen($diagnostics));
+
+        \local_catquizlab\external\job_complete::execute(
+            $attemptid,
+            'failed',
+            4100,
+            0,
+            'Attempt did not reach the finish page: HTTP 500',
+            $diagnostics
+        );
+
+        $row = $DB->get_record_select('local_catquizlab_attemptlog', 'attemptid = ? AND outcome = ?', [$attemptid, 'failed']);
+        $this->assertNotFalse($row, 'the original failure is recorded');
+        $this->assertStringContainsString('HTTP 500', (string) $row->detail);
+        $stored = json_decode((string) $row->diagnosis, true);
+        $this->assertCount(250, $stored['browser']['events'], 'the diagnosis arrived whole');
+        $this->assertSame('experiment-1/run-2/diagnosis-full.json', $stored['truncated']['full']);
     }
 }

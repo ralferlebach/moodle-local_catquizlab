@@ -118,6 +118,7 @@ class attempt_collector {
             $engine['responses'],
             $engine['stopreason']
         );
+        $trace['enginestatus'] = $engine['enginestatus'] ?? null;
         $debug = $engine['debug'] ?? [];
         // The debug_info blob comes first, since it carries the whole path; the
         // attempt row is the fallback that exists on every site.
@@ -167,6 +168,28 @@ class attempt_collector {
         // ships a delete() for it — so the lab keeps its own copy rather than
         // depending on someone else's retention decision.
         $trace['progress'] = self::read_progress((int) $attempt->engineattemptid);
+
+        // The engine's own per-question summary, where debug_info no longer
+        // carries the path. From catquiz 1.2.1 (2026092612) on, debug_info is
+        // empty and the progress row is deleted when the attempt ends — so a
+        // sitting was collected with its fifteen items and a step count of
+        // zero. The summary has one entry per question with the ability after
+        // it, which is the path.
+        $summary = self::read_summary((int) $attempt->engineattemptid);
+
+        // Richest first. The progress trace (progressretention = trace) holds
+        // every scale's estimate after every answer; debug_info holds the
+        // same when store_debug_info is on; the attempt summary holds only the
+        // scale of each question.
+        $progresspath = self::path_from_progress_trace((array) ($trace['progress']['abilitytrace'] ?? []));
+        if ($trace['abilitypath'] === [] && $progresspath !== []) {
+            $trace['abilitypath'] = $progresspath;
+        }
+        if ($trace['abilitypath'] === [] && $summary !== []) {
+            $trace['abilitypath'] = $summary;
+        }
+        $trace['summarysteps'] = max(count($summary), count($progresspath));
+
         $trace['steps'] = self::step_series($trace, $debug);
 
         $DB->update_record('local_catquizlab_attempt', (object) [
@@ -175,6 +198,42 @@ class attempt_collector {
             'tracejson'    => json_encode($trace, JSON_UNESCAPED_SLASHES),
             'timemodified' => time(),
         ]);
+
+        // The engine's person parameters for this person have done their work:
+        // the numbers are in this plugin's tables now. They go, so the next
+        // simulated person is estimated from their own answers alone — and so
+        // the context never accumulates fifty identical abilities, whose
+        // standard deviation is zero and which the engine then divides by.
+        $person = $DB->get_field('local_catquizlab_attempt', 'personid', ['id' => $attemptid]);
+        if ($person) {
+            user_provisioner::forget_engine_person_params(
+                (int) $DB->get_field('local_catquizlab_attempt', 'runid', ['id' => $attemptid]),
+                (int) $DB->get_field('local_catquizlab_person', 'moodleuserid', ['id' => $person])
+            );
+        }
+
+        // Why it ended, as a code, now that the stop reason is known — and in
+        // the run's record of ends in moodledata (#107). The ends a test was
+        // designed to reach are results as much as failures are faults.
+        $runid = (int) $DB->get_field('local_catquizlab_attempt', 'runid', ['id' => $attemptid]);
+        $runrecord = $DB->get_record('local_catquizlab_run', ['id' => $runid]);
+        $rundefinition = $runrecord ? run_registry::definition_for($runrecord) : [];
+        $options = $rundefinition === [] ? [] : test_provisioner::options_from_definition($rundefinition);
+        $strategy = (string) ($rundefinition['strategy'] ?? '');
+        $code = attempt_history::record_outcome_reason($attemptid, (string) ($trace['stopreason'] ?? ''), [
+            'strategy' => $strategy,
+            'finalse'  => $trace['finalse'] ?? null,
+            'semin'    => $rundefinition['budgets']['se']['min'] ?? null,
+            // The design's minimum, and the engine's code (#118): without them an
+            // end after seven of fifteen questions read as a standard error reached.
+            'minitems' => $options !== [] && strategy_catalog::uses($strategy, 'globalmin') ? (int) $options['minquestions'] : 0,
+            'maxitems' => $options !== [] ? (int) $options['maxquestions'] : 0,
+            'enginestatus' => $trace['enginestatus'] ?? null,
+            'dropped'  => count((array) ($trace['progress']['droppedscales'] ?? [])),
+            'played'   => (int) ($trace['nitems'] ?? count((array) ($trace['items'] ?? []))),
+            'poolsize' => $DB->count_records('local_catquizlab_item', ['runid' => $runid]),
+        ]);
+        artefact_store::document($attemptid, attempt_history::COLLECTED, $code);
 
         return $trace;
     }
@@ -233,6 +292,9 @@ class attempt_collector {
             'finalse'    => $finalse,
             'responses'  => self::read_responses((int) $aq->uniqueid),
             'stopreason' => (string) ($aq->attemptstopcriteria ?? ''),
+            // The engine's own end code beside its text (#118): the text is in
+            // the language of the moment, the number is not.
+            'enginestatus' => ($catquiz && $catquiz->status !== null) ? (int) $catquiz->status : null,
             'debug'      => self::parse_debug_info(
                 (string) ($catquiz->debug_info ?? ''),
                 (int) ($catquiz->contextid ?? 0)
@@ -269,9 +331,22 @@ class attempt_collector {
             return [];
         }
 
-        $record = $DB->get_records(
+        // Keyed by the CAT attempt, not the activity's attempt: since catquiz
+        // 1.2.1 local_catquiz_progress.attemptid is local_catquiz_attempts.id.
+        // Looked up without a component filter, because the engine writes
+        // "adaptivequiz" there while its own progress lookup asks for
+        // "mod_adaptivequiz" — which is also why, as of 1.2.1, the engine
+        // never persists the progress row at all (reported upstream).
+        $catattemptid = (int) $DB->get_field_sql(
+            'SELECT MAX(id) FROM {local_catquiz_attempts} WHERE attemptid = :attemptid',
+            ['attemptid' => $engineattemptid]
+        );
+        $keys = array_values(array_filter([$catattemptid, $engineattemptid]));
+        [$insql, $params] = $DB->get_in_or_equal($keys, SQL_PARAMS_NAMED, 'att');
+        $record = $DB->get_records_select(
             'local_catquiz_progress',
-            ['attemptid' => $engineattemptid],
+            'attemptid ' . $insql,
+            $params,
             'id DESC',
             '*',
             0,
@@ -292,6 +367,10 @@ class attempt_collector {
             'playedquestions', 'playedquestionsbyscale', 'activescales',
             'droppedscales', 'lockedscales', 'responses', 'abilities',
             'preattemptabilities', 'starttime',
+            // The step-by-step path, written by catquiz 1.2.1 when
+            // progressretention is "trace". Without this key in the list the
+            // richest source the engine offers was read and thrown away.
+            'abilitytrace',
         ];
 
         return array_intersect_key($decoded, array_flip($keep));
@@ -312,7 +391,101 @@ class attempt_collector {
         $progress = (array) ($trace['progress'] ?? []);
         $played = (array) ($progress['playedquestions'] ?? []);
 
-        return $played !== [] ? count($played) : (int) ($debug['steps'] ?? 0);
+        if ($played !== []) {
+            return count($played);
+        }
+
+        // The sources in the order they are trustworthy, the first that has an
+        // answer winning: the engine's per-question summary, its debug step
+        // count, and last the items actually read back from the question usage
+        // — which exist whatever the engine version, because they are Moodle's
+        // own record of what was asked.
+        $candidates = [
+            (int) ($trace['summarysteps'] ?? 0),
+            (int) ($debug['steps'] ?? 0),
+            count((array) ($trace['items'] ?? [])),
+        ];
+        foreach ($candidates as $candidate) {
+            if ($candidate > 0) {
+                return $candidate;
+            }
+        }
+
+        return 0;
+    }
+
+    /**
+     * The ability path from the engine's progress trace.
+     *
+     * catquiz 1.2.1 records, with progressretention = trace, a list per scale
+     * of {step, ability}. Turned round into one entry per step with every
+     * scale's ability at that step — the shape the debug_info path had.
+     *
+     * @param array $abilitytrace Scale id => list of {step, ability}.
+     * @return array[]
+     */
+    protected static function path_from_progress_trace(array $abilitytrace): array {
+        $bystep = [];
+        foreach ($abilitytrace as $scaleid => $entries) {
+            foreach ((array) $entries as $entry) {
+                $entry = (array) $entry;
+                if (!isset($entry['step'], $entry['ability'])) {
+                    continue;
+                }
+                $bystep[(int) $entry['step']][(int) $scaleid] = (float) $entry['ability'];
+            }
+        }
+        ksort($bystep);
+
+        $path = [];
+        foreach ($bystep as $step => $abilities) {
+            if ($step <= 0) {
+                continue;
+            }
+            ksort($abilities);
+            $path[] = ['step' => $step, 'abilities' => $abilities];
+        }
+
+        return $path;
+    }
+
+    /**
+     * The ability after each question, from the engine's attempt summary.
+     *
+     * @param int $engineattemptid The adaptivequiz attempt.
+     * @return array[] One entry per question: questionid, scaleid, ability.
+     */
+    protected static function read_summary(int $engineattemptid): array {
+        global $DB;
+
+        if ($engineattemptid <= 0) {
+            return [];
+        }
+
+        $json = $DB->get_field('local_catquiz_attempts', 'json', ['attemptid' => $engineattemptid]);
+        $decoded = json_decode((string) $json, true);
+        $rows = (array) ($decoded['graphicalsummary_data'] ?? []);
+
+        // The same shape the debug_info path had — step, and a scale => ability
+        // map — so everything that reads the path (the test-flow view, the
+        // export) reads this one without knowing which engine wrote it. The
+        // summary gives the ability of the question's own scale; that is the
+        // map's one entry.
+        $path = [];
+        foreach (array_values($rows) as $index => $row) {
+            if (!is_array($row) || !array_key_exists('personability_after', $row)) {
+                continue;
+            }
+            $scaleid = (int) ($row['questionscale'] ?? 0);
+            $path[] = [
+                'step'       => $index + 1,
+                'abilities'  => [$scaleid => (float) $row['personability_after']],
+                'questionid' => (int) ($row['id'] ?? 0),
+                'response'   => isset($row['lastresponse']) ? (float) $row['lastresponse'] : null,
+            ];
+        }
+
+        return $path;
     }
 
     /**

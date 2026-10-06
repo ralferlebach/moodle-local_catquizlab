@@ -47,6 +47,9 @@ final class results_export_test extends \advanced_testcase {
         global $DB;
 
         $definition = experiment_definition::example_baseline();
+        // Traces of two or three items, so a minimum they meet (#118): below the
+        // minimum a sitting is not valid, and these tests are about other things.
+        $definition['budgets']['global']['minitems'] = 1;
         $definition['name'] = 'Export demo';
         $definition['replications'] = 2;
         $definition['persons']['count'] = 3;

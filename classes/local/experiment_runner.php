@@ -181,11 +181,17 @@ class experiment_runner {
             return ['ok' => false, 'blockers' => [['stage' => 'definition', 'reason' => $e->getMessage()]]];
         }
 
-        // The installation has to be able to run anything at all, and finding
-        // that out after building thirty courses is finding it out too late.
-        $situation = setup_wizard::state();
+        // What preparation itself needs: the engine and somewhere to build.
+        // Asking for the whole runtime here — browser, worker, cron — refused
+        // to build anything on an installation that could have built
+        // everything and run it later. Running checks the rest, when it is
+        // actually needed.
+        $situation = setup_wizard::preparation_state();
         if (empty($situation['ready'])) {
-            return ['ok' => false, 'blockers' => [['stage' => 'preparation', 'reason' => 'setup-incomplete']]];
+            return ['ok' => false, 'blockers' => [[
+                'stage'  => 'preparation',
+                'reason' => 'setup-incomplete: ' . implode(', ', $situation['blockers']),
+            ]]];
         }
 
         return ['ok' => true, 'blockers' => []];

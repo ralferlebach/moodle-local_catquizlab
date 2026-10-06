@@ -67,15 +67,34 @@ class test_provisioner {
         $se = (array) ($budgets['se'] ?? []);
         $strategy = (string) ($definition['strategy'] ?? 'fastest');
 
+        // Pilot questions are an option of their own, not a strategy (#103):
+        // on where the definition asks for them, off — neutralised — for a
+        // strategy that cannot include them.
+        $engine = strategy_parameters::engine_values($strategy, $budgets);
+
+        $pilot = (array) ($definition['pilot'] ?? []);
+        $pilotwanted = !empty($pilot['include']);
+        $pilotapplies = $pilotwanted && strategy_catalog::uses($strategy, 'pilot');
+
         return $extra + [
             'strategykey'             => $strategy,
             'teststrategy'            => strategy_catalog::engine_id($strategy),
+            'includepilot'            => $pilotapplies,
+            'pilotratio'              => $pilotapplies ? max(0.0, min(100.0, (float) ($pilot['ratio'] ?? 0))) : 0.0,
+            'pilotneutralised'        => $pilotwanted && !$pilotapplies,
             'minquestions'            => (int) ($global['minitems'] ?? 10),
-            'maxquestions'            => (int) ($global['maxitems'] ?? 15),
-            'minquestionspersubscale' => (int) ($subscale['minitems'] ?? 3),
-            'maxquestionspersubscale' => (int) ($subscale['maxitems'] ?? 4),
-            'se_min'                  => (float) ($se['min'] ?? 0.35),
-            'se_max'                  => (float) ($se['max'] ?? 1.0),
+            // Minus one where the definition says unlimited: the engine stops
+            // applying the ceiling at that value.
+            'maxquestions'            => experiment_definition::engine_maximum($global['maxitems'] ?? null, 15),
+            // What the engine receives for what this strategy does not use is a
+            // neutral stand-in, never the definition's number (#101): a
+            // subscale ceiling handed to "fastest" is a limit the engine could
+            // apply after all.
+            'minquestionspersubscale' => $engine['subscalemin'],
+            'maxquestionspersubscale' => $engine['subscalemax'],
+            'se_min'                  => $engine['semin'],
+            'se_max'                  => $engine['semax'],
+            'na'                      => $engine['na'],
         ];
     }
 
@@ -100,22 +119,58 @@ class test_provisioner {
                 'key'      => $options['strategykey'],
                 'engineid' => $options['teststrategy'],
                 'label'    => strategy_catalog::label($options['strategykey']),
+                'alias'    => strategy_catalog::alias($options['strategykey']),
             ],
+            // What pilot questions did in this run: on, off, or asked for and
+            // neutralised because the strategy cannot include them.
+            'pilot'            => $options['pilotneutralised']
+                ? 'N/A (neutralised)'
+                : ($options['includepilot'] ? ['include' => true, 'ratio' => $options['pilotratio']] : ['include' => false]),
             'budgets'          => [
-                'global'   => [
-                    'minitems' => $options['minquestions'],
-                    'maxitems' => $options['maxquestions'],
-                ],
-                'subscale' => [
-                    'minitems' => $options['minquestionspersubscale'],
-                    'maxitems' => $options['maxquestionspersubscale'],
-                ],
+                // The classical test: every item of the scale, not a number.
+                'global'   => !strategy_catalog::uses((string) ($definition['strategy'] ?? ''), 'globalmax')
+                    ? strategy_parameters::ALL_ITEMS
+                    : [
+                        'minitems' => $options['minquestions'],
+                        'maxitems' => $options['maxquestions'],
+                    ],
+                // Recorded as neutralised where the strategy does not use it:
+                // the run shows what was in force, not what was typed.
+                'subscale' => !empty($options['na']['subscale'])
+                    ? strategy_parameters::NEUTRALISED
+                    : [
+                        'minitems' => $options['minquestionspersubscale'],
+                        'maxitems' => $options['maxquestionspersubscale'],
+                    ],
             ],
-            'se'               => ['min' => $semin, 'max' => $semax],
-            'targetinformation' => [
-                'min' => $semax > 0 ? round(1.0 / ($semax * $semax), 5) : null,
-                'max' => $semin > 0 ? round(1.0 / ($semin * $semin), 5) : null,
-            ],
+            'se'               => !empty($options['na']['standarderror'])
+                ? strategy_parameters::NEUTRALISED
+                : ['min' => $semin, 'max' => $semax],
+            'targetinformation' => !empty($options['na']['standarderror'])
+                ? strategy_parameters::NEUTRALISED
+                : [
+                    'min' => $semax > 0 ? round(1.0 / ($semax * $semax), 5) : null,
+                    'max' => $semin > 0 ? round(1.0 / ($semin * $semin), 5) : null,
+                ],
+            // The ground truth and the scale range, named (#102, #105): not
+            // "N(0, 2)", which leaves open whether 2 is a variance or an SD.
+            'ability'          => (static function (array $d) use ($definition): array {
+                return [
+                    'distribution'       => $d['distribution'],
+                    'mean'               => $d['mean'],
+                    'standard_deviation' => $d['distribution'] === ability_distribution::UNIFORM ? null : $d['sd'],
+                    'lower_bound'        => $d['min'],
+                    'upper_bound'        => $d['max'],
+                    'engine_scale_range' => ['min' => $d['min'], 'max' => $d['max']],
+                    'expected_share_outside' => round(ability_distribution::share_outside($d), 5),
+                    'category_sd'        => person_generator::deviation_sds($definition)['category'],
+                    'subscale_sd'        => person_generator::deviation_sds($definition)['subscale'],
+                    'explicit'           => $d['explicit'],
+                ];
+            })(ability_distribution::of($definition)),
+            'firstquestion'    => !empty($options['na']['firstquestion'])
+                ? strategy_parameters::NEUTRALISED
+                : (string) ($options['selectfirstquestion'] ?? '0'),
         ];
     }
 
@@ -136,10 +191,14 @@ class test_provisioner {
             'catquiz_selectteststrategy'             => (string) ($options['teststrategy']
                 ?? strategy_catalog::engine_id((string) ($options['strategykey'] ?? 'fastest'))),
             'catquiz_selectfirstquestion'            => (string) ($options['selectfirstquestion'] ?? '0'),
-            'catquiz_includepilotquestions'          => '0',
+            'catquiz_includepilotquestions'          => !empty($options['includepilot']) ? '1' : '0',
+            'catquiz_pilotratio'                     => (string) (float) ($options['pilotratio'] ?? 0),
             'catquiz_firstquestionreuseexistingdata' => '1',
             'catquiz_includetimelimit'               => '0',
             'catquiz_pp_min_inc'                     => $options['pp_min_inc'] ?? 0.01,
+            // The engine's step-by-step path for this test (catquiz 1.2.1+),
+            // capped by the site level, which the setup sets to the same.
+            'catquiz_progressretention'              => 'trace',
             'maxquestionsgroup'                      => [
                 'catquiz_minquestions' => (int) ($options['minquestions'] ?? 10),
                 'catquiz_maxquestions' => (int) ($options['maxquestions'] ?? 15),
