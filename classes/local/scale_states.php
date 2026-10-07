@@ -30,8 +30,10 @@ namespace local_catquizlab\local;
  * The engine's lists of active, locked and dropped scales say how a sitting
  * ended. When a scale left the selection they do not say — and guessing it from
  * the last step a scale was estimated at would not be the engine's finding. In
- * trace mode the engine records every change with its step
- * (local_catquiz#133, progress.scalestatetrace); this replays them.
+ * trace mode the engine is to record every change with its step
+ * (local_catquiz#133): progress.scalestatetrace, a list of entries with `step`
+ * (questions played so far), `scaleid` and `event` — activated, deactivated,
+ * locked, unlocked or dropped. This replays them.
  *
  * Where a sitting has no such record — an engine before that change, or not in
  * trace mode — nothing is known per step, and nothing is made up: the callers
@@ -54,8 +56,15 @@ class scale_states {
     /** @var string Removed for the rest of the sitting. */
     public const DROPPED = 'dropped';
 
-    /** @var string The engine's "unlocked": the lock is lifted, the scale not active by that alone. */
-    protected const UNLOCKED = 'unlocked';
+    /** @var array<string, string> The engine's event => the state a scale is in after it. */
+    protected const EVENTS = [
+        'activated'   => self::ACTIVE,
+        'deactivated' => self::INACTIVE,
+        'locked'      => self::LOCKED,
+        // The lock is lifted; the scale is not active by that alone.
+        'unlocked'    => self::INACTIVE,
+        'dropped'     => self::DROPPED,
+    ];
 
     /**
      * Whether a sitting's trace has the engine's record of state changes.
@@ -86,10 +95,11 @@ class scale_states {
         $events = [];
         foreach ((array) $trace['progress']['scalestatetrace'] as $event) {
             $event = (array) $event;
-            if (!isset($event['step'], $event['scale'], $event['state'])) {
+            // An event this version does not know is left out, not guessed at.
+            if (!isset($event['step'], $event['scaleid'], $event['event'], self::EVENTS[(string) $event['event']])) {
                 continue;
             }
-            $events[(int) $event['step']][] = [(int) $event['scale'], (string) $event['state']];
+            $events[(int) $event['step']][] = [(int) $event['scaleid'], self::EVENTS[(string) $event['event']]];
         }
         ksort($events);
 
@@ -103,7 +113,7 @@ class scale_states {
                     if (($current[$scaleid] ?? '') === self::DROPPED) {
                         continue;
                     }
-                    $current[$scaleid] = $state === self::UNLOCKED ? self::INACTIVE : $state;
+                    $current[$scaleid] = $state;
                 }
             }
             $bystep[$step] = $current;

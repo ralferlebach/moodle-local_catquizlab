@@ -36,9 +36,12 @@ namespace local_catquizlab\local;
  * - **deficit oriented** — the true targets are the subscales with
  *   Δs,true ≤ −threshold;
  * - **strength oriented** — those with Δs,true ≥ +threshold;
- * - **relevant scales** — those with |Δs,true| ≥ threshold, in either
- *   direction: the engine's strategy defines no set of relevant scales of its
- *   own, so this is the lab's definition, and it is said wherever it is used.
+ * - **relevant scales** — the scales relevant for the person's competence
+ *   band, which is what the engine's strategy is after ("Skalen im
+ *   Kompetenzbereich abprüfen"). Which scales those are for a simulated person
+ *   is not defined here yet: until it is, this mode has no set of true targets,
+ *   and so no recall, precision or ranking — only its local recovery, and that
+ *   beside the baselines.
  *
  * The quality of a mode is measured against the simulated ground truth, always.
  * allsubs and classic are **modes to compare with, not a truth**: they answer
@@ -84,6 +87,19 @@ class mode_detection {
     /** @var string[] The targeted modes, in the order they are shown. */
     public const TARGETS = [self::RELEVANT, self::DEFICIT, self::STRENGTH];
 
+    /** @var string[] The modes whose true targets are defined: a scale of a person is one, or is not. */
+    public const DEFINED_TARGETS = [self::DEFICIT, self::STRENGTH];
+
+    /**
+     * Whether a mode's true targets are defined, so that finding them can be measured.
+     *
+     * @param string $target One of TARGETS.
+     * @return bool
+     */
+    public static function has_targets(string $target): bool {
+        return in_array($target, self::DEFINED_TARGETS, true);
+    }
+
     /** @var string[] The baselines. */
     public const BASELINES = [self::ALLSUBS, self::CLASSIC];
 
@@ -116,11 +132,12 @@ class mode_detection {
         if ($target === self::STRENGTH) {
             return $delta >= $threshold;
         }
-        if ($target === self::RELEVANT) {
-            return abs($delta) >= $threshold;
+        if ($target === self::DEFICIT) {
+            return $delta <= -$threshold;
         }
 
-        return $delta <= -$threshold;
+        // No definition, no target: nothing is called one by guesswork.
+        return false;
     }
 
     /**
@@ -131,14 +148,7 @@ class mode_detection {
      * @return float
      */
     public static function oriented(float $delta, string $target): float {
-        if ($target === self::STRENGTH) {
-            return -$delta;
-        }
-        if ($target === self::RELEVANT) {
-            return -abs($delta);
-        }
-
-        return $delta;
+        return $target === self::STRENGTH ? -$delta : $delta;
     }
 
     /**
@@ -330,6 +340,7 @@ class mode_detection {
      *      mae, correlation, targetrmse, targetn, spearman, ranked, topk (k => agreement, ndcg).
      */
     public static function evaluate(array $sittings, string $target, float $threshold, ?array $onlyscales = null): array {
+        $defined = self::has_targets($target);
         $n = 0;
         $se = $sae = $serr = 0.0;
         $sx = $sy = $sxx = $syy = $sxy = 0.0;
@@ -371,7 +382,7 @@ class mode_detection {
                 $true[] = self::oriented($truedelta, $target);
                 $est[] = self::oriented($estdelta, $target);
             }
-            if (count($true) >= 2) {
+            if ($defined && count($true) >= 2) {
                 $rho = diagnostics::spearman($true, $est);
                 if ($rho !== null) {
                     $spearman[] = (float) $rho;
@@ -402,20 +413,21 @@ class mode_detection {
         return [
             'sittings' => count($sittings),
             'scales' => $n,
-            'truetargets' => $truetargets,
-            'targetscovered' => $covered,
-            'tp' => $tp, 'fp' => $fp, 'fn' => $fn,
-            'precision' => $precision === null ? null : round($precision, 6),
-            'recall' => $recall === null ? null : round($recall, 6),
-            'f1' => $precision !== null && $recall !== null && ($precision + $recall) > 0
+            // Null throughout where the mode's true targets are not defined: not zero.
+            'truetargets' => $defined ? $truetargets : null,
+            'targetscovered' => $defined ? $covered : null,
+            'tp' => $defined ? $tp : null, 'fp' => $defined ? $fp : null, 'fn' => $defined ? $fn : null,
+            'precision' => $precision === null || !$defined ? null : round($precision, 6),
+            'recall' => $recall === null || !$defined ? null : round($recall, 6),
+            'f1' => $defined && $precision !== null && $recall !== null && ($precision + $recall) > 0
                 ? round(2 * $precision * $recall / ($precision + $recall), 6) : null,
             'bias' => $n > 0 ? round($serr / $n, 6) : null,
             'rmse' => $n > 0 ? round(sqrt($se / $n), 6) : null,
             'mae' => $n > 0 ? round($sae / $n, 6) : null,
             'correlation' => $varx > 1e-12 && $vary > 1e-12
                 ? round(($sxy - $sx * $sy / $n) / sqrt($varx * $vary), 6) : null,
-            'targetrmse' => $tn > 0 ? round(sqrt($tse / $tn), 6) : null,
-            'targetn' => $tn,
+            'targetrmse' => $defined && $tn > 0 ? round(sqrt($tse / $tn), 6) : null,
+            'targetn' => $defined ? $tn : 0,
             'spearman' => $mean($spearman),
             'ranked' => count($spearman),
             'topk' => $ranking,
@@ -576,7 +588,7 @@ class mode_detection {
             'attemptvalid', 'validityreason', 'category', 'subscale', 'items', 'itemssource',
             'scalevalid', 'scalereasons', 'enginescalevalid', 'included',
             'truedelta', 'estdelta', 'error', 'localse', 'threshold',
-            'truedeficit', 'estdeficit', 'truestrength', 'eststrength', 'truerelevant', 'estrelevant',
+            'truedeficit', 'estdeficit', 'truestrength', 'eststrength',
             'baseline_allsubs', 'baseline_classic',
         ];
         $rows = (static function () use ($query, $threshold): \Generator {
@@ -631,8 +643,6 @@ class mode_detection {
                         'estdeficit' => (int) self::is_target($est, self::DEFICIT, $threshold),
                         'truestrength' => (int) self::is_target($true, self::STRENGTH, $threshold),
                         'eststrength' => (int) self::is_target($est, self::STRENGTH, $threshold),
-                        'truerelevant' => (int) self::is_target($true, self::RELEVANT, $threshold),
-                        'estrelevant' => (int) self::is_target($est, self::RELEVANT, $threshold),
                         // The twin's sitting in each baseline, where it has a valid one.
                         'baseline_allsubs' => $pairkey !== '' ? ($twins[self::ALLSUBS][$pairkey] ?? null) : null,
                         'baseline_classic' => $pairkey !== '' ? ($twins[self::CLASSIC][$pairkey] ?? null) : null,

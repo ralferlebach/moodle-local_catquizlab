@@ -2967,7 +2967,7 @@ class results_page {
                 get_string('mode:definition_' . $target, $component, $threshold),
                 ['class' => 'small', 'data-region' => 'catquizlab-mode-definition']
             );
-            $out .= \html_writer::div(implode(' · ', [
+            $out .= \html_writer::div(implode(' · ', array_filter([
                 $this->mode_share('mode:validsittings', $own['counts']['valid'], $own['counts']['sittings'], 'valid', 'all'),
                 $this->mode_share(
                     'mode:included',
@@ -2976,8 +2976,15 @@ class results_page {
                     'included',
                     'withitems'
                 ),
-                $this->mode_share('mode:targetscovered', $own['targetscovered'], $own['truetargets'], 'covered', 'targets'),
-            ]), 'small mb-2', ['data-region' => 'catquizlab-mode-coverage']);
+                // Only where the mode's true targets are defined.
+                $own['truetargets'] === null ? '' : $this->mode_share(
+                    'mode:targetscovered',
+                    (int) $own['targetscovered'],
+                    (int) $own['truetargets'],
+                    'covered',
+                    'targets'
+                ),
+            ])), 'small mb-2', ['data-region' => 'catquizlab-mode-coverage']);
 
             $out .= \html_writer::tag('h4', get_string('mode:detailheading', $component), ['class' => 'h6 mt-3']);
             $rows = [[$name . ' — ' . get_string('mode:row_truth', $component), $own]];
@@ -3183,8 +3190,10 @@ class results_page {
                 $this->format_number($e['correlation']),
                 $this->format_number($e['targetrmse']) . ($e['targetn'] > 0 ? ' (n = ' . $e['targetn'] . ')' : ''),
                 // The counts behind each share: found of all true targets, right of all detected.
-                $this->format_share($e['recall']) . ' (' . $e['tp'] . ' / ' . $e['truetargets'] . ')',
-                $this->format_share($e['precision']) . ' (' . $e['tp'] . ' / ' . ($e['tp'] + $e['fp']) . ')',
+                $e['truetargets'] === null ? '—'
+                    : $this->format_share($e['recall']) . ' (' . $e['tp'] . ' / ' . $e['truetargets'] . ')',
+                $e['truetargets'] === null ? '—'
+                    : $this->format_share($e['precision']) . ' (' . $e['tp'] . ' / ' . ($e['tp'] + $e['fp']) . ')',
                 $this->format_number($e['f1']),
                 $this->format_number($e['spearman']) . ' (n = ' . $e['ranked'] . ')',
                 $this->format_share($e['topk'][1]['agreement'] ?? null),

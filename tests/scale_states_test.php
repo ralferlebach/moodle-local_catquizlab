@@ -50,13 +50,13 @@ final class scale_states_test extends \advanced_testcase {
         ];
         if ($recorded) {
             $progress['scalestatetrace'] = [
-                ['step' => 0, 'scale' => 11, 'state' => 'active'],
-                ['step' => 0, 'scale' => 12, 'state' => 'active'],
-                ['step' => 0, 'scale' => 13, 'state' => 'active'],
-                ['step' => 2, 'scale' => 13, 'state' => 'locked'],
-                ['step' => 3, 'scale' => 12, 'state' => 'dropped'],
-                ['step' => 4, 'scale' => 13, 'state' => 'unlocked'],
-                ['step' => 4, 'scale' => 13, 'state' => 'active'],
+                ['step' => 0, 'scaleid' => 11, 'event' => 'activated'],
+                ['step' => 0, 'scaleid' => 12, 'event' => 'activated'],
+                ['step' => 0, 'scaleid' => 13, 'event' => 'activated'],
+                ['step' => 2, 'scaleid' => 13, 'event' => 'locked'],
+                ['step' => 3, 'scaleid' => 12, 'event' => 'dropped'],
+                ['step' => 4, 'scaleid' => 13, 'event' => 'unlocked'],
+                ['step' => 4, 'scaleid' => 13, 'event' => 'activated'],
             ];
         }
 
@@ -97,8 +97,12 @@ final class scale_states_test extends \advanced_testcase {
         $this->assertSame([], scale_states::course($states, 99), 'a scale never in the selection has no course');
 
         // A dropped scale stays dropped, whatever is recorded after.
-        $trace['progress']['scalestatetrace'][] = ['step' => 5, 'scale' => 12, 'state' => 'active'];
+        $trace['progress']['scalestatetrace'][] = ['step' => 5, 'scaleid' => 12, 'event' => 'activated'];
         $this->assertSame('dropped', scale_states::by_step($trace, 5)[5][12]);
+
+        // An event this version does not know changes nothing.
+        $trace['progress']['scalestatetrace'][] = ['step' => 5, 'scaleid' => 11, 'event' => 'paused'];
+        $this->assertSame('active', scale_states::by_step($trace, 5)[5][11]);
 
         // No record: nothing is known per step, and nothing is made up.
         $this->assertFalse(scale_states::recorded($this->observation(false)['trace']));

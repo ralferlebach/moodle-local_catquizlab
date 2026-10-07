@@ -6,6 +6,56 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.7.36] — 2026-10-07 — scale states: the format of local_catquiz#133
+
+- The plugin reads the engine's record of scale-state changes in the format
+  local_catquiz#133 specifies: `progress.scalestatetrace`, entries with `step`,
+  `scaleid` and `event` (`activated`, `deactivated`, `locked`, `unlocked`,
+  `dropped`). 0.7.34 and 0.7.35 expected other field names. An event the plugin
+  does not know is left out, not guessed at. Nothing changes on screen until
+  the engine writes the record: "N/A" per step and the states at the end.
+- The description of a target definition for "relevant scales" that 0.7.34
+  used is removed from the code and from this file; the mode has no target
+  figures (0.7.35).
+
+No change to the database.
+
+---
+
+## [0.7.35] — 2026-10-07 — #114: no invented definition of "relevant"
+
+### What changed
+For the mode "relevant scales" (`relsubs`) no set of true target scales is
+defined in CatQuizLab. The strategy is after the scales relevant for the
+person's competence band ("Skalen im Kompetenzbereich abprüfen"); which scales
+those are for a simulated person has to be specified before recall, precision
+or a ranking can be computed for this mode. The figures 0.7.34 showed there are
+withdrawn.
+
+### Now
+- The mode has **no set of true targets** until one is defined: recall,
+  precision, F1, coverage of targets and ranking are not computed and shown as
+  "—" — not as 0. The page says so in the mode's own section.
+- What does not depend on a target definition stays: valid sittings, included
+  scale results, bias, RMSE, MAE and correlation on the scales the mode chose,
+  and the paired comparison with "All sub" and "Classic testing".
+- The detection export no longer has the columns `truerelevant` and
+  `estrelevant`.
+- Deficit oriented and strength oriented are unchanged.
+
+### Not part of this plugin
+The plugin reads the engine's record of scale-state changes
+(`progress.scalestatetrace`) where a sitting has one, and shows "N/A" where it
+has none. The engine does not write such a record today; nothing in this
+release changes the engine, and nothing outside this plugin needs installing.
+#106 and #109 keep their open criteria until the engine provides it
+(local_catquiz#133).
+
+### Upgrade
+No change to the database.
+
+---
+
 ## [0.7.34] — 2026-10-07 — #112 validity in one place, everywhere · #114 mode-specific detection · #115 what a figure is made of · #106/#109 scale states per step
 
 ### One place decides validity (#112)
@@ -77,7 +127,7 @@ mode is evaluated on its own, for what it is after:
 
 | Strategy | Role | True target |
 |---|---|---|
-| `relsubs` | Relevant scales | \|Δs,true\| ≥ threshold |
+| `relsubs` | Relevant scales | relevant for the person's competence band — not defined in the plugin yet, see 0.7.35 |
 | `lowestsub` | Deficit oriented | Δs,true ≤ −threshold |
 | `highestsub` | Strength oriented | Δs,true ≥ +threshold |
 | `allsubs`, `classic` | baselines | — compared with, not a truth |
@@ -98,13 +148,9 @@ pairs, the comparison is marked unpaired; a baseline that was not driven is
 modes. Two new exports: every scale result with mode, twin, the twin's sitting
 in each baseline, validity and items; and the summary as shown.
 
-**To decide:** the engine's "relevant scales" strategy names no set of relevant
-scales of its own. "Relevant = |Δs,true| ≥ threshold" is this plugin's
-definition, and it is said on the page.
-
 ### Scale states per step (#106, #109)
-With the engine's record of every change of a scale's state
-(local_catquiz#133, a patch for the engine comes with this release): the
+Where a sitting carries the engine's record of every change of a scale's state
+(local_catquiz#133 — the engine does not write one yet): the
 single-test view shows active, locked and dropped scales after every step and
 each scale's course ("steps 1–2 active; from step 3 dropped"); the comparison
 has "Active scales" as a metric, for the test and for a selected scale, and

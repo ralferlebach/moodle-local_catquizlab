@@ -161,15 +161,16 @@ final class mode_detection_test extends \advanced_testcase {
                 mode_detection::CLASSIC, null],
             array_map([mode_detection::class, 'role'], ['relsubs', 'lowestsub', 'highestsub', 'allsubs', 'classic', 'fastest'])
         );
-        // A deficit is below, a strength above, relevant is either.
+        // A deficit is below, a strength above. What is relevant for a person's competence band is not
+        // defined yet: nothing is called a target by guesswork.
         $is = static fn(float $delta, string $target): bool => mode_detection::is_target($delta, $target, 0.5);
         $this->assertSame([true, false, false], [$is(-0.5, 'deficit'), $is(-0.49, 'deficit'), $is(0.9, 'deficit')]);
         $this->assertSame([true, false, false], [$is(0.5, 'strength'), $is(0.49, 'strength'), $is(-0.9, 'strength')]);
-        $this->assertSame([true, true, false], [$is(-0.7, 'relevant'), $is(0.7, 'relevant'), $is(0.2, 'relevant')]);
+        $this->assertSame([false, false, false], [$is(-0.7, 'relevant'), $is(0.7, 'relevant'), $is(0.2, 'relevant')]);
+        $this->assertSame([false, true, true], array_map([mode_detection::class, 'has_targets'], mode_detection::TARGETS));
         // And ranked from its own end: the strongest target first, which the helpers take as the lowest value.
         $this->assertLessThan(mode_detection::oriented(0.1, 'strength'), mode_detection::oriented(0.9, 'strength'));
         $this->assertLessThan(mode_detection::oriented(0.1, 'deficit'), mode_detection::oriented(-0.9, 'deficit'));
-        $this->assertSame(mode_detection::oriented(-0.9, 'relevant'), mode_detection::oriented(0.9, 'relevant'));
 
         // Scale results are held packed, and come back as they went in.
         $scales = ['1:1' => [-1.0, -0.8], '12:104' => [0.25, 0.125]];
@@ -257,9 +258,16 @@ final class mode_detection_test extends \advanced_testcase {
         $this->assertEqualsWithDelta(0.0, $classic['common']['baseline']['rmse'], 1e-9);
         $this->assertGreaterThan(0.0, $classic['meandifference'], 'the mode is further from the truth than the full form');
 
-        // Relevant scales: the deficit and the strength; relsubs finds both.
+        // Relevant scales: no set of true targets is defined, so nothing is counted as found or missed —
+        // the recovery on the scales the mode chose is there, and the comparison with the baselines.
         $relevant = $analysis['targets']['relevant'];
-        $this->assertSame([12, 12], [$relevant['own']['truetargets'], $relevant['own']['tp']]);
+        $this->assertSame([null, null, null, null], [$relevant['own']['truetargets'], $relevant['own']['tp'],
+            $relevant['own']['recall'], $relevant['own']['precision']]);
+        $this->assertSame([], $relevant['own']['topk']);
+        $this->assertSame(12, $relevant['own']['scales']);
+        $this->assertNotNull($relevant['own']['rmse']);
+        $this->assertSame([5, 6], [$relevant['baselines']['allsubs']['pairs'], $relevant['baselines']['allsubs']['pairable']]);
+        $this->assertNotNull($relevant['baselines']['classic']['meandifference']);
         // The deficit mode, by its own targets, never looked at the strength — and is not judged by that here.
         $this->assertSame(6, $deficit['own']['truetargets']);
 
@@ -270,7 +278,9 @@ final class mode_detection_test extends \advanced_testcase {
         $this->assertStringContainsString('data-region="catquizlab-mode-relevant"', $html);
         $this->assertStringNotContainsString('data-region="catquizlab-mode-strength"', $html);
         $this->assertStringContainsString('Δs,true ≤ −0.50 logits', $html);
-        $this->assertStringContainsString('|Δs,true| ≥ 0.50', $html);
+        $this->assertStringContainsString('relevant for the person\'s competence band', $html);
+        $this->assertStringContainsString('is not defined in CatQuizLab yet', $html);
+        $this->assertStringNotContainsString('|Δs,true|', $html);
         $this->assertStringContainsString('Valid paired sittings: 5 / 6 (83.3 %)', $html);
         $this->assertStringContainsString('Included: 12 / 12 scale results with at least one administered item (100.0 %)', $html);
         $this->assertStringContainsString('Valid sittings: 6 / 6 (100.0 %)', $html);
@@ -308,6 +318,7 @@ final class mode_detection_test extends \advanced_testcase {
         ) {
             $this->assertContains($column, $export['columns']);
         }
+        $this->assertNotContains('truerelevant', $export['columns']);
         // Two scale results of six sittings (lowestsub, relsubs), four of six (allsubs, classic).
         $this->assertCount(12 + 12 + 24 + 24, $export['rows']);
         $rows = array_values(array_filter($export['rows'], static fn(array $row): bool => $row['mode'] === 'deficit'
