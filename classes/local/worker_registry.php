@@ -576,6 +576,55 @@ class worker_registry {
     }
 
     /**
+     * When the last worker still coming up is planned to begin (#120).
+     *
+     * A second press of "start workers", or the pipeline's next tick, continues
+     * the stagger after the workers already waiting rather than beside them.
+     *
+     * @return int Unix time, or 0 where no live worker has a planned start.
+     */
+    public static function last_planned_start(): int {
+        $latest = 0;
+        foreach (self::live() as $worker) {
+            $latest = max($latest, (int) ($worker->startsat ?? 0));
+        }
+
+        return $latest;
+    }
+
+    /**
+     * Note when a worker will begin to claim work (#120).
+     *
+     * @param string $workerid The instance.
+     * @param int $startsat Unix time; 0 for at once.
+     * @return void
+     */
+    public static function plan_start(string $workerid, int $startsat): void {
+        global $DB;
+
+        $DB->set_field('local_catquizlab_worker', 'startsat', max(0, $startsat), ['workerid' => $workerid]);
+    }
+
+    /**
+     * How long a worker still waits for its staggered start (#120).
+     *
+     * @param \stdClass $worker A registry row.
+     * @param int|null $now The time to measure from; now by default.
+     * @return int Seconds; 0 once it has begun, or where it is not live.
+     */
+    public static function waits_for(\stdClass $worker, ?int $now = null): int {
+        $now = $now ?? time();
+        if (!in_array((int) $worker->status, [self::STATUS_STARTING, self::STATUS_RUNNING], true)) {
+            return 0;
+        }
+        if ((int) ($worker->currentattempt ?? 0) > 0 || (int) $worker->heartbeat < $now - self::HEARTBEAT_TIMEOUT) {
+            return 0;
+        }
+
+        return max(0, (int) ($worker->startsat ?? 0) - $now);
+    }
+
+    /**
      * How many slots are free for the configured concurrency.
      *
      * @param int $concurrency The configured number of slots.
@@ -597,7 +646,7 @@ class worker_registry {
     /**
      * A summary of the worker fleet, for the operations view.
      *
-     * @return array{live: int, crashed: int, stopped: int, jobsdone: int, lasterror: string|null}
+     * @return array{live: int, starting: int, waiting: int, crashed: int, stopped: int, jobsdone: int, lasterror: string|null}
      */
     public static function summary(): array {
         global $DB;
@@ -611,6 +660,8 @@ class worker_registry {
         $summary = [
             'live'      => 0,
             'starting'  => 0,
+            // Up, but not yet claiming: the staggered start is still ahead (#120).
+            'waiting'   => 0,
             'crashed'   => 0,
             'stopped'   => 0,
             'jobsdone'  => 0,
@@ -626,6 +677,9 @@ class worker_registry {
 
                 if ((int) $row->status === self::STATUS_STARTING) {
                     $summary['starting']++;
+                }
+                if (self::waits_for($row) > 0) {
+                    $summary['waiting']++;
                 }
             } else if ((int) $row->status === self::STATUS_STOPPED) {
                 $summary['stopped']++;

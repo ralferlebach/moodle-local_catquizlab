@@ -88,6 +88,8 @@ class progress_view {
             $state = (int) $worker->status;
             $stale = $state === worker_registry::STATUS_RUNNING
                 && (int) $worker->heartbeat < time() - worker_registry::HEARTBEAT_TIMEOUT;
+            // Up, but not yet claiming: its staggered start is still ahead (#120).
+            $waiting = worker_registry::waits_for($worker) > 0;
 
             $workers[] = [
                 'workerid'   => $worker->workerid,
@@ -99,7 +101,10 @@ class progress_view {
                 'slot'       => (int) $worker->slot,
                 'statename'  => $stale
                     ? get_string('worker:statestale', 'local_catquizlab')
-                    : worker_registry::status_label($state),
+                    : ($waiting
+                        ? get_string('worker:statewaiting', 'local_catquizlab')
+                        : worker_registry::status_label($state)),
+                'waiting'    => $waiting,
                 'stale'      => $stale,
                 'attemptid'  => (int) $worker->currentattempt,
                 'runid'      => (int) $worker->currentattempt > 0
@@ -175,6 +180,9 @@ class progress_view {
             'runs'        => ['hasany' => $runs !== [], 'rows' => $runs],
             'tasks'       => task_overview::state(),
             'workers'     => ['hasany' => $workers !== [], 'rows' => $workers],
+            // How starts and retries are spread, and when the waiting retries are due (#120).
+            'loadspreading' => worker_launcher::load_spreading(),
+            'retrywindow' => worker_launcher::retry_window_message($experimentid),
             // Named so the live updater knows where to write; the other cards
             // on this page are per-row and are refreshed by a reload when the
             // rows change.

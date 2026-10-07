@@ -224,3 +224,40 @@ test('a web service call carries the trace headers, and no secret in them (#110)
         {'Content-Type': 'application/x-www-form-urlencoded'});
 });
 
+
+test('a staggered worker waits for its start, reporting in, and can be stopped while it waits (#120)', async() => {
+    const {startDelayMs, waitForStart} = require('../run_attempt.js');
+
+    assert.strictEqual(startDelayMs('40000'), 40000);
+    assert.strictEqual(startDelayMs('0'), 0);
+    assert.strictEqual(startDelayMs('nonsense'), 0);
+    assert.strictEqual(startDelayMs(undefined), 0);
+    assert.strictEqual(startDelayMs('99999999'), 3600000, 'never longer than an hour');
+
+    // 45 s in steps of 20: three reports, and exactly the delay slept.
+    const slept = [];
+    let beats = 0;
+    const begun = await waitForStart(45000, async() => {
+        beats++;
+        return {stop: false};
+    }, async(ms) => slept.push(ms));
+    assert.strictEqual(begun, true);
+    assert.strictEqual(beats, 3);
+    assert.deepStrictEqual(slept, [20000, 20000, 5000]);
+
+    // No delay: no report, no wait.
+    assert.strictEqual(await waitForStart(0, async() => assert.fail('no report'), async() => assert.fail('no wait')), true);
+
+    // Asked to stop while waiting: it does not begin, and waits no longer.
+    const waited = [];
+    let calls = 0;
+    const stopped = await waitForStart(60000, async() => ({stop: ++calls === 2}), async(ms) => waited.push(ms));
+    assert.strictEqual(stopped, false);
+    assert.deepStrictEqual(waited, [20000]);
+
+    // A report that fails is not a reason to give up waiting.
+    const patient = await waitForStart(20000, async() => {
+        throw new Error('503');
+    }, async() => {});
+    assert.strictEqual(patient, true);
+});

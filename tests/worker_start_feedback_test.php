@@ -34,7 +34,8 @@ final class worker_start_feedback_test extends \advanced_testcase {
      */
     public function test_every_outcome_is_said(): void {
         $this->resetAfterTest();
-        $tick = mktime(14, 35, 0);
+        // Ahead of now, whatever the time of day: a tick in the past is shown as now.
+        $tick = time() + 300;
 
         $said = worker_launcher::explain(['launched' => 2, 'reason' => ''], $tick);
         $this->assertSame(\core\output\notification::NOTIFY_SUCCESS, $said['type']);

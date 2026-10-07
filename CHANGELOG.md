@@ -6,6 +6,148 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.7.33] — 2026-10-07 — #113: local error and local SE against the items administered on the scale
+
+### The plots
+0.7.32 left the two plots of #113 (section 4) out as "optional" and gave the
+table per class of item count instead. They belong to the presentation of the
+results, and are here:
+
+- **Local error Δ̂s − Δs,true by items administered on the scale**, with the
+  line y = 0;
+- **Local standard error by items administered on the scale** — where the
+  engine reported a standard error per scale.
+
+One point is one subscale of one sitting; the item count is the one
+reconstructed from the sitting's own steps. Both draw the same scale results as
+every other figure of the tab: **only valid scale results of valid sittings**,
+unless the switch above asks for the invalid ones or for all — and each plot
+says beneath it which it is.
+
+A scale result whose item count is not known has no place on an axis of item
+counts: it is not drawn at zero, it is not drawn, and the number left out is
+said beneath the plot. So is the number of results without a standard error
+beneath the second plot. The points are spread a little sideways on the whole
+numbers so that they do not cover each other; the tooltip gives the exact
+count, the error and the SE. Axis settings, profiles and the exports (SVG, PNG,
+PDF, CSV, settings) work as for every other plot.
+
+### Decided
+- The engine's `filter_semin` is not a rule of validity: it ends the test, it
+  does not judge its result. The uniform rules stay as they are (#112).
+
+### Tests
+- `population_sweep_test` (#116, criterion 6): the observed experiment — fifty
+  twins, six strategy cells — set up as on a real site, with the engine: scales,
+  pool, course, people, test, readiness, access, sittings. Then provisioned
+  again every way it happened or could: the whole setup a second time, the
+  people stored once more, the sittings scheduled once more, and a second setup
+  while one holds the run's lock. Fifty people, fifty different twins, fifty
+  claims and fifty sittings per run before and after; 300 in all; the same
+  twins in every cell. No sitting is played: the duplicates came from
+  provisioning, not from playing.
+
+### Upgrade
+No change to the database.
+
+---
+
+## [0.7.32] — 2026-10-07 — #120: workers start one after another, retries are spread · #113: items per scale from the steps, unknown is not zero
+
+### Why (#120)
+The server's thermal events of 28.09. and 02.10. fall into exactly the minutes
+of the HTTP 5xx waves, and each follows one to four minutes after a start of
+load from nothing: every worker of a pool opened its browser, signed in and
+began a sitting in the same second, and every sitting that failed in the same
+minute was retried in the same minute (fixed backoff of 60 s × tries) — the
+waves of 02.10. at 09:47 and 10:03. 78 % of the 623 worker 5xx lie within
+fifteen minutes of such a start. The cooling was the cause; the plugin made the
+load that reached its limit.
+
+### Staggered start
+- Workers started together begin one after another, **20 s apart** (setting
+  "Interval between worker starts", 0 = all at once): the launcher gives each
+  its own start time and passes it as `--start-delay`; the worker reports in at
+  once — the handshake is unchanged —, then waits, reporting as "waiting" every
+  20 s, and only then claims its first sitting.
+- A second start, or the scheduler's next tick, continues after the workers
+  still waiting instead of beside them (registry: `startsat`).
+- A stop asked of a waiting worker is granted at once: it holds no claim.
+
+### Spread retries
+- A failed sitting waits its backoff **plus a random 0–300 s** (setting "Spread
+  of retries", 0 = off). The history says how the wait is made up: "retry after
+  353 s (backoff 60 s + spread 293 s), at …".
+
+### Said on the page
+- "Start workers" answers with when they begin: "Started 4 worker(s) now … They
+  begin one after another, 20 s apart, so that the load rises gradually: the
+  first at 14:02:10, the last at 14:03:10."
+- A waiting worker is shown as "Waiting for its staggered start — begins to
+  claim sittings at 14:02:50 (in 34 s)", not as idle; its run as "Workers are
+  starting one after another", not as waiting for a worker.
+- Every slot taken by workers still waiting: "… 3 of them still wait for their
+  staggered start; the last begins at …".
+- Beside the workers, how the load is spread on this installation (both
+  settings, or that they are switched off — in red where both are); in the
+  queue, the window of the retries: "40 sitting(s) wait to be retried, spread
+  between 14:05:12 and 14:09:48".
+
+### Items per scale (#113)
+The subscale export said `items = 0` for scales of sittings that had played
+dozens of questions. Since 0.7.31 the number was the engine's count of answered
+items; where the engine had none, the trace's — and where nothing mapped,
+still 0. Zero means "no question of this scale was administered"; "could not be
+determined" is something else.
+
+- **Source of truth: the sitting's own steps** — the questions of its question
+  usage as Moodle recorded them, each filed under exactly one scale by the
+  run's item table (new: `scale_exposure`). Direct counts per scale, cumulative
+  counts as the engine counts (a scale and everything below it), and a
+  checksum: the direct counts add up to the administered items assigned.
+- **Unknown, not zero**: no steps, no item mapping, or an administered item
+  that is not in the mapping (every count is then a lower bound) → the count is
+  `null`; `0` only where the mapping is complete and no item of the scale was
+  administered. In the export `items` is empty for unknown, with new columns
+  `itemssource` (steps / engine / unknown), `itemsreason`, `itemclass` and
+  `itemsanswered` (the engine's count of answered items, which its rules use).
+- **The engine's counts are checked, not trusted**: compared scale by scale
+  where there are steps — fewer (pilot or unanswered items) and more are each a
+  diagnosis, counted per sitting on the page; used in place of the steps only
+  where there are none and the counts are consistent in themselves (the
+  subscales' add up to the test's).
+- **Validity and coverage**: the denominator "scale results with at least one
+  administered item" counts `items > 0` only. Unknown counts are neither in it
+  nor in the figures; they are counted beside it ("36 scale result(s) with an
+  unknown item count — not counted as 0, not in the figures") and carry their
+  own reason ("item count on the scale unknown") instead of "no answered item on
+  the scale". Scales estimated without an item of their own are counted too.
+- **Diagnosis by item count**: local bias, RMSE, correlation Δtrue ↔ Δestimated,
+  mean local SE and agreement within 1 and 2 SE per class — 0, 1, 2, 3–4, 5 or
+  more items, unknown — with the number of scale results in each. The classes
+  say how much was asked, not whether it is enough.
+
+### Not in this release
+- The rules of validity keep the engine's own count (answered items, pilots
+  excluded) for "fewer items than the minimum": that is the engine's definition
+  (#112). The administered count is beside it in every row.
+- Scatter plots of error and SE against the item count (#113, section 4,
+  "optional"): the table per class carries the same four quantities.
+
+### Tests
+- `load_spreading_test` (start plan, registry, cards, start message, spread and
+  history, the notes), worker `--start-delay` (wait, reports, stop while
+  waiting); `scale_exposure_test` (real zero, counted items, missing mapping,
+  missing debug information, reconstruction from steps, engine counts checked,
+  evaluation, page and export).
+- `worker_start_feedback_test` no longer depends on the time of day.
+
+### Upgrade
+One new field (`local_catquizlab_worker.startsat`). The worker script changes:
+workers already running keep the old behaviour until they are replaced.
+
+---
+
 ## [0.7.31] — 2026-10-07 — #112: valid by the engine's definitions, not by "did not stop early"
 
 ### What "valid" meant until now, and why that was wrong

@@ -72,6 +72,9 @@ class engine_validity {
     /** @var string No answered item on the scale in this sitting. */
     public const NOT_MEASURED = 'not_measured';
 
+    /** @var string Nothing measured on the scale, and whether an item was administered is not known (#113). */
+    public const ITEMS_UNKNOWN = 'items_unknown';
+
     /** @var string The engine's data of the sitting could not be read. */
     public const NO_ENGINE_DATA = 'no_engine_data';
 
@@ -304,7 +307,7 @@ class engine_validity {
      * @param int $runid The run.
      * @return array<int, int[]>
      */
-    protected static function question_scales(int $runid): array {
+    public static function question_scales(int $runid): array {
         global $DB;
 
         $memo = &self::memo();

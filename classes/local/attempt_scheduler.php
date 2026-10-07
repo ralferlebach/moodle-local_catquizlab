@@ -351,6 +351,40 @@ class attempt_scheduler {
     }
 
     /**
+     * The random share of a retry's wait, in seconds: 0 to the setting retry_spread (#120).
+     *
+     * @return int
+     */
+    public static function retry_spread(): int {
+        $max = get_config('local_catquizlab', 'retry_spread');
+        $max = $max === false || $max === '' ? 300 : max(0, (int) $max);
+
+        return $max > 0 ? random_int(0, $max) : 0;
+    }
+
+    /**
+     * When the sittings waiting for a retry are due: the earliest and the latest (#120).
+     *
+     * @param int $experimentid Restrict to one experiment, 0 for the installation.
+     * @return array{n: int, first: int, last: int}
+     */
+    public static function retry_window(int $experimentid = 0): array {
+        global $DB;
+
+        $sql = 'SELECT COUNT(1) AS n, MIN(a.nextruntime) AS first, MAX(a.nextruntime) AS last
+                  FROM {local_catquizlab_attempt} a
+                 WHERE a.status = :queued AND a.nextruntime > :now AND a.tries > 0';
+        $params = ['queued' => self::STATUS_QUEUED, 'now' => time()];
+        if ($experimentid > 0) {
+            $sql .= ' AND a.runid IN (SELECT id FROM {local_catquizlab_run} WHERE experimentid = :experimentid)';
+            $params['experimentid'] = $experimentid;
+        }
+        $row = $DB->get_record_sql($sql, $params);
+
+        return ['n' => (int) ($row->n ?? 0), 'first' => (int) ($row->first ?? 0), 'last' => (int) ($row->last ?? 0)];
+    }
+
+    /**
      * Apply the retry decision to one attempt.
      *
      * @param int $attemptid The attempt.
@@ -368,8 +402,14 @@ class attempt_scheduler {
             'status'       => $status,
             'timemodified' => $now,
         ];
+        $spread = 0;
         if ($status === self::STATUS_QUEUED) {
-            $update->nextruntime = $now + self::RETRY_BACKOFF * max(1, $tries);
+            // Scattered over up to retry_spread seconds (#120): sittings that
+            // failed in the same minute used to be retried in the same minute,
+            // the whole cohort started together, and that start overheated the
+            // server again — the waves of 02.10. at 09:47 and 10:03.
+            $spread = self::retry_spread();
+            $update->nextruntime = $now + self::RETRY_BACKOFF * max(1, $tries) + $spread;
         }
         $DB->update_record('local_catquizlab_attempt', $update);
 
@@ -380,9 +420,11 @@ class attempt_scheduler {
             attempt_history::record($attemptid, attempt_history::REQUEUED, [
                 'tryno'  => $tries,
                 'detail' => sprintf(
-                    '%s; retry after %d s, at %s',
+                    '%s; retry after %d s (backoff %d s + spread %d s), at %s',
                     $why,
                     (int) $update->nextruntime - $now,
+                    self::RETRY_BACKOFF * max(1, $tries),
+                    $spread,
                     date('c', (int) $update->nextruntime)
                 ),
             ]);

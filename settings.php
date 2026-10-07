@@ -192,6 +192,24 @@ if ($hassiteconfig) {
         PARAM_INT
     ));
 
+    // Load spread out (#120): workers one after another, retries scattered.
+    // Starting all at once, and retrying a whole cohort in the same minute,
+    // drove the server into thermal throttling on 28.09. and 02.10.
+    $settings->add(new admin_setting_configtext(
+        $component . '/worker_start_stagger',
+        get_string('setting:worker_start_stagger', $component),
+        get_string('setting:worker_start_stagger_desc', $component),
+        20,
+        PARAM_INT
+    ));
+    $settings->add(new admin_setting_configtext(
+        $component . '/retry_spread',
+        get_string('setting:retry_spread', $component),
+        get_string('setting:retry_spread_desc', $component),
+        300,
+        PARAM_INT
+    ));
+
     // Simulated-user login for the worker.
     $settings->add(new admin_setting_configselect(
         $component . '/worker_login_mode',

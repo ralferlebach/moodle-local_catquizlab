@@ -168,7 +168,10 @@ final class run_status_log_test extends \advanced_testcase {
             [\local_catquizlab\local\attempt_history::REQUEUED, \local_catquizlab\local\attempt_history::ABANDONED],
             array_column($entries, 'outcome')
         );
-        $this->assertMatchesRegularExpression('/^failed; retry after \d+ s, at /', $entries[0]->detail);
+        $this->assertMatchesRegularExpression(
+            '/^failed; retry after \d+ s \(backoff \d+ s \+ spread \d+ s\), at /',
+            $entries[0]->detail
+        );
         $this->assertStringContainsString('no tries left after', $entries[1]->detail);
     }
 

@@ -1111,7 +1111,7 @@ class results_page {
      */
     /** @var string[] Every plot type on the results pages, for keeping their axis settings. */
     public const PLOT_TYPES = ['lengthprecision', 'recovery', 'error', 'singletest', 'strength', 'localdeviation',
-        'exposure', 'comparison'];
+        'exposure', 'comparison', 'localerroritems', 'localseitems'];
 
     /**
      * A plot's axes and export, from its settings (#108).
@@ -1920,7 +1920,9 @@ class results_page {
         $component = 'local_catquizlab';
         $c = $this->query->scale_coverage();
         if ((int) $c['measured'] === 0) {
-            return '';
+            // Nothing measured — which is not nothing to say where the item
+            // counts could not be determined (#113).
+            return $this->render_scale_exposure($c);
         }
         $percent = static fn(int $n): string => format_float(100 * $n / $c['measured'], 1);
         $parts = [get_string('validity:scalecoverage', $component, (object) [
@@ -1940,7 +1942,168 @@ class results_page {
             'unknown' => $c['engineunknown'],
         ]);
 
-        return \html_writer::div(implode(' · ', $parts), 'small mb-2 text-warning', ['data-region' => 'catquizlab-scalecoverage']);
+        return \html_writer::div(implode(' · ', $parts), 'small mb-2 text-warning', ['data-region' => 'catquizlab-scalecoverage'])
+            . $this->render_scale_exposure($c);
+    }
+
+    /**
+     * Where the item counts per scale are from, and what could not be counted (#113).
+     *
+     * @param array $c The scale coverage.
+     * @return string
+     */
+    protected function render_scale_exposure(array $c): string {
+        $component = 'local_catquizlab';
+        $exposure = \local_catquizlab\local\scale_exposure::class;
+        if ((int) ($c['sittings'] ?? 0) === 0) {
+            return '';
+        }
+        $sources = [];
+        foreach ([$exposure::SOURCE_STEPS, $exposure::SOURCE_ENGINE, $exposure::SOURCE_UNKNOWN] as $source) {
+            if ((int) ($c['sources'][$source] ?? 0) > 0) {
+                $sources[] = get_string('exposure:sourcepart', $component, (object) [
+                    'source' => $exposure::label($source), 'n' => (int) $c['sources'][$source],
+                ]);
+            }
+        }
+        $parts = [get_string('exposure:sources', $component, implode('; ', $sources))];
+        if ((int) $c['unknownitems'] > 0) {
+            $parts[] = get_string('exposure:unknownitems', $component, (int) $c['unknownitems']);
+        }
+        if ((int) $c['withoutitems'] > 0) {
+            $parts[] = get_string('exposure:withoutitems', $component, (int) $c['withoutitems']);
+        }
+        foreach ($c['diagnosis'] as $code => $n) {
+            $parts[] = get_string('exposure:diagnosis', $component, (object) ['n' => (int) $n, 'what' => $exposure::label($code)]);
+        }
+        // Worth a warning only where something could not be counted or does not agree.
+        $quiet = (int) $c['unknownitems'] === 0 && array_diff_key($c['diagnosis'], [$exposure::ENGINE_LOWER => 1]) === [];
+
+        return \html_writer::div(
+            implode(' · ', $parts),
+            'small mb-2 ' . ($quiet ? 'text-muted' : 'text-warning'),
+            ['data-region' => 'catquizlab-exposure']
+        );
+    }
+
+    /**
+     * The local error and the local standard error against the items administered on the scale (#113).
+     *
+     * The same scale results as every other figure of this tab: the valid ones
+     * unless the switch above asks for others. A result whose item count is
+     * not known has no place on the x axis — it is counted beneath, not drawn
+     * at zero.
+     *
+     * @param array $rows Subscale observations of the selection.
+     * @return string
+     */
+    protected function render_item_plots(array $rows): string {
+        $component = 'local_catquizlab';
+        $known = array_values(array_filter($rows, static fn(array $row): bool => $row['items'] !== null));
+        if ($known === []) {
+            return '';
+        }
+        $unknown = count($rows) - count($known);
+        $mode = (string) ($this->filter['validity'] ?? \local_catquizlab\local\result_validity::VALID);
+        $selection = get_string('chart:itemsshown_' . $mode, $component);
+        $na = get_string('flow:na', $component);
+        $label = static fn(array $row): string => get_string('chart:itemspoint', $component, (object) [
+            'person' => (int) $row['personid'],
+            'subscale' => (string) $row['subscale'],
+            'items' => (int) $row['items'],
+            'error' => format_float((float) $row['error'], 3),
+            'se' => $row['localse'] === null ? $na : format_float((float) $row['localse'], 3),
+        ]);
+
+        $error = new scatter_chart(
+            get_string('chart:erroritems', $component),
+            get_string('axis:itemsonscale', $component),
+            get_string('axis:localerror', $component)
+        );
+        $error->set_axes(axis_scale::INTEGER, axis_scale::SYMMETRIC, ['xfromzero' => true, 'jitter' => 0.15]);
+        $error->set_basis($this->plot_basis());
+        $this->configure_chart($error, 'localerroritems');
+        $error->set_points(array_map(
+            static fn(array $row): array => ['x' => (int) $row['items'], 'y' => $row['error'], 'label' => $label($row)],
+            $known
+        ))->set_description(get_string('chart:pointissubscale', $component))
+            ->add_horizontal_line(0.0, get_string('chart:zeroline', $component))
+            ->add_note($selection)
+            ->add_note(get_string('chart:itemsjitter', $component));
+        if ($unknown > 0) {
+            $error->add_note(get_string('chart:itemsunknown', $component, $unknown));
+        }
+        $out = \html_writer::div($error->render(), '', ['data-region' => 'catquizlab-erroritems']);
+
+        $withse = array_values(array_filter($known, static fn(array $row): bool => $row['localse'] !== null));
+        if ($withse === []) {
+            return $out;
+        }
+        $se = new scatter_chart(
+            get_string('chart:seitems', $component),
+            get_string('axis:itemsonscale', $component),
+            get_string('axis:localse', $component)
+        );
+        $se->set_axes(axis_scale::INTEGER, axis_scale::LINEAR, ['xfromzero' => true, 'yfromzero' => true, 'jitter' => 0.15]);
+        $se->set_basis($this->plot_basis());
+        $this->configure_chart($se, 'localseitems');
+        $se->set_points(array_map(
+            static fn(array $row): array => ['x' => (int) $row['items'], 'y' => $row['localse'], 'label' => $label($row)],
+            $withse
+        ))->set_description(get_string('chart:pointissubscale', $component))
+            ->add_note($selection)
+            ->add_note(get_string('chart:itemsjitter', $component));
+        if ($unknown > 0) {
+            $se->add_note(get_string('chart:itemsunknown', $component, $unknown));
+        }
+        if (count($known) > count($withse)) {
+            $se->add_note(get_string('chart:itemsnose', $component, count($known) - count($withse)));
+        }
+
+        return $out . \html_writer::div($se->render(), '', ['data-region' => 'catquizlab-seitems']);
+    }
+
+    /**
+     * The local recovery by how many items the scale was given (#113).
+     *
+     * @param array $rows Subscale observations.
+     * @return string
+     */
+    protected function render_item_classes(array $rows): string {
+        $component = 'local_catquizlab';
+        $classes = local_analysis::by_item_class($rows);
+        if ($classes === []) {
+            return '';
+        }
+        $table = new \html_table();
+        $table->attributes['class'] = 'generaltable table-sm';
+        $table->attributes['data-region'] = 'catquizlab-itemclasses';
+        $table->head = [
+            get_string('exposure:classcol', $component),
+            'n',
+            get_string('metric:localbias', $component),
+            get_string('metric:localrmse', $component),
+            get_string('metric:localcorrelation', $component),
+            get_string('metric:localse', $component),
+            get_string('metric:within1se', $component),
+            get_string('metric:within2se', $component),
+        ];
+        foreach ($classes as $class) {
+            $table->data[] = [
+                s($class['label']),
+                $class['n'],
+                $this->format_number($class['bias']),
+                $this->format_number($class['rmse']),
+                $this->format_number($class['correlation']),
+                $this->format_number($class['meanse']),
+                $this->format_share($class['within1se']),
+                $this->format_share($class['within2se']),
+            ];
+        }
+
+        return \html_writer::tag('h3', get_string('exposure:classheading', $component), ['class' => 'h5 mt-4'])
+            . \html_writer::tag('p', get_string('exposure:classexplain', $component), ['class' => 'text-muted small'])
+            . \html_writer::table($table);
     }
 
     /**
@@ -2516,6 +2679,8 @@ class results_page {
 
         $out .= \html_writer::tag('h3', get_string('results:subscaletable', $component), ['class' => 'h5 mt-4']);
         $out .= $this->render_local_table(local_analysis::group($rows, 'key'), 'key');
+        $out .= $this->render_item_classes($rows);
+        $out .= $this->render_item_plots($rows);
 
         return $out;
     }

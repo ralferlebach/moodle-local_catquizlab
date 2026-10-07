@@ -53,6 +53,10 @@ class worker_launcher {
         if (!empty($config['workerid'])) {
             $argv[] = '--worker-id=' . $config['workerid'];
         }
+        if (!empty($config['startdelayms'])) {
+            // Wait this long after reporting in before claiming work (#120).
+            $argv[] = '--start-delay=' . (int) $config['startdelayms'];
+        }
         // Where a failed execution leaves its screenshots, DOM and events, in
         // moodledata (#107).
         if (!empty($config['artefactdir'])) {
@@ -538,6 +542,13 @@ class worker_launcher {
 
         $launched = 0;
         $failures = [];
+        // One after another (#120): every worker gets its own start time, the
+        // interval apart, after any worker still waiting for its own. All of
+        // them at once took the load from nothing to thousands of requests a
+        // minute, and the server reached its thermal limit within minutes.
+        $stagger = self::start_stagger();
+        $starts = self::plan_starts(count($free), $stagger, time(), worker_registry::last_planned_start());
+        $plan = [];
         foreach ($free as $slot) {
             $workerid = $prefix . '-' . $slot;
 
@@ -548,9 +559,13 @@ class worker_launcher {
                 continue;
             }
 
+            // The next start time not yet given out: a slot lost to another
+            // start leaves no gap in the sequence.
+            $startsat = max(time(), (int) array_shift($starts));
+            worker_registry::plan_start($workerid, $startsat);
             $command = self::command_with_environment(
                 $config,
-                self::build_command(['workerid' => $workerid] + $config)
+                self::build_command(['workerid' => $workerid, 'startdelayms' => max(0, $startsat - time()) * 1000] + $config)
             );
 
             // Detached: the caller must not wait for a worker that plays
@@ -576,6 +591,7 @@ class worker_launcher {
             $handshake = self::await_handshake($workerid);
             if ($handshake['ok']) {
                 $launched++;
+                $plan[] = ['workerid' => $workerid, 'startsat' => $startsat];
                 continue;
             }
 
@@ -598,12 +614,49 @@ class worker_launcher {
 
         return [
             'launched' => $launched,
+            // When each started worker begins: staggered, the interval apart.
+            'plan'     => $plan,
             'skipped'  => $concurrency - $launched,
             'reason'   => $reason,
             'failures' => $failures,
             'exitcode' => 0,
             'output'   => $failures === [] ? '' : (string) ($failures[0]['output'] ?? ''),
         ];
+    }
+
+    /**
+     * When each of a number of workers begins: one after another, the interval apart (#120).
+     *
+     * @param int $count How many workers are started.
+     * @param int $stagger The interval in seconds; 0 starts them all at once.
+     * @param int $now The time of the start.
+     * @param int $lastplanned When the last worker still waiting begins, 0 for none:
+     *      a second start continues after it rather than beside it.
+     * @return int[] Unix times, ascending.
+     */
+    public static function plan_starts(int $count, int $stagger, int $now, int $lastplanned = 0): array {
+        if ($stagger <= 0) {
+            return array_fill(0, max(0, $count), $now);
+        }
+        // Nobody waiting, or the last one began long ago: the first begins now.
+        $first = max($now, $lastplanned > 0 ? $lastplanned + $stagger : $now);
+        $starts = [];
+        for ($i = 0; $i < $count; $i++) {
+            $starts[] = $first + $i * $stagger;
+        }
+
+        return $starts;
+    }
+
+    /**
+     * The interval between worker starts, in seconds (#120); 0 starts them at once.
+     *
+     * @return int
+     */
+    public static function start_stagger(): int {
+        $value = get_config('local_catquizlab', 'worker_start_stagger');
+
+        return $value === false || $value === '' ? 20 : max(0, (int) $value);
     }
 
     /**
@@ -657,11 +710,15 @@ class worker_launcher {
             : get_string('workers:notick', $component);
 
         if ($launched > 0) {
+            $message = get_string('workers:launched', $component, (object) [
+                'n' => $launched, 'claimable' => (int) $breakdown['claimable'] + (int) $breakdown['running'],
+                'live' => (int) $workers['live'],
+            ]);
+            // Started is not the same as playing (#120): say when each begins.
+            $staggered = self::stagger_message((array) ($result['plan'] ?? []));
+
             return ['type' => \core\output\notification::NOTIFY_SUCCESS,
-                'message' => get_string('workers:launched', $component, (object) [
-                    'n' => $launched, 'claimable' => (int) $breakdown['claimable'] + (int) $breakdown['running'],
-                    'live' => (int) $workers['live'],
-                ])];
+                'message' => $staggered === '' ? $message : $message . ' ' . $staggered];
         }
         if (str_starts_with($reason, 'not-configured')) {
             $missing = array_filter(array_map('trim', explode(',', substr($reason, strlen('not-configured:')))));
@@ -674,10 +731,14 @@ class worker_launcher {
         }
         // No slot left: all busy, or taken by another start a moment earlier.
         if ($reason === 'all-slots-busy' || $reason === 'no-slot-acquired') {
+            $message = get_string('workers:allbusy', $component, (object) [
+                'live' => (int) $workers['live'], 'claimable' => (int) $breakdown['claimable'],
+            ]);
+            // Saying "already running" beside sittings nobody plays yet needs its reason.
+            $waiting = self::waiting_message();
+
             return ['type' => \core\output\notification::NOTIFY_INFO,
-                'message' => get_string('workers:allbusy', $component, (object) [
-                    'live' => (int) $workers['live'], 'claimable' => (int) $breakdown['claimable'],
-                ])];
+                'message' => $waiting === '' ? $message : $message . ' ' . $waiting];
         }
         if ($reason === 'no-claimable-work') {
             $parts = [];
@@ -707,6 +768,101 @@ class worker_launcher {
                 'output' => trim((string) ($failure['output'] ?? '')) !== ''
                     ? s(\core_text::substr(trim((string) $failure['output']), -300)) : '–',
             ]) . ' ' . $when];
+    }
+
+    /**
+     * A time of day to the second: with starts twenty seconds apart, the minute says too little (#120).
+     *
+     * @param int $time Unix time.
+     * @return string
+     */
+    public static function clock(int $time): string {
+        return userdate($time, '%H:%M:%S');
+    }
+
+    /**
+     * When the workers just started begin, as a sentence (#120).
+     *
+     * @param array $plan launch_pool()'s plan: workerid and startsat of each worker started.
+     * @return string Empty where nothing waits: one worker beginning now, or no stagger.
+     */
+    public static function stagger_message(array $plan): string {
+        $stagger = self::start_stagger();
+        $times = array_map(static fn(array $entry): int => (int) ($entry['startsat'] ?? 0), $plan);
+        if ($stagger <= 0 || $times === [] || max($times) <= time()) {
+            return '';
+        }
+        $a = (object) [
+            'stagger' => $stagger,
+            'first'   => self::clock(max(time(), min($times))),
+            'last'    => self::clock(max($times)),
+        ];
+
+        return get_string(count($times) === 1 ? 'workers:staggeredone' : 'workers:staggered', 'local_catquizlab', $a);
+    }
+
+    /**
+     * How many live workers still wait for their staggered start, as a sentence (#120).
+     *
+     * @return string Empty where none waits.
+     */
+    public static function waiting_message(): string {
+        $waiting = array_filter(worker_registry::live(), static fn(\stdClass $w): bool => worker_registry::waits_for($w) > 0);
+        if ($waiting === []) {
+            return '';
+        }
+
+        return get_string('workers:stillwaiting', 'local_catquizlab', (object) [
+            'n'    => count($waiting),
+            'last' => self::clock(worker_registry::last_planned_start()),
+        ]);
+    }
+
+    /**
+     * How starts and retries are spread on this installation, as a sentence (#120).
+     *
+     * Shown beside the workers: a worker that is up and plays nothing, or a
+     * failed sitting due minutes later than its backoff, is otherwise a fault
+     * to somebody who does not know the settings.
+     *
+     * @return array{text: string, off: bool} The sentence, and whether both are switched off.
+     */
+    public static function load_spreading(): array {
+        $stagger = self::start_stagger();
+        $spread = get_config('local_catquizlab', 'retry_spread');
+        $spread = $spread === false || $spread === '' ? 300 : max(0, (int) $spread);
+        $key = 'workers:loadspreading';
+        if ($stagger <= 0 && $spread <= 0) {
+            $key = 'workers:loadspreadingoff';
+        } else if ($spread <= 0) {
+            $key = 'workers:loadspreadingpartstagger';
+        } else if ($stagger <= 0) {
+            $key = 'workers:loadspreadingpartspread';
+        }
+
+        return [
+            'text' => get_string($key, 'local_catquizlab', (object) ['stagger' => $stagger, 'spread' => $spread]),
+            'off'  => $stagger <= 0 && $spread <= 0,
+        ];
+    }
+
+    /**
+     * When the sittings waiting for a retry are due, as a sentence (#120).
+     *
+     * @param int $experimentid Restrict to one experiment, 0 for the installation.
+     * @return string Empty where none waits.
+     */
+    public static function retry_window_message(int $experimentid = 0): string {
+        $window = attempt_scheduler::retry_window($experimentid);
+        if ($window['n'] <= 0) {
+            return '';
+        }
+
+        return get_string($window['n'] === 1 ? 'workers:retrywindowone' : 'workers:retrywindow', 'local_catquizlab', (object) [
+            'n'     => $window['n'],
+            'first' => self::clock($window['first']),
+            'last'  => self::clock($window['last']),
+        ]);
     }
 
     /**

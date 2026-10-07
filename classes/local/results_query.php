@@ -1101,7 +1101,11 @@ class results_query {
         $rule = (string) ($this->filter['validityrule'] ?? engine_validity::RULE_UNIFORM);
         $all = new self(['validity' => result_validity::ALL] + $this->filter);
         $coverage = ['measured' => 0, 'included' => 0, 'frominvalid' => 0, 'unestimated' => 0, 'reasons' => [],
-            'uniformvalid' => 0, 'enginevalid' => 0, 'engineunknown' => 0];
+            'uniformvalid' => 0, 'enginevalid' => 0, 'engineunknown' => 0,
+            // The item counts behind it (#113): where they are from, what was
+            // found on the way, and the scale results that are not "measured"
+            // — none administered for certain, or not known.
+            'sittings' => 0, 'sources' => [], 'diagnosis' => [], 'unknownitems' => 0, 'withoutitems' => 0];
         local_analysis::$unestimated = 0;
         $rows = [];
         $maps = $this->scale_maps();
@@ -1111,8 +1115,28 @@ class results_query {
                 continue;
             }
             $attemptvalid = (bool) $observation['valid'];
-            foreach (local_analysis::subscale_rows($observation + self::detail($observation), $map) as $row) {
-                if ((int) $row['items'] <= 0) {
+            $full = $observation + self::detail($observation);
+            $exposure = scale_exposure::reconstruct((array) ($full['trace'] ?? []), (int) $observation['runid']);
+            $coverage['sittings']++;
+            $coverage['sources'][$exposure['source']] = ($coverage['sources'][$exposure['source']] ?? 0) + 1;
+            foreach ($exposure['diagnosis'] as $code) {
+                $coverage['diagnosis'][$code] = ($coverage['diagnosis'][$code] ?? 0) + 1;
+            }
+            foreach (local_analysis::subscale_rows($full + ['exposure' => $exposure], $map) as $row) {
+                if ($row['items'] === null) {
+                    // Not known is not none (#113): not in the denominator of
+                    // scales with administered items, not in the figures —
+                    // counted, and shown where everything is.
+                    $coverage['unknownitems']++;
+                    $row['valid'] = false;
+                    if ($mode !== result_validity::VALID) {
+                        $rows[] = $row;
+                    }
+                    continue;
+                }
+                if ($row['items'] <= 0) {
+                    // Estimated without an item of its own: nothing local to judge.
+                    $coverage['withoutitems']++;
                     continue;
                 }
                 $coverage['measured']++;

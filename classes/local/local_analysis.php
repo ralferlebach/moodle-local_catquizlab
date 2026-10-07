@@ -65,11 +65,13 @@ class local_analysis {
             $scalemapindex
         );
         $ses = self::map_by_subscale((array) ($trace['scalestandarderrors'] ?? []), $scalemapindex);
-        $items = self::map_by_subscale((array) ($trace['questionsperscale'] ?? []), $scalemapindex);
-        // Validity per scale by the engine's definitions (#112), and the true
-        // number of items on it (#113): from the engine's measures where the
-        // trace keeps them, from the trace's own responses otherwise.
+        // Validity per scale by the engine's definitions (#112): from the
+        // engine's measures where the trace keeps them, from the trace's own
+        // responses otherwise.
         $runid = (int) ($observation['runid'] ?? 0);
+        // The items administered on each scale (#113): from the sitting's own
+        // steps — or unknown, which is not zero.
+        $exposure = $observation['exposure'] ?? scale_exposure::reconstruct($trace, $runid);
         $measure = engine_validity::recall((int) ($observation['attemptid'] ?? 0));
         if ($measure === false) {
             $measure = $trace['enginevalidity'] ?? engine_validity::measure_from_trace($trace, $runid);
@@ -84,15 +86,21 @@ class local_analysis {
         foreach ($truth['subscales'] as $key => $truetheta) {
             $catscaleid = (int) ($scaleids[$key] ?? 0);
             $measured = $measure['scales'][$catscaleid] ?? null;
+            $itemcount = scale_exposure::items($exposure, $catscaleid);
             if (!isset($estimates[$key])) {
                 // Not estimated: no row for the figures — but counted where it
-                // had an item, as part of the denominator of what went in (#112).
-                if ($measured !== null && (int) ($measured['n'] ?? 0) > 0) {
+                // had an item, as part of the denominator of what went in
+                // (#112). An unknown count is not an item, and not none (#113).
+                if ($itemcount !== null && $itemcount > 0) {
                     self::$unestimated++;
                 }
                 continue;
             }
-            $reasons = engine_validity::judge_scale($measured, $thresholds);
+            // Nothing measured and the count unknown: "no item on this scale"
+            // would be a statement nobody can make.
+            $reasons = $measured === null && $itemcount === null
+                ? [engine_validity::ITEMS_UNKNOWN]
+                : engine_validity::judge_scale($measured, $thresholds);
             $enginescale = $measure['engine']['scales'][$catscaleid] ?? null;
             [$category, $subscale] = array_map('intval', explode(':', $key));
             $esttheta = (float) $estimates[$key];
@@ -119,9 +127,16 @@ class local_analysis {
                 'estdelta'    => round($estdelta, 6),
                 'error'       => round($estdelta - $truedelta, 6),
                 'localse'     => $se === null ? null : round($se, 6),
-                // The engine's count of answered items on the scale (#113); the
-                // trace's questionsperscale was empty, so this was always 0.
-                'items'       => $measured !== null ? (int) $measured['n'] : (int) ($items[$key] ?? 0),
+                // The items administered on the scale, from the sitting's own
+                // steps (#113): null where that is not known, 0 only where it
+                // is certain. The trace's questionsperscale was empty, so this
+                // used to be 0 for every scale.
+                'items'       => $itemcount,
+                'itemssource' => $exposure['source'],
+                'itemsreason' => $exposure['reason'],
+                'itemclass'   => scale_exposure::class_of($itemcount),
+                // What the engine counts for its rules: answered, without pilot items.
+                'itemsanswered' => $measured !== null && isset($measured['n']) ? (int) $measured['n'] : null,
                 'catscaleid'  => $catscaleid,
                 'fraction'    => $measured['fraction'] ?? null,
                 'scalevalid'  => $reasons === [],
@@ -172,6 +187,34 @@ class local_analysis {
                 yield $row;
             }
         }
+    }
+
+    /**
+     * The local recovery by how many items the scale was given (#113).
+     *
+     * Whether a poor local estimate simply rests on too little asked there can
+     * be looked at with this: the error, the standard error and the correlation
+     * of true and estimated deviation, per class of item count. The classes do
+     * not say what is enough — they are for the diagnosis, not for a verdict.
+     *
+     * @param array $rows Subscale observations.
+     * @return array[] One row per class of scale_exposure::CLASSES and one for an unknown count,
+     *      each: class, label, and summarise()'s measures; classes without a row are left out.
+     */
+    public static function by_item_class(array $rows): array {
+        $groups = [];
+        foreach ($rows as $row) {
+            $groups[(string) ($row['itemclass'] ?? scale_exposure::class_of($row['items'] ?? null))][] = $row;
+        }
+        $out = [];
+        foreach (array_merge(array_column(scale_exposure::CLASSES, 'key'), [scale_exposure::CLASS_UNKNOWN]) as $key) {
+            if (empty($groups[$key])) {
+                continue;
+            }
+            $out[] = ['class' => $key, 'label' => scale_exposure::class_label($key)] + self::summarise($groups[$key]);
+        }
+
+        return $out;
     }
 
     /**

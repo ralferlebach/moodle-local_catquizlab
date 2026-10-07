@@ -52,7 +52,7 @@ class worker_heartbeat extends external_api {
             'attemptid' => new external_value(PARAM_INT, 'The attempt it is playing, or 0.', VALUE_DEFAULT, 0),
             'state'     => new external_value(
                 PARAM_ALPHA,
-                'What it is doing: working, idle or stopping.',
+                'What it is doing: starting, waiting (for its staggered start), working, idle or stopping.',
                 VALUE_DEFAULT,
                 'working'
             ),

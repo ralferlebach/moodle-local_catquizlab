@@ -64,6 +64,9 @@ const BASE_URL = normaliseBaseUrl(args['base-url']);
 const TOKEN = process.env.CATQUIZLAB_WORKER_TOKEN || args.token || '';
 const WORKER_ID = args['worker-id'] || 'catquizlab-worker';
 const MAX_JOBS = parseInt(args['max-jobs'] || '0', 10); // 0 = until the queue is empty.
+// How long to wait after reporting in before claiming work (#120): the launcher
+// gives every worker its own, so that they do not all begin in the same second.
+const START_DELAY_MS = startDelayMs(args['start-delay']);
 const LOGIN_SUFFIX = args['login-suffix'] || '';
 const LOGIN_MODE = args['login-mode'] || 'password';
 const LOGIN_URL_TEMPLATE = args['login-url-template'] || '';
@@ -1048,6 +1051,50 @@ function startHeartbeat(attemptId, state) {
     };
 }
 
+/**
+ * The staggered start's delay as given on the command line, in milliseconds.
+ *
+ * @param {*} value The argument's value.
+ * @returns {number} Zero for none, or anything that is not a positive number; at most an hour.
+ */
+function startDelayMs(value) {
+    const ms = parseInt(value, 10);
+    return Number.isFinite(ms) && ms > 0 ? Math.min(ms, 3600000) : 0;
+}
+
+/**
+ * Wait for this worker's turn to begin, reporting in while it waits (#120).
+ *
+ * Workers started together took the server from no load to thousands of
+ * requests a minute within seconds; each now begins a set interval after the
+ * one before. A waiting worker reports as "waiting", so that it is neither
+ * taken for dead nor for one that has nothing to do — and a stop asked of it
+ * while it waits is granted at once: it holds no claim.
+ *
+ * @param {number} delayMs How long to wait.
+ * @param {Function} beat Reports in; resolves to the web service's reply.
+ * @param {Function} sleep Waits the given milliseconds.
+ * @param {number} every How often to report, in milliseconds.
+ * @returns {Promise<boolean>} False where the worker was asked to stop while waiting.
+ */
+async function waitForStart(delayMs, beat, sleep, every = 20000) {
+    let left = delayMs;
+    while (left > 0) {
+        try {
+            const reply = await beat();
+            if (reply && reply.stop) {
+                return false;
+            }
+        } catch (error) {
+            // A missed report while waiting changes nothing: the next follows.
+        }
+        const step = Math.min(left, every);
+        await sleep(step);
+        left -= step;
+    }
+    return true;
+}
+
 async function selfTest() {
     const failures = [];
     const check = (label, condition) => {
@@ -1093,6 +1140,7 @@ async function selfTest() {
     check('web service request', request.url === 'http://x/webservice/rest/server.php'
         && request.body.includes('wsfunction=local_catquizlab_job_claim'));
 
+    check('start delay', startDelayMs('40000') === 40000 && startDelayMs('-5') === 0 && startDelayMs(undefined) === 0);
     check('dichotomous choice', chooseOptionIndex({fraction: 1.0, choice: -1}, 4) === 0);
     check('polytomous choice', chooseOptionIndex({fraction: 0.5, choice: 2}, 4) === 2);
 
@@ -1148,6 +1196,17 @@ async function main() {
         state: 'starting',
     });
 
+    // Not all at once (#120): wait for this worker's own start time.
+    let begin = true;
+    if (START_DELAY_MS > 0) {
+        console.log(`Worker ${WORKER_ID} waits ${Math.round(START_DELAY_MS / 1000)} s for its staggered start.`);
+        begin = await waitForStart(
+            START_DELAY_MS,
+            () => callWs('local_catquizlab_worker_heartbeat', {workerid: WORKER_ID, attemptid: 0, state: 'waiting'}),
+            (ms) => new Promise((resolve) => setTimeout(resolve, ms))
+        );
+    }
+
     let played = 0;
 
     // Why this worker stopped. "finished; played 1 attempt(s)" with 250 waiting
@@ -1157,6 +1216,11 @@ async function main() {
 
     try {
         for (;;) {
+            if (!begin) {
+                console.log(`Worker ${WORKER_ID} was asked to stop while waiting for its start.`);
+                reason = 'stop-requested';
+                break;
+            }
             if (MAX_JOBS > 0 && played >= MAX_JOBS) {
                 reason = 'max-jobs';
                 break;
@@ -1367,6 +1431,8 @@ module.exports = {
     artefactPath,
     selfTest,
     parseArgs,
+    startDelayMs,
+    waitForStart,
     normaliseBaseUrl,
     buildWsRequest,
     traceHeaders,

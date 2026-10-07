@@ -599,6 +599,16 @@ function xmldb_local_catquizlab_upgrade($oldversion): bool {
         upgrade_plugin_savepoint(true, 2026100100, 'local', 'catquizlab');
     }
 
+    if ($oldversion < 2026100106) {
+        // When a staggered worker begins to claim work (#120).
+        $table = new xmldb_table('local_catquizlab_worker');
+        $field = new xmldb_field('startsat', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, '0', 'heartbeat');
+        if (!$dbman->field_exists($table, $field)) {
+            $dbman->add_field($table, $field);
+        }
+        upgrade_plugin_savepoint(true, 2026100106, 'local', 'catquizlab');
+    }
+
     return true;
 }
 

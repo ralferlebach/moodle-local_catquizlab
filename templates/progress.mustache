@@ -18,6 +18,8 @@
     * tasks - scheduled, adhoc, hasadhoc, cron
     * population - text, problems, consistent (null without an experiment)
     * workers - hasany and rows of workerid, logurl, status, log
+    * loadspreading - text, off: how worker starts and retries are spread
+    * retrywindow - when the sittings waiting for a retry are due, or empty
     * queuestatus - the queue as a status card
     * queue - claimable, notdue, blocked, paused, running, collected, failed
     * pipelinestatus - the pipeline as a status card
@@ -62,6 +64,11 @@
                 "hasany": false,
                 "rows": []
         },
+        "loadspreading": {
+                "text": "Load spreading: workers begin one after another, 20 s apart.",
+                "off": false
+        },
+        "retrywindow": "",
         "queuestatus": {
                 "level": "good",
                 "good": true,
@@ -364,6 +371,9 @@
     <div class="card-body">
         <h3 class="h5">{{#str}}worker:heading, local_catquizlab{{/str}}</h3>
         <p class="small text-muted mb-2">{{#str}}worker:environmentheading, local_catquizlab{{/str}}</p>
+        {{#loadspreading}}
+            <p class="small mb-2 {{#off}}text-danger{{/off}}{{^off}}text-muted{{/off}}" data-region="catquizlab-load-spreading">{{text}}</p>
+        {{/loadspreading}}
         {{#workers.hasany}}
             {{#workers.rows}}
                 <div class="mb-2">
@@ -417,6 +427,9 @@
             {{#queue.hasnotdue}}
                 <li>{{#str}}queue:notdue, local_catquizlab{{/str}} {{queue.notdue}}</li>
             {{/queue.hasnotdue}}
+            {{#retrywindow}}
+                <li data-region="catquizlab-retry-window">{{retrywindow}}</li>
+            {{/retrywindow}}
             {{#queue.haspaused}}
                 <li>{{#str}}queue:paused, local_catquizlab{{/str}} {{queue.paused}}</li>
             {{/queue.haspaused}}

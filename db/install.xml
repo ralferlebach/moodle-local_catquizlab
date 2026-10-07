@@ -299,6 +299,7 @@
         <FIELD NAME="workerstate" TYPE="char" LENGTH="40" NOTNULL="false" SEQUENCE="false" COMMENT="What the worker says it is doing: working, idle or stopping."/>
         <FIELD NAME="stoprequested" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false" COMMENT="When somebody asked it to finish its attempt and exit. Killing the process would strand the claim."/>
         <FIELD NAME="heartbeat" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false" COMMENT="Last sign of life. A worker that stops reporting is crashed, not merely slow."/>
+        <FIELD NAME="startsat" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false" COMMENT="When a staggered worker begins to claim work; 0 for at once (#120)."/>
         <FIELD NAME="timecreated" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
         <FIELD NAME="timemodified" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
       </FIELDS>

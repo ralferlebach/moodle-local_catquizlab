@@ -207,7 +207,22 @@ class status_report {
             // in flight. That is planned replacement, not a stall, and calling
             // it "waiting for a worker" would have somebody investigating a
             // resource setting working exactly as configured.
-            $rotating = worker_registry::summary()['starting'] > 0;
+            $fleet = worker_registry::summary();
+            $rotating = $fleet['starting'] > 0;
+
+            // Up, and waiting for their turn (#120): nothing is in flight yet,
+            // by design. "Waiting" alone would read as a stall.
+            if ($fleet['waiting'] > 0) {
+                return self::card(
+                    self::GOOD,
+                    get_string('report:runstaggered', $component),
+                    get_string('report:runstaggeredwhy', $component, (object) [
+                        'n'    => $fleet['waiting'],
+                        'last' => worker_launcher::clock(worker_registry::last_planned_start()),
+                    ]) . ' ' . self::progress_line($counts, $component),
+                    null
+                );
+            }
 
             if ($rotating) {
                 return self::card(
@@ -276,6 +291,22 @@ class status_report {
                     'attempt'   => $attemptid,
                     'run'       => $runid,
                     'heartbeat' => duration::human($ago),
+                ]),
+                null
+            );
+        }
+
+        // Up, and waiting for its turn (#120): not idle, and not stuck — say
+        // when it begins, and why it does not begin now.
+        $waits = worker_registry::waits_for($worker);
+        if ($waits > 0) {
+            return self::card(
+                self::GOOD,
+                get_string('report:workerwaiting', $component),
+                get_string('report:workerwaitingwhy', $component, (object) [
+                    'time'    => worker_launcher::clock((int) $worker->startsat),
+                    'seconds' => $waits,
+                    'stagger' => worker_launcher::start_stagger(),
                 ]),
                 null
             );

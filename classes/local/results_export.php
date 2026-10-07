@@ -474,8 +474,13 @@ class results_export {
             'truetheta', 'esttheta', 'truedelta', 'estdelta', 'error',
             'localse', 'items', 'within1se', 'within2se',
             // Validity per scale (#112): by the engine's definitions, why not,
-            // and the engine's own verdict. 'items' is the engine's count (#113).
+            // and the engine's own verdict.
             'fraction', 'scalevalid', 'scalereasons', 'enginescalevalid',
+            // The column 'items' is what was administered on the scale, from the
+            // sitting's own steps (#113): empty where that is not known, 0 only where it
+            // is certain. Where it is from, why it is not known, its diagnostic
+            // class, and the engine's count of answered items beside it.
+            'itemssource', 'itemsreason', 'itemclass', 'itemsanswered',
         ];
 
         $filter = $query->get_filter();
