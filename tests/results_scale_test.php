@@ -111,6 +111,15 @@ final class results_scale_test extends \advanced_testcase {
             $persons[] = (int) $person->id;
         }
         $scaleabilities = array_fill_keys(array_keys($scales), 0.1);
+        // The pool: questions 1 to 85 spread over the twelve subscales, so that
+        // validity per scale is measured as for a real sitting (#112).
+        $leaves = array_keys($scales);
+        $items = [];
+        for ($q = 1; $q <= 85; $q++) {
+            $items[] = (object) ['runid' => $run->id, 'questionid' => $q, 'assignedcatscaleid' => $leaves[$q % 12],
+                'truecatscaleid' => $leaves[$q % 12], 'itemname' => 'q' . $q, 'timecreated' => time()];
+        }
+        $DB->insert_records('local_catquizlab_item', $items);
 
         // Sittings of thirty-five items and twelve subscales each: the item
         // and subscale levels multiply by those, which is where memory went.
@@ -123,6 +132,10 @@ final class results_scale_test extends \advanced_testcase {
                 'runtimems' => 4000 + $i % 900, 'timecreated' => time(), 'timemodified' => time(),
                 'tracejson' => json_encode([
                     'finaltheta' => sin($i), 'finalse' => 0.3 + ($i % 7) / 100, 'items' => $items,
+                    'responses' => array_combine($items, array_map(
+                        static fn(int $q): float => (float) (intdiv($q, 12) % 2),
+                        $items
+                    )),
                     'nitems' => 35, 'steps' => 35, 'stopreason' => 'se',
                     'scaleabilities' => $scaleabilities,
                 ]),
@@ -200,13 +213,16 @@ final class results_scale_test extends \advanced_testcase {
                     $size += strlen($chunk);
                     hash_update($hash, $chunk);
                     $head = $head === '' ? substr($chunk, 0, 200) : $head;
-                    $tail = substr($tail . $chunk, -200);
+                    $tail = substr($tail . $chunk, -4000);
                     return '';
                 }, 8192);
                 results_export::stream(new results_query($filter), results_export::LEVEL_ATTEMPT, 'json');
                 ob_end_clean();
-                $this->assertStringStartsWith('{"metadata":', $head);
-                $this->assertStringEndsWith(']}', $tail);
+                // The metadata last since 0.7.31, counted in the pass that wrote
+                // the rows instead of a pass of its own beforehand.
+                $this->assertStringStartsWith('{"columns":', $head);
+                $this->assertStringEndsWith('}}', $tail);
+                $this->assertStringContainsString('"attempts":' . $n . ',', $tail, 'the provenance counts every sitting');
                 $this->assertGreaterThan($n * 100, $size, 'every sitting written');
             },
             'subscale json' => function () use ($filter, $n): void {

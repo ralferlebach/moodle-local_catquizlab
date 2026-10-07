@@ -6,6 +6,83 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.7.31] — 2026-10-07 — #112: valid by the engine's definitions, not by "did not stop early"
+
+### What "valid" meant until now, and why that was wrong
+Since 0.7.28 the results showed "valid sittings" — and valid meant only "not
+ended before the minimum number of questions, not failed technically". A
+standard error above the upper bound, too few items on a scale, an answer
+pattern of all correct or all wrong: none of it was checked. The local plot
+took every scale the engine had a value for, whatever its number of items —
+which was always 0 in the data, because the trace's questionsperscale was empty.
+
+### The engine's definitions, taken over
+local_catquiz decides validity in one place, attempt_result_validator, with the
+rules of feedbacksettings and its strategies:
+- SE above the test's catquiz_standarderror_max (filter_semax);
+- fewer answered items on a scale than catquiz_minquestionspersubscale
+  (filter_nminscale), or in the test than catquiz_minquestions (filter_nmintest);
+- a share of points not strictly between 0 and 1 — all correct or all wrong;
+- no answered item on the scale in this sitting.
+
+The measures are the engine's too, read with its own functions: N and share of
+points per scale from its progress (answered items, pilots excluded, a question
+counted for its scale and every ancestor), the SE from its stored result, the
+thresholds from the settings of the test as provisioned. Where the engine has
+nothing to read, the trace is measured the same way (its responses, the items'
+scales and their ancestors); a sitting without any responses cannot be judged
+and is not valid.
+
+### Two verdicts
+The engine applies its rules per strategy, and not every one everywhere: the
+classical test, allsubs and relsubs never check the response pattern; fastest
+never checks the SE or the items per scale. Hence:
+- **uniform** — every rule for every strategy: the default of every figure;
+- **engine** — attempt_result_validator's verdict word for word, beside it.
+
+Switches above every view: valid only / invalid only / all, and uniform rules /
+engine verdict. Both verdicts are columns of the sitting and subscale exports.
+
+### Per scale
+The local figures — the deviation plot, its metrics, the subscale export — use
+only valid scale results of valid sittings, and say what went in against all
+there was: "Scale results in these figures: 842 / 1,126 with at least one
+answered item (74.8 %)", with every reason for the rest — from an invalid
+sitting, answered but not estimated, SE above the bound, too few items, all
+correct or all wrong — and the engine's own verdict beside it. The item count of
+a scale is now the engine's (#113 in part).
+
+### Found on the way
+- local_catquiz_attempts carries two spellings of the component —
+  'mod_adaptivequiz' from the start of a sitting, 'adaptivequiz' once its result
+  page saved it (the engine's catquiz::component_names()). The collector and the
+  engine-status lookup of 0.7.28 asked for 'adaptivequiz' only: a sitting whose
+  result page was never saved had no engine data. Both spellings now.
+
+- The trace keeps responses in two forms — the collector's (question id =>
+  fraction) and the engine's progress (question id => questionid, fraction) —
+  and both are read.
+- **The JSON download read every sitting three times.** Its metadata, written
+  first, counted the sittings in a pass of their own and the rows of the level
+  in another, before the rows were written. The metadata now comes last, from
+  the pass that wrote the rows: at fifty thousand sittings the subscale JSON
+  takes 34 s instead of 62 s, the sitting JSON 3.7 s instead of 10.6 s. The order
+  of keys in the file changed ("columns", "rows", "metadata"); their content did
+  not.
+- Caches of the engine's thresholds and of the questions' scales are emptied
+  by every new evaluation: between tests run ids repeat, and a static map of an
+  earlier run measured the wrong scales.
+
+### Tests
+The rules one by one; a sitting measured with the engine's own progress and
+judged both ways, where they differ (a subscale all correct: not valid by the
+uniform rules, valid by the engine's verdict, which does not check the pattern
+for that strategy); the trace measured the same way; only valid scale results
+in the subscale tab, with "12 / 24" and the reason said. Test data that had no
+responses — and could not be judged — were given mixed answer patterns.
+
+---
+
 ## [0.7.30] — 2026-10-06 — The experiment form follows the choice; "Start workers" says what it did
 
 ### The form (reported 06.10., with screenshots)

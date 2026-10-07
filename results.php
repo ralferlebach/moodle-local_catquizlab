@@ -86,6 +86,10 @@ if (!in_array($validity, ['valid', 'invalid', 'all'], true)) {
     $validity = $tab === 'rawdata' ? 'all' : 'valid';
 }
 $filter['validity'] = $validity;
+// Which verdict decides (#112): the engine's definitions for every strategy,
+// or the engine's own verdict word for word.
+$validityrule = optional_param('validityrule', 'uniform', PARAM_ALPHA);
+$filter['validityrule'] = in_array($validityrule, ['uniform', 'engine'], true) ? $validityrule : 'uniform';
 
 admin_externalpage_setup('local_catquizlab_manage');
 

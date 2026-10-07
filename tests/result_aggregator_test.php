@@ -71,6 +71,7 @@ final class result_aggregator_test extends \advanced_testcase {
                     'finaltheta' => $true + $offset,
                     'finalse'    => 0.30,
                     'items'      => ['q1', 'q2', 'q3'],
+                    'responses'  => [1 => 1.0, 2 => 0.0, 3 => 1.0],
                 ]),
                 'timecreated'  => $now,
                 'timemodified' => $now,
@@ -170,7 +171,8 @@ final class result_aggregator_test extends \advanced_testcase {
                 'runid'        => $run->id,
                 'personid'     => $person->id,
                 'status'       => attempt_scheduler::STATUS_COLLECTED,
-                'tracejson'    => json_encode(['finaltheta' => $global, 'finalse' => 0.3, 'items' => ['q1', 'q2']]),
+                'tracejson'    => json_encode(['finaltheta' => $global, 'finalse' => 0.3, 'items' => ['q1', 'q2'],
+                    'responses' => [1 => 1.0, 2 => 0.0]]),
                 'timecreated'  => $now,
                 'timemodified' => $now,
             ]);

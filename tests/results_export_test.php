@@ -91,6 +91,7 @@ final class results_export_test extends \advanced_testcase {
                         'finaltheta' => $ability + 0.1,
                         'finalse'    => 0.32,
                         'items'      => [101, 102],
+                        'responses'  => [101 => 1.0, 102 => 0.0],
                         'nitems'     => 2,
                         'stopreason' => 'standarderror',
                     ]),

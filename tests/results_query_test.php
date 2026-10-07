@@ -86,6 +86,8 @@ final class results_query_test extends \advanced_testcase {
                     'finaltheta' => $ability + $bias,
                     'finalse'    => 0.3 + 0.05 * $index,
                     'items'      => [101, 102, 103 + $index],
+                    // A mixed pattern: valid by the engine's definitions (#112).
+                    'responses'  => [101 => 1.0, 102 => 0.0, 103 + $index => 1.0],
                     'nitems'     => 3,
                     'stopreason' => $index === 2 ? 'maxquestions' : 'standarderror',
                 ];

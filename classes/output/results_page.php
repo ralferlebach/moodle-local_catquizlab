@@ -1856,21 +1856,91 @@ class results_page {
         $parts = [get_string('validity:coverage', $component, (object) [
             'valid' => $counts['valid'], 'total' => $counts['total'], 'percent' => $percent($counts['valid']),
         ])];
-        foreach ($counts['reasons'] as $code => $n) {
-            if (in_array($code, reason_catalog::INVALID_OUTCOMES, true)) {
-                $parts[] = get_string('validity:excluded', $component, (object) [
-                    'reason' => reason_catalog::label($code), 'n' => $n, 'total' => $counts['total'], 'percent' => $percent($n),
-                ]);
-            }
+        // Why the others are not valid — a sitting may fail several rules, and
+        // each is counted (#112): an end before the minimum, and the engine's
+        // definitions of SE, items and response pattern.
+        foreach ($counts['invalidreasons'] as $code => $n) {
+            $label = in_array($code, reason_catalog::OUTCOMES, true) ? reason_catalog::label($code)
+                : \local_catquizlab\local\engine_validity::label($code);
+            $parts[] = get_string('validity:excluded', $component, (object) [
+                'reason' => $label, 'n' => $n, 'total' => $counts['total'], 'percent' => $percent($n),
+            ]);
         }
+        // Which rule decides, and the other beside it.
+        $rule = (string) ($this->filter['validityrule'] ?? 'uniform');
+        $parts[] = get_string('validity:rule_' . $rule, $component);
+        $parts[] = get_string('validity:compare', $component, (object) [
+            'uniform' => $counts['uniformvalid'], 'engine' => $counts['enginevalid'], 'total' => $counts['total'],
+            'unknown' => $counts['engineunknown'],
+        ]);
         $mode = (string) ($this->filter['validity'] ?? 'valid');
         $parts[] = get_string('validity:shown_' . $mode, $component);
+        $parts[] = $this->validity_switches();
 
         return \html_writer::div(
             implode(' · ', $parts),
             'small mb-1' . ($counts['invalid'] > 0 ? ' text-warning' : ' text-muted'),
             ['data-region' => 'catquizlab-coverage']
         );
+    }
+
+    /**
+     * Links to show valid, invalid or all sittings, and to judge by either rule.
+     *
+     * @return string
+     */
+    protected function validity_switches(): string {
+        global $PAGE;
+
+        $component = 'local_catquizlab';
+        $base = $PAGE->has_set_url() ? $PAGE->url
+            : new \moodle_url('/local/catquizlab/results.php', array_filter($this->filter, 'is_scalar'));
+        $links = [];
+        foreach (['validity' => ['valid', 'invalid', 'all'], 'validityrule' => ['uniform', 'engine']] as $param => $values) {
+            $current = (string) ($this->filter[$param] ?? $values[0]);
+            foreach ($values as $value) {
+                $label = get_string('validity:switch_' . $value, $component);
+                $links[] = $value === $current
+                    ? \html_writer::tag('strong', $label)
+                    : \html_writer::link(new \moodle_url($base, [$param => $value]), $label);
+            }
+            $links[] = '|';
+        }
+        array_pop($links);
+
+        return \html_writer::span(implode(' ', $links), 'catquizlab-validity-switches');
+    }
+
+    /**
+     * Which scale results the local figures are made of, of all with an answered item, and why not the rest (#112).
+     *
+     * @return string
+     */
+    protected function render_scale_coverage(): string {
+        $component = 'local_catquizlab';
+        $c = $this->query->scale_coverage();
+        if ((int) $c['measured'] === 0) {
+            return '';
+        }
+        $percent = static fn(int $n): string => format_float(100 * $n / $c['measured'], 1);
+        $parts = [get_string('validity:scalecoverage', $component, (object) [
+            'included' => $c['included'], 'measured' => $c['measured'], 'percent' => $percent((int) $c['included']),
+        ])];
+        $excluded = ['frominvalid' => (int) $c['frominvalid'], 'unestimated' => (int) $c['unestimated']];
+        foreach ($excluded + $c['reasons'] as $code => $n) {
+            if ($n > 0) {
+                $parts[] = get_string('validity:excluded', $component, (object) [
+                    'reason' => \local_catquizlab\local\engine_validity::label($code), 'n' => $n,
+                    'total' => $c['measured'], 'percent' => $percent((int) $n),
+                ]);
+            }
+        }
+        $parts[] = get_string('validity:compare', $component, (object) [
+            'uniform' => $c['uniformvalid'], 'engine' => $c['enginevalid'], 'total' => $c['measured'],
+            'unknown' => $c['engineunknown'],
+        ]);
+
+        return \html_writer::div(implode(' · ', $parts), 'small mb-2 text-warning', ['data-region' => 'catquizlab-scalecoverage']);
     }
 
     /**
@@ -2375,6 +2445,7 @@ class results_page {
         // would have contained.
         $out = \html_writer::tag('h3', get_string('results:localgroup', $component), ['class' => 'h5']);
         $out .= \html_writer::tag('p', get_string('results:localexplain', $component), ['class' => 'text-muted']);
+        $out .= $this->render_scale_coverage();
 
         if ($rows === []) {
             return $out . \html_writer::div(

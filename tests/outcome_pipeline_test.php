@@ -107,6 +107,7 @@ final class outcome_pipeline_test extends \advanced_testcase {
                     'finaltheta' => $attempt['est'],
                     'finalse'    => 0.3,
                     'items'      => [101, 102, 103 + $index],
+                    'responses'  => [101 => 1.0, 102 => 0.0, 103 + $index => 1.0],
                     'nitems'     => 3,
                     'stopreason' => $attempt['stop'],
                 ]),

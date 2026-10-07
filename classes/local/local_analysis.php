@@ -66,15 +66,34 @@ class local_analysis {
         );
         $ses = self::map_by_subscale((array) ($trace['scalestandarderrors'] ?? []), $scalemapindex);
         $items = self::map_by_subscale((array) ($trace['questionsperscale'] ?? []), $scalemapindex);
+        // Validity per scale by the engine's definitions (#112), and the true
+        // number of items on it (#113): from the engine's measures where the
+        // trace keeps them, from the trace's own responses otherwise.
+        $runid = (int) ($observation['runid'] ?? 0);
+        $measure = engine_validity::recall((int) ($observation['attemptid'] ?? 0));
+        if ($measure === false) {
+            $measure = $trace['enginevalidity'] ?? engine_validity::measure_from_trace($trace, $runid);
+        }
+        $thresholds = engine_validity::thresholds($runid);
+        $scaleids = array_flip($scalemapindex);
 
         $trueglobal = (float) $truth['global'];
         $estglobal = (float) ($trace['finaltheta'] ?? $observation['esttheta'] ?? 0.0);
 
         $rows = [];
         foreach ($truth['subscales'] as $key => $truetheta) {
+            $catscaleid = (int) ($scaleids[$key] ?? 0);
+            $measured = $measure['scales'][$catscaleid] ?? null;
             if (!isset($estimates[$key])) {
+                // Not estimated: no row for the figures — but counted where it
+                // had an item, as part of the denominator of what went in (#112).
+                if ($measured !== null && (int) ($measured['n'] ?? 0) > 0) {
+                    self::$unestimated++;
+                }
                 continue;
             }
+            $reasons = engine_validity::judge_scale($measured, $thresholds);
+            $enginescale = $measure['engine']['scales'][$catscaleid] ?? null;
             [$category, $subscale] = array_map('intval', explode(':', $key));
             $esttheta = (float) $estimates[$key];
             $truedelta = $truetheta - $trueglobal;
@@ -100,7 +119,14 @@ class local_analysis {
                 'estdelta'    => round($estdelta, 6),
                 'error'       => round($estdelta - $truedelta, 6),
                 'localse'     => $se === null ? null : round($se, 6),
-                'items'       => (int) ($items[$key] ?? 0),
+                // The engine's count of answered items on the scale (#113); the
+                // trace's questionsperscale was empty, so this was always 0.
+                'items'       => $measured !== null ? (int) $measured['n'] : (int) ($items[$key] ?? 0),
+                'catscaleid'  => $catscaleid,
+                'fraction'    => $measured['fraction'] ?? null,
+                'scalevalid'  => $reasons === [],
+                'scalereasons' => $reasons,
+                'enginescalevalid' => $enginescale === null ? null : (bool) $enginescale['valid'],
                 'within1se'   => $se === null ? null : abs($estdelta - $truedelta) <= $se,
                 'within2se'   => $se === null ? null : abs($estdelta - $truedelta) <= 2 * $se,
             ];
@@ -108,6 +134,9 @@ class local_analysis {
 
         return $rows;
     }
+
+    /** @var int Scales with an answered item but no estimate, counted by subscale_rows() since the last reset. */
+    public static int $unestimated = 0;
 
     /**
      * Per-subscale observations across a set of attempts.

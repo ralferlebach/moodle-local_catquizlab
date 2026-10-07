@@ -40,7 +40,7 @@ class results_query {
     /** @var string[] The filters a results view understands. */
     public const FILTERS = [
         'experimentid', 'tier', 'model', 'strategy', 'variant', 'stratum', 'severity',
-        'replication', 'cellkey', 'budget',
+        'replication', 'cellkey', 'budget', 'validityrule',
         // One run, and which sittings by validity (#118). Both were dropped here
         // without a word: a query for one run read every run, and "all" read
         // only the valid ones.
@@ -75,6 +75,8 @@ class results_query {
      */
     public function __construct(array $filter = []) {
         $this->filter = array_intersect_key($filter, array_flip(self::FILTERS));
+        // A new evaluation reads the engine's thresholds and scales afresh (#112).
+        engine_validity::begin();
     }
 
     /**
@@ -262,6 +264,7 @@ class results_query {
 
     /** @var array The counts of a pass before it has read anything. */
     protected const EMPTY_COUNTS = [
+        'uniformvalid' => 0, 'enginevalid' => 0, 'engineunknown' => 0, 'invalidreasons' => [],
         'total' => 0, 'valid' => 0, 'invalid' => 0, 'designstops' => 0, 'reasons' => [], 'bystrategy' => [], 'bycell' => [],
     ];
 
@@ -273,6 +276,38 @@ class results_query {
 
     /** @var array Every collected sitting the last whole pass read, by validity and end — before any filter. */
     protected array $validitycounts = self::EMPTY_COUNTS;
+
+    /** @var array<int, ?array> Engine measures read in this request, by sitting. */
+    protected array $enginemeasures = [];
+
+    /**
+     * The engine's validity measures of a sitting collected before they were kept in its trace (#112).
+     *
+     * Read from the engine once and added to the trace, so that the next view
+     * does not read them again: they are the engine's data of a finished
+     * sitting and do not change.
+     *
+     * @param \stdClass $attempt The sitting (id, engineattemptid, tracejson).
+     * @return array|null
+     */
+    protected function engine_measure(\stdClass $attempt): ?array {
+        global $DB;
+
+        $id = (int) $attempt->id;
+        if (!array_key_exists($id, $this->enginemeasures)) {
+            $measure = engine_validity::measure((int) ($attempt->engineattemptid ?? 0));
+            if ($measure !== null) {
+                $trace = json_decode((string) ($attempt->tracejson ?? ''), true);
+                if (is_array($trace)) {
+                    $trace['enginevalidity'] = $measure;
+                    $DB->set_field('local_catquizlab_attempt', 'tracejson', json_encode($trace), ['id' => $id]);
+                }
+            }
+            $this->enginemeasures[$id] = $measure;
+        }
+
+        return $this->enginemeasures[$id];
+    }
 
     /**
      * The facts of a run's design that decide whether an end is a regular one (#118).
@@ -546,6 +581,8 @@ class results_query {
         if ($this->onlyattempts === null) {
             $this->validitycounts = self::EMPTY_COUNTS;
         }
+        $this->lastpass = null;
+        $pass = ['attempts' => 0, 'replications' => []];
 
         $runs = $this->runs();
         if ($runs === []) {
@@ -619,7 +656,7 @@ class results_query {
                     [$inengine, $engineparams] = $DB->get_in_or_equal(array_values($engineids), SQL_PARAMS_NAMED, 'eng');
                     $statuses = $DB->get_records_select_menu(
                         'local_catquiz_attempts',
-                        "component = 'adaptivequiz' AND attemptid " . $inengine,
+                        "component IN ('adaptivequiz', 'mod_adaptivequiz') AND attemptid " . $inengine,
                         $engineparams,
                         '',
                         'attemptid, status'
@@ -643,11 +680,23 @@ class results_query {
                 }
                 foreach ($batch as $attempt) {
                     $lastid = (int) $attempt->id;
-                    yield from $this->observation_row($attempt, $runs, $persons, $personfields);
+                    foreach ($this->observation_row($attempt, $runs, $persons, $personfields) as $row) {
+                        $pass['attempts']++;
+                        $pass['replications'][$row['replication']] = true;
+                        yield $row;
+                    }
                 }
             } while (count($batch) === self::BATCH);
         }
+        // A whole pass, read to its end: what it yielded is the provenance, and
+        // a caller that has just read it need not read everything again.
+        if ($this->onlyattempts === null) {
+            $this->lastpass = $pass;
+        }
     }
+
+    /** @var array|null What the last whole pass yielded: attempts and replications; null until one ended. */
+    protected ?array $lastpass = null;
 
     /** @var int Sittings read per query while streaming. */
     public const BATCH = 500;
@@ -700,9 +749,35 @@ class results_query {
         ];
         $endcode = reason_catalog::outcome((string) ($trace['stopreason'] ?? ''), $facts);
         $validity = result_validity::evaluate($endcode);
+
+        // Valid by the engine's definitions as well (#112): SE within its upper
+        // bound, enough items, a response pattern that determines an ability.
+        // Uniformly, every rule for every strategy — the default — and the
+        // engine's own verdict word for word beside it.
+        $measure = $trace['enginevalidity'] ?? $this->engine_measure($attempt)
+            ?? engine_validity::measure_from_trace($trace, (int) $attempt->runid);
+        engine_validity::remember((int) $attempt->id, $measure);
+        $reasons = $validity['valid'] ? [] : [$endcode];
+        $reasons = array_merge($reasons, engine_validity::judge_attempt(
+            $measure,
+            engine_validity::thresholds((int) $attempt->runid),
+            $se
+        ));
+        $uniformvalid = $reasons === [];
+        $enginevalid = engine_validity::engine_attempt($measure);
+        $rule = (string) ($this->filter['validityrule'] ?? engine_validity::RULE_UNIFORM);
+        $valid = $rule === engine_validity::RULE_ENGINE ? $enginevalid === true : $uniformvalid;
+        $validity['valid'] = $valid;
+        $validity['reason'] = implode(',', $reasons);
         if ($this->onlyattempts === null) {
             $this->validitycounts['total']++;
-            $this->validitycounts[$validity['valid'] ? 'valid' : 'invalid']++;
+            $this->validitycounts[$valid ? 'valid' : 'invalid']++;
+            $this->validitycounts['uniformvalid'] += $uniformvalid ? 1 : 0;
+            $this->validitycounts['enginevalid'] += $enginevalid === true ? 1 : 0;
+            $this->validitycounts['engineunknown'] += $enginevalid === null ? 1 : 0;
+            foreach ($reasons as $reason) {
+                $this->validitycounts['invalidreasons'][$reason] = ($this->validitycounts['invalidreasons'][$reason] ?? 0) + 1;
+            }
             $this->validitycounts['designstops'] += $validity['criterionstop'] ? 1 : 0;
             $this->validitycounts['reasons'][$endcode] = ($this->validitycounts['reasons'][$endcode] ?? 0) + 1;
             // Per strategy and per cell as well: the success of the stop rules is
@@ -762,6 +837,8 @@ class results_query {
             'enginefinished' => $validity['enginefinished'],
             'valid' => $validity['valid'],
             'validityreason' => $validity['reason'],
+            'uniformvalid' => $uniformvalid,
+            'enginevalid' => $enginevalid,
             'runtimems'   => (int) ($attempt->runtimems ?? 0),
             // How it ended, as a code and in words, and where it ended (#106).
             'endreasoncode'  => $endcode,
@@ -1017,7 +1094,69 @@ class results_query {
      * @return array[] Rows from {@see local_analysis::rows()}.
      */
     public function subscale_observations(): array {
-        return local_analysis::rows($this->each_observation(), $this->scale_maps());
+        // Every sitting is read, valid or not, so that what went in can be said
+        // against all there was (#112): the denominator is every scale result
+        // with at least one answered item.
+        $mode = (string) ($this->filter['validity'] ?? result_validity::VALID);
+        $rule = (string) ($this->filter['validityrule'] ?? engine_validity::RULE_UNIFORM);
+        $all = new self(['validity' => result_validity::ALL] + $this->filter);
+        $coverage = ['measured' => 0, 'included' => 0, 'frominvalid' => 0, 'unestimated' => 0, 'reasons' => [],
+            'uniformvalid' => 0, 'enginevalid' => 0, 'engineunknown' => 0];
+        local_analysis::$unestimated = 0;
+        $rows = [];
+        $maps = $this->scale_maps();
+        foreach ($all->each_observation() as $observation) {
+            $map = $maps[$observation['runid']] ?? [];
+            if ($map === []) {
+                continue;
+            }
+            $attemptvalid = (bool) $observation['valid'];
+            foreach (local_analysis::subscale_rows($observation + self::detail($observation), $map) as $row) {
+                if ((int) $row['items'] <= 0) {
+                    continue;
+                }
+                $coverage['measured']++;
+                $coverage['uniformvalid'] += $row['scalevalid'] && $observation['uniformvalid'] ? 1 : 0;
+                $coverage['enginevalid'] += $row['enginescalevalid'] === true && $observation['enginevalid'] === true ? 1 : 0;
+                $coverage['engineunknown'] += $row['enginescalevalid'] === null ? 1 : 0;
+                $scalevalid = $rule === engine_validity::RULE_ENGINE ? $row['enginescalevalid'] === true : $row['scalevalid'];
+                $valid = $attemptvalid && $scalevalid;
+                if (!$attemptvalid) {
+                    $coverage['frominvalid']++;
+                } else if (!$scalevalid) {
+                    foreach ($row['scalereasons'] ?: ['engine'] as $reason) {
+                        $coverage['reasons'][$reason] = ($coverage['reasons'][$reason] ?? 0) + 1;
+                    }
+                }
+                $row['valid'] = $valid;
+                if ($mode === result_validity::ALL || ($mode === result_validity::VALID) === $valid) {
+                    $rows[] = $row;
+                    $coverage['included'] += $valid ? 1 : 0;
+                }
+            }
+        }
+        $coverage['unestimated'] = local_analysis::$unestimated;
+        $coverage['measured'] += $coverage['unestimated'];
+        $this->scalecoverage = $coverage;
+
+        return $rows;
+    }
+
+    /** @var array|null What the last subscale_observations() let in, of what there was (#112). */
+    protected ?array $scalecoverage = null;
+
+    /**
+     * What the last subscale_observations() let in, of what there was.
+     *
+     * @return array measured (scale results with an answered item), included, frominvalid, unestimated,
+     *               reasons (code => n), uniformvalid, enginevalid, engineunknown.
+     */
+    public function scale_coverage(): array {
+        if ($this->scalecoverage === null) {
+            $this->subscale_observations();
+        }
+
+        return $this->scalecoverage;
     }
 
     /**
@@ -1066,9 +1205,19 @@ class results_query {
      * Shown with every table and chart: without the aggregation level and the
      * observation count, a number on screen cannot be interpreted.
      *
+     * @param bool $fromlastpass From the last whole pass, where one has just ended, rather than reading again.
      * @return array{runs: int, attempts: int, replications: int, dispersion: string, computed: int}
      */
-    public function provenance(): array {
+    public function provenance(bool $fromlastpass = false): array {
+        if ($fromlastpass && $this->lastpass !== null) {
+            return [
+                'runs'         => count($this->runs()),
+                'attempts'     => $this->lastpass['attempts'],
+                'replications' => count($this->lastpass['replications']),
+                'dispersion'   => self::DISPERSION_CI95,
+                'computed'     => time(),
+            ];
+        }
         // Streamed: provenance is two counts and a set of replications, and
         // it used to materialise every observation to get them — the reason
         // the export tab and the JSON download still peaked above 150 MB on

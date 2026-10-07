@@ -621,7 +621,10 @@ final class audit_test extends \advanced_testcase {
         $profile = json_encode(['subscales' => array_fill(0, 100, ['key' => 'cat', 'theta' => 0.3])]);
         $trace = json_encode([
             'finaltheta' => 0.4, 'finalse' => 0.3, 'items' => range(1, 35),
-            'responses' => array_fill(1, 35, 1.0), 'nitems' => 35, 'steps' => 35,
+            // Mixed: all correct would rightly not be valid (#112), and this
+            // test is about how often the database is read, not about validity.
+            'responses' => array_combine(range(1, 35), array_map(static fn(int $q): float => (float) ($q % 2), range(1, 35))),
+            'nitems' => 35, 'steps' => 35,
             'stopreason' => 'se', 'scaleabilities' => [],
         ]);
 
@@ -1155,7 +1158,9 @@ final class audit_test extends \advanced_testcase {
 
         $trace = json_encode([
             'finaltheta' => 0.4, 'finalse' => 0.3, 'items' => range(1, 10),
-            'responses' => array_fill(1, 10, 1.0), 'nitems' => 10, 'steps' => 10,
+            // Mixed: all correct would rightly not be valid (#112); this test is about streaming.
+            'responses' => array_combine(range(1, 10), array_map(static fn(int $q): float => (float) ($q % 2), range(1, 10))),
+            'nitems' => 10, 'steps' => 10,
             'stopreason' => 'se', 'scaleabilities' => [],
         ]);
         for ($i = 0; $i < 25; $i++) {

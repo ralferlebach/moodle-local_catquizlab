@@ -51,6 +51,12 @@ final class local_deviation_variation_test extends \advanced_testcase {
                 'timecreated' => time(),
             ]);
             $scales[] = $catscaleid;
+            // Two items on each subscale, so that its validity can be measured (#112).
+            foreach ([2 * $subscale - 1, 2 * $subscale] as $questionid) {
+                $DB->insert_record('local_catquizlab_item', (object) ['runid' => $run->id, 'questionid' => $questionid,
+                    'assignedcatscaleid' => $catscaleid, 'truecatscaleid' => $catscaleid, 'itemname' => 'q' . $questionid,
+                    'timecreated' => time()]);
+            }
         }
         for ($i = 0; $i < 12; $i++) {
             $global = -1.5 + 0.25 * $i;
@@ -66,8 +72,9 @@ final class local_deviation_variation_test extends \advanced_testcase {
             $DB->insert_record('local_catquizlab_attempt', (object) [
                 'runid' => $run->id, 'personid' => $person->id, 'status' => attempt_scheduler::STATUS_COLLECTED,
                 'tries' => 1, 'timecreated' => time(), 'timemodified' => time(),
-                'tracejson' => json_encode(['finaltheta' => $global + 0.1, 'finalse' => 0.4, 'items' => [1, 2, 3],
-                    'nitems' => 3, 'stopreason' => 'se', 'scaleabilities' => array_fill_keys($scales, $global + 0.2)]),
+                'tracejson' => json_encode(['finaltheta' => $global + 0.1, 'finalse' => 0.4, 'items' => [1, 2, 3, 4],
+                    'responses' => [1 => 1.0, 2 => 0.0, 3 => 1.0, 4 => 0.0], 'nitems' => 4, 'stopreason' => 'se',
+                    'scaleabilities' => array_fill_keys($scales, $global + 0.2)]),
             ]);
         }
 
@@ -113,5 +120,40 @@ final class local_deviation_variation_test extends \advanced_testcase {
         $this->assertStringNotContainsString('data-region="catquizlab-novariation"', $html);
         $this->assertStringContainsString(get_string('chart:identity', 'local_catquizlab'), $html);
         $this->assertStringContainsString('<svg', $html);
+    }
+
+    /**
+     * Only valid scale results reach the plot; what was left out, and why, is said (#112).
+     *
+     * @return void
+     */
+    public function test_only_valid_scale_results_are_plotted(): void {
+        global $DB;
+        $this->resetAfterTest();
+        $this->setAdminUser();
+        $runid = $this->run_with([0.8, 0.6]);
+
+        // Subscale 1 (questions 1 and 2) answered all correctly in every sitting:
+        // its ability is not determined — the engine's 0 < f < 1.
+        foreach ($DB->get_records('local_catquizlab_attempt', ['runid' => $runid]) as $attempt) {
+            $trace = json_decode($attempt->tracejson, true);
+            $trace['responses'] = [1 => 1.0, 2 => 1.0, 3 => 1.0, 4 => 0.0];
+            $DB->set_field('local_catquizlab_attempt', 'tracejson', json_encode($trace), ['id' => $attempt->id]);
+        }
+
+        $query = new results_query(['runid' => $runid]);
+        $rows = $query->subscale_observations();
+        $this->assertCount(12, $rows, 'one valid scale result per sitting');
+        $this->assertSame([2], array_values(array_unique(array_column($rows, 'subscale'))));
+        $coverage = $query->scale_coverage();
+        $this->assertSame([24, 12, 12], [$coverage['measured'], $coverage['included'], $coverage['reasons']['fraction']]);
+
+        $html = $this->tab($runid);
+        $this->assertStringContainsString('12 / 24', $html);
+        $this->assertStringContainsString('all answers correct or all wrong', $html);
+
+        // Asked for all, both are there.
+        $all = new results_query(['runid' => $runid, 'validity' => 'all']);
+        $this->assertCount(24, $all->subscale_observations());
     }
 }

@@ -119,6 +119,10 @@ class attempt_collector {
             $engine['stopreason']
         );
         $trace['enginestatus'] = $engine['enginestatus'] ?? null;
+        // What the engine knows about the validity of this sitting (#112): N,
+        // share of points and SE per scale by its own functions, and its own
+        // verdict. Kept here so that results need not ask the engine again.
+        $trace['enginevalidity'] = engine_validity::measure((int) $attempt->engineattemptid);
         $debug = $engine['debug'] ?? [];
         // The debug_info blob comes first, since it carries the whole path; the
         // attempt row is the fallback that exists on every site.
@@ -280,9 +284,15 @@ class attempt_collector {
             return null;
         }
 
-        $catquiz = $DB->get_record(
+        // Both spellings of the component (catquiz::component_names()): a sitting
+        // whose result page was never saved keeps 'mod_adaptivequiz', and its
+        // engine row — ability, SE, status — was not found under 'adaptivequiz'.
+        $catquiz = $DB->get_record_select(
             'local_catquiz_attempts',
-            ['attemptid' => $engineattemptid, 'component' => 'adaptivequiz']
+            "attemptid = :attemptid AND component IN ('adaptivequiz', 'mod_adaptivequiz')",
+            ['attemptid' => $engineattemptid],
+            '*',
+            IGNORE_MULTIPLE
         );
         $finaltheta = $catquiz ? (float) $catquiz->personability_after_attempt : 0.0;
         $finalse = self::final_standarderror($catquiz);

@@ -87,6 +87,11 @@ class behat_local_catquizlab extends behat_base {
                     'tries' => 1, 'runtimems' => 4000,
                     'tracejson' => json_encode([
                         'finaltheta' => 0.1 * $i, 'finalse' => 0.34, 'items' => range(1, 15),
+                        // A mixed pattern: valid by the engine's definitions (#112).
+                        'responses' => array_combine(range(1, 15), array_map(
+                            static fn(int $q): float => (float) ($q % 2),
+                            range(1, 15)
+                        )),
                         'nitems' => 15, 'steps' => 15, 'stopreason' => 'se', 'scaleabilities' => [],
                     ]),
                     'timecreated' => time(), 'timemodified' => time(),

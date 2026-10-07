@@ -118,7 +118,9 @@ final class early_stop_validity_test extends \advanced_testcase {
         foreach ($lengths as $i => $n) {
             $person = $generator->create_person(['runid' => $run->id, 'abilityglobal' => 0.1 * ($i % 7)]);
             $trace = ['finaltheta' => 0.1 * ($i % 7) + 0.05, 'finalse' => $n < 15 ? 0.18 : 0.31,
-                'items' => range(1, $n), 'nitems' => $n, 'stopreason' => 'Keine weiteren Fragen', 'scaleabilities' => []];
+                'items' => range(1, $n), 'nitems' => $n,
+                'responses' => array_combine(range(1, $n), array_map(static fn(int $k): float => (float) ($k % 2), range(1, $n))),
+                'stopreason' => 'Keine weiteren Fragen', 'scaleabilities' => []];
             $engineattemptid = 0;
             if ($i === 0) {
                 // One from before 0.7.28: no code in its trace, the engine's table holds it.

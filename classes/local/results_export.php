@@ -217,6 +217,9 @@ class results_export {
         // Three things kept apart (#118): did the engine finish, did it end as
         // the design planned, may it go into the figures — and why not.
         'valid', 'validityreason', 'enginefinished', 'designstopreached',
+        // Both verdicts (#112): the engine's definitions for every strategy, and
+        // the engine's own verdict word for word (empty where it gave none).
+        'uniformvalid', 'enginevalid',
     ];
 
     /** @var array<int, array> Ability distribution and range by run, for this request. */
@@ -355,6 +358,8 @@ class results_export {
             $row['validityreason'] = (string) ($observation['validityreason'] ?? '');
             $row['enginefinished'] = !empty($observation['enginefinished']) ? 1 : 0;
             $row['designstopreached'] = !empty($observation['designstopreached']) ? 1 : 0;
+            $row['uniformvalid'] = !empty($observation['uniformvalid']) ? 1 : 0;
+            $row['enginevalid'] = $observation['enginevalid'] === null ? '' : ((int) $observation['enginevalid']);
             $ability = self::run_ability((int) $observation['runid']);
             $row['abilitydistribution'] = $ability['distribution'];
             $row['abilitymean'] = $ability['mean'];
@@ -468,11 +473,24 @@ class results_export {
             'stratum', 'severity', 'category', 'subscale',
             'truetheta', 'esttheta', 'truedelta', 'estdelta', 'error',
             'localse', 'items', 'within1se', 'within2se',
+            // Validity per scale (#112): by the engine's definitions, why not,
+            // and the engine's own verdict. 'items' is the engine's count (#113).
+            'fraction', 'scalevalid', 'scalereasons', 'enginescalevalid',
         ];
 
-        $rows = (static function () use ($query, $columns): \Generator {
+        $filter = $query->get_filter();
+        $mode = (string) ($filter['validity'] ?? result_validity::VALID);
+        $engine = ($filter['validityrule'] ?? engine_validity::RULE_UNIFORM) === engine_validity::RULE_ENGINE;
+        $rows = (static function () use ($query, $columns, $mode, $engine): \Generator {
             $source = local_analysis::each_row($query->each_observation(), $query->scale_maps());
             foreach ($source as $observation) {
+                // The scales of a valid sitting are not all valid: the export of
+                // the analysis holds the ones the figures use, unless all are asked for.
+                $valid = $engine ? $observation['enginescalevalid'] === true : (bool) $observation['scalevalid'];
+                if ($mode !== result_validity::ALL && (($mode === result_validity::VALID) !== $valid)) {
+                    continue;
+                }
+                $observation['scalereasons'] = implode(',', (array) $observation['scalereasons']);
                 $row = [];
                 foreach ($columns as $column) {
                     $value = $observation[$column] ?? null;
@@ -505,23 +523,31 @@ class results_export {
      *
      * @param results_query $query The data source.
      * @param string $level The export level.
+     * @param bool $afterrows Written after the rows: the provenance is taken from the pass that read them.
+     * @param int|null $rows The rows already written and counted; null to count them here.
      * @return array The metadata block.
      */
-    public static function metadata(results_query $query, string $level): array {
+    public static function metadata(results_query $query, string $level, bool $afterrows = false, ?int $rows = null): array {
         global $CFG, $USER;
 
         $plugin = new \stdClass();
         require($CFG->dirroot . '/local/catquizlab/version.php');
 
-        $provenance = $query->provenance();
+        // After the rows of a level that reads every sitting, from that pass.
+        $provenance = $query->provenance($afterrows && in_array($level, [self::LEVEL_ATTEMPT, self::LEVEL_SUBSCALE], true));
 
         // The columns and the count, not the dataset: metadata used to build
         // the whole export to say how many rows it had, and the JSON download
         // then built it a second time to write them.
+        // Counted while they were written, where they were: counting them here
+        // read the whole level once more — every sitting and every scale of it.
         $stream = self::iterate($query, $level);
-        $count = 0;
-        foreach ($stream['rows'] as $unused) {
-            $count++;
+        $count = $rows;
+        if ($count === null) {
+            $count = 0;
+            foreach ($stream['rows'] as $unused) {
+                $count++;
+            }
         }
         $dataset = ['columns' => $stream['columns']];
 
@@ -670,15 +696,20 @@ class results_export {
         } else {
             // Written by hand rather than json_encode() on the whole thing,
             // which would build the very string this exists to avoid.
-            fwrite($out, '{"metadata":' . json_encode(self::metadata($query, $level), JSON_UNESCAPED_SLASHES));
-            fwrite($out, ',"columns":' . json_encode($dataset['columns']));
+            // The metadata last: it counts the sittings, and the rows have just
+            // been read — written first, it read every sitting once more
+            // beforehand. The order of keys means nothing in JSON.
+            fwrite($out, '{"columns":' . json_encode($dataset['columns']));
             fwrite($out, ',"rows":[');
             $first = true;
+            $written = 0;
             foreach ($dataset['rows'] as $row) {
                 fwrite($out, ($first ? '' : ',') . json_encode($row, JSON_UNESCAPED_SLASHES));
                 $first = false;
+                $written++;
             }
-            fwrite($out, ']}');
+            fwrite($out, '],"metadata":' . json_encode(self::metadata($query, $level, true, $written), JSON_UNESCAPED_SLASHES)
+                . '}');
         }
 
         fclose($out);

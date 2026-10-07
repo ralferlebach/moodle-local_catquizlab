@@ -60,6 +60,7 @@ final class export_ability_test extends \advanced_testcase {
                 'status' => \local_catquizlab\local\attempt_scheduler::STATUS_COLLECTED, 'tries' => 1,
                 'timecreated' => time(), 'timemodified' => time(),
                 'tracejson' => json_encode(['finaltheta' => 0.1 * $i, 'finalse' => 0.4, 'items' => [11, 12],
+                    'responses' => [11 => 1.0, 12 => 0.0],
                     'nitems' => 2, 'stopreason' => 'se', 'scaleabilities' => []]),
             ]);
         }
