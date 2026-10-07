@@ -43,6 +43,11 @@ use local_catquizlab\local\test_flow;
 $definition = experiment_definition::example_baseline();
 $definition['name'] = 'Plots ' . date('Ymd-His');
 $definition['sweep']['factors']['strategy'] = ['fastest', 'allsubs'];
+// Six questions a sitting: within the budgets, so that the sittings are valid ones.
+$definition['budgets']['global'] = ['minitems' => 3, 'maxitems' => 30];
+$definition['budgets']['subscale'] = ['minitems' => 1, 'maxitems' => 10];
+$definition['persons']['count'] = 20;
+$definition['pool']['scales'] = ['categories' => 1, 'subcategories' => 1, 'itemspersubscale' => 6];
 $experimentid = (int) experiment_service::save($definition)['id'];
 experiment_service::create_sweep($experimentid);
 
@@ -82,6 +87,8 @@ foreach ($DB->get_records('local_catquizlab_run', ['experimentid' => $experiment
                 'items' => array_keys($played), 'nitems' => count($played),
                 'stopreason' => 'Reached maximum number of questions', 'scaleabilities' => [],
                 'abilitypath' => $path,
+                // Answered, some right and some wrong: a sitting whose validity can be judged (#112).
+                'responses' => array_combine(array_map('intval', array_keys($played)), [1.0, 0.0, 1.0, 1.0, 0.0, 1.0]),
                 'progress' => ['playedquestions' => $played, 'responses' => [], 'activescales' => [5],
                     'droppedscales' => [], 'lockedscales' => []],
             ]),

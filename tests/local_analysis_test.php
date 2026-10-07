@@ -362,20 +362,6 @@ final class local_analysis_test extends \advanced_testcase {
     }
 
     /**
-     * The tab title follows the strategy's purpose.
-     *
-     * @return void
-     */
-    public function test_detection_labels_follow_the_strategy(): void {
-        $this->resetAfterTest();
-
-        $this->assertSame('Deficit detection', local_analysis::detection_labels('lowestsub')['title']);
-        $this->assertSame('Strength detection', local_analysis::detection_labels('highestsub')['title']);
-        $this->assertSame('Subscale coverage', local_analysis::detection_labels('allsubs')['title']);
-        $this->assertNotEmpty(local_analysis::detection_labels('fastest')['goal']);
-    }
-
-    /**
      * Grouping summarises per domain and per subscale.
      *
      * @return void

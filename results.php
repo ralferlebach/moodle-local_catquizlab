@@ -113,7 +113,7 @@ $query = new results_query($filter);
 // Downloading takes exactly the filter that is on screen, so a reader cannot
 // look at one selection and receive another.
 $action = optional_param('action', '', PARAM_ALPHA);
-if ($action === 'csv' || $action === 'json') {
+if (in_array($action, ['csv', 'json', 'meta'], true)) {
     require_capability('local/catquizlab:export', $context);
 
     $level = optional_param('level', results_export::LEVEL_ATTEMPT, PARAM_ALPHA);
@@ -133,6 +133,24 @@ if ($action === 'csv' || $action === 'json') {
         $asked = optional_param('engineinfo', -1, PARAM_INT);
         results_export::$engineinfo = $cost['seconds'] <= results_export::ENGINE_INFO_HARD_LIMIT
             && ($asked === 1 || ($asked === -1 && $cost['seconds'] <= results_export::ENGINE_INFO_SOFT_LIMIT));
+    }
+
+    // The metadata on their own, for a CSV — which cannot carry them (#115):
+    // the rows are read and counted as for the file, so that both say the same.
+    if ($action === 'meta') {
+        header('Content-Type: application/json; charset=utf-8');
+        header('Content-Disposition: attachment; filename="'
+            . str_replace('.json', '.metadata.json', results_export::filename($query, $level, 'json')) . '"');
+        header('Cache-Control: no-store');
+        $written = 0;
+        foreach (results_export::iterate($query, $level)['rows'] as $unused) {
+            $written++;
+        }
+        echo json_encode(
+            results_export::metadata($query, $level, true, $written),
+            JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE
+        );
+        die();
     }
 
     $format = $action === 'csv' ? 'csv' : 'json';

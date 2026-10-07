@@ -78,14 +78,23 @@ class robustness_analysis {
         ];
     }
 
+    /** @var string The rule the local outcomes of the cells being computed are valid by. */
+    protected static string $rule = engine_validity::RULE_UNIFORM;
+
     /**
      * Compute the outcomes of every cell, and the deltas against its reference.
      *
      * @param array $observations Rows from {@see results_query::observations()}.
      * @param array $scalemaps Run id => scale map, for the local outcomes.
+     * @param string $rule Which verdict decides a scale result's validity: uniform rules or the engine's own.
      * @return array[] One row per cell, with 'outcomes', 'deltas' and 'reference'.
      */
-    public static function cells(array $observations, array $scalemaps = []): array {
+    public static function cells(
+        array $observations,
+        array $scalemaps = [],
+        string $rule = engine_validity::RULE_UNIFORM
+    ): array {
+        self::$rule = $rule;
         $grouped = [];
         foreach ($observations as $observation) {
             $grouped[self::cell_key($observation)][] = $observation;
@@ -177,6 +186,7 @@ class robustness_analysis {
      */
     protected static function local_outcomes(array $members, array $scalemaps): array {
         $empty = [
+            'localn' => 0,
             'localrmse' => null, 'localbias' => null,
             'within1se' => null, 'within2se' => null,
             'spearman'  => null, 'top3' => null, 'ndcg3' => null,
@@ -192,7 +202,8 @@ class robustness_analysis {
             if ($map === []) {
                 continue;
             }
-            $rows = local_analysis::subscale_rows($member + results_query::detail($member), $map);
+            // Valid scale results of valid sittings only, as every local figure (#112).
+            $rows = local_analysis::valid_rows($member + results_query::detail($member), $map, self::$rule);
             foreach ($rows as $row) {
                 $subscalerows[] = $row;
             }
@@ -210,6 +221,8 @@ class robustness_analysis {
         $aggregate = local_analysis::aggregate_ranking($rankings);
 
         return [
+            // How many valid scale results the local figures of the cell are made of.
+            'localn'    => $summary['n'],
             'localrmse' => $summary['rmse'],
             'localbias' => $summary['bias'],
             'within1se' => $summary['within1se'],

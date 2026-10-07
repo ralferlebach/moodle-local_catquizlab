@@ -210,6 +210,15 @@ if ($hassiteconfig) {
         PARAM_INT
     ));
 
+    // Results: below which share of the design a loss is said (#115).
+    $settings->add(new admin_setting_configtext(
+        $component . '/coverage_warning',
+        get_string('setting:coverage_warning', $component),
+        get_string('setting:coverage_warning_desc', $component),
+        80,
+        PARAM_INT
+    ));
+
     // Simulated-user login for the worker.
     $settings->add(new admin_setting_configselect(
         $component . '/worker_login_mode',

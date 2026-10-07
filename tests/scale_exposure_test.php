@@ -174,7 +174,10 @@ final class scale_exposure_test extends \advanced_testcase {
 
         /** @var \local_catquizlab_generator $generator */
         $generator = $this->getDataGenerator()->get_plugin_generator('local_catquizlab');
-        $run = $generator->create_run();
+        // An adaptive run: a sitting need not play the whole pool, as a fixed form must (#112).
+        $experiment = $generator->create_experiment(['strategy' => 'fastest',
+            'definition' => ['budgets' => ['global' => ['minitems' => 1, 'maxitems' => 100]]]]);
+        $run = $generator->create_run(['experimentid' => $experiment->id]);
         $scales = [];
         $questionid = 0;
         // Subscale 1 holds five items, 2 holds one, 3 holds two.

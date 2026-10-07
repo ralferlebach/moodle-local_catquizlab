@@ -106,9 +106,13 @@ class test_flow {
         }
 
         $count = $played !== [] ? count($played) : count($items);
+        // Which scales were active, locked or dropped after each step — where
+        // the engine recorded their changes (#106); null where it did not.
+        $states = scale_states::by_step($trace, $count);
         $steps = [];
         for ($index = 0; $index < $count; $index++) {
             $question = $played[$index] ?? null;
+            $counts = $states === null ? null : scale_states::counts($states[$index + 1] ?? []);
             $steps[] = [
                 'step'       => $index + 1,
                 'questionid' => $question !== null
@@ -120,9 +124,12 @@ class test_flow {
                 'fraction'   => self::score_of($question, $progress),
                 'ability'    => self::ability_at($path, $index),
                 // How many scales had an estimate after this step: what the
-                // engine's ability path records. Which were active, dropped or
-                // locked at that moment it does not record — only at the end.
+                // engine's ability path records.
                 'scalesestimated' => isset($path[$index]['abilities']) ? count((array) $path[$index]['abilities']) : null,
+                // And how many were active, locked or dropped after it.
+                'activescales'  => $counts === null ? null : $counts[scale_states::ACTIVE],
+                'lockedscales'  => $counts === null ? null : $counts[scale_states::LOCKED],
+                'droppedscales' => $counts === null ? null : $counts[scale_states::DROPPED],
             ];
         }
         $metrics = self::information_path($steps, $played, $trace);
@@ -145,12 +152,14 @@ class test_flow {
             'source' => $path !== [] ? self::SOURCE_PROGRESS : self::SOURCE_DEBUG,
             'steps'  => $metrics['steps'],
             'scales' => $scales,
+            // Step => scale => state, or null where the engine recorded no changes.
+            'scalestates' => $states,
             'final'  => $metrics['final'],
         ];
     }
 
     /** @var string[] The metrics a trace can be compared by (#109). */
-    public const METRICS = ['ability', 'se', 'ti', 'tiatn', 'tiremainingmin', 'tiremaining', 'scales'];
+    public const METRICS = ['ability', 'se', 'ti', 'tiatn', 'tiremainingmin', 'tiremaining', 'scales', 'activescales'];
 
     /**
      * TI@n and the remaining potential per step, from the engine.
@@ -245,7 +254,7 @@ class test_flow {
         if ($scaleid === 0) {
             $field = ['ability' => 'ability', 'se' => 'se', 'ti' => 'ti', 'tiatn' => 'tiatn',
                 'tiremainingmin' => 'tiremainingmin', 'tiremaining' => 'tiremaining',
-                'scales' => 'scalesestimated'][$metric] ?? 'ability';
+                'scales' => 'scalesestimated', 'activescales' => 'activescales'][$metric] ?? 'ability';
             foreach ($flow['steps'] as $step) {
                 $points[] = ['x' => $step['step'], 'y' => $step[$field] ?? null];
             }
@@ -323,6 +332,11 @@ class test_flow {
             } else if ($metric === 'ti' && $consistent) {
                 $y = $value['ti'];
             }
+            // For one scale, "active scales" is whether it was active after the step.
+            if ($metric === 'activescales') {
+                $states = $flow['scalestates'][$value['step']] ?? null;
+                $y = $states === null ? null : (int) (($states[$scaleid] ?? '') === scale_states::ACTIVE);
+            }
             $points[] = ['x' => $value['step'], 'y' => $y];
         }
 
@@ -334,7 +348,11 @@ class test_flow {
             }
         }
 
-        return ['points' => $points, 'consistent' => $consistent, 'status' => $status];
+        return ['points' => $points, 'consistent' => $consistent, 'status' => $status,
+            // The scale's state from step to step, where the engine recorded it.
+            'course' => isset($flow['scalestates']) && is_array($flow['scalestates'])
+                ? scale_states::course($flow['scalestates'], $scaleid)
+                : null];
     }
 
     /**

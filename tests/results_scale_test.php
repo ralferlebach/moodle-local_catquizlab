@@ -75,7 +75,10 @@ final class results_scale_test extends \advanced_testcase {
 
         /** @var \local_catquizlab_generator $generator */
         $generator = $this->getDataGenerator()->get_plugin_generator('local_catquizlab');
-        $run = $generator->create_run();
+        // An adaptive run: a sitting need not play the whole pool, as a fixed form must (#112).
+        $experiment = $generator->create_experiment(['strategy' => 'fastest',
+            'definition' => ['budgets' => ['global' => ['minitems' => 1, 'maxitems' => 100]]]]);
+        $run = $generator->create_run(['experimentid' => $experiment->id]);
         $DB->set_field('local_catquizlab_run', 'status', registry::STATUS_FINISHED, ['id' => $run->id]);
 
         // A real scale map — three categories of four subscales — and people

@@ -113,6 +113,36 @@ final class load_spreading_test extends \advanced_testcase {
     }
 
     /**
+     * A run whose workers still wait for their start is starting — not stalled, and not without a worker.
+     *
+     * @return void
+     */
+    public function test_a_run_with_waiting_workers_is_not_stalled(): void {
+        global $DB;
+        $this->resetAfterTest();
+        $this->setAdminUser();
+
+        /** @var \local_catquizlab_generator $generator */
+        $generator = $this->getDataGenerator()->get_plugin_generator('local_catquizlab');
+        $run = $generator->create_run();
+        $DB->set_field('local_catquizlab_run', 'status', \local_catquizlab\local\registry::STATUS_READY, ['id' => $run->id]);
+        $DB->insert_record('local_catquizlab_attempt', (object) [
+            'runid' => $run->id, 'personid' => 0, 'status' => attempt_scheduler::STATUS_QUEUED,
+            'tries' => 0, 'nextruntime' => 0, 'timecreated' => time(), 'timemodified' => time(),
+        ]);
+        $begins = time() + 60;
+        worker_registry::acquire_slot(1, 'pool-1');
+        worker_registry::plan_start('pool-1', $begins);
+        worker_registry::report('pool-1', 0, 'waiting');
+
+        $card = status_report::run($DB->get_record('local_catquizlab_run', ['id' => $run->id]));
+        $this->assertSame(status_report::GOOD, $card['level']);
+        $this->assertSame('Workers are starting one after another', $card['state']);
+        $this->assertStringContainsString('1 worker(s) are up and wait for their staggered start', $card['reason']);
+        $this->assertStringContainsString(worker_launcher::clock($begins), $card['reason']);
+    }
+
+    /**
      * Pressing "start workers" says when the workers begin, not only that they were started.
      *
      * @return void

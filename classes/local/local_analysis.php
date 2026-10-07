@@ -78,6 +78,9 @@ class local_analysis {
         }
         $thresholds = engine_validity::thresholds($runid);
         $scaleids = array_flip($scalemapindex);
+        // More than one engine scale for one subscale of the design: whose
+        // estimate would it be?
+        $keycounts = array_count_values($scalemapindex);
 
         $trueglobal = (float) $truth['global'];
         $estglobal = (float) ($trace['finaltheta'] ?? $observation['esttheta'] ?? 0.0);
@@ -96,11 +99,9 @@ class local_analysis {
                 }
                 continue;
             }
-            // Nothing measured and the count unknown: "no item on this scale"
-            // would be a statement nobody can make.
-            $reasons = $measured === null && $itemcount === null
-                ? [engine_validity::ITEMS_UNKNOWN]
-                : engine_validity::judge_scale($measured, $thresholds);
+            // Whether this scale result may go into the figures, decided
+            // where every such decision is (#112).
+            $reasons = result_validity::scale_reasons($measured, $itemcount, $thresholds, ($keycounts[$key] ?? 0) > 1);
             $enginescale = $measure['engine']['scales'][$catscaleid] ?? null;
             [$category, $subscale] = array_map('intval', explode(':', $key));
             $esttheta = (float) $estimates[$key];
@@ -148,6 +149,54 @@ class local_analysis {
         }
 
         return $rows;
+    }
+
+    /**
+     * The scale results of a sitting that may go into a local figure (#112).
+     *
+     * One rule for every view that computes from scale results — the local
+     * recovery, detection, robustness, the comparison of modes: the sitting is
+     * valid (the caller's observation says so), at least one item was actually
+     * administered on the scale, there is a truth and an estimate, the mapping
+     * is unique, and the scale result is valid — by the uniform rules or by the
+     * engine's own verdict, as the view's rule says.
+     *
+     * @param array $observation An observation with its detail (profile, trace).
+     * @param array $scalemapindex Engine scale id => "category:subscale".
+     * @param string $rule engine_validity::RULE_UNIFORM or RULE_ENGINE.
+     * @return array[] The rows of subscale_rows() that are valid; none for a sitting that is not.
+     */
+    public static function valid_rows(
+        array $observation,
+        array $scalemapindex,
+        string $rule = engine_validity::RULE_UNIFORM
+    ): array {
+        if (array_key_exists('valid', $observation) && !$observation['valid']) {
+            return [];
+        }
+        $valid = [];
+        foreach (self::subscale_rows($observation, $scalemapindex) as $row) {
+            if (self::row_is_valid($row, $rule)) {
+                $valid[] = $row;
+            }
+        }
+
+        return $valid;
+    }
+
+    /**
+     * Whether a scale result is valid by the rule asked for, and has an administered item.
+     *
+     * @param array $row A row of subscale_rows().
+     * @param string $rule engine_validity::RULE_UNIFORM or RULE_ENGINE.
+     * @return bool
+     */
+    public static function row_is_valid(array $row, string $rule = engine_validity::RULE_UNIFORM): bool {
+        if ($row['items'] === null || (int) $row['items'] <= 0) {
+            return false;
+        }
+
+        return $rule === engine_validity::RULE_ENGINE ? $row['enginescalevalid'] === true : (bool) $row['scalevalid'];
     }
 
     /** @var int Scales with an answered item but no estimate, counted by subscale_rows() since the last reset. */
@@ -432,35 +481,6 @@ class local_analysis {
      */
     public static function orientation(string $strategy): float {
         return $strategy === 'highestsub' ? -1.0 : 1.0;
-    }
-
-    /**
-     * The tab title and target wording that fit a strategy.
-     *
-     * Calling the tab "deficit detection" for a strategy that hunts strengths
-     * would misdescribe what is being measured, even though the arithmetic is
-     * the same.
-     *
-     * @param string $strategy The strategy key.
-     * @return array{title: string, goal: string}
-     */
-    public static function detection_labels(string $strategy): array {
-        $component = 'local_catquizlab';
-        $known = [
-            'lowestsub'  => 'deficit',
-            'highestsub' => 'strength',
-            'relsubs'    => 'relevant',
-            'allsubs'    => 'coverage',
-            'fastest'    => 'byproduct',
-            'balanced'   => 'balance',
-            'classic'    => 'baseline',
-        ];
-        $key = $known[$strategy] ?? 'deficit';
-
-        return [
-            'title' => get_string('detection:title' . $key, $component),
-            'goal'  => get_string('detection:goal' . $key, $component),
-        ];
     }
 
     /**

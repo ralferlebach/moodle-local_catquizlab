@@ -43,6 +43,7 @@ class reason_catalog {
         'target_se_reached',
         'max_items_reached',
         'fixed_form_complete',
+        'fixed_form_incomplete',
         'subscale_rule_satisfied',
         'pool_exhausted',
         'no_eligible_item_remaining',
@@ -65,7 +66,7 @@ class reason_catalog {
     public const CRITERION_STOPS = ['target_se_reached', 'fixed_form_complete', 'subscale_rule_satisfied'];
 
     /** @var string[] Ends that make a result invalid by themselves (#118): before the design allowed one. */
-    public const INVALID_OUTCOMES = ['no_eligible_item_before_minimum', 'ended_before_minimum'];
+    public const INVALID_OUTCOMES = ['no_eligible_item_before_minimum', 'ended_before_minimum', 'fixed_form_incomplete'];
 
     /**
      * The engine's own end codes, as it stores them in local_catquiz_attempts.status
@@ -254,6 +255,13 @@ class reason_catalog {
         }
         $strategy = (string) ($facts['strategy'] ?? '');
         if ($strategy !== '' && strategy_catalog::fixed_form($strategy)) {
+            // A fixed form is complete when it was played in full (#112): every
+            // item of the scale. Fewer is a form broken off, whatever ended it.
+            $form = (int) ($facts['poolsize'] ?? 0);
+            if ($form > 0 && array_key_exists('played', $facts) && (int) $facts['played'] < $form) {
+                return 'fixed_form_incomplete';
+            }
+
             return 'fixed_form_complete';
         }
 

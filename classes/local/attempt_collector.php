@@ -381,6 +381,9 @@ class attempt_collector {
             // progressretention is "trace". Without this key in the list the
             // richest source the engine offers was read and thrown away.
             'abilitytrace',
+            // Every change of a scale's state with its step, in trace mode
+            // (local_catquiz#133): what was active, locked or dropped when.
+            'scalestatetrace',
         ];
 
         return array_intersect_key($decoded, array_flip($keep));

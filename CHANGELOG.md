@@ -6,6 +6,137 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.7.34] — 2026-10-07 — #112 validity in one place, everywhere · #114 mode-specific detection · #115 what a figure is made of · #106/#109 scale states per step
+
+### One place decides validity (#112)
+`result_validity::evaluate_attempt()` is now the one function every view asks —
+overview, global and local figures, detection, robustness, comparison, exports.
+It returns `valid`, `reasoncode`, `reasons[]`, `played_items`,
+`required_min_items`, `trace_complete`, `engine_complete`,
+`technical_failure`, `strategy`, and both verdicts (uniform and the engine's).
+The rules come from the run's effective definition and the engine's settings;
+no number is written into the code:
+
+- **a fixed form must be played in full**: a classical test with fewer items
+  than its scale holds is `fixed_form_incomplete` — until now every classical
+  sitting counted as "form complete", however it ended;
+- **a time limit is neither valid nor invalid as such**: valid where the design
+  allowed an end there, not where a form was left unfinished or the minimum not
+  reached;
+- running out of the pool and the maximum number of questions remain regular
+  ends;
+- **no final ability** and **an engine that ended on an error of its own**
+  (`errorfetchnextquestion`, `emptyfirstquestionlist`, `errornoitems`) are no
+  results;
+- on top, as before, the engine's definitions: SE within its upper bound, the
+  minimum of answered items, a response pattern that determines an ability.
+
+For a scale, `result_validity::scale_reasons()`: an administered item (#113), a
+unique mapping to a subscale of the design (new: `mapping_ambiguous`), and the
+engine's definitions. `local_analysis::valid_rows()` is what every local figure
+is computed from.
+
+**This closes two gaps.** The detection tab and the local figures of the
+robustness tab computed from every scale result of a valid sitting — also the
+ones that were not valid themselves, and the ones without an administered item.
+Both now use valid scale results only; the robustness table says how many.
+
+### From what there was to what went in (#112 section 4, #115)
+Above every results view, folded: **the analysis population** —
+
+- sittings planned (the design), scheduled, started, ended by a technical
+  failure, collected, valid; "valid of all started" and "valid of all finished";
+  the invalid ones by reason code;
+- on views made of scale results: scale results with an administered item → of
+  those from valid sittings → of those with truth and estimate → of those valid
+  → of those with a standard error (what the agreement within 1 and 2 SE is made
+  of);
+- active filters, strategies with their counts, how many simulated people have
+  a valid sitting in every strategy, the run ids.
+
+And above the figures, by name, **where the design lost something**: a strategy
+without a collected sitting, a strategy or baseline without a valid one, a run
+below the warning threshold, twins without a valid sitting in every strategy,
+scale results below the threshold. The threshold is a new setting ("Warning
+threshold for the analysis population", 80 %, 0 = off).
+
+The exports carry the same as `metadata.population`, machine-readable, counted
+by the pass that wrote the rows; each CSV has a "Metadata (JSON)" download
+beside it. The subscale export now reads the rows of the analysis itself — what
+a figure counts and what the file holds cannot differ — and has a `valid`
+column.
+
+### Spread before and after the filter (#112 section 5)
+Subscales tab: per strategy, every collected scale result beside the valid
+ones — n, SD(Δtrue), SD(Δ̂), their ratio, correlation, RMSE, bias. Described,
+not explained: nothing on the page derives a "compression" from a correlation.
+
+### Mode-specific detection (#114)
+The tab "Deficit detection" is now **"Mode-specific detection"**. Each targeted
+mode is evaluated on its own, for what it is after:
+
+| Strategy | Role | True target |
+|---|---|---|
+| `relsubs` | Relevant scales | \|Δs,true\| ≥ threshold |
+| `lowestsub` | Deficit oriented | Δs,true ≤ −threshold |
+| `highestsub` | Strength oriented | Δs,true ≥ +threshold |
+| `allsubs`, `classic` | baselines | — compared with, not a truth |
+
+Other strategies have no role and are named as not evaluated. Per mode: its
+definition with threshold and orientation; valid sittings of all, included
+scale results of those with an administered item, true targets with a valid
+result; bias, RMSE, MAE, correlation, RMSE on the true targets, recall,
+precision, F1, Spearman, top-k agreement, NDCG. Recall counts every true target
+of a person — also the ones the sitting has no valid result for.
+
+Beside each baseline, **paired over the same simulated people**: both sides on
+the pairs, both sides on the scales valid in both sittings, the mean difference
+of the absolute local error, and a plot — one point per person. A twin without
+a valid sitting in the baseline is not replaced by anybody; where nothing
+pairs, the comparison is marked unpaired; a baseline that was not driven is
+"not available in the selected experiment/filter". Nothing is pooled over
+modes. Two new exports: every scale result with mode, twin, the twin's sitting
+in each baseline, validity and items; and the summary as shown.
+
+**To decide:** the engine's "relevant scales" strategy names no set of relevant
+scales of its own. "Relevant = |Δs,true| ≥ threshold" is this plugin's
+definition, and it is said on the page.
+
+### Scale states per step (#106, #109)
+With the engine's record of every change of a scale's state
+(local_catquiz#133, a patch for the engine comes with this release): the
+single-test view shows active, locked and dropped scales after every step and
+each scale's course ("steps 1–2 active; from step 3 dropped"); the comparison
+has "Active scales" as a metric, for the test and for a selected scale, and
+says the selected scale's course per sitting; the step export has
+`scales_active`, `scales_locked`, `scales_dropped`. Without the record — an
+engine before the change, or not in trace mode — nothing is made up: "N/A" and
+the states at the end, as before.
+
+### Found on the way
+- Sittings collected of which none is valid were answered with "No attempts
+  match this filter yet. Results appear once runs have been played." Now: how
+  many were collected, that none is valid, why — and the switch to see them.
+- `cli/seed_results.php` seeded sittings without responses and below the
+  minimum number of questions: invalid since 0.7.31, so the plots it is there
+  for were empty. It seeds valid sittings again.
+
+### Changed behaviour to know
+- Classical sittings that did not play their whole scale are no longer valid.
+- Local figures on the detection and robustness tabs can change: invalid scale
+  results no longer enter them.
+- The subscale export in "invalid only" now holds every scale result that is not
+  in the figures (it held the invalid scales of invalid sittings only).
+
+### Tests
+`result_validity_test`, `mode_detection_test`, `scale_states_test`; fixtures of
+adaptive runs where a fixed form used to be assumed.
+
+### Upgrade
+No change to the database. One new setting.
+
+---
+
 ## [0.7.33] — 2026-10-07 — #113: local error and local SE against the items administered on the scale
 
 ### The plots

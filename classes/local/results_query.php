@@ -266,7 +266,39 @@ class results_query {
     protected const EMPTY_COUNTS = [
         'uniformvalid' => 0, 'enginevalid' => 0, 'engineunknown' => 0, 'invalidreasons' => [],
         'total' => 0, 'valid' => 0, 'invalid' => 0, 'designstops' => 0, 'reasons' => [], 'bystrategy' => [], 'bycell' => [],
+        // Per run, for the analysis population (#115).
+        'byrun' => [],
     ];
+
+    /** @var array<string, array<string, bool>> The twins with a valid sitting, by strategy, of the last whole pass. */
+    protected array $validtwins = [];
+
+    /** @var array<string, bool> Every twin the last whole pass read a sitting of. */
+    protected array $alltwins = [];
+
+    /**
+     * Of the simulated people of the selection, how many have a valid sitting in every strategy of it (#115).
+     *
+     * A comparison of strategies is a comparison of the same people only for
+     * those; the others enter one side and not the other.
+     *
+     * @return array{complete: int, twins: int, strategies: int}
+     */
+    public function twin_completeness(): array {
+        $this->validity_counts();
+        $strategies = array_keys($this->available('strategy'));
+        $complete = 0;
+        foreach (array_keys($this->alltwins) as $twin) {
+            foreach ($strategies as $strategy) {
+                if (empty($this->validtwins[$strategy][$twin])) {
+                    continue 2;
+                }
+            }
+            $complete++;
+        }
+
+        return ['complete' => $complete, 'twins' => count($this->alltwins), 'strategies' => count($strategies)];
+    }
 
     /** @var array<int, ?int> The engine's status number by engine attempt, for the batch being read. */
     protected array $enginestatus = [];
@@ -580,6 +612,8 @@ class results_query {
         // sittings a comparison fetches as themselves.
         if ($this->onlyattempts === null) {
             $this->validitycounts = self::EMPTY_COUNTS;
+            $this->validtwins = [];
+            $this->alltwins = [];
         }
         $this->lastpass = null;
         $pass = ['attempts' => 0, 'replications' => []];
@@ -747,27 +781,25 @@ class results_query {
             'enginestatus' => $trace['enginestatus']
                 ?? ($this->enginestatus[(int) ($attempt->engineattemptid ?? 0)] ?? null),
         ];
-        $endcode = reason_catalog::outcome((string) ($trace['stopreason'] ?? ''), $facts);
-        $validity = result_validity::evaluate($endcode);
-
-        // Valid by the engine's definitions as well (#112): SE within its upper
-        // bound, enough items, a response pattern that determines an ability.
-        // Uniformly, every rule for every strategy — the default — and the
-        // engine's own verdict word for word beside it.
+        // Valid or not: decided in one place for every view alike (#112) —
+        // the end against the design, the engine's definitions of SE, items
+        // and response pattern, uniformly and as the engine's own verdict.
         $measure = $trace['enginevalidity'] ?? $this->engine_measure($attempt)
             ?? engine_validity::measure_from_trace($trace, (int) $attempt->runid);
         engine_validity::remember((int) $attempt->id, $measure);
-        $reasons = $validity['valid'] ? [] : [$endcode];
-        $reasons = array_merge($reasons, engine_validity::judge_attempt(
+        $rule = (string) ($this->filter['validityrule'] ?? engine_validity::RULE_UNIFORM);
+        $validity = result_validity::evaluate_attempt(
+            $trace,
+            $facts,
             $measure,
             engine_validity::thresholds((int) $attempt->runid),
-            $se
-        ));
-        $uniformvalid = $reasons === [];
-        $enginevalid = engine_validity::engine_attempt($measure);
-        $rule = (string) ($this->filter['validityrule'] ?? engine_validity::RULE_UNIFORM);
-        $valid = $rule === engine_validity::RULE_ENGINE ? $enginevalid === true : $uniformvalid;
-        $validity['valid'] = $valid;
+            $rule
+        );
+        $endcode = $validity['endcode'];
+        $reasons = $validity['reasons'];
+        $uniformvalid = $validity['uniformvalid'];
+        $enginevalid = $validity['enginevalid'];
+        $valid = $validity['valid'];
         $validity['reason'] = implode(',', $reasons);
         if ($this->onlyattempts === null) {
             $this->validitycounts['total']++;
@@ -777,6 +809,19 @@ class results_query {
             $this->validitycounts['engineunknown'] += $enginevalid === null ? 1 : 0;
             foreach ($reasons as $reason) {
                 $this->validitycounts['invalidreasons'][$reason] = ($this->validitycounts['invalidreasons'][$reason] ?? 0) + 1;
+            }
+            $runid = (int) $attempt->runid;
+            $this->validitycounts['byrun'][$runid]['total'] = ($this->validitycounts['byrun'][$runid]['total'] ?? 0) + 1;
+            $this->validitycounts['byrun'][$runid]['valid'] = ($this->validitycounts['byrun'][$runid]['valid'] ?? 0)
+                + ($valid ? 1 : 0);
+            // The simulated person, whatever the strategy: for what is paired (#115).
+            if ((string) ($person->twinid ?? '') !== '') {
+                $twin = mode_detection::pair_key(['twinid' => (string) $person->twinid, 'tier' => $this->tier_of_run($run)]
+                    + $run);
+                $this->alltwins[$twin] = true;
+                if ($valid) {
+                    $this->validtwins[(string) $run['strategy']][$twin] = true;
+                }
             }
             $this->validitycounts['designstops'] += $validity['criterionstop'] ? 1 : 0;
             $this->validitycounts['reasons'][$endcode] = ($this->validitycounts['reasons'][$endcode] ?? 0) + 1;
@@ -1094,6 +1139,27 @@ class results_query {
      * @return array[] Rows from {@see local_analysis::rows()}.
      */
     public function subscale_observations(): array {
+        // Read once per evaluation: the population block and the tab below it
+        // ask for the same rows (#115).
+        if ($this->scalerows === null) {
+            $this->scalerows = iterator_to_array($this->each_subscale_observation(), false);
+        }
+
+        return $this->scalerows;
+    }
+
+    /**
+     * The per-subscale observations, one at a time — and, once read to the end, what they are made of.
+     *
+     * The analysis and the export read the same rows by the same rule (#115):
+     * what the figures count and what a file holds cannot then differ. After
+     * the last row, scale_coverage() says what went in of what there was.
+     *
+     * @param bool $withzero Also the scale results estimated although no item of the scale was administered —
+     *      where not only valid ones are asked for: they are part of the raw data, and of no figure.
+     * @return \Generator<array>
+     */
+    public function each_subscale_observation(bool $withzero = false): \Generator {
         // Every sitting is read, valid or not, so that what went in can be said
         // against all there was (#112): the denominator is every scale result
         // with at least one answered item.
@@ -1105,9 +1171,18 @@ class results_query {
             // The item counts behind it (#113): where they are from, what was
             // found on the way, and the scale results that are not "measured"
             // — none administered for certain, or not known.
-            'sittings' => 0, 'sources' => [], 'diagnosis' => [], 'unknownitems' => 0, 'withoutitems' => 0];
+            'sittings' => 0, 'sources' => [], 'diagnosis' => [], 'unknownitems' => 0, 'withoutitems' => 0,
+            // From what there was to what went in, step by step (#112, section 4):
+            // of the scale results with an administered item, those of valid
+            // sittings; of those, the ones with truth and estimate; of those,
+            // the valid ones — and of those, the ones with a standard error,
+            // which the figures that need one are made of.
+            'chain' => ['fromvalid' => 0, 'paired' => 0, 'valid' => 0, 'withse' => 0],
+            // Per strategy, every collected scale result against the valid
+            // ones (#112, section 5): the spread of the true and the estimated
+            // deviation, their correlation and error.
+            'spread' => []];
         local_analysis::$unestimated = 0;
-        $rows = [];
         $maps = $this->scale_maps();
         foreach ($all->each_observation() as $observation) {
             $map = $maps[$observation['runid']] ?? [];
@@ -1122,7 +1197,11 @@ class results_query {
             foreach ($exposure['diagnosis'] as $code) {
                 $coverage['diagnosis'][$code] = ($coverage['diagnosis'][$code] ?? 0) + 1;
             }
+            $unestimatedbefore = local_analysis::$unestimated;
+            $strategy = (string) $observation['strategy'];
             foreach (local_analysis::subscale_rows($full + ['exposure' => $exposure], $map) as $row) {
+                // Every collected scale result with an estimate, whatever became of it.
+                self::accumulate($coverage['spread'][$strategy]['all'], $row);
                 if ($row['items'] === null) {
                     // Not known is not none (#113): not in the denominator of
                     // scales with administered items, not in the figures —
@@ -1130,13 +1209,17 @@ class results_query {
                     $coverage['unknownitems']++;
                     $row['valid'] = false;
                     if ($mode !== result_validity::VALID) {
-                        $rows[] = $row;
+                        yield $row;
                     }
                     continue;
                 }
                 if ($row['items'] <= 0) {
                     // Estimated without an item of its own: nothing local to judge.
                     $coverage['withoutitems']++;
+                    $row['valid'] = false;
+                    if ($withzero && $mode !== result_validity::VALID) {
+                        yield $row;
+                    }
                     continue;
                 }
                 $coverage['measured']++;
@@ -1153,17 +1236,98 @@ class results_query {
                     }
                 }
                 $row['valid'] = $valid;
-                if ($mode === result_validity::ALL || ($mode === result_validity::VALID) === $valid) {
-                    $rows[] = $row;
-                    $coverage['included'] += $valid ? 1 : 0;
+                if ($attemptvalid) {
+                    $coverage['chain']['fromvalid']++;
+                    $coverage['chain']['paired']++;
                 }
+                if ($valid) {
+                    $coverage['chain']['valid']++;
+                    $coverage['chain']['withse'] += $row['localse'] !== null ? 1 : 0;
+                    self::accumulate($coverage['spread'][$strategy]['valid'], $row);
+                }
+                if ($mode === result_validity::ALL || ($mode === result_validity::VALID) === $valid) {
+                    $coverage['included'] += $valid ? 1 : 0;
+                    yield $row;
+                }
+            }
+            // With an item but without an estimate: of a valid sitting, and not a pair.
+            if ($attemptvalid) {
+                $coverage['chain']['fromvalid'] += local_analysis::$unestimated - $unestimatedbefore;
+            }
+        }
+        ksort($coverage['spread']);
+        foreach ($coverage['spread'] as $strategy => $sets) {
+            foreach (['all', 'valid'] as $set) {
+                $coverage['spread'][$strategy][$set] = self::spread_of($sets[$set] ?? null);
             }
         }
         $coverage['unestimated'] = local_analysis::$unestimated;
         $coverage['measured'] += $coverage['unestimated'];
         $this->scalecoverage = $coverage;
+    }
 
-        return $rows;
+    /**
+     * What the last read of the subscale observations was made of — null where none has been read to the end.
+     *
+     * @return array|null
+     */
+    public function scale_coverage_if_read(): ?array {
+        return $this->scalecoverage;
+    }
+
+    /** @var array|null The rows of the last subscale_observations(). */
+    protected ?array $scalerows = null;
+
+    /**
+     * Add a scale result to the running sums of a set.
+     *
+     * @param array|null $sums The sums so far, by reference.
+     * @param array $row A subscale row.
+     * @return void
+     */
+    protected static function accumulate(?array &$sums, array $row): void {
+        $sums = $sums ?? ['n' => 0, 'x' => 0.0, 'y' => 0.0, 'xx' => 0.0, 'yy' => 0.0, 'xy' => 0.0, 'e' => 0.0, 'ee' => 0.0];
+        $x = (float) $row['truedelta'];
+        $y = (float) $row['estdelta'];
+        $sums['n']++;
+        $sums['x'] += $x;
+        $sums['y'] += $y;
+        $sums['xx'] += $x * $x;
+        $sums['yy'] += $y * $y;
+        $sums['xy'] += $x * $y;
+        $sums['e'] += $y - $x;
+        $sums['ee'] += ($y - $x) * ($y - $x);
+    }
+
+    /**
+     * The spread of a set of scale results: described, not explained (#112, section 5).
+     *
+     * The standard deviation of the true and of the estimated local deviation
+     * and their ratio; the correlation and the error beside them. A ratio below
+     * one says the estimates vary less than the truth — it does not say why.
+     *
+     * @param array|null $sums From accumulate().
+     * @return array{n: int, sdtrue: ?float, sdest: ?float, ratio: ?float, correlation: ?float, rmse: ?float, bias: ?float}
+     */
+    protected static function spread_of(?array $sums): array {
+        $n = (int) ($sums['n'] ?? 0);
+        if ($n < 2) {
+            return ['n' => $n, 'sdtrue' => null, 'sdest' => null, 'ratio' => null, 'correlation' => null,
+                'rmse' => $n > 0 ? round(sqrt($sums['ee'] / $n), 6) : null, 'bias' => $n > 0 ? round($sums['e'] / $n, 6) : null];
+        }
+        $varx = max(0.0, ($sums['xx'] - $sums['x'] * $sums['x'] / $n) / ($n - 1));
+        $vary = max(0.0, ($sums['yy'] - $sums['y'] * $sums['y'] / $n) / ($n - 1));
+        $cov = ($sums['xy'] - $sums['x'] * $sums['y'] / $n) / ($n - 1);
+
+        return [
+            'n' => $n,
+            'sdtrue' => round(sqrt($varx), 6),
+            'sdest' => round(sqrt($vary), 6),
+            'ratio' => $varx > 1e-12 ? round(sqrt($vary / $varx), 6) : null,
+            'correlation' => $varx > 1e-12 && $vary > 1e-12 ? round($cov / sqrt($varx * $vary), 6) : null,
+            'rmse' => round(sqrt($sums['ee'] / $n), 6),
+            'bias' => round($sums['e'] / $n, 6),
+        ];
     }
 
     /** @var array|null What the last subscale_observations() let in, of what there was (#112). */

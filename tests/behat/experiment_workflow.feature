@@ -172,8 +172,9 @@ Feature: Defining and running CAT experiments from the web interface
     When I follow "Subscales"
     Then I should see "Local diagnostic performance"
     And I should see "No subscale-level data under this filter."
-    When I follow "Deficit detection"
-    Then I should see "No subscale-level data under this filter."
+    When I follow "Mode-specific detection"
+    Then I should see "Each targeted mode on its own"
+    And I should see "No targeted mode"
 
   Scenario: The robustness tab explains its reference even with nothing to compare
     Given the following "local_catquizlab > experiment" exists:

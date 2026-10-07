@@ -54,6 +54,11 @@ class local_catquizlab_generator extends component_generator_base {
         if (isset($record['name'])) {
             $definition['name'] = $record['name'];
         }
+        // Any other part of the definition, laid over the baseline: budgets, pool, persons.
+        if (isset($record['definition']) && is_array($record['definition'])) {
+            $definition = array_replace_recursive($definition, $record['definition']);
+            unset($record['definition']);
+        }
 
         $defaults = [
             'name'         => $definition['name'] ?? ('Experiment '

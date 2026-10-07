@@ -95,10 +95,18 @@ class results_export {
     /** @var string One row per step of every sitting (#106). */
     public const LEVEL_STEP = 'step';
 
+    /** @var string Export level: mode-specific detection, one row per scale result (#114). */
+    public const LEVEL_DETECTION = 'detection';
+
+    /** @var string Export level: mode-specific detection, the summary per mode and baseline (#114). */
+    public const LEVEL_DETECTIONSUMMARY = 'detectionsummary';
+
     /** @var string[] The columns of the step level. */
     public const STEP_COLUMNS = [
         'attemptid', 'runid', 'strategy', 'step', 'questionid', 'subscaleid', 'score',
         'esttheta', 'se', 'ti_played', 'ti_at_n', 'ti_remaining_min', 'ti_remaining_max', 'scales_estimated',
+        // After the step, from the engine's record of every change (#106): empty where it kept none.
+        'scales_active', 'scales_locked', 'scales_dropped',
     ];
 
     /**
@@ -113,6 +121,8 @@ class results_export {
             self::LEVEL_SUBSCALE => 'export:levelsubscale',
             self::LEVEL_ITEM     => 'export:levelitem',
             self::LEVEL_STEP     => 'export:levelstep',
+            self::LEVEL_DETECTION => 'export:leveldetection',
+            self::LEVEL_DETECTIONSUMMARY => 'export:leveldetectionsummary',
         ];
     }
 
@@ -169,6 +179,11 @@ class results_export {
                 // which each observation now carries as a count.
                 return $total;
 
+            case self::LEVEL_DETECTION:
+            case self::LEVEL_DETECTIONSUMMARY:
+                // Known once it is computed: every sitting of every validity is read for it.
+                return -1;
+
             default:
                 return 0;
         }
@@ -193,6 +208,8 @@ class results_export {
                 return ['columns' => self::ATTEMPT_COLUMNS, 'rows' => self::attempt_rows($query->each_observation())];
             case self::LEVEL_SUBSCALE:
                 return self::subscales($query, true);
+            case self::LEVEL_DETECTION:
+                return mode_detection::export($query);
             default:
                 return self::dataset($query, $level);
         }
@@ -333,6 +350,9 @@ class results_export {
                     'ti_remaining_min' => $step['tiremainingmin'] ?? null,
                     'ti_remaining_max' => $step['tiremaining'] ?? null,
                     'scales_estimated' => $step['scalesestimated'],
+                    'scales_active'    => $step['activescales'] ?? null,
+                    'scales_locked'    => $step['lockedscales'] ?? null,
+                    'scales_dropped'   => $step['droppedscales'] ?? null,
                 ];
             }
         }
@@ -390,6 +410,11 @@ class results_export {
                 return self::items($query);
             case self::LEVEL_STEP:
                 return ['columns' => self::STEP_COLUMNS, 'rows' => iterator_to_array(self::step_rows($query), false)];
+            case self::LEVEL_DETECTION:
+                $detection = mode_detection::export($query);
+                return ['columns' => $detection['columns'], 'rows' => iterator_to_array($detection['rows'], false)];
+            case self::LEVEL_DETECTIONSUMMARY:
+                return mode_detection::summary_rows(mode_detection::analyse(mode_detection::sittings($query)));
             default:
                 throw new \coding_exception('Unknown export level: ' . $level);
         }
@@ -481,20 +506,15 @@ class results_export {
             // is certain. Where it is from, why it is not known, its diagnostic
             // class, and the engine's count of answered items beside it.
             'itemssource', 'itemsreason', 'itemclass', 'itemsanswered',
+            // In the figures or not (#115): a valid scale result of a valid sitting.
+            'valid',
         ];
 
-        $filter = $query->get_filter();
-        $mode = (string) ($filter['validity'] ?? result_validity::VALID);
-        $engine = ($filter['validityrule'] ?? engine_validity::RULE_UNIFORM) === engine_validity::RULE_ENGINE;
-        $rows = (static function () use ($query, $columns, $mode, $engine): \Generator {
-            $source = local_analysis::each_row($query->each_observation(), $query->scale_maps());
-            foreach ($source as $observation) {
-                // The scales of a valid sitting are not all valid: the export of
-                // the analysis holds the ones the figures use, unless all are asked for.
-                $valid = $engine ? $observation['enginescalevalid'] === true : (bool) $observation['scalevalid'];
-                if ($mode !== result_validity::ALL && (($mode === result_validity::VALID) !== $valid)) {
-                    continue;
-                }
+        // The rows of the analysis itself, by its rule (#115): a valid scale
+        // result of a valid sitting, unless the invalid ones or all are asked
+        // for — which then come with their reasons, the certain zeros included.
+        $rows = (static function () use ($query, $columns): \Generator {
+            foreach ($query->each_subscale_observation(true) as $observation) {
                 $observation['scalereasons'] = implode(',', (array) $observation['scalereasons']);
                 $row = [];
                 foreach ($columns as $column) {
@@ -572,6 +592,12 @@ class results_export {
             // the share expected outside the range, and the range written to
             // the engine's root scale (#102) — as the manifest records them.
             'ability'       => self::ability_by_run($query),
+            // What the rows are made of, from the plan down (#115): sittings
+            // planned, started, failed, collected, valid; why the others are
+            // not; where the design lost something — and, for a level made of
+            // scale results, the same for those. Counted by the pass that
+            // wrote the rows, so the two cannot differ.
+            'population'    => analysis_population::metadata($query, $query->scale_coverage_if_read()),
             'exported'      => date('c'),
             'exportedby'    => (int) ($USER->id ?? 0),
             'plugin'        => [

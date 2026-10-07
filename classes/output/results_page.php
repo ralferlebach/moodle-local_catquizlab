@@ -93,20 +93,6 @@ class results_page {
     }
 
     /**
-     * The tab label for the detection tab, which depends on the strategy.
-     *
-     * @return string|null The label, or null when no single strategy is selected.
-     */
-    protected function detection_tab_label(): ?string {
-        $strategies = array_keys($this->query->available('strategy'));
-        if (count($strategies) !== 1) {
-            return null;
-        }
-
-        return local_analysis::detection_labels($strategies[0])['title'];
-    }
-
-    /**
      * Whether a tab key is known.
      *
      * @param string $tab The tab key.
@@ -195,13 +181,9 @@ class results_page {
      */
     public function render_tabs(): string {
         $items = '';
-        $detection = $this->detection_tab_label();
+        // The detection tab has one name whatever is selected (#114): what it
+        // shows is said mode by mode inside it.
         foreach (self::tabs() as $key => $label) {
-            if ($key === 'deficits' && $detection !== null) {
-                // Naming the tab "deficit detection" for a strategy that hunts
-                // strengths would misdescribe what is measured there.
-                $label = $detection;
-            }
             $url = new \moodle_url('/local/catquizlab/results.php', $this->filter + ['tab' => $key]);
             $active = $key === $this->tab;
             $items .= \html_writer::tag(
@@ -328,13 +310,28 @@ class results_page {
         // match is to be seen before there is anything to read (#117).
         [$problems, $population] = $this->render_population();
         if ($provenance['attempts'] === 0) {
+            // Collected, but nothing of it in this view (#112, #115): not
+            // "nothing has been played". Forty sittings of which none is valid
+            // read as an experiment that had not run — when the reasons, and
+            // the way to see them, were one line further down.
+            $counts = $this->query->validity_counts();
+            if ($counts['total'] > 0) {
+                $mode = (string) ($this->filter['validity'] ?? 'valid');
+                return $problems . \html_writer::div(
+                    get_string($mode === 'invalid' ? 'results:noneinvalid' : 'results:nonevalid', $component, (object) [
+                        'total' => $counts['total'],
+                    ]),
+                    'alert alert-warning',
+                    ['data-region' => 'catquizlab-nonevalid']
+                ) . $population . $this->render_coverage() . $this->render_analysis_population();
+            }
             // The two cases -- "nothing matches this filter" and "nothing has been run" -- look the
             // same from here and mean entirely different things. Saying which
             // one it is turns a dead end into a next step.
             return $problems . \html_writer::div(
                 $this->explain_absence(),
                 'alert alert-info'
-            ) . $population;
+            ) . $population . $this->render_analysis_population();
         }
 
         $out = \html_writer::div(
@@ -348,7 +345,7 @@ class results_page {
             'small text-muted mb-1'
         );
 
-        $out = $problems . $out . $population . $this->render_coverage();
+        $out = $problems . $out . $population . $this->render_coverage() . $this->render_analysis_population();
 
         // What the ground truth was drawn from, named (#105): mean and
         // standard deviation, distribution and range of the selected runs.
@@ -384,6 +381,112 @@ class results_page {
         }
 
         return $out;
+    }
+
+    /** @var string[] The tabs whose figures are made of scale results as well. */
+    protected const SCALE_TABS = ['subscales', 'robustness'];
+
+    /**
+     * What the figures of this view are made of, from the plan down — and where the design lost something (#115).
+     *
+     * @return string
+     */
+    protected function render_analysis_population(): string {
+        $component = 'local_catquizlab';
+        $population = \local_catquizlab\local\analysis_population::class;
+        $funnel = $population::funnel($this->query);
+        if ($funnel['scheduled'] === 0 && $funnel['planned'] === 0) {
+            return '';
+        }
+        $scales = in_array($this->tab, self::SCALE_TABS, true) ? $this->query->scale_coverage() : null;
+        $percent = static fn(int $n, int $of): string => $of > 0 ? format_float(100 * $n / $of, 1) : '–';
+        $share = static fn(string $key, int $n, int $of): string => get_string($key, $component, (object) [
+            'valid' => $n, 'of' => $of, 'percent' => $percent($n, $of),
+        ]);
+
+        // Above the figures, by name: what is missing from the design.
+        $out = '';
+        $losses = $population::design_loss($funnel, $scales);
+        if ($losses !== []) {
+            $out .= \html_writer::div(
+                \html_writer::tag('strong', get_string('population:lossheading', $component))
+                    . \html_writer::alist(array_map([$population, 'message'], $losses)),
+                'alert alert-warning',
+                ['data-region' => 'catquizlab-designloss']
+            );
+        }
+
+        $rows = [
+            [get_string('population:planned', $component), $funnel['planned']],
+            [get_string('population:scheduled', $component), $funnel['scheduled']],
+            [get_string('population:started', $component), $funnel['started']],
+            [get_string('population:failed', $component), $funnel['failed']],
+            [get_string('population:collected', $component), $funnel['collected']],
+            [get_string('population:valid', $component), $funnel['valid'] . ' — '
+                . $share('population:validofstarted', $funnel['valid'], $funnel['started']) . '; '
+                . $share('population:validoffinished', $funnel['valid'], $funnel['collected'])],
+        ];
+        $reasons = [];
+        foreach ($funnel['invalidreasons'] as $code => $n) {
+            $label = in_array($code, reason_catalog::OUTCOMES, true) ? reason_catalog::label($code)
+                : \local_catquizlab\local\engine_validity::label($code);
+            $reasons[] = s($label) . ' [' . s($code) . ']: ' . (int) $n;
+        }
+        $rows[] = [get_string('population:invalid', $component), $funnel['invalid'] . ($reasons === [] ? ''
+            : ' — ' . implode('; ', $reasons))];
+
+        if ($scales !== null) {
+            $measured = (int) $scales['measured'];
+            $chain = $scales['chain'];
+            $of = static fn(int $n): string => $n . ' (' . $percent($n, $measured) . ' %)';
+            $rows[] = [get_string('population:scaleswithitems', $component), $measured];
+            $rows[] = [get_string('population:scalesfromvalid', $component), $of((int) $chain['fromvalid'])];
+            $rows[] = [get_string('population:scalespaired', $component), $of((int) $chain['paired'])];
+            $rows[] = [get_string('population:scalesvalid', $component), $of((int) $chain['valid'])];
+            $rows[] = [get_string('population:scaleswithse', $component), $of((int) $chain['withse'])];
+        } else if ($this->tab !== 'deficits') {
+            $rows[] = [get_string('population:scaleswithitems', $component), get_string('population:scalesnone', $component)];
+        }
+
+        $filters = [];
+        foreach ($funnel['filter'] as $key => $value) {
+            if (is_scalar($value) && (string) $value !== '') {
+                $filters[] = s($key) . ' = ' . s((string) $value);
+            }
+        }
+        $rows[] = [get_string('population:filters', $component), $filters === []
+            ? get_string('population:nofilter', $component) : implode(', ', $filters)];
+        $strategies = [];
+        foreach ($funnel['strategies'] as $strategy => $counts) {
+            $strategies[] = get_string('population:strategyline', $component, (object) ([
+                'label' => \local_catquizlab\local\strategy_catalog::has($strategy)
+                    ? \local_catquizlab\local\strategy_catalog::label($strategy) : $strategy,
+            ] + $counts));
+        }
+        $rows[] = [get_string('population:strategies', $component), \html_writer::alist(array_map('s', $strategies), [
+            'class' => 'mb-0 pl-3',
+        ])];
+        if ($funnel['pairs']['strategies'] > 1 && $funnel['pairs']['twins'] > 0) {
+            $rows[] = ['', get_string('population:twins', $component, (object) ($funnel['pairs'] + [
+                'percent' => $percent($funnel['pairs']['complete'], $funnel['pairs']['twins']),
+            ]))];
+        }
+        $rows[] = [get_string('population:runids', $component), implode(', ', $funnel['runids'])];
+
+        $table = new \html_table();
+        $table->attributes['class'] = 'generaltable table-sm w-auto mb-2';
+        $table->data = $rows;
+
+        return $out . \html_writer::tag(
+            'details',
+            \html_writer::tag('summary', get_string('population:summary', $component, (object) [
+                'valid' => $funnel['valid'], 'planned' => $funnel['planned'],
+                'percent' => $percent($funnel['valid'], $funnel['planned']),
+            ]), ['class' => 'small', 'style' => 'cursor: pointer;'])
+            . \html_writer::tag('p', get_string('population:heading', $component), ['class' => 'small text-muted mb-1 mt-2'])
+            . \html_writer::table($table),
+            ['class' => 'mb-2', 'data-region' => 'catquizlab-analysis-population'] + ($losses !== [] ? ['open' => 'open'] : [])
+        );
     }
 
     /**
@@ -843,7 +946,15 @@ class results_page {
                     'tab' => 'export', 'level' => $level, 'action' => 'json',
                 ]),
                 get_string('export:json', $component),
-                ['class' => 'btn btn-sm btn-outline-secondary']
+                ['class' => 'btn btn-sm btn-outline-secondary mr-2']
+            );
+            // What a CSV cannot say about itself: its population, filters and losses (#115).
+            $links .= \html_writer::link(
+                new \moodle_url('/local/catquizlab/results.php', $this->filter + [
+                    'tab' => 'export', 'level' => $level, 'action' => 'meta',
+                ]),
+                get_string('export:metadatadownload', $component),
+                ['class' => 'btn btn-sm btn-outline-secondary', 'data-region' => 'catquizlab-export-metadata']
             );
 
             // The step level: what TI@n would cost, said before it is asked for (#99).
@@ -884,6 +995,7 @@ class results_page {
         $metadata = results_export::metadata($this->query, results_export::LEVEL_ATTEMPT);
         $out .= \html_writer::tag('h3', get_string('export:metadata', $component), ['class' => 'h5 mt-4']);
         $out .= \html_writer::tag('p', get_string('export:metadataexplain', $component), ['class' => 'text-muted']);
+        $out .= \html_writer::tag('p', get_string('export:idsnote', $component), ['class' => 'text-muted small']);
         $out .= \html_writer::tag(
             'pre',
             s(json_encode(
@@ -1111,7 +1223,9 @@ class results_page {
      */
     /** @var string[] Every plot type on the results pages, for keeping their axis settings. */
     public const PLOT_TYPES = ['lengthprecision', 'recovery', 'error', 'singletest', 'strength', 'localdeviation',
-        'exposure', 'comparison', 'localerroritems', 'localseitems'];
+        'exposure', 'comparison', 'localerroritems', 'localseitems',
+        'moderelevantallsubs', 'moderelevantclassic', 'modedeficitallsubs', 'modedeficitclassic',
+        'modestrengthallsubs', 'modestrengthclassic'];
 
     /**
      * A plot's axes and export, from its settings (#108).
@@ -1373,6 +1487,7 @@ class results_page {
             'tiremainingmin' => get_string('flow:tiremainingmin', $component),
             'tiremaining' => get_string('flow:tiremaining', $component),
             'scales' => get_string('flow:scalesestimated', $component),
+            'activescales' => get_string('flow:activescalesmetric', $component),
         ];
         $chart = new scatter_chart(
             get_string('compare:heading', $component),
@@ -1381,7 +1496,8 @@ class results_page {
         );
         $chart->set_axes(
             axis_scale::INTEGER,
-            $metric === 'ability' ? axis_scale::SYMMETRIC : ($metric === 'scales' ? axis_scale::INTEGER : axis_scale::LINEAR),
+            $metric === 'ability' ? axis_scale::SYMMETRIC
+                : (in_array($metric, ['scales', 'activescales'], true) ? axis_scale::INTEGER : axis_scale::LINEAR),
             ['yatleast' => $metric === 'ability' ? $this->ability_halfrange() : 0, 'yfromzero' => $metric !== 'ability']
         );
         $chart->set_basis($this->plot_basis());
@@ -1395,6 +1511,9 @@ class results_page {
         // left may still be played — not a fault, and said so.
         if (in_array($metric, ['tiremaining', 'tiremainingmin'], true)) {
             $notes[] = get_string('compare:remainingnote', $component);
+        }
+        if ($metric === 'activescales' && $scaleid > 0) {
+            $notes[] = get_string('compare:scaleactivenote', $component);
         }
         foreach ($selected as $observation) {
             $detail = $observation + results_query::detail($observation);
@@ -1440,12 +1559,25 @@ class results_page {
             $chart->add_series($label, $groupvalue, $series['points']);
             $traces[] = ['label' => $label, 'group' => $groupvalue, 'points' => $series['points']];
             if ($scaleid > 0) {
-                $notes[] = get_string('compare:scalestatus', $component, (object) [
-                    'attempt' => (int) $observation['attemptid'],
-                    'status' => $series['status'] !== '' ? $series['status'] : get_string('flow:na', $component),
-                ]) . ($metric !== 'ability' && !$series['consistent']
-                    ? ' ' . get_string('compare:scaleunconfirmed', $component)
-                    : '');
+                // The scale's state step by step where the engine recorded it
+                // (#109); where it did not, its state at the end, and that said.
+                $states = \local_catquizlab\local\scale_states::class;
+                $laststep = $flow['steps'] === [] ? 0 : (int) end($flow['steps'])['step'];
+                $status = $series['course'] !== null
+                    ? get_string('compare:scalecourse', $component, (object) [
+                        'attempt' => (int) $observation['attemptid'],
+                        'course' => $series['course'] === [] ? get_string('scalestate:never', $component)
+                            : $states::describe($series['course'], $laststep),
+                    ])
+                    : get_string('compare:scalestatus', $component, (object) [
+                        'attempt' => (int) $observation['attemptid'],
+                        'status' => $series['status'] !== '' ? $states::label($series['status'])
+                            : get_string('flow:na', $component),
+                    ]);
+                $unconfirmed = in_array($metric, ['se', 'ti'], true) && !$series['consistent'];
+                $notes[] = $status . ($unconfirmed ? ' ' . get_string('compare:scaleunconfirmed', $component) : '');
+            } else if ($metric === 'activescales' && ($flow['scalestates'] ?? null) === null) {
+                $notes[] = get_string('compare:activenotrecorded', $component, (int) $observation['attemptid']);
             }
             foreach ($series['points'] as $point) {
                 $rows[] = [
@@ -1478,7 +1610,7 @@ class results_page {
                     axis_scale::INTEGER,
                     $metric === 'ability'
                         ? axis_scale::SYMMETRIC
-                        : ($metric === 'scales' ? axis_scale::INTEGER : axis_scale::LINEAR)
+                        : (in_array($metric, ['scales', 'activescales'], true) ? axis_scale::INTEGER : axis_scale::LINEAR)
                 );
                 $small->set_fixed_bounds([
                     'xmin' => $axes['x']['min'] ?? null, 'xmax' => $axes['x']['max'] ?? null,
@@ -1624,6 +1756,7 @@ class results_page {
             'tiremainingmin' => get_string('flow:tiremainingmin', $component),
             'tiremaining' => get_string('flow:tiremaining', $component),
             'scales' => get_string('flow:scalesestimated', $component),
+            'activescales' => get_string('flow:activescalesmetric', $component),
         ], 'cmp_metric', $metric, false, ['class' => 'custom-select', 'id' => 'cmp_metric']));
         $out .= $field(
             'cmp_scale',
@@ -1987,6 +2120,57 @@ class results_page {
     }
 
     /**
+     * The spread of the local deviation per strategy, all collected scale results beside the valid ones (#112).
+     *
+     * What the validity filter changes, to be seen: the correlation and the
+     * error before and after — and whether the estimates still vary less than
+     * the truth once only valid results are left. Described, never explained.
+     *
+     * @return string
+     */
+    protected function render_spread(): string {
+        $component = 'local_catquizlab';
+        $spread = $this->query->scale_coverage()['spread'] ?? [];
+        if ($spread === []) {
+            return '';
+        }
+        $table = new \html_table();
+        $table->attributes['class'] = 'generaltable table-sm';
+        $table->attributes['data-region'] = 'catquizlab-spread';
+        $table->head = [
+            get_string('form:strategy', $component),
+            get_string('spread:col_set', $component),
+            'n',
+            get_string('spread:col_sdtrue', $component),
+            get_string('spread:col_sdest', $component),
+            get_string('spread:col_ratio', $component),
+            get_string('metric:localcorrelation', $component),
+            get_string('metric:localrmse', $component),
+            get_string('metric:localbias', $component),
+        ];
+        foreach ($spread as $strategy => $sets) {
+            foreach (['all', 'valid'] as $set) {
+                $s = $sets[$set];
+                $table->data[] = [
+                    s(run_registry::group_label('strategy', (string) $strategy)),
+                    get_string('spread:set_' . $set, $component),
+                    $s['n'],
+                    $this->format_number($s['sdtrue']),
+                    $this->format_number($s['sdest']),
+                    $this->format_number($s['ratio']),
+                    $this->format_number($s['correlation']),
+                    $this->format_number($s['rmse']),
+                    $this->format_number($s['bias']),
+                ];
+            }
+        }
+
+        return \html_writer::tag('h3', get_string('spread:heading', $component), ['class' => 'h5 mt-4'])
+            . \html_writer::tag('p', get_string('spread:explain', $component), ['class' => 'text-muted small'])
+            . \html_writer::table($table);
+    }
+
+    /**
      * The local error and the local standard error against the items administered on the scale (#113).
      *
      * The same scale results as every other figure of this tab: the valid ones
@@ -2284,10 +2468,12 @@ class results_page {
         $out = $this->render_single_head($observation, $flow) . $out;
 
         // Per step: the estimate, its standard error and the test information
-        // at it (#106). "N/A" where a value is not known — never left out:
-        // which scales were dropped or locked at a given step the engine does
-        // not record, only at the end.
+        // at it (#106). "N/A" where a value is not known — never left out.
+        // Which scales were active, locked or dropped after a step is known
+        // where the engine recorded their changes (trace mode,
+        // local_catquiz#133); where it did not, only at the end.
         $na = get_string('flow:na', $component);
+        $recorded = is_array($flow['scalestates'] ?? null);
         $table = new \html_table();
         $table->attributes['class'] = 'generaltable table-sm';
         $table->attributes['data-region'] = 'catquizlab-flow-steps';
@@ -2303,8 +2489,14 @@ class results_page {
             get_string('flow:tiremainingmin', $component),
             get_string('flow:tiremaining', $component),
             get_string('flow:scalesestimated', $component),
-            get_string('flow:droppedlocked', $component),
         ];
+        if ($recorded) {
+            $table->head[] = get_string('flow:activeafter', $component);
+            $table->head[] = get_string('flow:lockedafter', $component);
+            $table->head[] = get_string('flow:droppedafter', $component);
+        } else {
+            $table->head[] = get_string('flow:droppedlocked', $component);
+        }
         // Dropped and locked scales the engine records at the end only: N/A
         // on every step but the last, where its values are known (#106).
         $laststep = $flow['steps'] === [] ? 0 : (int) end($flow['steps'])['step'];
@@ -2313,7 +2505,7 @@ class results_page {
             'locked'  => count((array) ($flow['scales']['locked'] ?? [])),
         ]);
         foreach ($flow['steps'] as $step) {
-            $table->data[] = [
+            $row = [
                 $step['step'],
                 $step['questionid'] > 0 ? $step['questionid'] : '—',
                 $step['scaleid'] > 0 ? $step['scaleid'] : '—',
@@ -2325,8 +2517,15 @@ class results_page {
                 ($step['tiremainingmin'] ?? null) === null ? $na : format_float($step['tiremainingmin'], 3),
                 $step['tiremaining'] === null ? $na : format_float($step['tiremaining'], 3),
                 $step['scalesestimated'] === null ? $na : (string) $step['scalesestimated'],
-                (int) $step['step'] === $laststep && !empty($flow['scales']) ? $atend : $na,
             ];
+            if ($recorded) {
+                $row[] = (int) $step['activescales'];
+                $row[] = (int) $step['lockedscales'];
+                $row[] = (int) $step['droppedscales'];
+            } else {
+                $row[] = (int) $step['step'] === $laststep && !empty($flow['scales']) ? $atend : $na;
+            }
+            $table->data[] = $row;
         }
         $out .= \html_writer::table($table);
         $out .= \html_writer::div(
@@ -2348,6 +2547,32 @@ class results_page {
             ];
             $out .= \html_writer::tag('h3', get_string('flow:scalelifecycle', $component), ['class' => 'h5 mt-4']);
             $out .= \html_writer::table($scales);
+        }
+
+        // Every scale's state from step to step (#106) — or that it is not on record.
+        if ($recorded) {
+            $states = \local_catquizlab\local\scale_states::class;
+            $scaleids = [];
+            foreach ($flow['scalestates'] as $bystep) {
+                $scaleids += array_fill_keys(array_keys($bystep), true);
+            }
+            ksort($scaleids);
+            $course = new \html_table();
+            $course->attributes['class'] = 'generaltable table-sm w-auto';
+            $course->attributes['data-region'] = 'catquizlab-scale-course';
+            $course->head = [get_string('results:subscale', $component), get_string('flow:scalecoursecol', $component)];
+            foreach (array_keys($scaleids) as $id) {
+                $course->data[] = [(int) $id, s($states::describe($states::course($flow['scalestates'], (int) $id), $laststep))];
+            }
+            $out .= \html_writer::tag('h3', get_string('flow:scalecourse', $component), ['class' => 'h5 mt-4'])
+                . \html_writer::tag('p', get_string('flow:scalecourseexplain', $component), ['class' => 'text-muted small'])
+                . \html_writer::table($course);
+        } else if (!empty($flow['scales']['active']) || !empty($flow['scales']['dropped'])) {
+            $out .= \html_writer::div(
+                get_string('flow:scalestatesnotrecorded', $component),
+                'small text-muted mb-3',
+                ['data-region' => 'catquizlab-scale-course-missing']
+            );
         }
 
         return $out;
@@ -2394,7 +2619,11 @@ class results_page {
             );
         }
 
-        $cells = robustness_analysis::cells($observations, $this->query->scale_maps());
+        $cells = robustness_analysis::cells(
+            $observations,
+            $this->query->scale_maps(),
+            (string) ($this->filter['validityrule'] ?? \local_catquizlab\local\engine_validity::RULE_UNIFORM)
+        );
         $variants = robustness_analysis::variants($cells);
 
         if ($variants === []) {
@@ -2461,6 +2690,11 @@ class results_page {
             get_string('form:stratum', $component),
             'n',
         ];
+        // The local figures are made of valid scale results (#112): how many.
+        $local = array_key_exists('localrmse', $metrics);
+        if ($local) {
+            $head[] = get_string('validity:col_scales', $component);
+        }
         foreach ($metrics as $key => $stringkey) {
             $head[] = get_string($stringkey, $component);
         }
@@ -2477,6 +2711,9 @@ class results_page {
                 s(run_registry::group_label('stratum', $cell['stratum'])),
                 $cell['n'],
             ];
+            if ($local) {
+                $row[] = (int) ($cell['outcomes']['localn'] ?? 0);
+            }
             foreach (array_keys($metrics) as $metric) {
                 $row[] = $this->format_delta($metric, $cell['deltas'][$metric] ?? null);
             }
@@ -2614,7 +2851,7 @@ class results_page {
             return $out . \html_writer::div(
                 get_string('results:nosubscaledata', $component),
                 'alert alert-info'
-            );
+            ) . $this->render_spread();
         }
 
         $summary = local_analysis::summarise($rows);
@@ -2681,141 +2918,337 @@ class results_page {
         $out .= $this->render_local_table(local_analysis::group($rows, 'key'), 'key');
         $out .= $this->render_item_classes($rows);
         $out .= $this->render_item_plots($rows);
+        $out .= $this->render_spread();
 
         return $out;
     }
 
     /**
-     * The detection tab: did the strategy identify the right subscales?
+     * Mode-specific detection (#114): each targeted mode for what it is after, beside the baselines.
      *
      * @return string
      */
     protected function render_detection(): string {
         $component = 'local_catquizlab';
-        $observations = $this->query->observations();
-        $maps = $this->query->scale_maps();
+        $modes = \local_catquizlab\local\mode_detection::class;
 
-        $strategies = array_keys($this->query->available('strategy'));
-        $strategy = count($strategies) === 1 ? $strategies[0] : 'lowestsub';
-        $labels = local_analysis::detection_labels($strategy);
+        $out = \html_writer::tag('h3', get_string('mode:heading', $component), ['class' => 'h5'])
+            . \html_writer::tag('p', get_string('mode:explain', $component), ['class' => 'text-muted']);
+        $unassigned = $modes::unassigned($this->query);
+        if ($unassigned !== []) {
+            $out .= \html_writer::div(get_string('mode:unassigned', $component, implode(', ', array_map(
+                static fn(string $strategy): string => \local_catquizlab\local\strategy_catalog::label($strategy),
+                $unassigned
+            ))), 'small text-muted mb-2', ['data-region' => 'catquizlab-mode-unassigned']);
+        }
 
-        $header = \html_writer::tag('h3', $labels['title'], ['class' => 'h5'])
-            . \html_writer::tag('p', $labels['goal'], ['class' => 'text-muted']);
-
-        if ($observations === []) {
-            return $header . \html_writer::div(
-                get_string('results:nosubscaledata', $component),
-                'alert alert-info'
+        $analysis = $modes::analyse($modes::sittings($this->query));
+        if ($analysis['targets'] === []) {
+            return $out . \html_writer::div(
+                get_string('mode:notargets', $component),
+                'alert alert-info',
+                ['data-region' => 'catquizlab-mode-none']
             );
         }
+        $threshold = format_float($analysis['threshold'], 2);
 
-        $rankings = [];
-        foreach ($observations as $observation) {
-            $map = $maps[$observation['runid']] ?? [];
-            if ($map === []) {
-                continue;
-            }
-            $subscales = local_analysis::subscale_rows($observation + results_query::detail($observation), $map);
-            $ranking = local_analysis::ranking($subscales, $observation['strategy']);
-            if ($ranking !== null) {
-                $rankings[] = $ranking;
-            }
-        }
+        // A. Every mode's figures side by side — never one figure over modes.
+        $out .= \html_writer::tag('h3', get_string('mode:summaryheading', $component), ['class' => 'h5 mt-3']);
+        $out .= \html_writer::tag('p', get_string('mode:summarynote', $component), ['class' => 'text-muted small']);
+        $out .= $this->render_mode_summary($analysis);
 
-        if ($rankings === []) {
-            return $header . \html_writer::div(
-                get_string('results:nosubscaledata', $component),
-                'alert alert-info'
+        foreach ($analysis['targets'] as $target => $entry) {
+            $name = get_string('mode:' . $target, $component);
+            $own = $entry['own'];
+            $out .= \html_writer::start_div('mt-4', ['data-region' => 'catquizlab-mode-' . $target]);
+            $out .= \html_writer::tag('h3', $name, ['class' => 'h5']);
+            $out .= \html_writer::tag(
+                'p',
+                get_string('mode:definition_' . $target, $component, $threshold),
+                ['class' => 'small', 'data-region' => 'catquizlab-mode-definition']
             );
+            $out .= \html_writer::div(implode(' · ', [
+                $this->mode_share('mode:validsittings', $own['counts']['valid'], $own['counts']['sittings'], 'valid', 'all'),
+                $this->mode_share(
+                    'mode:included',
+                    $own['counts']['included'],
+                    $own['counts']['withitems'],
+                    'included',
+                    'withitems'
+                ),
+                $this->mode_share('mode:targetscovered', $own['targetscovered'], $own['truetargets'], 'covered', 'targets'),
+            ]), 'small mb-2', ['data-region' => 'catquizlab-mode-coverage']);
+
+            $out .= \html_writer::tag('h4', get_string('mode:detailheading', $component), ['class' => 'h6 mt-3']);
+            $rows = [[$name . ' — ' . get_string('mode:row_truth', $component), $own]];
+
+            $plots = '';
+            foreach ($entry['baselines'] as $baseline => $comparison) {
+                $basename = get_string('mode:' . $baseline, $component);
+                if (empty($comparison['available'])) {
+                    $plots .= \html_writer::div(
+                        get_string('mode:notavailable', $component, get_string('mode:baselineof', $component, $basename)),
+                        'small text-muted mb-1',
+                        ['data-region' => 'catquizlab-mode-notavailable']
+                    );
+                    continue;
+                }
+                $plots .= \html_writer::tag('h4', get_string('mode:comparisonheading', $component, (object) [
+                    'mode' => $name, 'baseline' => $basename,
+                ]), ['class' => 'h6 mt-3']);
+                if (!$comparison['paired']) {
+                    // Other people: said before any figure of theirs is read.
+                    $plots .= \html_writer::div(
+                        get_string('mode:unpaired', $component, $basename),
+                        'alert alert-warning',
+                        ['data-region' => 'catquizlab-mode-unpaired']
+                    );
+                    $rows[] = [$basename . ' — ' . get_string('mode:row_unpaired', $component), $comparison['unpaired']];
+                    continue;
+                }
+                $paired = get_string('mode:row_paired', $component);
+                $common = get_string('mode:row_common', $component);
+                $rows[] = [$name . ' — ' . $paired . ' (' . $basename . ')', $comparison['mode']];
+                $rows[] = [$basename . ' — ' . $paired, $comparison['baseline']];
+                $rows[] = [$name . ' — ' . $common . ' (' . $basename . ')', $comparison['common']['mode']];
+                $rows[] = [$basename . ' — ' . $common, $comparison['common']['baseline']];
+                $plots .= $this->render_mode_comparison($target, $baseline, $comparison);
+            }
+            $out .= $this->render_mode_detail($rows) . $plots;
+            $out .= \html_writer::end_div();
         }
-
-        $aggregate = local_analysis::aggregate_ranking($rankings);
-        $out = $header;
-
-        // Top-k across the k values, one row per k with its dispersion.
-        $table = new \html_table();
-        $table->attributes['class'] = 'generaltable table-sm';
-        $table->head = [
-            'k',
-            get_string('metric:topk', $component),
-            get_string('metric:precisionk', $component),
-            get_string('metric:recallk', $component),
-            get_string('metric:ndcgk', $component),
-        ];
-        foreach ($aggregate['topk'] as $k => $measures) {
-            $table->data[] = [
-                $k,
-                $this->format_stat($measures['agreement'] ?? []),
-                $this->format_stat($measures['precision'] ?? []),
-                $this->format_stat($measures['recall'] ?? []),
-                $this->format_stat($measures['ndcg'] ?? []),
-            ];
-        }
-        $out .= \html_writer::table($table);
-
-        $rank = new \html_table();
-        $rank->attributes['class'] = 'generaltable table-sm w-auto';
-        $rank->head = [get_string('chart:quantity', $component), get_string('preview:value', $component)];
-        $rank->data = [
-            [get_string('metric:spearman', $component), $this->format_stat($aggregate['spearman'])],
-            [get_string('metric:rankerror', $component), $this->format_stat($aggregate['rankerror'])],
-            [get_string('metric:rankedattempts', $component), $aggregate['n']],
-        ];
-        $out .= \html_writer::tag('h3', get_string('results:ranking', $component), ['class' => 'h5 mt-4']);
-        $out .= \html_writer::table($rank);
-
-        $out .= \html_writer::tag('h3', get_string('results:confusion', $component), ['class' => 'h5 mt-4']);
-        $out .= $this->render_confusion($aggregate['confusion'], $labels);
 
         return $out;
     }
 
     /**
-     * The binary confusion matrix with its derived rates.
+     * "n / N (p %)" in a sentence of the mode-specific detection.
      *
-     * @param array $confusion The pooled matrix plus its rates.
-     * @param array $labels The strategy-specific wording.
+     * @param string $key The string.
+     * @param int $n The share.
+     * @param int $of The whole.
+     * @param string $nname The string's name of the share.
+     * @param string $ofname The string's name of the whole.
      * @return string
      */
-    protected function render_confusion(array $confusion, array $labels): string {
+    protected function mode_share(string $key, int $n, int $of, string $nname, string $ofname): string {
+        return get_string($key, 'local_catquizlab', (object) [
+            $nname => $n, $ofname => $of, 'percent' => $of > 0 ? format_float(100 * $n / $of, 1) : '–',
+        ]);
+    }
+
+    /**
+     * "n / N (p %)" as a cell.
+     *
+     * @param int|null $n The share.
+     * @param int|null $of The whole.
+     * @return string
+     */
+    protected function format_fraction(?int $n, ?int $of): string {
+        if ($n === null || $of === null) {
+            return '—';
+        }
+
+        return $n . ' / ' . $of . ($of > 0 ? ' (' . format_float(100 * $n / $of, 1) . '&nbsp;%)' : '');
+    }
+
+    /**
+     * The summary of the mode-specific detection: one block of rows per targeted mode.
+     *
+     * @param array $analysis From mode_detection::analyse().
+     * @return string
+     */
+    protected function render_mode_summary(array $analysis): string {
         $component = 'local_catquizlab';
+        $table = new \html_table();
+        $table->attributes['class'] = 'generaltable table-sm';
+        $table->attributes['data-region'] = 'catquizlab-mode-summary';
+        $table->head = [
+            get_string('mode:col_target', $component),
+            get_string('mode:col_compared', $component),
+            get_string('mode:col_baseline', $component),
+            get_string('mode:col_pairs', $component),
+            get_string('mode:col_sittings', $component),
+            get_string('mode:col_scales', $component),
+            get_string('mode:col_coverage', $component),
+            get_string('mode:col_correlation', $component),
+            get_string('mode:col_rmse', $component),
+            get_string('mode:col_recall', $component),
+            get_string('mode:col_precision', $component),
+        ];
+        $line = function (string $target, string $compared, string $baseline, string $pairs, array $e, string $scales): array {
+            return [
+                $target, $compared, $baseline, $pairs,
+                $e['sittings'] ?? '—',
+                $scales,
+                isset($e['truetargets']) ? $this->format_fraction((int) $e['targetscovered'], (int) $e['truetargets']) : '—',
+                $this->format_number($e['correlation'] ?? null),
+                $this->format_number($e['rmse'] ?? null),
+                $this->format_share($e['recall'] ?? null),
+                $this->format_share($e['precision'] ?? null),
+            ];
+        };
+        foreach ($analysis['targets'] as $target => $entry) {
+            $name = get_string('mode:' . $target, $component);
+            $own = $entry['own'];
+            $table->data[] = $line(
+                $name,
+                $name,
+                get_string('mode:row_truth', $component),
+                '—',
+                $own,
+                $this->format_fraction((int) $own['counts']['included'], (int) $own['counts']['withitems'])
+            );
+            foreach ($entry['baselines'] as $baseline => $comparison) {
+                $basename = get_string('mode:' . $baseline, $component);
+                if (empty($comparison['available'])) {
+                    $row = new \html_table_row([$name, '—', $basename,
+                        get_string('mode:notavailable', $component, $basename)]);
+                    $row->cells[3] = new \html_table_cell(get_string('mode:notavailable', $component, $basename));
+                    $row->cells[3]->colspan = 8;
+                    $row->attributes['class'] = 'text-muted';
+                    $table->data[] = $row;
+                    continue;
+                }
+                if (!$comparison['paired']) {
+                    $table->data[] = $line(
+                        $name,
+                        $basename,
+                        $basename,
+                        get_string('mode:row_unpaired', $component),
+                        $comparison['unpaired'],
+                        (string) $comparison['unpaired']['scales']
+                    );
+                    continue;
+                }
+                $pairs = $this->format_fraction((int) $comparison['pairs'], (int) $comparison['pairable']);
+                $table->data[] = $line(
+                    $name,
+                    $name,
+                    $basename,
+                    $pairs,
+                    $comparison['mode'],
+                    (string) $comparison['mode']['scales']
+                );
+                $table->data[] = $line(
+                    $name,
+                    $basename,
+                    $basename,
+                    $pairs,
+                    $comparison['baseline'],
+                    (string) $comparison['baseline']['scales']
+                );
+            }
+        }
 
-        $matrix = new \html_table();
-        $matrix->attributes['class'] = 'generaltable table-sm w-auto';
-        $matrix->head = [
+        return \html_writer::table($table);
+    }
+
+    /**
+     * Recovery, detection and ranking of a mode and of each side of its comparisons.
+     *
+     * @param array $rows Each: label, and mode_detection::evaluate()'s figures.
+     * @return string
+     */
+    protected function render_mode_detail(array $rows): string {
+        $component = 'local_catquizlab';
+        $table = new \html_table();
+        $table->attributes['class'] = 'generaltable table-sm';
+        $table->attributes['data-region'] = 'catquizlab-mode-detail';
+        $table->head = [
             '',
-            get_string('confusion:truepositive', $component),
-            get_string('confusion:truenegative', $component),
+            get_string('mode:col_sittings', $component),
+            get_string('mode:col_scales', $component),
+            get_string('mode:col_bias', $component),
+            get_string('mode:col_rmse', $component),
+            get_string('mode:col_mae', $component),
+            get_string('mode:col_correlation', $component),
+            get_string('mode:col_targetrmse', $component),
+            get_string('mode:col_recall', $component),
+            get_string('mode:col_precision', $component),
+            get_string('mode:col_f1', $component),
+            get_string('mode:col_spearman', $component),
+            get_string('mode:col_topk', $component, 1),
+            get_string('mode:col_topk', $component, 3),
+            get_string('mode:col_ndcg', $component, 3),
         ];
-        $matrix->data = [
-            [
-                get_string('confusion:detected', $component),
-                (int) $confusion['tp'],
-                (int) $confusion['fp'],
-            ],
-            [
-                get_string('confusion:notdetected', $component),
-                (int) $confusion['fn'],
-                (int) $confusion['tn'],
-            ],
-        ];
+        foreach ($rows as [$label, $e]) {
+            $table->data[] = [
+                s($label),
+                $e['sittings'],
+                $e['scales'],
+                $this->format_number($e['bias']),
+                $this->format_number($e['rmse']),
+                $this->format_number($e['mae']),
+                $this->format_number($e['correlation']),
+                $this->format_number($e['targetrmse']) . ($e['targetn'] > 0 ? ' (n = ' . $e['targetn'] . ')' : ''),
+                // The counts behind each share: found of all true targets, right of all detected.
+                $this->format_share($e['recall']) . ' (' . $e['tp'] . ' / ' . $e['truetargets'] . ')',
+                $this->format_share($e['precision']) . ' (' . $e['tp'] . ' / ' . ($e['tp'] + $e['fp']) . ')',
+                $this->format_number($e['f1']),
+                $this->format_number($e['spearman']) . ' (n = ' . $e['ranked'] . ')',
+                $this->format_share($e['topk'][1]['agreement'] ?? null),
+                $this->format_share($e['topk'][3]['agreement'] ?? null),
+                $this->format_number($e['topk'][3]['ndcg'] ?? null),
+            ];
+        }
 
-        $rates = new \html_table();
-        $rates->attributes['class'] = 'generaltable table-sm w-auto';
-        $rates->head = [get_string('chart:quantity', $component), get_string('preview:value', $component)];
-        $rates->data = [
-            [get_string('metric:precision', $component), $this->format_share($confusion['precision'] ?? null)],
-            [get_string('metric:recall', $component), $this->format_share($confusion['recall'] ?? null)],
-            [get_string('metric:specificity', $component), $this->format_share($confusion['specificity'] ?? null)],
-            [get_string('metric:accuracy', $component), $this->format_share($confusion['accuracy'] ?? null)],
-        ];
+        return \html_writer::table($table);
+    }
 
-        return \html_writer::tag('p', get_string('confusion:threshold', $component, format_float(
-            local_analysis::DEFAULT_DEFICIT_THRESHOLD,
-            2
-        )), ['class' => 'text-muted small'])
-            . \html_writer::table($matrix)
-            . \html_writer::table($rates);
+    /**
+     * A targeted mode against a baseline, person by person: the plot and what it is made of.
+     *
+     * @param string $target The mode.
+     * @param string $baseline The baseline.
+     * @param array $comparison From mode_detection::compare(), paired.
+     * @return string
+     */
+    protected function render_mode_comparison(string $target, string $baseline, array $comparison): string {
+        $component = 'local_catquizlab';
+        $names = (object) [
+            'mode' => get_string('mode:' . $target, $component),
+            'baseline' => get_string('mode:' . $baseline, $component),
+        ];
+        $out = \html_writer::div(implode(' · ', array_filter([
+            $this->mode_share('mode:validpairs', $comparison['pairs'], $comparison['pairable'], 'pairs', 'pairable'),
+            $this->mode_share(
+                'mode:included',
+                $comparison['commonscales'],
+                (int) $comparison['pairwithitems'],
+                'included',
+                'withitems'
+            ),
+            $comparison['ambiguous'] > 0 ? get_string('mode:ambiguous', $component, $comparison['ambiguous']) : '',
+        ])), 'small mb-2', ['data-region' => 'catquizlab-mode-pairs']);
+        if ($comparison['points'] === []) {
+            return $out . \html_writer::div(get_string('mode:nocommon', $component), 'alert alert-info');
+        }
+
+        $chart = new scatter_chart(
+            get_string('mode:plottitle', $component, $names),
+            get_string('mode:plotx', $component, $names->baseline),
+            get_string('mode:plotx', $component, $names->mode)
+        );
+        $chart->set_axes(axis_scale::LINEAR, axis_scale::LINEAR, ['xfromzero' => true, 'yfromzero' => true]);
+        $chart->set_basis($this->plot_basis());
+        $this->configure_chart($chart, 'mode' . $target . $baseline);
+        $chart->set_points(array_map(static fn(array $point): array => [
+            'x' => $point['x'], 'y' => $point['y'],
+            'label' => get_string('mode:plotlabel', $component, (object) [
+                'attempt' => $point['attemptid'], 'twin' => $point['twin'], 'n' => $point['n'],
+                'x' => format_float($point['x'], 3), 'y' => format_float($point['y'], 3),
+            ]),
+        ], $comparison['points']))
+            ->set_description(get_string('mode:plotpoint', $component))
+            ->add_identity_line(get_string('chart:identity', $component) . ' — ' . get_string('mode:plotbelow', $component))
+            ->add_note(get_string('mode:meandifference', $component, (object) [
+                'mean' => format_float((float) $comparison['meandifference'], 4),
+                'n' => count($comparison['points']),
+                'scales' => $comparison['commonscales'],
+            ]));
+
+        return $out . \html_writer::div($chart->render(), '', ['data-region' => 'catquizlab-mode-plot']);
     }
 
     /**
