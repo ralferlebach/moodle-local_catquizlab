@@ -204,7 +204,8 @@ class situation {
                     ? get_string('situation:stalledcrashed', $component, $workers['crashed'])
                     : get_string('situation:stallednoworker', $component),
                 get_string('ops:startworkers', $component),
-                $setupurl
+                // The action itself, not the setup tab (where nothing started).
+                worker_launcher::start_url()
             );
         }
 

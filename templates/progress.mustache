@@ -500,6 +500,7 @@
                         <form method="post" action="{{url}}" class="d-inline">
                             <input type="hidden" name="sesskey" value="{{sesskey}}">
                             <input type="hidden" name="action" value="{{command}}">
+                            <input type="hidden" name="returnurl" value="{{returnurl}}">
                             <button type="submit" class="btn btn-sm btn-primary">{{label}}</button>
                         </form>
                     {{/command}}
@@ -522,6 +523,7 @@
                 <form method="post" action="{{formurl}}" class="d-inline">
                     <input type="hidden" name="sesskey" value="{{sesskey}}">
                     <input type="hidden" name="action" value="startworkers">
+                    <input type="hidden" name="returnurl" value="{{returnurl}}">
                     <button type="submit" class="btn btn-sm btn-primary">
                         {{#str}}ops:startworkers, local_catquizlab{{/str}}
                     </button>

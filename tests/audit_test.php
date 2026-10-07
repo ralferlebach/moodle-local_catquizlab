@@ -1074,7 +1074,7 @@ final class audit_test extends \advanced_testcase {
         // each, a global maximum of thirty-five. Readiness caught it — after a
         // course, 2500 questions and a thousand accounts had been built.
         $errors = $check->invoke(null, [
-            'categories' => 10, 'subcategories' => 10, 'strategy' => 'allsubs',
+            'poolcategories' => 10, 'poolsubcategories' => 10, 'poolitems' => 25, 'strategy' => 'allsubs',
             'subscalemin' => 3, 'globalmax' => 35,
         ]);
         $this->assertArrayHasKey('globalmax', $errors);
@@ -1082,11 +1082,11 @@ final class audit_test extends \advanced_testcase {
 
         // Raising the maximum, or lifting it for that strategy alone, settles it.
         $this->assertSame([], $check->invoke(null, [
-            'categories' => 10, 'subcategories' => 10, 'strategy' => 'allsubs',
+            'poolcategories' => 10, 'poolsubcategories' => 10, 'poolitems' => 25, 'strategy' => 'allsubs',
             'subscalemin' => 3, 'globalmax' => 400,
         ]));
         $this->assertSame([], $check->invoke(null, [
-            'categories' => 10, 'subcategories' => 10, 'strategy' => 'allsubs',
+            'poolcategories' => 10, 'poolsubcategories' => 10, 'poolitems' => 25, 'strategy' => 'allsubs',
             'subscalemin' => 3, 'globalmax' => 35,
             'perstrategy_allsubs_globalmax' => 'unlimited',
         ]));
@@ -1094,19 +1094,48 @@ final class audit_test extends \advanced_testcase {
         // A strategy that does not have to serve every subscale is not bound
         // by the arithmetic at all.
         $this->assertSame([], $check->invoke(null, [
-            'categories' => 10, 'subcategories' => 10, 'strategy' => 'classic',
+            'poolcategories' => 10, 'poolsubcategories' => 10, 'poolitems' => 25, 'strategy' => 'classic',
             'subscalemin' => 3, 'globalmax' => 35,
         ]));
 
+        // The pool's shape is read from the pool's fields. Until 0.7.30 it was
+        // read from "categories" (the model's response categories) and
+        // "subcategories" (no such field), the product was zero, and the
+        // check never ran in the real form — this test passed because it fed
+        // the check the names it read, not the names the form sends.
+        $this->assertSame([], $check->invoke(null, [
+            'categories' => 10, 'subcategories' => 10, 'strategy' => 'allsubs',
+            'subscalemin' => 3, 'globalmax' => 35,
+        ]), 'not the model\'s response categories');
+
+        // The reported form (06.10.): 15 to 25 questions, 3 to 5 per subscale,
+        // the default pool of 10 × 10 subscales.
+        $errors = $check->invoke(null, [
+            'poolcategories' => 10, 'poolsubcategories' => 10, 'poolitems' => 25,
+            'sweepstrategies' => ['highestsub', 'classic', 'relsubs', 'allsubs'],
+            'globalmin' => 15, 'globalmax' => 25, 'subscalemin' => 3, 'subscalemax' => 5,
+        ]);
+        $this->assertSame(['globalmax'], array_keys($errors));
+        $this->assertStringContainsString('300', $errors['globalmax']);
+
         // And a swept strategy counts even when it is not the chosen one.
         $swept = $check->invoke(null, [
-            'categories' => 3, 'subcategories' => 3, 'strategy' => 'classic',
+            'poolcategories' => 3, 'poolsubcategories' => 3, 'poolitems' => 25, 'strategy' => 'classic',
             'sweepstrategies' => ['classic', 'allsubs'],
             'subscalemin' => 5, 'globalmax' => 20,
         ]);
         $this->assertNotSame([], $swept);
         $this->assertStringContainsString('45', reset($swept));
+
+        // The sweep's strategies replace the one chosen above: allsubs chosen
+        // above and a sweep without it is not checked as allsubs.
+        $this->assertSame([], $check->invoke(null, [
+            'poolcategories' => 3, 'poolsubcategories' => 3, 'poolitems' => 25, 'strategy' => 'allsubs',
+            'sweepstrategies' => ['classic', 'relsubs'],
+            'subscalemin' => 5, 'globalmax' => 20,
+        ]));
     }
+
 
     /**
      * A download is written as it goes, and says the same as before.

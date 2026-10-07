@@ -180,7 +180,9 @@ class status_report {
                     get_string('report:openattempts', $component, $counts['open']),
                     [
                         'label' => get_string('ops:startworkers', $component),
-                        'url'   => (new \moodle_url('/local/catquizlab/index.php', ['tab' => 'setup']))->out(false),
+                        // The action itself, not a link to the setup tab: clicking it
+                        // used to open a page and start nothing.
+                        'url'   => worker_launcher::start_url()->out(false),
                     ]
                 );
             }

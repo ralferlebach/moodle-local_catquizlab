@@ -196,9 +196,26 @@ class progress_view {
             ],
             'pipelinestatus' => status_report::pipeline() + ['region' => 'catquizlab-pipeline'],
             'formurl'     => (new \moodle_url('/local/catquizlab/operations.php'))->out(false),
+            // Where an action's message is shown: here, not on the setup tab.
+            'returnurl'   => self::return_url(),
             'sesskey'     => sesskey(),
             'experimentid' => $experimentid,
             'canexecute'  => has_capability('local/catquizlab:execute', \context_system::instance()),
         ];
+    }
+
+    /**
+     * This page as a local URL, for an action to come back to.
+     *
+     * @return string
+     */
+    protected static function return_url(): string {
+        global $PAGE;
+
+        try {
+            return $PAGE->has_set_url() ? $PAGE->url->out_as_local_url(false) : '';
+        } catch (\Throwable $e) {
+            return '';
+        }
     }
 }

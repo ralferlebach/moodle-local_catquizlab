@@ -607,6 +607,123 @@ class worker_launcher {
     }
 
     /**
+     * The URL that starts workers and comes back to the page it was pressed on.
+     *
+     * @return \moodle_url
+     */
+    public static function start_url(): \moodle_url {
+        global $PAGE;
+
+        $return = '';
+        try {
+            $return = $PAGE->has_set_url() ? $PAGE->url->out_as_local_url(false) : '';
+        } catch (\Throwable $e) {
+            $return = '';
+        }
+
+        return new \moodle_url('/local/catquizlab/operations.php', array_filter([
+            'action' => 'startworkers', 'sesskey' => sesskey(), 'returnurl' => $return,
+        ]));
+    }
+
+    /**
+     * What a press of "Start workers" did, in a sentence — and when it goes on by itself.
+     *
+     * Each outcome of launch_pool() said itself as a code ("no-claimable-work",
+     * "all-slots-busy"), on another tab than the button's, or not at all: the
+     * button looked as if nothing had happened. Now every outcome is a
+     * sentence: how many were started and that they claim work now; that the
+     * workers are already running; why there is nothing to play and when it
+     * will be; what is missing from the setup; why a start did not report back.
+     * And when the scheduler, which starts workers by itself, runs next.
+     *
+     * @param array|null $result launch_pool()'s result.
+     * @param int|null $nexttick When the scheduler runs next; null to look it up.
+     * @return array{message: string, type: string} The message and its notification type.
+     */
+    public static function explain(?array $result, ?int $nexttick = null): array {
+        $component = 'local_catquizlab';
+        $result = $result ?? ['launched' => 0, 'reason' => 'not-configured: ?'];
+        $launched = (int) ($result['launched'] ?? 0);
+        $reason = (string) ($result['reason'] ?? '');
+        $breakdown = attempt_scheduler::queue_breakdown();
+        $workers = worker_registry::summary();
+        if ($nexttick === null) {
+            $task = \core\task\manager::get_scheduled_task(\local_catquizlab\task\pipeline_tick::class);
+            $nexttick = $task && !$task->get_disabled() ? (int) $task->get_next_run_time() : 0;
+        }
+        $when = $nexttick > 0
+            ? get_string('workers:nexttick', $component, userdate(max(time(), $nexttick), get_string('strftimetime')))
+            : get_string('workers:notick', $component);
+
+        if ($launched > 0) {
+            return ['type' => \core\output\notification::NOTIFY_SUCCESS,
+                'message' => get_string('workers:launched', $component, (object) [
+                    'n' => $launched, 'claimable' => (int) $breakdown['claimable'] + (int) $breakdown['running'],
+                    'live' => (int) $workers['live'],
+                ])];
+        }
+        if (str_starts_with($reason, 'not-configured')) {
+            $missing = array_filter(array_map('trim', explode(',', substr($reason, strlen('not-configured:')))));
+            $labels = array_map(static function (string $setting) use ($component): string {
+                $key = 'setting:' . $setting;
+                return get_string_manager()->string_exists($key, $component) ? get_string($key, $component) : $setting;
+            }, $missing);
+            return ['type' => \core\output\notification::NOTIFY_ERROR,
+                'message' => get_string('workers:notconfigured', $component, implode(', ', $labels))];
+        }
+        // No slot left: all busy, or taken by another start a moment earlier.
+        if ($reason === 'all-slots-busy' || $reason === 'no-slot-acquired') {
+            return ['type' => \core\output\notification::NOTIFY_INFO,
+                'message' => get_string('workers:allbusy', $component, (object) [
+                    'live' => (int) $workers['live'], 'claimable' => (int) $breakdown['claimable'],
+                ])];
+        }
+        if ($reason === 'no-claimable-work') {
+            $parts = [];
+            foreach (['running', 'notdue', 'blocked', 'paused'] as $kind) {
+                if ((int) ($breakdown[$kind] ?? 0) > 0) {
+                    $parts[] = get_string('workers:queue_' . $kind, $component, (int) $breakdown[$kind]);
+                }
+            }
+            $nextdue = $breakdown['notdue'] > 0 ? self::next_due() : 0;
+            if ($nextdue > 0) {
+                $parts[] = get_string('workers:nextdue', $component, userdate($nextdue, get_string('strftimetime')));
+            }
+            $message = $parts === []
+                ? get_string('workers:nothingqueued', $component)
+                : get_string('workers:nothingclaimable', $component, implode('; ', $parts));
+            if ($breakdown['notdue'] > 0 || $breakdown['blocked'] > 0) {
+                $message .= ' ' . $when;
+            }
+            return ['type' => \core\output\notification::NOTIFY_INFO, 'message' => $message];
+        }
+        // A start that did not report back within its few seconds.
+        $failure = (array) (($result['failures'] ?? [])[0] ?? []);
+        return ['type' => \core\output\notification::NOTIFY_ERROR,
+            'message' => get_string('workers:nohandshake', $component, (object) [
+                'reason' => trim((string) ($failure['reason'] ?? '')) !== ''
+                    ? (string) $failure['reason'] : get_string('workers:noreason', $component),
+                'output' => trim((string) ($failure['output'] ?? '')) !== ''
+                    ? s(\core_text::substr(trim((string) $failure['output']), -300)) : '–',
+            ]) . ' ' . $when];
+    }
+
+    /**
+     * When the earliest sitting waiting after a failure is due again.
+     *
+     * @return int Unix time, 0 when none waits.
+     */
+    protected static function next_due(): int {
+        global $DB;
+
+        return (int) $DB->get_field_sql(
+            'SELECT MIN(nextruntime) FROM {local_catquizlab_attempt} WHERE status = :queued AND nextruntime > :now',
+            ['queued' => attempt_scheduler::STATUS_QUEUED, 'now' => time()]
+        );
+    }
+
+    /**
      * Wait for a worker to report that it is actually up.
      *
      * Short by design: a worker that is going to start does so in a second or

@@ -570,6 +570,12 @@ Feature: Defining and running CAT experiments from the web interface
     And the "perstrategy_classic_globalmax" "field" should be disabled
     And the "perstrategy_allsubs_globalmax" "field" should be enabled
     And I should see "Budgets per cell"
+    # A pool allsubs can cover: 2 × 2 subscales at 3 questions each fit in 25.
+    # The default pool of 10 × 10 does not (300 questions), and since the form
+    # checks budgets against the pool (0.7.30) it is refused.
+    And I set the following fields to these values:
+      | Domains               | 2 |
+      | Subscales per domain  | 2 |
     When I set cell budget "globalmax" of "allsubs" in "Behat cells" to "25"
     And I set cell budget "semin" of "allsubs" in "Behat cells" to "0.3"
     And I press "Save experiment"

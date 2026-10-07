@@ -6,6 +6,64 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.7.30] — 2026-10-06 — The experiment form follows the choice; "Start workers" says what it did
+
+### The form (reported 06.10., with screenshots)
+Three faults, each visible in the browser and in none of the tests:
+
+- **The classical test's question budget came back to life.** PHP disabled the
+  fields of its own row; the form's script enabled them again at once — it knew
+  only subscale fields as "not applicable". The shared budgets were never
+  hidden, only greyed when no strategy in play used them.
+- **The strategy chosen above counted although the sweep replaced it**, in the
+  script and in the server's check alike. The sweep's help says its strategies
+  replace that choice; now both read it so.
+- **The check of a budget against the pool never ran.** It took the model's
+  number of response categories for the number of domains and a field that
+  does not exist for the subscales per domain: the product was zero, and the
+  check skipped itself. "Cover all subscales" over the default pool of
+  10 × 10 subscales needs 3 × 100 = 300 questions; 25 were allowed, and the
+  form saved it. Its test passed because it fed the check the names it read,
+  not the names the form sends.
+
+Now:
+- A field no strategy in play uses is **hidden and disabled**, with a sentence
+  where it was. The classical test alone: no question budget, no subscale
+  budget. A strategy's own row is shown only while it is in play; the classical
+  test's row has no question budget, whatever the sweep.
+- With strategies in the sweep, the choice above is disabled and says which
+  strategies replace it.
+- **The budgets are checked against the pool as they are typed**, and again on
+  submit, by one set of rules (`budget_feasibility`): a minimum per subscale
+  that the maximum cannot cover (allsubs); more questions per subscale than a
+  subscale has; a maximum per subscale × subscales below the global minimum —
+  the engine removes a subscale at its maximum in every strategy's selection,
+  so every sitting would run out of questions before its minimum (#118, #134);
+  a pool smaller than the minimum; a minimum above the maximum.
+- Checked in a browser (`tests/playwright/experiment_form.spec.js`, part of the
+  interface end-to-end job): the reported form shows "300" while typed and is
+  refused on submit; a ceiling below the minimum is said; the classical test
+  alone hides its budgets.
+
+Two Behat scenarios relied on the check not running — one saved allsubs over
+the default 10 × 10 pool with a maximum of 25 — and were given a pool allsubs
+can cover. A minimum above the maximum stays with the definition's own message
+on submit; the browser says it while typed.
+
+### "Start workers"
+- The buttons on the run card and in the situation were **links to the setup
+  tab** — clicking them opened a page and started nothing. They are the action
+  now.
+- Every button comes back to the page it was pressed on — not the setup tab —
+  with a **sentence** instead of a code: how many workers started and that they
+  are claiming the sittings now; that workers are already running; why there is
+  nothing to play (being played, waiting for a retry and until when, waiting for
+  their run, paused) and when the scheduler, which starts workers by itself,
+  looks again; which settings are missing, by their labels; that a start did not
+  report back, with the end of its log.
+
+---
+
 ## [0.7.29] — 2026-10-06 — #110: a line per worker request, with the exception behind a 500
 
 ### Why

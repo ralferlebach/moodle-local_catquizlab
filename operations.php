@@ -337,18 +337,15 @@ if ($action !== '') {
     }
 
     if ($action === 'startworkers') {
+        // Back to the page the button was on, with a sentence about what
+        // happened — the setup tab and a code said neither.
         $result = worker_launcher::launch_pool(worker_launcher::config_from_settings());
-        $launched = (int) ($result['launched'] ?? 0);
-        redirect(
-            $pageurl,
-            $launched > 0
-                ? get_string('ops:workersstarted', $component, $launched)
-                : get_string('ops:workersnotstarted', $component, $result['reason'] ?? 'not-configured'),
-            null,
-            $launched > 0
-                ? \core\output\notification::NOTIFY_SUCCESS
-                : \core\output\notification::NOTIFY_WARNING
-        );
+        $said = worker_launcher::explain($result);
+        $return = optional_param('returnurl', '', PARAM_LOCALURL);
+        if ($return === '') {
+            $return = get_local_referer(false) ?: '';
+        }
+        redirect($return !== '' ? new moodle_url($return) : $pageurl, $said['message'], null, $said['type']);
     }
 
     if (($action === 'pauserun' || $action === 'resumerun') && $runid > 0) {

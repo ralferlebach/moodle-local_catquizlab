@@ -28,6 +28,7 @@ use local_catquizlab\local\experiment_definition;
 use local_catquizlab\local\model_catalog;
 use local_catquizlab\local\pool_mutator;
 use local_catquizlab\local\preset_library;
+use local_catquizlab\local\budget_feasibility;
 use local_catquizlab\local\strategy_catalog;
 
 defined('MOODLE_INTERNAL') || die();
@@ -319,6 +320,12 @@ class experiment_form extends \moodleform {
         $mform->addElement('select', 'strategy', get_string('form:strategy', $component), self::strategy_menu());
         $mform->setDefault('strategy', 'fastest');
         $mform->addHelpButton('strategy', 'form:strategy', $component);
+        // Said where the choice is when the sweep's strategies replace it.
+        $mform->addElement('static', 'na_strategy', '', \html_writer::span(
+            '',
+            'text-muted',
+            ['data-catquizlab-na' => 'strategy', 'hidden' => 'hidden']
+        ));
 
         $mform->addElement('text', 'globalmin', get_string('form:globalmin', $component), ['size' => 8]);
         $mform->setType('globalmin', PARAM_INT);
@@ -346,6 +353,12 @@ class experiment_form extends \moodleform {
             get_string('form:na_subscale', $component),
             'text-muted',
             ['data-catquizlab-na' => 'subscalemax', 'hidden' => 'hidden']
+        ));
+        // What the budgets cannot do with this pool, as they are typed.
+        $mform->addElement('static', 'feasibility', '', \html_writer::div(
+            '',
+            'alert alert-danger mb-0',
+            ['data-catquizlab-feasibility' => '1', 'role' => 'alert', 'hidden' => 'hidden']
         ));
 
         // Budgets that belong to one strategy. Left empty, a strategy uses the
@@ -414,73 +427,24 @@ class experiment_form extends \moodleform {
             $mform->addHelpButton('perstrategygroup_' . $key, 'form:perstrategy', $component);
         }
 
-        // Which fields apply follows what is chosen, as it is chosen: the
-        // subscale budgets only where a strategy in play uses subscales, a
-        // strategy's own row only while that strategy is in play, and the
-        // shared budgets shown in every empty field of a row as what it will
-        // inherit.
+        // Which fields apply follows what is chosen, as it is chosen. A field
+        // that applies to none of the strategies in play is hidden and
+        // disabled, with a sentence where it was; a strategy's own row is shown
+        // only while that strategy is in play; the classical test's row has no
+        // question budget to set. The strategies in play are the sweep's where
+        // it has any — they replace the one chosen above — that one otherwise.
+        // And the budgets are checked against the pool as they are typed, by
+        // the same rules the server applies on submit (budget_feasibility).
         global $PAGE;
-        $PAGE->requires->js_amd_inline('
-            require([], function() {
-                var capabilities = ' . json_encode([
-                    'globalmax'     => strategy_catalog::using('globalmax'),
-                    'subscalemax'   => strategy_catalog::using('subscalemax'),
-                    'standarderror' => strategy_catalog::using('standarderror'),
-                    'pilot'         => strategy_catalog::using('pilot'),
-                ]) . ';
-                var fields = {
-                    globalmax: ["id_globalmin", "id_globalmax"],
-                    subscalemax: ["id_subscalemin", "id_subscalemax"],
-                    standarderror: ["id_semin", "id_semax"],
-                    pilot: ["id_pilotinclude", "id_pilotratio"]
-                };
-                var na = ' . json_encode(get_string('form:na_short', $component)) . ';
-                var byid = function(id) { return document.getElementById(id); };
-                var inplay = function() {
-                    var keys = {};
-                    var main = byid("id_strategy");
-                    if (main) { keys[main.value] = true; }
-                    var sweep = byid("id_sweepstrategies");
-                    if (sweep) {
-                        Array.prototype.forEach.call(sweep.options, function(o) {
-                            if (o.selected) { keys[o.value] = true; }
-                        });
-                    }
-                    return keys;
-                };
-                var update = function() {
-                    var keys = inplay();
-                    Object.keys(fields).forEach(function(cap) {
-                        var applies = Object.keys(keys).some(function(k) {
-                            return capabilities[cap].indexOf(k) !== -1;
-                        });
-                        fields[cap].forEach(function(id) {
-                            var el = byid(id);
-                            if (el) { el.disabled = !applies; }
-                        });
-                        document.querySelectorAll("[data-catquizlab-na=\\"" + cap + "\\"]").forEach(function(note) {
-                            note.hidden = applies;
-                        });
-                    });
-                    document.querySelectorAll("[data-catquizlab-perstrategy]").forEach(function(el) {
-                        var key = el.getAttribute("data-catquizlab-perstrategy");
-                        var field = el.getAttribute("data-catquizlab-field");
-                        var notapplicable = field.indexOf("subscale") === 0
-                            && capabilities.subscalemax.indexOf(key) === -1;
-                        el.disabled = !keys[key] || notapplicable;
-                        if (notapplicable) {
-                            el.placeholder = na;
-                            return;
-                        }
-                        var shared = byid("id_" + field);
-                        el.placeholder = shared && !shared.disabled ? shared.value : "";
-                    });
-                };
-                document.addEventListener("change", update);
-                document.addEventListener("input", update);
-                update();
-            });
-        ');
+        $config = budget_feasibility::client_rules() + [
+            'na' => get_string('form:na_short', $component),
+            'allitems' => get_string('form:allitems_short', $component),
+            'replaced' => get_string('form:strategyreplaced', $component),
+        ];
+        $PAGE->requires->js_amd_inline('require([], function() {
+            var cfg = ' . json_encode($config, JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT) . ';
+            ' . self::form_script() . '
+        });');
 
         // Pilot questions: an option of their own, not a strategy (#103). The
         // engine mixes not-yet-calibrated questions into the sitting at the
@@ -814,61 +778,212 @@ class experiment_form extends \moodleform {
     }
 
     /**
-     * Budgets that the chosen strategies cannot satisfy.
+     * Budgets that the chosen strategies cannot satisfy with the chosen pool.
      *
-     * The same arithmetic readiness uses, applied to every strategy this
-     * experiment will run — the one chosen, plus every level of a swept
-     * strategy factor — and to whichever budget each of them will actually
-     * use, its own or the shared one.
+     * The arithmetic is budget_feasibility's — the same the browser applies
+     * while the form is filled in — for every strategy this experiment will
+     * run, with whichever budget each of them will actually use: its own where
+     * it has one, the shared one otherwise. The pool's shape is the pool's:
+     * domains × subscales per domain. It used to be read from the model's
+     * response categories and a field that does not exist, the product was
+     * zero, and the check never ran.
      *
      * @param array $data The submitted form data.
      * @return array<string, string> Field name => message.
      */
     protected static function impossible_budgets(array $data): array {
-        $categories = (int) ($data['categories'] ?? 0);
-        $subcategories = (int) ($data['subcategories'] ?? 0);
-        $leaves = $categories * $subcategories;
-
-        if ($leaves <= 0) {
-            return [];
-        }
-
+        $leaves = max(0, (int) ($data['poolcategories'] ?? 0)) * max(0, (int) ($data['poolsubcategories'] ?? 0));
+        $items = max(0, (int) ($data['poolitems'] ?? 0));
         $overrides = self::per_strategy_budgets($data);
         $errors = [];
 
         foreach (self::strategies_in_play($data) as $key) {
-            if (!strategy_catalog::enforces_per_subscale_minimum($key)) {
-                continue;
-            }
-
             $own = (array) ($overrides[$key] ?? []);
-            $submin = (int) ($own['subscale']['minitems'] ?? $data['subscalemin'] ?? 0);
-            $max = $own['global']['maxitems'] ?? ($data['globalmax'] ?? 0);
-
-            if ($submin <= 0 || experiment_definition::is_unlimited($max) || (int) $max <= 0) {
-                continue;
+            $budgets = [
+                'globalmin' => $own['global']['minitems'] ?? ($data['globalmin'] ?? null),
+                'globalmax' => $own['global']['maxitems'] ?? ($data['globalmax'] ?? null),
+                'subscalemin' => $own['subscale']['minitems'] ?? ($data['subscalemin'] ?? null),
+                'subscalemax' => $own['subscale']['maxitems'] ?? ($data['subscalemax'] ?? null),
+            ];
+            foreach (budget_feasibility::check($key, $budgets, $leaves, $items) as $problem) {
+                // A minimum above the maximum the definition's own validation
+                // reports on the field, with the level it is in; said twice it
+                // would only hide that message behind this one.
+                if ($problem['code'] === 'minabovemax') {
+                    continue;
+                }
+                // On the field somebody can change: the strategy's own row where
+                // it set this budget itself, the shared field otherwise.
+                [$level, $target] = [
+                    'globalmin' => ['global', 'minitems'], 'globalmax' => ['global', 'maxitems'],
+                    'subscalemin' => ['subscale', 'minitems'], 'subscalemax' => ['subscale', 'maxitems'],
+                ][$problem['field']];
+                $field = isset($own[$level][$target]) ? 'perstrategygroup_' . $key : $problem['field'];
+                $message = budget_feasibility::message($problem);
+                $errors[$field] = isset($errors[$field]) ? $errors[$field] . ' ' . $message : $message;
             }
-
-            if ($submin * $leaves <= (int) $max) {
-                continue;
-            }
-
-            // Reported on the field somebody can change: their own maximum
-            // where they set one, the shared maximum otherwise.
-            $field = isset($own['global']['maxitems'])
-                ? 'perstrategygroup_' . $key
-                : 'globalmax';
-
-            $errors[$field] = get_string('readiness:subscalefloorabovemaximum', 'local_catquizlab', (object) [
-                'floor'    => $submin * $leaves,
-                'maximum'  => (int) $max,
-                'leaves'   => $leaves,
-                'submin'   => $submin,
-                'strategy' => strategy_catalog::label($key),
-            ]);
         }
 
         return $errors;
+    }
+
+    /**
+     * The browser's half of the form logic; cfg is defined before it.
+     *
+     * @return string
+     */
+    protected static function form_script(): string {
+        return <<<'JS'
+var byid = function(id) { return document.getElementById(id); };
+var row = function(id) {
+    var el = byid(id);
+    return el ? (el.closest('.fitem') || el.closest('.form-group') || el) : null;
+};
+var style = document.createElement('style');
+style.textContent = '.catquizlab-hidden{display:none!important}';
+document.head.appendChild(style);
+var show = function(node, visible) {
+    if (node) { node.classList.toggle('catquizlab-hidden', !visible); }
+};
+var num = function(value) {
+    var v = String(value === undefined || value === null ? '' : value).trim();
+    return /^[0-9]+$/.test(v) ? parseInt(v, 10) : null;
+};
+var inplay = function() {
+    var sweep = byid('id_sweepstrategies');
+    var keys = [];
+    if (sweep) {
+        Array.prototype.forEach.call(sweep.options, function(o) {
+            if (o.selected && cfg.strategies[o.value]) { keys.push(o.value); }
+        });
+    }
+    var main = byid('id_strategy');
+    return {keys: keys.length ? keys : (main && cfg.strategies[main.value] ? [main.value] : []), swept: keys.length > 0};
+};
+var uses = function(keys, what) {
+    return keys.some(function(k) { return cfg.strategies[k][what]; });
+};
+var fill = function(template, a) {
+    return template.replace(/\{\$a->([a-z]+)\}/g, function(m, k) { return a[k] !== undefined ? a[k] : m; });
+};
+var check = function(key, b, leaves, items) {
+    var s = cfg.strategies[key];
+    var out = [];
+    if (!s || !s.global) { return out; }
+    var add = function(code, a) { a.strategy = s.label; out.push(fill(cfg.messages[code], a)); };
+    var smin = s.subscale ? b.subscalemin : null;
+    var smax = s.subscale ? b.subscalemax : null;
+    if (b.globalmin !== null && b.globalmax !== null && b.globalmax > 0 && b.globalmin > b.globalmax) {
+        add('minabovemax', {minimum: b.globalmin, maximum: b.globalmax});
+    }
+    if (leaves > 0 && s.floor && smin !== null && smin > 0) {
+        if (b.globalmax !== null && b.globalmax > 0 && smin * leaves > b.globalmax) {
+            add('floorabovemaximum', {leaves: leaves, submin: smin, floor: smin * leaves, maximum: b.globalmax});
+        }
+        if (items > 0 && smin > items) { add('floorabovepool', {submin: smin, items: items}); }
+    }
+    if (leaves > 0 && smax !== null && smax > 0 && b.globalmin !== null && smax * leaves < b.globalmin) {
+        add('ceilingbelowminimum', {leaves: leaves, submax: smax, ceiling: smax * leaves, minimum: b.globalmin});
+    }
+    if (leaves > 0 && items > 0 && b.globalmin !== null && leaves * items < b.globalmin) {
+        add('poolbelowminimum', {pool: leaves * items, minimum: b.globalmin});
+    }
+    return out;
+};
+var shared = {
+    global: ['id_globalmin', 'id_globalmax'],
+    subscale: ['id_subscalemin', 'id_subscalemax'],
+    se: ['id_semin', 'id_semax'],
+    pilot: ['id_pilotinclude']
+};
+var notes = {global: 'globalmax', subscale: 'subscalemax', se: 'standarderror', pilot: 'pilot'};
+var update = function() {
+    var play = inplay();
+    var keys = play.keys;
+
+    // The choice above, replaced by the sweep's strategies.
+    var main = byid('id_strategy');
+    if (main) { main.disabled = play.swept; }
+    document.querySelectorAll('[data-catquizlab-na="strategy"]').forEach(function(note) {
+        note.textContent = play.swept ? fill(cfg.replaced, {strategies: keys.map(function(k) {
+            return cfg.strategies[k].label;
+        }).join(', ')}) : '';
+        note.hidden = !play.swept;
+        show(note.closest('.fitem') || note.parentNode, play.swept);
+    });
+
+    // Shared fields: hidden and disabled where no strategy in play uses them.
+    Object.keys(shared).forEach(function(what) {
+        var applies = uses(keys, what);
+        shared[what].forEach(function(id) {
+            var el = byid(id);
+            if (el) { el.disabled = !applies; }
+            show(row(id), applies);
+        });
+        if (what === 'pilot') {
+            var ratio = byid('id_pilotratio');
+            if (ratio) { ratio.disabled = !applies; }
+            show(row('id_pilotratio'), applies);
+        }
+        document.querySelectorAll('[data-catquizlab-na="' + notes[what] + '"]').forEach(function(note) {
+            note.hidden = applies;
+            show(note.closest('.fitem') || note.parentNode, !applies);
+        });
+    });
+
+    // A strategy's own row: only while it is in play, only what it uses.
+    Object.keys(cfg.strategies).forEach(function(key) {
+        show(row('fgroup_id_perstrategygroup_' + key) || byid('fgroup_id_perstrategygroup_' + key),
+            keys.indexOf(key) !== -1);
+    });
+    document.querySelectorAll('[data-catquizlab-perstrategy]').forEach(function(el) {
+        var key = el.getAttribute('data-catquizlab-perstrategy');
+        var field = el.getAttribute('data-catquizlab-field');
+        var s = cfg.strategies[key] || {};
+        var level = field.indexOf('subscale') === 0 ? 'subscale' : 'global';
+        var applies = keys.indexOf(key) !== -1 && !!s[level];
+        el.disabled = !applies;
+        if (!s[level]) {
+            el.value = '';
+            el.placeholder = level === 'global' ? cfg.allitems : cfg.na;
+            return;
+        }
+        var base = byid('id_' + field);
+        el.placeholder = base && !base.disabled ? base.value : '';
+    });
+
+    // What the budgets cannot do with this pool.
+    var leaves = (num(byid('id_poolcategories') && byid('id_poolcategories').value) || 0)
+        * (num(byid('id_poolsubcategories') && byid('id_poolsubcategories').value) || 0);
+    var items = num(byid('id_poolitems') && byid('id_poolitems').value) || 0;
+    var problems = [];
+    keys.forEach(function(key) {
+        var b = {};
+        ['globalmin', 'globalmax', 'subscalemin', 'subscalemax'].forEach(function(field) {
+            var own = byid('id_perstrategy_' + key + '_' + field);
+            var base = byid('id_' + field);
+            var value = own && !own.disabled && String(own.value).trim() !== '' ? own.value
+                : (base && !base.disabled ? base.value : '');
+            b[field] = num(value);
+        });
+        problems = problems.concat(check(key, b, leaves, items));
+    });
+    document.querySelectorAll('[data-catquizlab-feasibility]').forEach(function(box) {
+        box.innerHTML = '';
+        problems.forEach(function(text) {
+            var p = document.createElement('p');
+            p.className = 'mb-1';
+            p.textContent = text;
+            box.appendChild(p);
+        });
+        box.hidden = problems.length === 0;
+        show(box.closest('.fitem') || box.parentNode, problems.length > 0);
+    });
+};
+document.addEventListener('change', update);
+document.addEventListener('input', update);
+update();
+JS;
     }
 
     /**
@@ -878,13 +993,16 @@ class experiment_form extends \moodleform {
      * @return string[]
      */
     protected static function strategies_in_play(array $data): array {
-        $keys = [];
-
-        if (!empty($data['strategy'])) {
+        // The strategies of the sweep where it has any — they replace the one
+        // chosen above, as the sweep's help says — that one otherwise. Both
+        // used to count: a classical test chosen above and four other
+        // strategies in the sweep was checked as five strategies.
+        $keys = array_map('strval', array_values(array_filter(
+            (array) ($data['sweepstrategies'] ?? []),
+            static fn($v): bool => (string) $v !== ''
+        )));
+        if ($keys === [] && !empty($data['strategy'])) {
             $keys[] = (string) $data['strategy'];
-        }
-        foreach ((array) ($data['sweepstrategies'] ?? []) as $level) {
-            $keys[] = (string) $level;
         }
 
         return array_values(array_unique(array_filter($keys, static function (string $key): bool {
