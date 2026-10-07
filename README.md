@@ -134,6 +134,43 @@ and changes definitions, `:execute` starts and cancels runs, `:export` takes
 data off the instance. Every state-changing action is a POST guarded by
 `sesskey` and the capability belonging to that specific action.
 
+## Server logs for worker requests
+
+Every request the worker makes carries two headers: `X-CatQuizLab-Correlation`
+(the execution's correlation id, from `job_claim`) and `X-CatQuizLab-Attempt`
+(`attemptid.execution`). Two logs use them.
+
+**The plugin's own line per request.** For every request carrying the header,
+the plugin writes one JSON line to `moodledata/catquizlab/requests/YYYY-MM-DD.jsonl`:
+time, method, path (session keys and tokens redacted), HTTP status, duration in
+milliseconds, what became of the connection (`normal`, `aborted`, `timeout`),
+peak memory, process id, correlation id, sitting and execution — and what the
+web server cannot know: the exception Moodle turned into an error page (class,
+message, error code, debug info, file, line, first frames), or a PHP fatal
+error. A file, not the database, since a failing request most often fails at
+the database. The logs page shows these lines as the source `request`, filtered
+by experiment, run or sitting like every other source. They are kept as long
+as the artefacts (`artefact_retention_days`). Requests without the header —
+every real user's — are not touched.
+
+Not caught there: an exception thrown before Moodle's configuration is
+complete (a database that cannot be reached, a session that cannot be
+started), since the plugin's hook runs after it. For those, set Moodle's
+debugging to NORMAL with *Display debug messages* off, and see the web
+server's error log.
+
+**The web server's access log.** Its default format knows neither the
+duration nor the correlation. With Apache:
+
+```apache
+LogFormat "%h %l %u %t \"%r\" %>s %b \"%{Referer}i\" \"%{User-Agent}i\" %D %X %{X-CatQuizLab-Correlation}i %{X-CatQuizLab-Attempt}i" catquizlab
+CustomLog ${APACHE_LOG_DIR}/access.log catquizlab
+```
+
+`%D` is the duration in microseconds; `%X` what became of the connection when
+the response was done: `X` aborted before the response completed, `+` kept
+alive, `-` closed. The last two fields tie a line to the sitting.
+
 ## Repository layout
 
     version.php                     component, version, dependencies

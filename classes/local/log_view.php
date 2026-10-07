@@ -50,7 +50,8 @@ class log_view {
             self::from_runlog($filter),
             self::from_attemptlog($filter),
             self::from_tasks($filter),
-            self::from_dispatch($filter)
+            self::from_dispatch($filter),
+            self::from_requests($filter)
         );
 
         // Newest last: a log is read downwards, and a person pasting the tail
@@ -93,6 +94,88 @@ class log_view {
         }
 
         return implode("\n", $out);
+    }
+
+    /** @var int A worker request that took this long, in milliseconds, is worth a warning. */
+    public const SLOW_REQUEST_MS = 10000;
+
+    /**
+     * The worker's requests as the server saw them: status, duration, connection, exception (#110).
+     *
+     * From files, not the database (request_trace says why), so the time window
+     * is applied here: the last two days unless one is given.
+     *
+     * @param array $filter The filter.
+     * @return array[]
+     */
+    protected static function from_requests(array $filter): array {
+        global $DB;
+
+        $until = (int) ($filter['until'] ?? 0) ?: time();
+        $since = (int) ($filter['since'] ?? 0) ?: $until - 2 * DAYSECS;
+        $runs = [];
+        $experiments = [];
+        $lines = [];
+        foreach (request_trace::read($since, $until) as $i => $request) {
+            $attemptid = (int) ($request['attemptid'] ?? 0);
+            if ($attemptid > 0 && !array_key_exists($attemptid, $runs)) {
+                $runs[$attemptid] = (int) $DB->get_field('local_catquizlab_attempt', 'runid', ['id' => $attemptid]);
+            }
+            $runid = $attemptid > 0 ? $runs[$attemptid] : 0;
+            if (!empty($filter['attemptid']) && (int) $filter['attemptid'] !== $attemptid) {
+                continue;
+            }
+            if (!empty($filter['runid']) && (int) $filter['runid'] !== $runid) {
+                continue;
+            }
+            if (!empty($filter['experimentid'])) {
+                if ($runid > 0 && !array_key_exists($runid, $experiments)) {
+                    $experiments[$runid] = (int) $DB->get_field('local_catquizlab_run', 'experimentid', ['id' => $runid]);
+                }
+                if ((int) $filter['experimentid'] !== ($experiments[$runid] ?? 0)) {
+                    continue;
+                }
+            }
+
+            $status = (int) ($request['status'] ?? 0);
+            $connection = (string) ($request['connection'] ?? 'normal');
+            $exception = $request['exception'] ?? null;
+            $fatal = $request['fatal'] ?? null;
+            $text = sprintf(
+                '%s %s → %d in %.1f s',
+                $request['method'] ?? '',
+                $request['path'] ?? '',
+                $status,
+                ((int) ($request['durationms'] ?? 0)) / 1000
+            );
+            if ($connection !== 'normal') {
+                $text .= ', connection ' . $connection;
+            }
+            $text .= sprintf(', %.1f MB', (float) ($request['peakmb'] ?? 0));
+            if (is_array($exception)) {
+                $text .= ' — ' . $exception['class'] . ($exception['errorcode'] !== '' ? ' [' . $exception['errorcode'] . ']' : '')
+                    . ': ' . $exception['message']
+                    . ($exception['debuginfo'] !== '' ? ' (' . $exception['debuginfo'] . ')' : '')
+                    . ' at ' . $exception['file'] . ':' . $exception['line'];
+            }
+            if (is_array($fatal)) {
+                $text .= ' — PHP fatal: ' . $fatal['message'] . ' at ' . $fatal['file'] . ':' . $fatal['line'];
+            }
+            $failed = $status >= 500 || is_array($exception) || is_array($fatal) || $connection !== 'normal';
+            $slow = (int) ($request['durationms'] ?? 0) >= self::SLOW_REQUEST_MS || $status >= 400;
+            $ms = (int) $request['unixms'];
+            $lines[] = self::line(intdiv($ms, 1000), $i, 'request', $text, [
+                'ms' => $ms,
+                'runid' => $runid,
+                'attemptid' => $attemptid,
+                'correlationid' => (string) ($request['correlationid'] ?? ''),
+                'failed' => $failed,
+                'severity' => $failed ? self::ERROR : ($slow ? self::WARNING : self::INFO),
+                'action' => 'request',
+            ]);
+        }
+
+        return $lines;
     }
 
     /**

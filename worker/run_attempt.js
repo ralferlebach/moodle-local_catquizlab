@@ -89,14 +89,14 @@ if (require.main === module && !SELF_TEST && (!BASE_URL || !TOKEN)) {
  * @returns {Promise<object>} The decoded response.
  */
 async function callWs(wsfunction, params) {
-    const {url, body} = buildWsRequest(BASE_URL, TOKEN, wsfunction, params);
+    const {url, body, headers} = buildWsRequest(BASE_URL, TOKEN, wsfunction, params, currentTrace);
     const started = Date.now();
     let response = null;
     let data = null;
     try {
         response = await fetch(url, {
             method: 'POST',
-            headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+            headers,
             body,
         });
         if (!response.ok) {
@@ -129,6 +129,8 @@ let currentAttemptId = 0;
  * @returns {Promise<object|null>}
  */
 async function claimJob() {
+    // A new job: the previous sitting's headers end here — its report went out with them.
+    currentTrace = {};
     const job = await callWs('local_catquizlab_job_claim', {workerid: WORKER_ID});
     return job && job.hasjob ? job : null;
 }
@@ -163,8 +165,11 @@ async function playAttempt(browser, job) {
     const recorder = new nav.Recorder(page, {capture: CAPTURE});
     // Every request of this sitting carries the execution's correlation id, so
     // that a server-side error can be found by it (#107, #110).
-    if (job.correlationid) {
-        await page.setExtraHTTPHeaders({'X-CatQuizLab-Correlation': String(job.correlationid)});
+    // And which sitting and execution it is: the server's line for each
+    // request names it, and the logs page filters by it (#110).
+    currentTrace = traceHeaders(job);
+    if (Object.keys(currentTrace).length > 0) {
+        await page.setExtraHTTPHeaders(currentTrace);
     }
     let transport = null;
     let artefacts = null;
@@ -746,7 +751,26 @@ function normaliseBaseUrl(value) {
  * @param {object} params The function parameters.
  * @returns {string}
  */
-function buildWsRequest(baseUrl, token, wsfunction, params) {
+/** @type {object} The trace headers of the sitting being played, sent with every web service call too. */
+let currentTrace = {};
+
+/**
+ * The headers that tie a request to its sitting on the server (#107, #110).
+ *
+ * @param {object} job The claimed job.
+ * @returns {object} Header name to value; empty without a correlation id.
+ */
+function traceHeaders(job) {
+    if (!job || !job.correlationid) {
+        return {};
+    }
+    return {
+        'X-CatQuizLab-Correlation': String(job.correlationid),
+        'X-CatQuizLab-Attempt': `${Number(job.attemptid) || 0}.${Number(job.execution) || 0}`,
+    };
+}
+
+function buildWsRequest(baseUrl, token, wsfunction, params, trace = {}) {
     // Everything in the body (#111): the parameters — a diagnosis can be tens
     // of kilobytes, which as a query string made the server answer 414 and the
     // report of a failure fail in turn — and the token, which in a URL ends up
@@ -761,6 +785,7 @@ function buildWsRequest(baseUrl, token, wsfunction, params) {
     return {
         url: `${normaliseBaseUrl(baseUrl)}/webservice/rest/server.php`,
         body: body.toString(),
+        headers: {'Content-Type': 'application/x-www-form-urlencoded', ...(trace || {})},
     };
 }
 
@@ -1344,6 +1369,7 @@ module.exports = {
     parseArgs,
     normaliseBaseUrl,
     buildWsRequest,
+    traceHeaders,
     reportFailureMessage,
     fitDiagnostics,
     fitMessage,

@@ -203,3 +203,24 @@ test('a failed report does not hide the attempt it was reporting (#111)', () => 
     assert.ok(message.indexOf('HTTP 500') < message.indexOf('ECONNRESET'));
     assert.match(message, /^Attempt 42 failed: .*HTTP 500 — and its report to Moodle failed: .*ECONNRESET/);
 });
+
+test('a sitting\'s requests name it on the server (#110)', () => {
+    const headers = worker.traceHeaders({correlationid: 'abc123', attemptid: 19084, execution: 2});
+    assert.deepEqual(headers, {'X-CatQuizLab-Correlation': 'abc123', 'X-CatQuizLab-Attempt': '19084.2'});
+    // Without a correlation id from the server, nothing to send.
+    assert.deepEqual(worker.traceHeaders({attemptid: 5}), {});
+    assert.deepEqual(worker.traceHeaders(null), {});
+});
+
+test('a web service call carries the trace headers, and no secret in them (#110)', () => {
+    const trace = worker.traceHeaders({correlationid: 'abc123', attemptid: 7, execution: 1});
+    const request = worker.buildWsRequest('http://x', 'secret-token', 'local_catquizlab_oracle_answer', {q: 1}, trace);
+    assert.equal(request.headers['X-CatQuizLab-Correlation'], 'abc123');
+    assert.equal(request.headers['X-CatQuizLab-Attempt'], '7.1');
+    assert.equal(request.headers['Content-Type'], 'application/x-www-form-urlencoded');
+    assert.ok(!JSON.stringify(request.headers).includes('secret-token'));
+    // Without them, the content type alone, as before.
+    assert.deepEqual(worker.buildWsRequest('http://x', 't', 'fn', {}).headers,
+        {'Content-Type': 'application/x-www-form-urlencoded'});
+});
+

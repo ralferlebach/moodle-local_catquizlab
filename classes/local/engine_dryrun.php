@@ -207,6 +207,17 @@ class engine_dryrun {
             $USER = $previoususer;
 
             if ($rolledback->errorcode !== 'dryrun') {
+                // The engine's own exception, not ours: the transaction is still
+                // open and must be rolled back here. It was not, and the request
+                // ended with it open — "active database transaction detected
+                // during request shutdown" in the server's error log (#110).
+                try {
+                    $transaction->rollback($rolledback);
+                } catch (\Throwable $ignored) {
+                    // Moodle's rollback() rethrows what it is given; that is the point here.
+                    $ignored = null;
+                }
+
                 return self::from_throwable($rolledback, $CFG->dirroot) + ['attemptid' => (int) $attempt->id];
             }
 

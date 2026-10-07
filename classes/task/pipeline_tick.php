@@ -71,6 +71,11 @@ class pipeline_tick extends \core\task\scheduled_task {
 
         // Execution artefacts past their retention (#107).
         \local_catquizlab\local\artefact_store::cleanup();
+        // The worker requests' lines, kept as long as the artefacts (#110).
+        $days = (int) get_config('local_catquizlab', 'artefact_retention_days');
+        if ($days > 0) {
+            \local_catquizlab\local\request_trace::purge_older_than($days);
+        }
 
         // Old lifecycle entries go by the same retention as the debug log. They
         // were kept for ever: a year of runs is a table nobody reads and every

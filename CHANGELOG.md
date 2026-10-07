@@ -6,6 +6,53 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.7.29] — 2026-10-06 — #110: a line per worker request, with the exception behind a 500
+
+### Why
+The server's logs from Experiment 12 held 623 answers of HTTP 500 to the
+worker's sittings and not one entry about them: Moodle catches an exception,
+turns it into an error page with status 500, and logs it nowhere unless
+debugging is on. The access log's default format has neither the duration nor
+the sitting. Two kinds of failure looked alike there: an overloaded server
+(answers taking 10 to 60 seconds, connections not accepted for 10 seconds) and
+waves of errors on a server that answered in one to three seconds.
+
+### What
+- **One JSON line per worker request**, in `moodledata/catquizlab/requests/
+  YYYY-MM-DD.jsonl`: time, method, path (session keys and tokens redacted),
+  status, duration, what became of the connection (`normal`, `aborted`,
+  `timeout` — the access log's `%X`), peak memory, process, correlation id,
+  sitting and execution — and what the web server cannot know: **the exception
+  Moodle turned into an error page** (class, message, error code, debug info,
+  file, line, first frames) or a PHP fatal error. Through the `after_config`
+  hook, for requests carrying the worker's header only; real users' requests are
+  not touched. A file, not the database, because a failing request most often
+  fails there. Kept as long as the artefacts.
+- **The server adopts the worker's correlation id** for the request, so every
+  entry it leaves carries it. The header was sent since 0.7.24 and read nowhere.
+- **The worker sends `X-CatQuizLab-Attempt`** (`attemptid.execution`) beside the
+  correlation id — **with its web service calls too**, not only the browser's:
+  the oracle's answers were among the requests that timed out. A report still
+  carries the headers of the sitting it reports.
+- **The logs page shows the requests** as the source `request`: an error for a
+  status of 500 and up, an exception, a fatal error or a broken connection; a
+  warning from 10 seconds or a 4xx; filtered by experiment, run and sitting.
+- **README:** the Apache `LogFormat` with `%D %X` and both headers, and what the
+  plugin's lines cover and do not (exceptions before Moodle's configuration is
+  complete — for those, debugging NORMAL with display off).
+
+Checked in a real web request besides the tests: a request with the headers
+left one line, one without left none; a request for a course that does not
+exist left `dml_missing_record_exception [invalidrecord]` with its place.
+
+### Also
+- **`engine_dryrun` left a database transaction open** when the engine threw an
+  exception of its own: the server's error log had it four times ("active
+  database transaction detected during request shutdown", from
+  `diagnose_attempt`). It is rolled back now.
+
+---
+
 ## [0.7.28] — 2026-10-05 — #118: an end before the minimum is not a regular one
 
 ### What Experiment 12 showed, and more
