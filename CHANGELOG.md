@@ -17,6 +17,14 @@ versioning follows [Semantic Versioning](https://semver.org/).
 - The description of a target definition for "relevant scales" that 0.7.34
   used is removed from the code and from this file; the mode has no target
   figures (0.7.35).
+- CI (release workflow, no engine installed): `early_stop_validity_test` no
+  longer needs local_catquiz. The engine-text checks are skipped there, the
+  number-based checks still run; the 22-of-50 regression test gives its first
+  sitting the engine status in the trace instead of a row in
+  `local_catquiz_attempts`. Test-only, no version change.
+- CI: the workflows use the actions that run on Node.js 24
+  (`actions/checkout@v5`, `actions/setup-node@v5`, `actions/upload-artifact@v6`);
+  the "Node.js 20 is deprecated" warning on every job goes away.
 
 No change to the database.
 

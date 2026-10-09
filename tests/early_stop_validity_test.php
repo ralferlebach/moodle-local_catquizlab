@@ -17,6 +17,7 @@
 namespace local_catquizlab;
 
 use local_catquizlab\local\attempt_scheduler;
+use local_catquizlab\local\environment;
 use local_catquizlab\local\experiment_definition;
 use local_catquizlab\local\experiment_service;
 use local_catquizlab\local\reason_catalog;
@@ -81,11 +82,18 @@ final class early_stop_validity_test extends \advanced_testcase {
      * @return void
      */
     public function test_the_engine_text_is_read_whatever_its_language(): void {
+        // The number decides where there is one, whatever the text — with or without the engine.
+        $this->assertSame('noremainingquestions', reason_catalog::engine_code('Keine weiteren Fragen', 1));
+        $this->assertSame('reachedmaximumquestions', reason_catalog::engine_code('', 4));
+
+        // The text is matched against the engine's own strings: only where the engine is installed.
+        // The release CI installs the plugin on its own.
+        if (!environment::engine_available()) {
+            $this->markTestSkipped('The engine\'s strings need local_catquiz.');
+        }
         // The engine's English string: the old patterns passed it by.
         $this->assertSame('noremainingquestions', reason_catalog::engine_code('You ran out of questions'));
         $this->assertSame('reachedmaximumquestions', reason_catalog::engine_code('Reached maximum number of questions'));
-        // The number decides where there is one, whatever the text.
-        $this->assertSame('noremainingquestions', reason_catalog::engine_code('Keine weiteren Fragen', 1));
         $this->assertSame('no_eligible_item_before_minimum', reason_catalog::outcome(
             'You ran out of questions',
             ['played' => 7, 'finalse' => 0.2] + self::FACTS
@@ -122,7 +130,9 @@ final class early_stop_validity_test extends \advanced_testcase {
                 'responses' => array_combine(range(1, $n), array_map(static fn(int $k): float => (float) ($k % 2), range(1, $n))),
                 'stopreason' => 'Keine weiteren Fragen', 'scaleabilities' => []];
             $engineattemptid = 0;
-            if ($i === 0) {
+            // The sitting from before 0.7.28 needs the engine's table; without the
+            // engine (the release CI) it carries its code like the others.
+            if ($i === 0 && environment::engine_available()) {
                 // One from before 0.7.28: no code in its trace, the engine's table holds it.
                 $engineattemptid = 900001;
                 $DB->insert_record('local_catquiz_attempts', (object) ['userid' => 2, 'scaleid' => 1, 'contextid' => 1,
