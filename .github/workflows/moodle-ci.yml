@@ -49,9 +49,9 @@ jobs:
     name: "Worker syntax check"
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: '22'
 
@@ -71,7 +71,7 @@ jobs:
         php: ['8.1', '8.2', '8.3']
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           path: plugin
 
@@ -111,7 +111,7 @@ jobs:
           --health-retries=10
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           path: plugin
 
@@ -152,7 +152,7 @@ jobs:
           DB: mariadb
           MOODLE_BRANCH: MOODLE_405_STABLE
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: '22'
 
@@ -220,7 +220,7 @@ jobs:
           --health-interval=10s --health-retries=5
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           path: plugin
 
@@ -294,7 +294,7 @@ jobs:
           --health-interval=10s --health-retries=10
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           path: plugin
 
@@ -350,7 +350,7 @@ jobs:
 
       - name: Upload failure screenshots
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: behat-screenshots-${{ matrix.moodle }}
           path: ${{ github.workspace }}/moodle/behatfaildumps/

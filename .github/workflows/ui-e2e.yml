@@ -47,11 +47,11 @@ jobs:
           --health-retries 5
     steps:
       - name: Check out the plugin
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           path: plugin
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: '22'
 
@@ -196,7 +196,7 @@ jobs:
 
       - name: Upload the results
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: catquizlab-ui-e2e
           path: evidence
