@@ -581,7 +581,28 @@ class experiment_form extends \moodleform {
             'levels:itempairshort', 'levels:sepairshort', 'levels:minmaxshort', 'levels:sepositiveshort',
         ], $component);
 
-        $this->add_action_buttons(true, get_string('form:save', $component));
+        // One primary action (#126): with the right to run, saving and creating the
+        // sweep's runs is that action; saving alone stays beside it. The preview
+        // computes from what is in the form, without saving it.
+        $cansweep = !empty($this->_customdata['cansweep']);
+        // Registered before the button is made: only then does it skip the
+        // browser's checks, which would otherwise refuse to send for a preview.
+        $mform->registerNoSubmitButton('previewbutton');
+        $buttons = [];
+        if ($cansweep) {
+            $buttons[] = $mform->createElement(
+                'submit',
+                'saveandsweep',
+                get_string('form:saveandsweep', $component),
+                null,
+                true
+            );
+        }
+        $buttons[] = $mform->createElement('submit', 'submitbutton', get_string('form:save', $component), null, !$cansweep);
+        $buttons[] = $mform->createElement('submit', 'previewbutton', get_string('form:previewnow', $component), null, false);
+        $buttons[] = $mform->createElement('cancel');
+        $mform->addGroup($buttons, 'buttonar', '', [' '], false);
+        $mform->closeHeaderBefore('buttonar');
     }
 
     /**

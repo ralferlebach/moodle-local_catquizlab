@@ -32,8 +32,16 @@ stillschweigend („40-15“ verschwand; das Experiment lief ohne diese Stufe).
 ## Vorschau
 
 Die Sweep-Vorschau (Zellen, Läufe, Bearbeitungen, Budgets je Zelle) rechnet
-aus der gespeicherten Definition; der Test prüft Vorschau = angelegte Läufe.
-Eine Live-Vorschau vor dem Speichern ist nicht Teil dieser Lieferung.
+nach dem Speichern aus der gespeicherten Definition; der Test prüft Vorschau =
+angelegte Läufe.
+
+Seit 0.7.40 rechnet „Vorschau ohne Speichern“ (No-Submit-Button
+`previewbutton`) aus den Eingaben im Formular. Vorher laufen alle Regeln des
+Formulars wie beim Speichern (`validate_defined_fields(true)`): eine
+abgelehnte Stufe steht am Feld, und es gibt keine Vorschau. Die ungespeicherte
+Vorschau bietet kein „Sweep anlegen“, weil Läufe aus der gespeicherten
+Definition entstehen. Primäre Aktion des Editors ist „Speichern und Läufe
+anlegen“ (`saveandsweep`, nur mit `local/catquizlab:execute`).
 
 ## Tests
 
@@ -41,4 +49,7 @@ Eine Live-Vorschau vor dem Speichern ist nicht Teil dieser Lieferung.
 ab, Speichern/Neuladen verlustfrei, Vorschau = Läufe);
 `tests/playwright/sweep_levels.spec.js` (eingeklappt ohne leere Textareas,
 Stufen per Tastatur, Meldung je Zeile, Einzelwert ausgeblendet, Server lehnt
-unlesbare Stufe ab, Stufen nach Speichern wieder als Zeilen).
+unlesbare Stufe ab, Stufen nach Speichern wieder als Zeilen);
+`tests/playwright/experiment_form.spec.js` (Vorschau ohne Speichern, primäre
+Aktion, abgelehnte Stufe ohne Vorschau); Behat `experiment_workflow.feature`
+(Vorschau ohne Speichern, Speichern und Läufe anlegen).

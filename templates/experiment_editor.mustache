@@ -35,7 +35,8 @@
       infocount int, errors array of { message string }, warnings array of { message string },
       notes array of { message string }
     * preview object|false - has cells, replications, runs, attempts, large bool,
-      createurl, cansweep bool, sesskey string, experimentid int
+      unsaved bool (a preview of the form, not of the stored definition), createurl,
+      cansweep bool, sesskey string, experimentid int
     * exchange object|false - has declarativeurl, normalisedurl
 
     Example context (json):
@@ -167,6 +168,12 @@
                             </li>
                         </ul>
 
+                        {{#unsaved}}
+                            <div class="alert alert-info py-2 small" data-region="catquizlab-preview-unsaved">
+                                {{#str}}editor:previewunsaved, local_catquizlab{{/str}}
+                            </div>
+                        {{/unsaved}}
+
                         {{#large}}
                             <div class="alert alert-warning py-2 small">
                                 {{#str}}editor:largesweep, local_catquizlab{{/str}}
@@ -181,7 +188,7 @@
                                 <input type="hidden" name="sesskey" value="{{sesskey}}">
                                 <input type="hidden" name="action" value="createsweep">
                                 <input type="hidden" name="id" value="{{experimentid}}">
-                                <button type="submit" class="btn btn-secondary btn-block">
+                                <button type="submit" class="btn btn-primary btn-block">
                                     {{#str}}action:createsweep, local_catquizlab{{/str}}
                                 </button>
                             </form>
@@ -194,7 +201,7 @@
                                 <input type="hidden" name="sesskey" value="{{sesskey}}">
                                 <input type="hidden" name="action" value="createsweepandstart">
                                 <input type="hidden" name="id" value="{{experimentid}}">
-                                <button type="submit" class="btn btn-primary btn-block">
+                                <button type="submit" class="btn btn-outline-secondary btn-block">
                                     {{#str}}action:createsweepandstart, local_catquizlab{{/str}}
                                 </button>
                             </form>

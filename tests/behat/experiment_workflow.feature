@@ -61,6 +61,31 @@ Feature: Defining and running CAT experiments from the web interface
     And I press "Create sweep"
     Then I should see "Sweep created with"
 
+  Scenario: The preview computes from the form before anything is saved (#126)
+    Given I navigate to "Reports > CAT experiment suite" in site administration
+    When I follow "New experiment"
+    And I set the following fields to these values:
+      | Name                                | Behat unsaved preview |
+      | Simulated DigiTwins per replication | 7                     |
+    And I press "Preview without saving"
+    Then I should see "Sweep preview"
+    And I should see "nothing has been saved" in the "[data-region='catquizlab-preview-unsaved']" "css_element"
+    And I should see "7" in the "[data-region='catquizlab-plan-twins']" "css_element"
+    And the field "Name" matches value "Behat unsaved preview"
+    And "Create sweep" "button" should not exist
+    When I navigate to "Reports > CAT experiment suite" in site administration
+    Then I should not see "Behat unsaved preview"
+
+  Scenario: Saving and creating the runs is the one primary action (#126)
+    Given I navigate to "Reports > CAT experiment suite" in site administration
+    When I follow "New experiment"
+    And I set the following fields to these values:
+      | Name                                | Behat save and sweep |
+      | Simulated DigiTwins per replication | 3                    |
+    And I press "Save and create runs"
+    Then I should see "Experiment saved."
+    And I should see "Sweep created with"
+
   Scenario: The experiment overview shows publication labels
     Given the following "local_catquizlab > experiment" exists:
       | name     | Behat labelled |

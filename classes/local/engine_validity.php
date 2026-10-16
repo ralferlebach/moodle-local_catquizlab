@@ -72,6 +72,15 @@ class engine_validity {
     /** @var string No answered item on the scale in this sitting. */
     public const NOT_MEASURED = 'not_measured';
 
+    /** @var string Every productive item of the scale answered wrongly (local_catquiz #140). */
+    public const FRACTION_ALL_INCORRECT = 'fraction_all_incorrect';
+
+    /** @var string Every productive item of the scale answered correctly (local_catquiz #140). */
+    public const FRACTION_ALL_CORRECT = 'fraction_all_correct';
+
+    /** @var string The test ended before its minimum of answered productive questions (local_catquiz #141). */
+    public const MIN_QUESTIONS = 'min_questions_not_reached';
+
     /** @var string Nothing measured on the scale, and whether an item was administered is not known (#113). */
     public const ITEMS_UNKNOWN = 'items_unknown';
 
@@ -381,13 +390,18 @@ class engine_validity {
             return [self::NOT_MEASURED];
         }
         $reasons = [];
+        // In the engine's words (local_catquiz #140, #141): the test's minimum
+        // is min_questions_not_reached, a subscale's n_min; a share of 0 or 1
+        // is all incorrect or all correct.
         $minimum = $root ? (int) $thresholds['nmintest'] : (int) $thresholds['nminscale'];
         if ($minimum > 0 && (int) $scale['n'] < $minimum) {
-            $reasons[] = self::N_MIN;
+            $reasons[] = $root ? self::MIN_QUESTIONS : self::N_MIN;
         }
         $fraction = $scale['fraction'] ?? null;
-        if ($fraction !== null && ((float) $fraction <= 0.0 || (float) $fraction >= 1.0)) {
-            $reasons[] = self::FRACTION;
+        if ($fraction !== null && (float) $fraction <= 0.0) {
+            $reasons[] = self::FRACTION_ALL_INCORRECT;
+        } else if ($fraction !== null && (float) $fraction >= 1.0) {
+            $reasons[] = self::FRACTION_ALL_CORRECT;
         }
         if ($thresholds['semax'] !== null) {
             if (!isset($scale['se']) || $scale['se'] === null || !is_finite((float) $scale['se'])) {

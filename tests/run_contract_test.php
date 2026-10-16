@@ -187,4 +187,49 @@ final class run_contract_test extends \advanced_testcase {
 
         return $values;
     }
+
+    /**
+     * The engine's counting since local_catquiz 2026100909 (#141): minimum on answered productive, maximum on all asked.
+     *
+     * @return void
+     */
+    public function test_minimum_counts_answered_productive_questions(): void {
+        $this->resetAfterTest();
+        $runid = $this->run_with('allsubs', 30, []);
+
+        // Seven played, two of them pilots: five answered productive — the minimum of five is met.
+        $pilots = $this->trace(7) + ['enginevalidity' => ['n' => 5]];
+        $this->assertSame([], run_contract::check_sitting($runid, $pilots));
+        // Six played, but only four answered productive: under the minimum, though the played count is not.
+        $short = $this->trace(6) + ['enginevalidity' => ['n' => 4]];
+        $this->assertSame(['global_min_undercut'], run_contract::check_sitting($runid, $short));
+        // The maximum counts every question asked, pilots included: eleven asked is one too many.
+        $long = $this->trace(11) + ['enginevalidity' => ['n' => 9]];
+        $this->assertContains('global_max_exceeded', run_contract::check_sitting($runid, $long));
+        // The engine's own code for running out before the minimum is the design's, not a defect.
+        $this->assertSame(['pool_exhausted_before_min'], run_contract::check_sitting(
+            $runid,
+            $this->trace(3) + ['enginevalidity' => ['n' => 3]],
+            null,
+            'noremainingquestionsbeforeminimum'
+        ));
+    }
+
+    /**
+     * The engine's status 10 and the minimum without pilots are read as the engine means them (#141).
+     *
+     * @return void
+     */
+    public function test_the_engine_status_before_the_minimum(): void {
+        $this->resetAfterTest();
+
+        $this->assertSame('noremainingquestionsbeforeminimum', \local_catquizlab\local\reason_catalog::engine_code('', 10));
+        $this->assertSame('no_eligible_item_before_minimum', \local_catquizlab\local\reason_catalog::outcome('', [
+            'enginestatus' => 10, 'strategy' => 'allsubs', 'minitems' => 5, 'played' => 9,
+        ]));
+        // Nine played, but six answered productive under a minimum of eight: an end before the minimum.
+        $this->assertSame('ended_before_minimum', \local_catquizlab\local\reason_catalog::outcome('statusok', [
+            'enginestatus' => 0, 'strategy' => 'allsubs', 'minitems' => 8, 'played' => 9, 'answered' => 6,
+        ]));
+    }
 }

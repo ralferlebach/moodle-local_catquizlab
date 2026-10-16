@@ -65,7 +65,7 @@ class run_contract {
     ];
 
     /** @var string[] Engine stop codes that mean the pool had nothing left to give. */
-    public const POOL_EXHAUSTED = ['noremainingquestions', 'no_eligible_item_before_minimum'];
+    public const POOL_EXHAUSTED = ['noremainingquestions', 'noremainingquestionsbeforeminimum', 'no_eligible_item_before_minimum'];
 
     /** @var array<int, array> Per run, its effective options and pool size, read once. */
     protected static array $limits = [];
@@ -357,7 +357,13 @@ class run_contract {
         if ($limits['maxquestions'] > 0 && $n > $limits['maxquestions']) {
             $rules[] = 'global_max_exceeded';
         }
-        if ($n < $limits['minquestions']) {
+        // The minimum counts answered productive questions, the maximum every
+        // question asked, pilots included — as the engine counts them since
+        // local_catquiz 2026100909 (#141). The engine's count where the trace
+        // carries it; the played items otherwise.
+        $answered = isset($trace['enginevalidity']['n']) && is_numeric($trace['enginevalidity']['n'])
+            ? (int) $trace['enginevalidity']['n'] : $n;
+        if ($answered < $limits['minquestions']) {
             $rules[] = in_array($code, self::POOL_EXHAUSTED, true) ? 'pool_exhausted_before_min' : 'global_min_undercut';
         }
         if ($limits['maxpersubscale'] > 0) {

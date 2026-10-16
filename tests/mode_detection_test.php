@@ -361,7 +361,7 @@ final class mode_detection_test extends \advanced_testcase {
         // Five runs of six: thirty planned and scheduled; six failed, twenty-four collected, twenty-three valid.
         $this->assertSame([30, 30, 30, 6, 24, 23, 1], [$funnel['planned'], $funnel['scheduled'], $funnel['started'],
             $funnel['failed'], $funnel['collected'], $funnel['valid'], $funnel['invalid']]);
-        $this->assertSame(['fraction' => 1], $funnel['invalidreasons']);
+        $this->assertSame(['fraction_all_correct' => 1], $funnel['invalidreasons']);
         $this->assertSame([6, 0, 0], [$funnel['strategies']['fastest']['planned'], $funnel['strategies']['fastest']['collected'],
             $funnel['strategies']['fastest']['valid']]);
         $this->assertSame([6, 5], [$funnel['strategies']['allsubs']['collected'], $funnel['strategies']['allsubs']['valid']]);
@@ -393,7 +393,7 @@ final class mode_detection_test extends \advanced_testcase {
         $this->assertStringContainsString('Analysis population: 23 valid of 30 planned sittings (76.7 %)', $html);
         $this->assertStringContainsString('valid of all started: 23 / 30 (76.7 %)', $html);
         $this->assertStringContainsString('valid of all finished: 23 / 24 (95.8 %)', $html);
-        $this->assertStringContainsString('[fraction]: 1', $html);
+        $this->assertStringContainsString('[fraction_all_correct]: 1', $html);
         $this->assertStringContainsString('No figure of this view is made of scale results.', $html);
         $this->assertStringContainsString('experimentid = ' . $filter['experimentid'], $html);
 
@@ -423,7 +423,7 @@ final class mode_detection_test extends \advanced_testcase {
         $population = $json['metadata']['population'];
         $this->assertEquals(['planned' => 30, 'scheduled' => 30, 'started' => 30, 'failed' => 6, 'collected' => 24,
             'valid' => 23, 'evaluated' => 24, 'invalid' => 1], $population['attempts']);
-        $this->assertSame(['fraction' => 1], $population['invalidreasons']);
+        $this->assertSame(['fraction_all_correct' => 1], $population['invalidreasons']);
         $this->assertSame(count($json['data']), $population['scales']['included']);
         $this->assertSame([72, 68, 68], [$population['scales']['withadministereditem'],
             $population['scales']['fromvalidattempts'], $population['scales']['valid']]);

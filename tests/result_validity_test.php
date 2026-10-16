@@ -143,7 +143,7 @@ final class result_validity_test extends \advanced_testcase {
                 'scales' => [1 => ['n' => 14, 'fraction' => 1.0, 'se' => 0.3]], 'n' => 14, 'fraction' => 1.0,
                 'engine' => ['valid' => true, 'scales' => []],
             ]]);
-            $this->assertSame([false, [engine_validity::FRACTION]], [$v['valid'], $v['reasons']], $strategy);
+            $this->assertSame([false, [engine_validity::FRACTION_ALL_CORRECT]], [$v['valid'], $v['reasons']], $strategy);
             // By the engine's own verdict, which does not check the pattern here, it stands.
             $this->assertTrue($v['enginevalid']);
             $v = $this->evaluate($strategy, 14, ['rule' => engine_validity::RULE_ENGINE, 'facts' => ['finalse' => 0.3],
@@ -156,7 +156,7 @@ final class result_validity_test extends \advanced_testcase {
         // The thresholds are the test's own: SE above its upper bound, fewer answers than its minimum.
         $strict = ['nmintest' => 20, 'nminscale' => 3, 'semax' => 0.4, 'rootscaleid' => 1];
         $v = $this->evaluate('fastest', 14, ['thresholds' => $strict, 'facts' => ['finalse' => 0.5, 'semin' => 0.2]]);
-        $this->assertSame([engine_validity::N_MIN, engine_validity::SE_MAX], $v['reasons']);
+        $this->assertSame([engine_validity::MIN_QUESTIONS, engine_validity::SE_MAX], $v['reasons']);
 
         // Nothing on record of what was administered, and nothing from the engine: not judgeable.
         $v = result_validity::evaluate_attempt(
@@ -184,7 +184,10 @@ final class result_validity_test extends \advanced_testcase {
         $this->assertSame([], result_validity::scale_reasons($good, 4, $thresholds));
         $this->assertSame([engine_validity::N_MIN], result_validity::scale_reasons(['n' => 2] + $good, 2, $thresholds));
         $this->assertSame([engine_validity::SE_MAX], result_validity::scale_reasons(['se' => 0.9] + $good, 4, $thresholds));
-        $this->assertSame([engine_validity::FRACTION], result_validity::scale_reasons(['fraction' => 0.0] + $good, 4, $thresholds));
+        $this->assertSame(
+            [engine_validity::FRACTION_ALL_INCORRECT],
+            result_validity::scale_reasons(['fraction' => 0.0] + $good, 4, $thresholds)
+        );
         // Two engine scales for one subscale of the design: whose estimate would it be?
         $this->assertSame([result_validity::MAPPING_AMBIGUOUS], result_validity::scale_reasons($good, 4, $thresholds, true));
         // The count unknown: not "no item", and not valid.

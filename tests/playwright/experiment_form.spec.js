@@ -125,3 +125,54 @@ test('the form hides and disables what does not apply, and checks budgets agains
     await page.waitForLoadState('networkidle');
     await expect(page.locator('#id_error_globalmax')).toContainText('300');
 });
+
+test('the preview computes from the form without saving; saving and creating runs is the primary action', async({page}) => {
+    test.skip(!PASSWORD, 'MOODLE_ADMIN_PASSWORD not set.');
+
+    await page.goto('/login/index.php', {waitUntil: 'networkidle'});
+    await page.fill('#username', ADMIN);
+    await page.fill('#password', PASSWORD);
+    await page.click('#loginbtn');
+    await page.waitForLoadState('networkidle');
+    await page.goto('/local/catquizlab/experiment.php', {waitUntil: 'networkidle'});
+
+    // One primary action (#126): save and create the runs; saving alone and the preview beside it.
+    await expect(page.locator('#id_saveandsweep')).toHaveClass(/btn-primary/);
+    await expect(page.locator('#id_submitbutton')).toHaveClass(/btn-secondary/);
+    await expect(page.locator('#id_previewbutton')).toHaveClass(/btn-secondary/);
+
+    const name = 'Unsaved preview ' + Date.now();
+    await page.fill('#id_name', name);
+    await page.locator('#id_sweepmore .ftoggler a, #id_sweepmore legend a').first().click();
+    const budgets = page.locator('[data-region="catquizlab-levels-sweepglobalbudgets"]');
+    for (const [min, max] of [['10', '15'], ['20', '30']]) {
+        await budgets.getByRole('button', {name: 'Add level'}).click();
+        await budgets.locator('li').last().locator('input').nth(0).fill(min);
+        await budgets.locator('li').last().locator('input').nth(1).fill(max);
+    }
+    await page.click('#id_previewbutton');
+    await page.waitForLoadState('networkidle');
+
+    // The preview of what was entered: two budget levels, not saved, no sweep to create yet.
+    await expect(page.locator('[data-region="catquizlab-preview-unsaved"]')).toBeVisible();
+    await expect(page.locator('#id_name')).toHaveValue(name);
+    await expect(page.locator('[data-region="catquizlab-levels-sweepglobalbudgets"] li')).toHaveCount(2);
+    await expect(page.locator('input[name="action"][value="createsweep"]')).toHaveCount(0);
+    const cells = await page.locator('.card', {hasText: 'Sweep preview'}).locator('li').first().locator('strong').innerText();
+    expect(Number(cells)).toBeGreaterThanOrEqual(2);
+
+    // A level the form refuses is named, not dropped from the preview.
+    await page.evaluate(() => {
+        document.getElementById('id_sweepse').value = '0.3/0.5\n0.6-0.9';
+    });
+    await page.click('#id_previewbutton');
+    await page.waitForLoadState('networkidle');
+    await expect(page.locator('[data-region="catquizlab-preview-unsaved"]')).toHaveCount(0);
+    await expect(page.locator('body')).toContainText('No preview');
+    await expect(page.locator('#id_error_sweepse, #fitem_id_sweepse .invalid-feedback').first())
+        .toContainText(/Line 2|min\/max/);
+
+    // Nothing was stored.
+    await page.goto('/local/catquizlab/index.php', {waitUntil: 'networkidle'});
+    await expect(page.locator('body')).not.toContainText(name);
+});

@@ -123,6 +123,9 @@ class attempt_collector {
         // share of points and SE per scale by its own functions, and its own
         // verdict. Kept here so that results need not ask the engine again.
         $trace['enginevalidity'] = engine_validity::measure((int) $attempt->engineattemptid);
+        // The engine's own request timing for this sitting, where it traced it
+        // (local_catquiz #136): kept here, beyond the engine's retention (#110).
+        $trace['engineperf'] = engine_perf::for_sitting((int) $attempt->engineattemptid);
         $debug = $engine['debug'] ?? [];
         // The debug_info blob comes first, since it carries the whole path; the
         // attempt row is the fallback that exists on every site.
@@ -236,7 +239,7 @@ class attempt_collector {
             'dropped'  => count((array) ($trace['progress']['droppedscales'] ?? [])),
             'played'   => (int) ($trace['nitems'] ?? count((array) ($trace['items'] ?? []))),
             'poolsize' => $DB->count_records('local_catquizlab_item', ['runid' => $runid]),
-        ]);
+        ] + (isset($trace['enginevalidity']['n']) ? ['answered' => (int) $trace['enginevalidity']['n']] : []));
         artefact_store::document($attemptid, attempt_history::COLLECTED, $code);
 
         return $trace;

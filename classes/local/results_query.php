@@ -789,6 +789,10 @@ class results_query {
         $measure = $trace['enginevalidity'] ?? $this->engine_measure($attempt)
             ?? engine_validity::measure_from_trace($trace, (int) $attempt->runid);
         engine_validity::remember((int) $attempt->id, $measure);
+        // The engine's count of answered productive questions, for the minimum (#141).
+        if (($measure['source'] ?? '') !== 'trace' && isset($measure['n']) && is_numeric($measure['n'])) {
+            $facts['answered'] = (int) $measure['n'];
+        }
         $rule = (string) ($this->filter['validityrule'] ?? engine_validity::RULE_UNIFORM);
         $validity = result_validity::evaluate_attempt(
             $trace,

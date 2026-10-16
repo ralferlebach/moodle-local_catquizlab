@@ -146,11 +146,15 @@ final class local_deviation_variation_test extends \advanced_testcase {
         $this->assertCount(12, $rows, 'one valid scale result per sitting');
         $this->assertSame([2], array_values(array_unique(array_column($rows, 'subscale'))));
         $coverage = $query->scale_coverage();
-        $this->assertSame([24, 12, 12], [$coverage['measured'], $coverage['included'], $coverage['reasons']['fraction']]);
+        $this->assertSame(
+            [24, 12, 12],
+            [$coverage['measured'], $coverage['included'], $coverage['reasons']['fraction_all_correct']]
+        );
 
         $html = $this->tab($runid);
         $this->assertStringContainsString('12 / 24', $html);
-        $this->assertStringContainsString('all answers correct or all wrong', $html);
+        // In the engine's words (local_catquiz #140).
+        $this->assertStringContainsString('every productive item of the scale answered correctly', $html);
 
         // Asked for all, both are there.
         $all = new results_query(['runid' => $runid, 'validity' => 'all']);

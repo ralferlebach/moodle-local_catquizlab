@@ -815,6 +815,9 @@ if ($runid > 0) {
         200
     );
 
+    // The engine's request timing for this run's sittings (#110, local_catquiz #136).
+    echo \local_catquizlab\output\engine_perf_view::render($runid);
+
     echo $OUTPUT->heading(get_string('attempt:diagnostics', $component), 4);
     echo html_writer::tag('p', get_string('attempt:diagnosticsexplain', $component), ['class' => 'text-muted']);
     echo html_writer::tag('p', implode(' · ', $choices), ['class' => 'small']);

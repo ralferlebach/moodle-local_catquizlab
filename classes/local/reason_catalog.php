@@ -76,6 +76,8 @@ class reason_catalog {
         -1 => 'statusundefined', 0 => 'statusok', 1 => 'noremainingquestions', 2 => 'testiteminrelatedscale',
         3 => 'errorfetchnextquestion', 4 => 'reachedmaximumquestions', 5 => 'abortpersonabilitynotchanged',
         6 => 'emptyfirstquestionlist', 7 => 'errornoitems', 8 => 'exceededmaxattempttime', 9 => 'attemptclosedbytimelimit',
+        // The engine's own word for running out before the minimum (local_catquiz 2026100909, #141).
+        10 => 'noremainingquestionsbeforeminimum',
     ];
 
     /** @var array<string, string>|null The engine's stop texts in every installed language => its code. */
@@ -298,10 +300,17 @@ class reason_catalog {
             return 'fixed_form_complete';
         }
 
+        // The engine says itself that it ran out before the minimum (#141).
+        if ($code === 'noremainingquestionsbeforeminimum') {
+            return 'no_eligible_item_before_minimum';
+        }
         // Before the minimum number of questions no end is a regular one (#118):
         // not even a standard error at its target — the design does not allow a
         // stop there. "No remaining questions" there is its own code.
-        $played = (int) ($facts['played'] ?? 0);
+        // The minimum counts answered productive questions, as the engine does
+        // since local_catquiz 2026100909 (#141): pilot items do not count. The
+        // played items stand in where that count is not known.
+        $played = (int) ($facts['answered'] ?? $facts['played'] ?? 0);
         $minitems = (int) ($facts['minitems'] ?? 0);
         $minapplies = $strategy === '' || strategy_catalog::uses($strategy, 'globalmin');
         if ($minapplies && $minitems > 0 && $played < $minitems) {

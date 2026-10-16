@@ -42,17 +42,17 @@ final class engine_validity_test extends \advanced_testcase {
         $this->assertSame([], $judge(['n' => 4, 'fraction' => 0.5, 'se' => 0.4]));
         $this->assertSame([engine_validity::SE_MAX], $judge(['n' => 4, 'fraction' => 0.5, 'se' => 0.6]));
         $this->assertSame([engine_validity::N_MIN], $judge(['n' => 2, 'fraction' => 0.5, 'se' => 0.4]));
-        $this->assertSame([engine_validity::FRACTION], $judge(['n' => 4, 'fraction' => 1.0, 'se' => 0.4]));
-        $this->assertSame([engine_validity::FRACTION], $judge(['n' => 4, 'fraction' => 0.0, 'se' => 0.4]));
+        $this->assertSame([engine_validity::FRACTION_ALL_CORRECT], $judge(['n' => 4, 'fraction' => 1.0, 'se' => 0.4]));
+        $this->assertSame([engine_validity::FRACTION_ALL_INCORRECT], $judge(['n' => 4, 'fraction' => 0.0, 'se' => 0.4]));
         $this->assertSame([engine_validity::SE_MISSING], $judge(['n' => 4, 'fraction' => 0.5, 'se' => null]));
         $this->assertSame([engine_validity::NOT_MEASURED], engine_validity::judge_scale(null, self::THRESHOLDS));
         // Several at once, each named.
         $this->assertSame(
-            [engine_validity::N_MIN, engine_validity::FRACTION, engine_validity::SE_MAX],
+            [engine_validity::N_MIN, engine_validity::FRACTION_ALL_CORRECT, engine_validity::SE_MAX],
             $judge(['n' => 2, 'fraction' => 1.0, 'se' => 0.9])
         );
-        // The test as a whole: the test's minimum, not the scale's.
-        $this->assertSame([engine_validity::N_MIN], $judge(['n' => 8, 'fraction' => 0.5, 'se' => 0.3], true));
+        // The test as a whole: the test's minimum, not the scale's — in the engine's word (#141).
+        $this->assertSame([engine_validity::MIN_QUESTIONS], $judge(['n' => 8, 'fraction' => 0.5, 'se' => 0.3], true));
         // A threshold the test does not set is not checked.
         $this->assertSame([], engine_validity::judge_scale(
             ['n' => 1, 'fraction' => 0.5, 'se' => 3.0],
@@ -140,7 +140,10 @@ final class engine_validity_test extends \advanced_testcase {
 
         $thresholds = ['nmintest' => 5, 'nminscale' => 2, 'semax' => 0.5, 'rootscaleid' => 1];
         // Uniform: scale 5 is all correct, scale 6's SE is above the bound; the test as a whole is valid.
-        $this->assertSame([engine_validity::FRACTION], engine_validity::judge_scale($measure['scales'][5], $thresholds));
+        $this->assertSame(
+            [engine_validity::FRACTION_ALL_CORRECT],
+            engine_validity::judge_scale($measure['scales'][5], $thresholds)
+        );
         $this->assertSame([engine_validity::SE_MAX], engine_validity::judge_scale($measure['scales'][6], $thresholds));
         $this->assertSame([], engine_validity::judge_attempt($measure, $thresholds));
         // The engine's verdict, word for word: valid — it flagged nothing.

@@ -292,7 +292,7 @@ if (($action === 'createsweep' || $action === 'createsweepandstart') && $id > 0)
 
 // The editor.
 
-$customdata = ['existing' => $existing];
+$customdata = ['existing' => $existing, 'cansweep' => has_capability('local/catquizlab:execute', $context)];
 $form = new experiment_form($pageurl->out(false), $customdata);
 
 if ($form->is_cancelled()) {
@@ -300,6 +300,7 @@ if ($form->is_cancelled()) {
 }
 
 $preview = null;
+$previewunsaved = false;
 $validation = null;
 $notes = [];
 $frozennotice = '';
@@ -318,6 +319,27 @@ if ($data = $form->get_data()) {
     $submitted = experiment_form::to_definition((array) $data);
     try {
         $result = experiment_service::save($submitted, $id > 0 ? $id : null);
+        // Save and create the sweep's runs in one step (#126): the primary action.
+        if (!empty($data->saveandsweep)) {
+            require_capability('local/catquizlab:execute', $context);
+            try {
+                $sweep = experiment_service::create_sweep((int) $result['id']);
+            } catch (moodle_exception $e) {
+                redirect(
+                    new moodle_url('/local/catquizlab/experiment.php', ['id' => $result['id']]),
+                    get_string('notice:saved', $component) . ' ' . $e->getMessage(),
+                    null,
+                    \core\output\notification::NOTIFY_WARNING
+                );
+            }
+            redirect(
+                $manageurl,
+                get_string('notice:saved', $component) . ' '
+                    . get_string('notice:sweepcreated', $component, $sweep['created']),
+                null,
+                \core\output\notification::NOTIFY_SUCCESS
+            );
+        }
         redirect(
             new moodle_url('/local/catquizlab/experiment.php', ['id' => $result['id']]),
             get_string('notice:saved', $component),
@@ -326,6 +348,32 @@ if ($data = $form->get_data()) {
         );
     } catch (moodle_exception $e) {
         \core\notification::error($e->getMessage());
+    }
+} else if ($form->no_submit_button_pressed() && optional_param('previewbutton', '', PARAM_RAW) !== '') {
+    // The preview of what is in the form, not of what was saved (#126): the
+    // form keeps the entries, nothing is stored, and creating runs waits for a
+    // save, since the runs are made from the stored definition.
+    // The form's own checks first, as saving would apply them: a level the
+    // form refuses must not vanish from the preview without a word (#126 AK 2).
+    // validate_defined_fields(true) runs every rule of the form, as saving
+    // does, and marks a refused entry at its field.
+    $raw = (array) $form->get_submitted_data();
+    $previewunsaved = true;
+    if (!$form->validate_defined_fields(true)) {
+        $validation = [
+            'valid' => false,
+            'errors' => [get_string('editor:previewformerrors', $component)],
+            'warnings' => [],
+            'normalised' => [],
+        ];
+    } else {
+        try {
+            $unsaved = experiment_form::to_definition($raw);
+            $validation = experiment_service::validate($unsaved);
+            $preview = $validation['valid'] ? experiment_service::preview($unsaved) : null;
+        } catch (\Throwable $e) {
+            $validation = ['valid' => false, 'errors' => [$e->getMessage()], 'warnings' => [], 'normalised' => []];
+        }
     }
 } else if ($id > 0) {
     $form->set_data(experiment_form::to_form_data($definition, $id));
@@ -394,6 +442,10 @@ echo $OUTPUT->heading($id > 0
 $current = $id > 0
     ? (new experiment_definition($definition))->get_normalised()
     : experiment_definition::apply_defaults([]);
+if ($previewunsaved && !empty($validation['normalised'])) {
+    // The summaries follow what is in the form, as the preview does.
+    $current = $validation['normalised'];
+}
 
 $sections = experiment_form::sections($current);
 
@@ -440,7 +492,8 @@ if ($preview !== null && $preview['runs'] > 0) {
         'runpersons'   => $preview['runpersons'] ?? 0,
         'sittings'     => $preview['sittings'] ?? 0,
         'large'        => $preview['large'],
-        'cansweep'     => has_capability('local/catquizlab:execute', $context),
+        'unsaved'      => $previewunsaved,
+        'cansweep'     => !$previewunsaved && $id > 0 && has_capability('local/catquizlab:execute', $context),
         // What would stop a start, shown next to the button rather than after
         // pressing it. A run queued without an engine or a course looks started
         // and never moves.

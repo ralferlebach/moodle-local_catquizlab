@@ -6,6 +6,61 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.7.40] — 2026-10-14 — engine alignment (local_catquiz #140/#141/#136), #110 engine request timing, #126 preview and primary action
+
+No database change (version 2026101400). Gates: PHPUnit, Behat (two new
+scenarios), Playwright (`experiment_form`: preview without saving), phpcs.
+
+### Engine alignment — local_catquiz 1.2.1 / 1.3.0 (2026100910)
+
+Checked against both engine branches (ALiSe-v-1.2.0-legacy and
+migration-zu-moodle-5.x). Implemented there and taken over here:
+
+- **#141 — the minimum counts answered productive questions, the maximum all
+  questions asked.** The run contract checks the global minimum against the
+  engine's own count of answered productive questions (`enginevalidity.n`),
+  falling back to all played items only where the engine gives none; the
+  maximum still counts every item, pilots included. A sitting with 7 items of
+  which 5 productive meets a minimum of 5.
+- **Engine status 10 `noremainingquestionsbeforeminimum`** (pool empty before
+  the minimum) is known: stop reason "No eligible item left before the minimum
+  number of questions", contract rule "pool exhausted before the global
+  minimum" — not an unknown status.
+- **#140 — the validity reasons in the engine's words:** `fraction_all_correct`,
+  `fraction_all_incorrect` and, for the root scale, `min_questions_not_reached`
+  replace the former single fraction reason; texts in EN and DE. Results,
+  plots and coverage counts use them.
+- **#136 — the engine's request timing** (see #110 below).
+- **Not implemented in the engine: local_catquiz #133** (per-step scale state
+  trace). #106 and #109 stay blocked on it.
+
+### #110 — Engine request timing per sitting and per run (AK-ENGINE-02)
+
+- New `local\engine_perf`: reads `local_catquiz_trace` (engine setting
+  `local_catquiz/attempttrace`) and only reads it. Per sitting a compact summary
+  (`engineperf` in the trace: requests, first item, following items p50/p95/max,
+  database queries, the eight slowest spans), so the figures outlive the
+  engine's retention.
+- Run page: "Engine request timing" — coverage (traced sittings, tracing on or
+  off) and, first item and following items apart, percentiles of the whole
+  request, its database queries and every span (p50/p95/p99/max).
+- `cli/engine_trace_report.php --runid=N [--json]` for the server measurement
+  matrix, beside `cli/capacity_report.php`.
+- Without a tracing engine nothing is invented; the page says why.
+
+### #126 — Preview of the form without saving; one primary action
+
+- "Preview without saving" computes the sweep preview from what is in the form:
+  cells, runs, twins, run-persons, sittings, budgets per cell. Nothing is
+  stored; the entries and the level rows stay. The preview says it is unsaved
+  and offers no "Create sweep", since runs come from the saved definition.
+- The preview applies every rule of the form, as saving does: a level the
+  form refuses is marked at its field and there is no preview — never a
+  preview that silently dropped it.
+- "Save and create runs" is the primary action of the editor (with the right to
+  run); "Save experiment" and the preview stand beside it. In the preview card
+  "Create sweep" is primary, "Create sweep and start" secondary.
+
 ## [0.7.39] — 2026-10-13 — #127 statistics, #125 ETA, #124 worker capacity, #128 status, #130 results, #126 levels, #129 library, #131 logs
 
 Upgrade: new field `local_catquizlab_worker.timestarted` (step 2026101302), an index on attemptlog (timecreated, outcome) (step 2026101303) and
