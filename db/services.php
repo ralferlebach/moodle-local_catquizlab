@@ -59,6 +59,13 @@ $functions = [
         'type'         => 'read',
         'capabilities' => 'local/catquizlab:worker',
     ],
+    'local_catquizlab_sitting_state' => [
+        'classname'    => 'local_catquizlab\\external\\sitting_state',
+        'description'  => 'Where a sitting stands on the server: questions answered and presented, '
+            . 'whether the activity attempt is finished (#134).',
+        'type'         => 'read',
+        'capabilities' => 'local/catquizlab:worker',
+    ],
     'local_catquizlab_job_claim' => [
         'classname'   => 'local_catquizlab\\external\\job_claim',
         'methodname'  => 'execute',
@@ -107,6 +114,7 @@ $services = [
             // liveness were read from the registry row the launcher wrote.
             'local_catquizlab_worker_heartbeat',
             'local_catquizlab_diagnose_attempt',
+            'local_catquizlab_sitting_state',
         ],
         'restrictedusers' => 1,
         'enabled'         => 0,

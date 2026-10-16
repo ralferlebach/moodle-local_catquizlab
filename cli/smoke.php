@@ -61,6 +61,7 @@ use local_catquizlab\local\worker_registry;
     'case' => '',
     'concurrency' => 0,
     'no-navigation-failures' => false,
+    'expect-recovered' => 0,
 ], ['h' => 'help']);
 
 if ($options['help']) {
@@ -496,6 +497,59 @@ if (!empty($options['no-navigation-failures'])) {
     }
 }
 
+// Issue #134: submissions that ended uncertainly were reconciled with the
+// server and continued — and no question was answered twice, none lost. Run
+// with CATQUIZLAB_FAULTS set for the worker, e.g. lostresponse@5,lostrequest@9.
+$expectrecovered = (int) $options['expect-recovered'];
+if ($expectrecovered > 0) {
+    [$insql, $inparams] = $DB->get_in_or_equal(
+        array_keys($DB->get_records('local_catquizlab_run', ['experimentid' => $experimentid], '', 'id')) ?: [0],
+        SQL_PARAMS_NAMED,
+        'rrun'
+    );
+    $recovered = $DB->get_records_select(
+        'local_catquizlab_attemptlog',
+        'runid ' . $insql . ' AND outcome = :recovered',
+        $inparams + ['recovered' => \local_catquizlab\local\attempt_history::RECOVERED],
+        'id ASC',
+        'id, attemptid, reasoncode, detail'
+    );
+    foreach ($recovered as $row) {
+        cli_writeln('  recovered: sitting ' . $row->attemptid . ' ' . $row->reasoncode . ': ' . $row->detail);
+    }
+    if (count($recovered) < $expectrecovered) {
+        cli_error(count($recovered) . ' reconciled submission(s) recorded, ' . $expectrecovered . ' expected.');
+    }
+    // Every question of every collected sitting answered exactly once.
+    $sittings = $DB->get_records_select(
+        'local_catquizlab_attempt',
+        'runid ' . $insql . ' AND engineattemptid > 0',
+        $inparams,
+        '',
+        'id, engineattemptid'
+    );
+    foreach ($sittings as $sitting) {
+        $usage = (int) $DB->get_field('adaptivequiz_attempt', 'uniqueid', ['id' => $sitting->engineattemptid]);
+        $answered = (int) $DB->get_field('adaptivequiz_attempt', 'questionsattempted', ['id' => $sitting->engineattemptid]);
+        $presented = $DB->get_records('question_attempts', ['questionusageid' => $usage], 'slot', 'id, questionid');
+        $distinct = count(array_unique(array_column($presented, 'questionid')));
+        $steps = [];
+        foreach ($presented as $qa) {
+            $steps[] = $DB->count_records_select(
+                'question_attempt_steps',
+                'questionattemptid = ? AND sequencenumber > 0',
+                [$qa->id]
+            );
+        }
+        $uniform = count(array_unique($steps)) <= 1;
+        step('sitting ' . $sitting->id . ': ' . $answered . ' answered, ' . count($presented) . ' presented, '
+            . $distinct . ' distinct questions, answer steps per question ' . implode('/', array_unique($steps)));
+        if ($distinct !== count($presented) || !$uniform || $answered !== count($presented)) {
+            cli_error('Sitting ' . $sitting->id . ': a question presented or answered twice, or an answer lost.');
+        }
+    }
+}
+
 if ($failed > 0) {
     $errors = $DB->get_records_select(
         'local_catquizlab_attempt',
@@ -605,6 +659,46 @@ if ((int) ($named['n'] ?? 0) < 1) {
 }
 
 $withestimate = (int) ($named['n'] ?? 0);
+
+// Issue #123: every parameter from the cell to the sittings, and every limit a
+// sitting broke. Drift or a replaced value is a defect of the chain; a limit
+// overstepped is a defect of the engine; a minimum the pool could not supply
+// is a design violation, reported and not failed.
+$started = microtime(true);
+$defects = [];
+foreach ($DB->get_records('local_catquizlab_run', ['experimentid' => $experimentid], 'id ASC', 'id') as $run) {
+    $contract = \local_catquizlab\local\run_contract::chain((int) $run->id);
+    foreach ($contract['rows'] as $row) {
+        if (
+            in_array($row['status'], [\local_catquizlab\local\run_contract::DRIFT,
+                \local_catquizlab\local\run_contract::REPLACED], true)
+        ) {
+            $defects[] = sprintf(
+                'run %d %s: %s (requested %s, effective %s, engine %s)',
+                $run->id,
+                $row['param'],
+                $row['status'],
+                json_encode($row['requested']),
+                json_encode($row['effective']),
+                json_encode($row['provisioned'])
+            );
+        }
+    }
+    foreach ($contract['violations'] as $rule => $count) {
+        $kind = \local_catquizlab\local\run_contract::RULES[$rule];
+        cli_writeln(sprintf('  contract run %d: %s × %d (%s)', $run->id, $rule, $count, $kind));
+        if ($kind === 'defect') {
+            $defects[] = sprintf('run %d: %s × %d', $run->id, $rule, $count);
+        }
+    }
+}
+step('Parameter chain checked: ' . ($defects === [] ? 'no defect.' : count($defects) . ' defect(s).'), $started);
+if ($defects !== []) {
+    foreach ($defects as $defect) {
+        cli_writeln('  DEFECT: ' . $defect);
+    }
+    cli_error('The run did not keep to its contract (#123).');
+}
 
 
 // Give the rest of the installation its queue back, whatever happened here.

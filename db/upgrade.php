@@ -609,6 +609,13 @@ function xmldb_local_catquizlab_upgrade($oldversion): bool {
         upgrade_plugin_savepoint(true, 2026100106, 'local', 'catquizlab');
     }
 
+    if ($oldversion < 2026101301) {
+        // Runs the circuit breaker held as failed become runs held as paused
+        // (#133): not terminal, resumable after a readiness check, with their cause.
+        \local_catquizlab\local\circuit_breaker::migrate_failed_held();
+        upgrade_plugin_savepoint(true, 2026101301, 'local', 'catquizlab');
+    }
+
     return true;
 }
 

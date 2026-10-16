@@ -431,7 +431,11 @@
                 <li data-region="catquizlab-retry-window">{{retrywindow}}</li>
             {{/retrywindow}}
             {{#queue.haspaused}}
-                <li>{{#str}}queue:paused, local_catquizlab{{/str}} {{queue.paused}}</li>
+                <li>{{#str}}queue:paused, local_catquizlab{{/str}} {{queue.paused}}
+                    <ul class="small mb-0" data-region="catquizlab-pausecauses">
+                        {{#queue.pausecauses}}<li>{{line}}</li>{{/queue.pausecauses}}
+                    </ul>
+                </li>
             {{/queue.haspaused}}
         </ul>
     </div>

@@ -356,7 +356,21 @@ if ($action !== '') {
         }
 
         $paused = $action === 'pauserun';
-        run_lifecycle::set_paused($runid, $paused);
+        $run = $DB->get_record('local_catquizlab_run', ['id' => $runid], '*', MUST_EXIST);
+        // A run the breaker held resumes only through its readiness check and
+        // the release of its failed sittings (#133), whichever button is pressed.
+        if (!$paused && \local_catquizlab\local\circuit_breaker::is_held($run)) {
+            $resumed = \local_catquizlab\local\circuit_breaker::reset_and_continue($runid);
+            redirect(
+                $pageurl,
+                $resumed['ok']
+                    ? get_string('circuit:reset', $component, $resumed['released'])
+                    : get_string('circuit:resumerefused', $component, $resumed['reason'] ?? ''),
+                null,
+                $resumed['ok'] ? \core\output\notification::NOTIFY_SUCCESS : \core\output\notification::NOTIFY_WARNING
+            );
+        }
+        run_lifecycle::set_paused($runid, $paused, '', ['by' => 'operator']);
         redirect(
             $pageurl,
             get_string($paused ? 'ops:runpaused' : 'ops:runresumed', $component, $runid)

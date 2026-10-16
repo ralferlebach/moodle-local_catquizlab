@@ -3039,8 +3039,10 @@ class results_page {
             );
             $out .= \html_writer::div(implode(' · ', array_filter([
                 $this->mode_share('mode:validsittings', $own['counts']['valid'], $own['counts']['sittings'], 'valid', 'all'),
+                // For the relevant scales the engine decides which they are (#114):
+                // the scales whose result it reports are the relevant ones.
                 $this->mode_share(
-                    'mode:included',
+                    $target === \local_catquizlab\local\mode_detection::RELEVANT ? 'mode:included_relevant' : 'mode:included',
                     $own['counts']['included'],
                     $own['counts']['withitems'],
                     'included',

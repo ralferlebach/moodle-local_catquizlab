@@ -20,6 +20,7 @@ use core_external\external_api;
 use core_external\external_function_parameters;
 use core_external\external_single_structure;
 use core_external\external_value;
+use local_catquizlab\local\attempt_scheduler;
 use local_catquizlab\local\worker_launcher;
 use local_catquizlab\local\worker_registry;
 
@@ -106,6 +107,14 @@ class worker_heartbeat extends external_api {
             $known = worker_registry::adopt((string) $params['workerid']);
         }
 
+        // The lease of the sitting it is playing, renewed while it holds it
+        // (#133). A worker told it has lost it stops playing: the sitting has
+        // gone back to the queue, and two browsers in one attempt is #134.
+        $leaselost = false;
+        if ((int) $params['attemptid'] > 0) {
+            $leaselost = !attempt_scheduler::renew_lease((string) $params['workerid'], (int) $params['attemptid']);
+        }
+
         $stopping = in_array((string) $params['state'], ['stopping', 'stopped'], true);
         $why = (string) $params['reason'];
 
@@ -128,6 +137,7 @@ class worker_heartbeat extends external_api {
             // better than letting two workers believe they hold one slot.
             'stop'  => !$known || worker_registry::stop_requested($params['workerid']),
             'known' => $known,
+            'leaselost' => $leaselost,
         ];
     }
 
@@ -139,6 +149,7 @@ class worker_heartbeat extends external_api {
     public static function execute_returns(): external_single_structure {
         return new external_single_structure([
             'stop'  => new external_value(PARAM_BOOL, 'Whether the worker should finish up and exit.'),
+            'leaselost' => new external_value(PARAM_BOOL, 'The sitting it named is no longer its own (#133).'),
             'known' => new external_value(PARAM_BOOL, 'Whether the registry still knows this worker.'),
         ]);
     }

@@ -104,7 +104,7 @@ class live_progress {
                 'inflight' => $inflight,
                 'failed'   => $failed,
                 'complete' => $total > 0 && $done >= $total,
-                'held'     => (int) $run->status === registry::STATUS_FAILED,
+                'held'     => circuit_breaker::is_held($run),
             ];
         }
 
@@ -149,15 +149,15 @@ class live_progress {
             return (int) $run->status;
         }, $runs);
 
-        if (in_array(registry::STATUS_FAILED, $statuses, true)) {
-            $held = 0;
-            foreach ($runs as $run) {
-                if ((int) $run->status === registry::STATUS_FAILED) {
-                    $held = (int) $run->id;
-                    break;
-                }
+        $held = 0;
+        foreach ($runs as $run) {
+            // Failed, or paused by the circuit breaker (#133).
+            if (circuit_breaker::is_held($run)) {
+                $held = (int) $run->id;
+                break;
             }
-
+        }
+        if ($held > 0) {
             return [
                 'state'  => self::BLOCKED,
                 'reason' => get_string('progress:reasonblocked', $component, $held),

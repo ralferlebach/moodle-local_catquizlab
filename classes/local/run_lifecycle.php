@@ -179,20 +179,29 @@ class run_lifecycle {
      * simply not handed out. Pausing is a decision an operator takes, so it
      * survives until it is taken back.
      *
+     * Every change is recorded in the run's log, append-only (#133): when, by
+     * whom or what, why, and what it held or released. Setting what is already
+     * set records nothing and changes nothing.
+     *
      * @param int $runid The run.
      * @param bool $paused Whether it should be paused.
      * @param string $reason Why, when the pause is automatic.
-     * @return void
+     * @param array $detail More for the log: cause, counts, who.
+     * @return bool Whether anything changed.
      */
-    public static function set_paused(int $runid, bool $paused, string $reason = ''): void {
+    public static function set_paused(int $runid, bool $paused, string $reason = '', array $detail = []): bool {
         global $DB;
 
         $run = $DB->get_record('local_catquizlab_run', ['id' => $runid]);
         if (!$run) {
-            return;
+            return false;
         }
 
         $manifest = json_decode((string) $run->manifestjson, true) ?: [];
+        if (!empty($manifest['lifecycle']['paused']) === $paused) {
+            return false;
+        }
+        $was = (string) ($manifest['lifecycle']['pausedreason'] ?? '');
         if ($paused) {
             $manifest['lifecycle']['paused'] = true;
             $manifest['lifecycle']['pausedtime'] = time();
@@ -210,6 +219,13 @@ class run_lifecycle {
             'manifestjson' => json_encode($manifest, JSON_UNESCAPED_SLASHES),
             'timemodified' => time(),
         ]);
+        run_log::record(
+            $runid,
+            $paused ? run_log::RUN_AUTOPAUSED : run_log::RUN_RESUMED,
+            ['reason' => $paused ? ($reason !== '' ? $reason : 'operator') : 'resumed', 'was' => $was] + $detail
+        );
+
+        return true;
     }
 
     /**

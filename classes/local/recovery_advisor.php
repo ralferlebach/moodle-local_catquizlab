@@ -51,7 +51,9 @@ class recovery_advisor {
 
         // Several held runs: one action for all of them. The reset also
         // removes the seeded starting abilities that held them.
-        $heldcount = $DB->count_records('local_catquizlab_run', ['status' => registry::STATUS_FAILED]);
+        // Failed, or paused by the circuit breaker (#133).
+        [$heldsql, $heldparams] = circuit_breaker::held_sql();
+        $heldcount = $DB->count_records_select('local_catquizlab_run', $heldsql, $heldparams);
         if ($heldcount > 1) {
             return self::problem(
                 get_string('recovery:problemheldmany', $component, $heldcount),
@@ -63,10 +65,15 @@ class recovery_advisor {
         // A held run comes first: everything else is downstream of it, and
         // restarting a worker would not help.
         if ($experimentid > 0) {
-            $held = $DB->get_records('local_catquizlab_run', [
-                'experimentid' => $experimentid,
-                'status'       => registry::STATUS_FAILED,
-            ], 'id ASC', 'id', 0, 1);
+            $held = $DB->get_records_select(
+                'local_catquizlab_run',
+                'experimentid = :experimentid AND ' . $heldsql,
+                $heldparams + ['experimentid' => $experimentid],
+                'id ASC',
+                'id',
+                0,
+                1
+            );
 
             if ($held !== []) {
                 $run = reset($held);

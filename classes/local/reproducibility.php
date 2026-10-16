@@ -146,6 +146,8 @@ class reproducibility {
             // the definition as this run used it, the parameters the
             // provisioning derived from it, and the stop rules they make.
             $entry += self::effective((object) $run);
+            // The chain from request to observation, with every limit a sitting broke (#123).
+            $entry['contract'] = run_contract::chain((int) $run->id);
 
             if ($includelog) {
                 $entry['log'] = run_log::entries((int) $run->id);

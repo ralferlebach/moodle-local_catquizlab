@@ -147,6 +147,7 @@ class attempt_scheduler {
             'running'   => $count(self::STATUS_RUNNING),
             'collected' => $count(self::STATUS_COLLECTED),
             'failed'    => $count(self::STATUS_FAILED),
+            'pausecauses' => [],
         ];
 
         // Grouped by run so the run's state is read once rather than per
@@ -171,6 +172,17 @@ class attempt_scheduler {
             $manifest = json_decode((string) $row->manifestjson, true) ?: [];
             if (!empty($manifest['lifecycle']['paused'])) {
                 $counts['paused'] += $total;
+                // Why, per run (#133): a pause by the circuit breaker names its cause.
+                $reason = (string) ($manifest['lifecycle']['pausedreason'] ?? '');
+                $cause = strpos($reason, circuit_breaker::PAUSE_REASON) === 0
+                    ? reason_catalog::label(substr($reason, strlen(circuit_breaker::PAUSE_REASON) + 1))
+                    : get_string('queue:pausedbyoperator', 'local_catquizlab');
+                $counts['pausecauses'][] = ['runid' => (int) $row->runid, 'cause' => $cause, 'waiting' => $total,
+                    'line' => get_string(
+                        'queue:pausecause',
+                        'local_catquizlab',
+                        (object) ['runid' => (int) $row->runid, 'cause' => $cause, 'waiting' => $total]
+                    )];
                 continue;
             }
 
@@ -288,13 +300,83 @@ class attempt_scheduler {
             $params['runid'] = $runid;
         }
 
-        $stale = $DB->get_records_select('local_catquizlab_attempt', $where, $params, '', 'id, tries');
+        $stale = $DB->get_records_select('local_catquizlab_attempt', $where, $params, '', 'id, tries, leaseowner, runid');
         foreach ($stale as $attempt) {
             $DB->set_field('local_catquizlab_attempt', 'leaseowner', null, ['id' => $attempt->id]);
             $DB->set_field('local_catquizlab_attempt', 'leaseexpires', 0, ['id' => $attempt->id]);
-            self::apply_retry((int) $attempt->id, (int) $attempt->tries, $now, 'lease_expired');
+
+            // Not handed blindly to the next execution (#133): the server says
+            // first what became of it. An attempt the engine has completed is
+            // collected, not played again.
+            $state = \local_catquizlab\external\sitting_state::state((int) $attempt->id);
+            if ($state['found'] && $state['state'] === 'complete') {
+                $DB->update_record('local_catquizlab_attempt', (object) [
+                    'id' => $attempt->id, 'status' => self::STATUS_COLLECTED,
+                    'engineattemptid' => (int) $state['engineattemptid'], 'timemodified' => $now,
+                ]);
+                attempt_history::record((int) $attempt->id, attempt_history::COLLECTED, [
+                    'tryno' => (int) $attempt->tries,
+                    'workerid' => (string) ($attempt->leaseowner ?? ''),
+                    'engineattemptid' => (int) $state['engineattemptid'],
+                    'detail' => sprintf(
+                        'lease expired; the engine attempt was complete (%d answered): collected, not replayed',
+                        (int) $state['questionsattempted']
+                    ),
+                ]);
+                attempt_collector::collect((int) $attempt->id);
+                run_lifecycle::attempt_finished((int) $attempt->runid);
+                continue;
+            }
+            $why = 'lease_expired' . ($state['found']
+                ? sprintf(
+                    ' (worker %s; engine attempt %s, %d answered, %d presented)',
+                    (string) ($attempt->leaseowner ?? '?'),
+                    $state['state'],
+                    (int) $state['questionsattempted'],
+                    (int) $state['slots']
+                )
+                : sprintf(' (worker %s; no engine attempt: %s)', (string) ($attempt->leaseowner ?? '?'), $state['reason']));
+            self::apply_retry((int) $attempt->id, (int) $attempt->tries, $now, $why);
         }
         return count($stale);
+    }
+
+    /**
+     * Keep a sitting's lease while its worker is still on it (#133).
+     *
+     * The lease used to be set once, at the claim, for five minutes, and never
+     * renewed. A sitting that took longer — long classical tests, a loaded
+     * server — lost it while its worker was still answering: it went back into
+     * the queue, its person became claimable, and a second worker logged in as
+     * the same person into the same attempt. Run 51 recorded 303 such
+     * "lease_expired" requeues. Every heartbeat now renews the lease of the
+     * sitting its worker names — only while that worker still holds it.
+     *
+     * @param string $workerid The worker reporting.
+     * @param int $attemptid The sitting it says it is playing.
+     * @return bool Whether it still holds it (and now for longer).
+     */
+    public static function renew_lease(string $workerid, int $attemptid): bool {
+        global $DB;
+
+        if ($workerid === '' || $attemptid <= 0) {
+            return false;
+        }
+        $held = $DB->record_exists_select(
+            'local_catquizlab_attempt',
+            'id = :id AND status = :running AND leaseowner = :owner',
+            ['id' => $attemptid, 'running' => self::STATUS_RUNNING, 'owner' => $workerid]
+        );
+        if ($held) {
+            $DB->set_field(
+                'local_catquizlab_attempt',
+                'leaseexpires',
+                time() + worker_registry::HEARTBEAT_TIMEOUT,
+                ['id' => $attemptid]
+            );
+        }
+
+        return $held;
     }
 
     /**

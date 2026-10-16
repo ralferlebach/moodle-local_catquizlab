@@ -506,11 +506,13 @@ final class worker_registry_test extends \advanced_testcase {
         ]);
 
         // Retrying 1600 attempts that all fail the same way exhausts the queue
-        // and leaves nothing to diagnose. The run is held as failed — not
-        // merely paused — with the cause on it, and the experiment is blocked.
+        // and leaves nothing to diagnose. The run is held — paused, not failed
+        // (#133): a technical pause is not the end of a run — with the cause on
+        // it, and the experiment is blocked.
         $this->assertTrue(\local_catquizlab\local\run_lifecycle::check_failure_streak($runid));
         $held = $DB->get_record('local_catquizlab_run', ['id' => $runid]);
-        $this->assertSame(registry::STATUS_FAILED, (int) $held->status);
+        $this->assertNotSame(registry::STATUS_FAILED, (int) $held->status);
+        $this->assertTrue(\local_catquizlab\local\circuit_breaker::is_held($held));
         $this->assertStringContainsString('Division by zero', (string) $held->lasterror);
 
         // The five waiting sittings were not touched: still queued, and out of

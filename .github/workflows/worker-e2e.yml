@@ -242,6 +242,20 @@ jobs:
           php local/catquizlab/cli/smoke.php --strategy=classic --persons=1
           --minanswers=60 --minutes=12 --no-navigation-failures
 
+      - name: Issue 134 — a lost response and a lost request are reconciled, nothing answered twice
+        working-directory: moodle
+        timeout-minutes: 12
+        env:
+          MOODLE_ROOT: ${{ github.workspace }}/moodle
+          # The fifth POST to attempt.php is processed by the server but its
+          # response never reaches the browser; the ninth never reaches the
+          # server. Both must be reconciled with the server and the sitting
+          # finished, every question answered exactly once.
+          CATQUIZLAB_FAULTS: lostresponse@5,lostrequest@9
+        run: >-
+          php local/catquizlab/cli/smoke.php --strategy=classic --persons=1
+          --minanswers=10 --minutes=8 --expect-recovered=2
+
       - name: Issue 100 — load test, several hundred sittings without a navigation failure
         working-directory: moodle
         timeout-minutes: 35

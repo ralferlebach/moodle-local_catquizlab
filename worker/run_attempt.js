@@ -33,6 +33,8 @@
 
 // Selector lists, tried in order until one matches, for theme robustness.
 const QUESTION_SELECTORS = ['.que', 'div[id^="question-"]', '.qtext'];
+/** How often one execution may reconcile an uncertain submission with the server before it gives up (#134). */
+const MAX_RECOVERIES = 3;
 const RADIO_SELECTORS = [
     '.que .answer input[type="radio"]',
     '.que input[type="radio"]',
@@ -76,6 +78,11 @@ const SELF_TEST = args['self-test'] === true;
 // whether successful ones do too ('all', for explicit debugging only).
 const ARTEFACT_DIR = args['artefact-dir'] || '';
 const CAPTURE = args.capture === 'all' ? 'all' : 'failure';
+// For tests only (#134): faults injected into answer submissions, as
+// "lostresponse@3,lostrequest@5" — the third answer is processed by the server
+// but its response never reaches the browser; the fifth never reaches the
+// server. Empty in every real run.
+const FAULTS = parseFaults(process.env.CATQUIZLAB_FAULTS || '');
 const nav = require('./navigation.js');
 
 // The self test never talks to Moodle, so it must not demand credentials.
@@ -125,6 +132,8 @@ async function callWs(wsfunction, params) {
 
 /** @type {number} The attempt being played, for transport diagnoses. */
 let currentAttemptId = 0;
+// The sitting whose lease the server says this worker has lost (#133), or 0.
+let leaseLost = 0;
 
 /**
  * Claim the next queued attempt, or null when the queue is empty.
@@ -174,9 +183,15 @@ async function playAttempt(browser, job) {
     if (Object.keys(currentTrace).length > 0) {
         await page.setExtraHTTPHeaders(currentTrace);
     }
+    if (FAULTS.length > 0) {
+        await injectFaults(page, FAULTS);
+    }
     let transport = null;
     let artefacts = null;
+    // Every uncertain submission and what the server said about it (#134).
+    const reconciliations = [];
     currentAttemptId = job.attemptid;
+    leaseLost = 0;
 
     try {
         await login(page, job.userid, job.username, recorder);
@@ -189,7 +204,14 @@ async function playAttempt(browser, job) {
         // on the way to the next question ended it as if the test were over.
         let guard = 0;
         let answeredCount = 0;
+        let recoveries = 0;
+        let finishedOnServer = null;
         while (state === nav.STATE.QUESTION && guard++ < 1000) {
+            if (leaseLost === job.attemptid) {
+                throw new Error(`[lease:lost] The server reports that the lease of sitting ${job.attemptid} has expired `
+                    + `and the sitting went back to the queue; stopped after ${answeredCount} answer(s) rather than `
+                    + 'answer into an attempt another execution may now hold.');
+            }
             const {qubaid, slot} = await nav.withContextRetry(page, () => currentQuestionRef(page), 'read question', recorder);
             const decision = await callWs('local_catquizlab_oracle_answer', {
                 runid: job.runid,
@@ -210,24 +232,85 @@ async function playAttempt(browser, job) {
                 throw new Error(`No answer option found for usage ${qubaid} slot ${slot}.`);
             }
             await recorder.snapshot();
-            const result = await nav.clickAndSettle(page, SUBMIT_SELECTORS, QUESTION_SELECTORS, {
-                label: `submit answer ${answeredCount + 1}`,
-                timeout: NAV_TIMEOUT,
-                recorder,
-            });
+            let result;
+            try {
+                result = await nav.clickAndSettle(page, SUBMIT_SELECTORS, QUESTION_SELECTORS, {
+                    label: `submit answer ${answeredCount + 1}`,
+                    timeout: NAV_TIMEOUT,
+                    recorder,
+                    context: {qubaid, slot, answered: answeredCount},
+                });
+            } catch (error) {
+                if (!error.submit) {
+                    throw error;
+                }
+                result = {clicked: true, state: null, submit: error.submit, error};
+            }
             if (!result.clicked) {
                 throw new Error(`No way to submit the answer to usage ${qubaid} slot ${slot} was found.`);
             }
-            state = result.state;
-            answeredCount++;
+            const kind = result.submit.class;
+            if (kind === nav.SUBMIT.OK || kind === nav.SUBMIT.REDIRECT) {
+                state = result.state;
+                answeredCount++;
+                continue;
+            }
+            if (kind === nav.SUBMIT.MOODLE_ERROR_PAGE) {
+                state = nav.STATE.ERROR;
+                break;
+            }
+            if (!nav.UNCERTAIN.includes(kind) || recoveries >= MAX_RECOVERIES) {
+                throw new Error(`${nav.describeSubmit(result.submit)}`
+                    + (recoveries >= MAX_RECOVERIES ? ` (after ${recoveries} reconciliation(s))` : '')
+                    + (result.error ? ` | ${result.error.message}` : ''));
+            }
+
+            // Uncertain: the answer may have been stored with only the response
+            // lost, or not at all. The server knows; ask before going on (#134).
+            recoveries++;
+            const server = await callWs('local_catquizlab_sitting_state', {attemptid: job.attemptid})
+                .catch((stateError) => ({found: false, reason: 'unavailable: ' + stateError.message}));
+            const verdict = nav.reconcile(answeredCount, server);
+            // The session as well: a 404 or a redirect may be the login page.
+            const sessionlost = /\/login\//.test(page.url());
+            reconciliations.push({class: kind, verdict, answered: answeredCount, usage: qubaid, slot,
+                session: sessionlost ? 'lost' : 'kept',
+                server: {state: server.state || '', questionsattempted: server.questionsattempted || 0,
+                    slots: server.slots || 0, reason: server.reason || ''}});
+            recorder.event('reconcile', `${nav.describeSubmit(result.submit)} → server ${server.state || server.reason}`
+                + ` ${server.questionsattempted || 0}/${server.slots || 0} → ${verdict}`);
+            if (verdict === 'finished') {
+                finishedOnServer = server;
+                answeredCount = Number(server.questionsattempted) || answeredCount;
+                state = nav.STATE.FINISH;
+                break;
+            }
+            if (verdict === 'missing' || verdict === 'mismatch') {
+                throw new Error(`${nav.describeSubmit(result.submit)} [reconcile:${verdict}] server: `
+                    + `${server.state || server.reason}, ${server.questionsattempted || 0} answered, `
+                    + `${server.slots || 0} presented; the worker had ${answeredCount}.`);
+            }
+            if (verdict === 'stored') {
+                // Stored, only the response was lost: the engine has gone on.
+                answeredCount++;
+            }
+            if (sessionlost) {
+                await login(page, job.userid, job.username, recorder);
+            }
+            // Back in through the activity page, to whatever the engine presents
+            // now: the next question when the answer was stored, the same one
+            // again when it was not. Never the same answer twice.
+            await gotoSettle(page, `${BASE_URL}/mod/adaptivequiz/view.php?id=${job.quizcmid}`);
+            state = await startAttempt(page, recorder);
         }
 
         if (state === nav.STATE.ERROR) {
             const detail = await describePage(page);
-            throw new Error(`Moodle showed an error page after ${answeredCount} answer(s). ${detail}`);
+            throw new Error(`[submit:${nav.SUBMIT.MOODLE_ERROR_PAGE}] Moodle showed an error page after `
+                + `${answeredCount} answer(s). ${detail}`);
         }
 
-        engineAttemptId = await readEngineAttemptId(page);
+        engineAttemptId = finishedOnServer ? Number(finishedOnServer.engineattemptid) || 0 : await readEngineAttemptId(page);
 
         // An attempt that answered nothing is not a finished attempt. Reporting
         // one as finished is how a run of empty attempts would look like a
@@ -240,8 +323,9 @@ async function playAttempt(browser, job) {
             );
         }
 
-        // Only the activity's own finish page counts as finished.
-        if (!(await onFinishPage(page))) {
+        // Only the activity's own finish page counts as finished — or the
+        // server's word, where the response that would have shown it was lost.
+        if (!finishedOnServer && !(await onFinishPage(page))) {
             const detail = await describePage(page);
             throw new Error(`Attempt did not reach the finish page after ${answeredCount} answer(s). ${detail}`);
         }
@@ -284,7 +368,7 @@ async function playAttempt(browser, job) {
     } finally {
         await page.close();
         await context.close();
-        const diagnosis = {browser: recorder.summary(), transport, artefacts};
+        const diagnosis = {browser: recorder.summary(), transport, artefacts, reconciliations};
         const fullpath = writeFullDiagnosis(diagnosis, job);
         // A report that fails must not hide what it was reporting (#111): an
         // exception thrown here replaced the attempt's own failure, and only
@@ -302,6 +386,9 @@ async function playAttempt(browser, job) {
                 engineattemptid: engineAttemptId,
                 // The browser's record for the attempt history (#100, #107).
                 diagnostics: fitDiagnostics(diagnosis, DIAGNOSTICS_LIMIT, fullpath),
+                // Who reports: a report from an execution that no longer holds
+                // the sitting is kept, not applied (#133).
+                workerid: WORKER_ID,
             });
         } catch (reportError) {
             const both = reportFailureMessage(job.attemptid, status, failure, reportError);
@@ -311,6 +398,65 @@ async function playAttempt(browser, job) {
         }
         currentAttemptId = 0;
     }
+}
+
+/**
+ * The faults to inject, from "lostresponse@3,lostrequest@5" (#134, tests only).
+ *
+ * @param {string} spec The specification.
+ * @returns {Array<{kind: string, at: number}>}
+ */
+function parseFaults(spec) {
+    return String(spec || '').split(',').map((part) => part.trim()).filter((part) => part !== '')
+        .map((part) => {
+            const [kind, at] = part.split('@');
+            return {kind, at: parseInt(at, 10)};
+        })
+        .filter((fault) => ['lostresponse', 'lostrequest'].includes(fault.kind) && fault.at > 0);
+}
+
+/**
+ * Fail chosen answer submissions in the browser, at the request or at the response (#134, tests only).
+ *
+ * Through the DevTools Fetch domain: a request failed at its request stage
+ * never reaches the server; one failed at its response stage has been
+ * processed there, and only the browser does not learn of it.
+ *
+ * @param {object} page The Puppeteer page.
+ * @param {Array<{kind: string, at: number}>} faults What to fail, by the number of the answer POST.
+ * @returns {Promise<void>}
+ */
+async function injectFaults(page, faults) {
+    const client = await page.createCDPSession();
+    let posts = 0;
+    await client.send('Fetch.enable', {patterns: [
+        {urlPattern: '*/mod/adaptivequiz/attempt.php*', requestStage: 'Request'},
+        {urlPattern: '*/mod/adaptivequiz/attempt.php*', requestStage: 'Response'},
+    ]});
+    client.on('Fetch.requestPaused', async(event) => {
+        const atresponse = event.responseStatusCode !== undefined || event.responseErrorReason !== undefined;
+        let fail = false;
+        if (event.request.method === 'POST') {
+            if (!atresponse) {
+                posts++;
+                fail = faults.some((fault) => fault.kind === 'lostrequest' && fault.at === posts);
+            } else {
+                fail = faults.some((fault) => fault.kind === 'lostresponse' && fault.at === posts);
+            }
+        }
+        try {
+            if (fail) {
+                console.error(`Injected fault: ${atresponse ? 'lostresponse' : 'lostrequest'} at answer POST ${posts}`);
+                await client.send('Fetch.failRequest', {requestId: event.requestId, errorReason: 'ConnectionReset'});
+            } else if (atresponse) {
+                await client.send('Fetch.continueResponse', {requestId: event.requestId});
+            } else {
+                await client.send('Fetch.continueRequest', {requestId: event.requestId});
+            }
+        } catch (error) {
+            // The page may have moved on: nothing to continue.
+        }
+    });
 }
 
 /**
@@ -864,8 +1010,14 @@ function fitDiagnostics(diagnosis, limit = DIAGNOSTICS_LIMIT, fullpath = null) {
             return JSON.stringify(fitted);
         }
     }
-    // Still too large: the marker and the path, which always fit.
-    return JSON.stringify({truncated: {originalbytes: Buffer.byteLength(full), limit, full: fullpath, structure: 'dropped'}});
+    // Still too large: the marker and the path, which always fit — and the
+    // reconciled submissions, which the server records as rows of their own (#134).
+    const kept = {truncated: {originalbytes: Buffer.byteLength(full), limit, full: fullpath, structure: 'dropped'}};
+    const reconciliations = Array.isArray(diagnosis.reconciliations) ? diagnosis.reconciliations.slice(-10) : [];
+    if (reconciliations.length > 0 && Buffer.byteLength(JSON.stringify({...kept, reconciliations})) <= limit) {
+        kept.reconciliations = reconciliations;
+    }
+    return JSON.stringify(kept);
 }
 
 /**
@@ -1034,6 +1186,12 @@ function startHeartbeat(attemptId, state) {
             });
             if (reply && reply.stop) {
                 asked = true;
+            }
+            // The sitting is no longer this worker's (#133): its lease ran out
+            // and it went back to the queue. Playing on would put two browsers
+            // into one attempt; the answer loop stops before its next answer.
+            if (reply && reply.leaselost && attemptId > 0 && attemptId === currentAttemptId) {
+                leaseLost = attemptId;
             }
         } catch (error) {
             // A missed heartbeat is not worth abandoning an attempt that is
@@ -1431,6 +1589,7 @@ module.exports = {
     artefactPath,
     selfTest,
     parseArgs,
+    parseFaults,
     startDelayMs,
     waitForStart,
     normaliseBaseUrl,

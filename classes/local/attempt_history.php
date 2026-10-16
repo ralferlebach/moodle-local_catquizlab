@@ -54,6 +54,17 @@ class attempt_history {
     public const ABANDONED = 'abandoned';
 
     /**
+     * @var string An answer submission that ended uncertainly, reconciled with the server and continued (#134).
+     *
+     * Not a failure of the sitting, and not nothing either: the cause is kept
+     * with its code, so a sitting that finished after a lost response still says so.
+     */
+    public const RECOVERED = 'recovered';
+
+    /** @var string A report from an execution that no longer held the sitting: kept, not applied (#133). */
+    public const STALE = 'stale';
+
+    /**
      * Record one execution.
      *
      * @param int $attemptid The sitting.
@@ -89,7 +100,7 @@ class attempt_history {
             'correlationid'   => \core_text::substr(debug_trace::correlation_id(), 0, 64),
             // Why it ended, as a code (#107): for a failure now; for a sitting
             // that finished, once the collector knows its stop reason.
-            'reasoncode'      => $outcome === self::FAILED
+            'reasoncode'      => in_array($outcome, [self::FAILED, self::RECOVERED], true)
                 ? reason_catalog::failure(
                     (string) ($detail['detail'] ?? ''),
                     (array) (json_decode((string) self::diagnosis_json($detail), true) ?: [])
@@ -97,6 +108,47 @@ class attempt_history {
                 : null,
             'timecreated'     => time(),
         ]);
+    }
+
+    /**
+     * One history row per answer submission that was reconciled and continued (#134).
+     *
+     * @param int $attemptid The sitting.
+     * @param array $reconciliations From the worker: class, verdict, answered, usage, slot, server.
+     * @param array $detail workerid, tryno of the execution.
+     * @return int Rows written.
+     */
+    public static function record_reconciliations(int $attemptid, array $reconciliations, array $detail = []): int {
+        $written = 0;
+        foreach ($reconciliations as $entry) {
+            $verdict = (string) ($entry['verdict'] ?? '');
+            // Those that ended the execution are its failure, recorded with it.
+            if (!in_array($verdict, ['stored', 'notstored', 'finished'], true)) {
+                continue;
+            }
+            $class = preg_replace('/[^a-z0-9_]/', '', (string) ($entry['class'] ?? ''));
+            $server = (array) ($entry['server'] ?? []);
+            $text = sprintf(
+                '[submit:%s] reconciled: %s — usage %d slot %d, %d answered before; server %s, %d answered, %d presented'
+                    . (($entry['session'] ?? '') === 'lost' ? '; session lost, signed in again' : ''),
+                $class,
+                $verdict,
+                (int) ($entry['usage'] ?? 0),
+                (int) ($entry['slot'] ?? 0),
+                (int) ($entry['answered'] ?? 0),
+                (string) ($server['state'] ?? ''),
+                (int) ($server['questionsattempted'] ?? 0),
+                (int) ($server['slots'] ?? 0)
+            );
+            $written += self::record($attemptid, self::RECOVERED, [
+                'workerid' => $detail['workerid'] ?? null,
+                'tryno' => $detail['tryno'] ?? null,
+                'detail' => $text,
+                'extra' => ['reconciliation' => $entry],
+            ]) > 0 ? 1 : 0;
+        }
+
+        return $written;
     }
 
     /**
@@ -112,7 +164,7 @@ class attempt_history {
             : [];
         $extra = (array) ($detail['extra'] ?? []);
         // The entry 'truncated' says what was cut and where the full diagnosis is (#111).
-        foreach (['browser', 'transport', 'artefacts', 'truncated'] as $key) {
+        foreach (['browser', 'transport', 'artefacts', 'truncated', 'reconciliations', 'reconciliation', 'lease'] as $key) {
             if (!empty($extra[$key])) {
                 $diagnosis[$key] = json_decode(self::redact(json_encode($extra[$key], JSON_UNESCAPED_SLASHES)), true);
             }

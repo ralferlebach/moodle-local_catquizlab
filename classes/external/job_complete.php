@@ -67,6 +67,12 @@ class job_complete extends external_api {
                 VALUE_DEFAULT,
                 ''
             ),
+            'workerid'        => new external_value(
+                PARAM_ALPHANUMEXT,
+                'The reporting worker: a report from one that no longer holds the lease is recorded, not applied (#133).',
+                VALUE_DEFAULT,
+                ''
+            ),
         ]);
     }
 
@@ -78,6 +84,8 @@ class job_complete extends external_api {
      * @param int $runtimems Wall-clock runtime in milliseconds.
      * @param int $engineattemptid The adaptivequiz_attempt id, when known.
      * @param string $message The worker's reason, when the attempt did not finish.
+     * @param string $diagnostics What the browser saw, as JSON.
+     * @param string $workerid The reporting worker; '' from workers before 0.7.38.
      * @param string $diagnostics The browser's record, as JSON.
      * @return array The acknowledgement.
      */
@@ -87,7 +95,8 @@ class job_complete extends external_api {
         int $runtimems = 0,
         int $engineattemptid = 0,
         string $message = '',
-        string $diagnostics = ''
+        string $diagnostics = '',
+        string $workerid = ''
     ): array {
         global $DB;
 
@@ -98,6 +107,7 @@ class job_complete extends external_api {
             'engineattemptid' => $engineattemptid,
             'message'         => $message,
             'diagnostics'     => $diagnostics,
+            'workerid'        => $workerid,
         ]);
 
         $context = \context_system::instance();
@@ -110,6 +120,36 @@ class job_complete extends external_api {
                 'acknowledged' => false,
                 'message'      => get_string('job:unknownattempt', 'local_catquizlab'),
             ];
+        }
+
+        // A report from an execution that no longer holds the sitting (#133):
+        // its lease ran out and the sitting went back to the queue, or another
+        // worker has it now. Applied, it would overwrite the state of the
+        // execution that came after. Recorded, not applied — except a finished
+        // engine attempt for a sitting still waiting in the queue: that is a
+        // result, and playing it again would be the double sitting of #134.
+        $reporter = (string) $params['workerid'];
+        if (
+            $reporter !== '' && ((int) $attempt->status !== attempt_scheduler::STATUS_RUNNING
+                || (string) ($attempt->leaseowner ?? '') !== $reporter)
+        ) {
+            $late = \local_catquizlab\external\sitting_state::state($attemptid);
+            $accept = $status === 'finished' && (int) $attempt->status === attempt_scheduler::STATUS_QUEUED
+                && $late['found'] && $late['state'] === 'complete';
+            if (!$accept) {
+                \local_catquizlab\local\attempt_history::record($attemptid, \local_catquizlab\local\attempt_history::STALE, [
+                    'workerid' => $reporter,
+                    'detail' => sprintf('late report from %s ignored (%s): %s', $reporter, $status, (string) $params['message']),
+                    'extra' => (array) (json_decode((string) $params['diagnostics'], true) ?: []),
+                ]);
+                return [
+                    'acknowledged' => false,
+                    'message'      => get_string('job:stale', 'local_catquizlab'),
+                ];
+            }
+            $engineattemptid = (int) $late['engineattemptid'];
+            $DB->set_field('local_catquizlab_attempt', 'leaseowner', $reporter, ['id' => $attemptid]);
+            $attempt->leaseowner = $reporter;
         }
 
         // The worker reads the engine attempt id off the finish page, which it
@@ -200,10 +240,22 @@ class job_complete extends external_api {
                 'runtimems'       => (int) ($params['runtimems'] ?? 0),
                 'detail'          => (string) ($params['message'] ?? ''),
                 'tryno'           => (int) $attempt->tries,
-                // The browser's own record, kept with the diagnosis (#100).
-                'extra'           => (array) (json_decode((string) ($params['diagnostics'] ?? ''), true) ?: []),
+                // The browser's own record, kept with the diagnosis (#100) —
+                // and how long the lease was held, from the claim (#133).
+                'extra'           => (array) (json_decode((string) ($params['diagnostics'] ?? ''), true) ?: [])
+                    + ['lease' => self::lease_held($attemptid, (int) $attempt->tries, (int) ($attempt->leaseexpires ?? 0))],
             ]
         );
+
+        // Every submission that ended uncertainly and was reconciled with the
+        // server keeps a row of its own, with its cause (#134).
+        $extra = (array) (json_decode((string) ($params['diagnostics'] ?? ''), true) ?: []);
+        if (!empty($extra['reconciliations']) && is_array($extra['reconciliations'])) {
+            \local_catquizlab\local\attempt_history::record_reconciliations($attemptid, $extra['reconciliations'], [
+                'workerid' => (string) ($attempt->leaseowner ?? ''),
+                'tryno' => (int) $attempt->tries,
+            ]);
+        }
 
         // A failure documented in moodledata beside the worker's artefacts,
         // with the run's design, the reason code and a log excerpt (#107). A
@@ -270,6 +322,27 @@ class job_complete extends external_api {
         );
 
         return $rows ? (int) reset($rows)->id : 0;
+    }
+
+    /**
+     * How long this execution held its sitting, and how much lease it had left (#133).
+     *
+     * @param int $attemptid The sitting.
+     * @param int $tryno The execution.
+     * @param int $leaseexpires When its lease would have run out.
+     * @return array heldseconds, leftseconds.
+     */
+    protected static function lease_held(int $attemptid, int $tryno, int $leaseexpires): array {
+        global $DB;
+
+        $started = $DB->get_records('local_catquizlab_attemptlog', ['attemptid' => $attemptid, 'tryno' => $tryno,
+            'outcome' => \local_catquizlab\local\attempt_history::STARTED], 'id DESC', 'id, timecreated', 0, 1);
+        $since = $started === [] ? 0 : (int) reset($started)->timecreated;
+
+        return [
+            'heldseconds' => $since > 0 ? time() - $since : null,
+            'leftseconds' => $leaseexpires > 0 ? $leaseexpires - time() : null,
+        ];
     }
 
     /**

@@ -492,7 +492,8 @@ class log_view {
                 'attemptid'     => (int) $row->attemptid,
                 'correlationid' => (string) ($row->correlationid ?? ''),
                 'failed'        => $failed,
-                'severity'      => $failed ? self::ERROR : self::INFO,
+                'severity'      => $failed ? self::ERROR
+                    : ($row->outcome === attempt_history::RECOVERED ? self::WARNING : self::INFO),
                 'action'        => 'attempt_' . $row->outcome,
                 'workerid'      => (string) ($row->workerid ?? ''),
             ]);

@@ -161,8 +161,8 @@ final class mode_detection_test extends \advanced_testcase {
                 mode_detection::CLASSIC, null],
             array_map([mode_detection::class, 'role'], ['relsubs', 'lowestsub', 'highestsub', 'allsubs', 'classic', 'fastest'])
         );
-        // A deficit is below, a strength above. What is relevant for a person's competence band is not
-        // defined yet: nothing is called a target by guesswork.
+        // A deficit is below, a strength above. Which scales are relevant for a person the engine
+        // decides (#114): CatQuizLab calls nothing a target of that mode by a rule of its own.
         $is = static fn(float $delta, string $target): bool => mode_detection::is_target($delta, $target, 0.5);
         $this->assertSame([true, false, false], [$is(-0.5, 'deficit'), $is(-0.49, 'deficit'), $is(0.9, 'deficit')]);
         $this->assertSame([true, false, false], [$is(0.5, 'strength'), $is(0.49, 'strength'), $is(-0.9, 'strength')]);
@@ -278,8 +278,8 @@ final class mode_detection_test extends \advanced_testcase {
         $this->assertStringContainsString('data-region="catquizlab-mode-relevant"', $html);
         $this->assertStringNotContainsString('data-region="catquizlab-mode-strength"', $html);
         $this->assertStringContainsString('Δs,true ≤ −0.50 logits', $html);
-        $this->assertStringContainsString('relevant for the person\'s competence band', $html);
-        $this->assertStringContainsString('is not defined in CatQuizLab yet', $html);
+        $this->assertStringContainsString('is decided by the engine (strategy relevantscales)', $html);
+        $this->assertStringContainsString('Reported by the engine as relevant: ', $html);
         $this->assertStringNotContainsString('|Δs,true|', $html);
         $this->assertStringContainsString('Valid paired sittings: 5 / 6 (83.3 %)', $html);
         $this->assertStringContainsString('Included: 12 / 12 scale results with at least one administered item (100.0 %)', $html);

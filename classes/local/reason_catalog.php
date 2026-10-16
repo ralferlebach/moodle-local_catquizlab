@@ -141,8 +141,25 @@ class reason_catalog {
         'worker_timeout',
         'circuit_breaker_pause',
         'manual_stop',
+        // What an answer submission ended in, each cause its own (#134).
+        'submit_http_404',
+        'submit_http_4xx',
+        'submit_http_5xx',
+        'submit_connect_timeout',
+        'submit_connect_failed',
+        'submit_cdp_timeout',
+        'submit_unexpected_redirect',
+        'submit_moodle_error_page',
+        'submit_no_state',
+        'submit_state_mismatch',
+        // The lease ran out while the worker was still on the sitting (#133).
+        'lease_lost',
         'unknown_failure',
     ];
+
+    /** @var string[] The submission classes the worker reports as "[submit:<class>]" (#134). */
+    public const SUBMIT_CLASSES = ['http_404', 'http_4xx', 'http_5xx', 'connect_timeout', 'connect_failed', 'cdp_timeout',
+        'unexpected_redirect', 'moodle_error_page', 'no_state'];
 
     /**
      * Every code, for a filter.
@@ -182,6 +199,22 @@ class reason_catalog {
     public static function failure(string $message, array $diagnosis = []): string {
         $events = array_column((array) ($diagnosis['browser']['events'] ?? []), 'type');
         $status = (int) ($diagnosis['transport']['status'] ?? 0);
+
+        // A submission the worker classified says its cause itself (#134): a 404
+        // answered with Moodle's error page is a 404, not an engine exception.
+        if (strpos($message, '[lease:lost]') !== false) {
+            return 'lease_lost';
+        }
+        if (preg_match('/\[reconcile:(mismatch|missing)\]/', $message)) {
+            return 'submit_state_mismatch';
+        }
+        if (preg_match('/\[submit:([a-z0-9_]+)\]/', $message, $match) && in_array($match[1], self::SUBMIT_CLASSES, true)) {
+            // Where the server's replay located an exception behind the error page, that is the cause.
+            if ($match[1] === 'moodle_error_page' && preg_match('/server replay: [A-Za-z_\\\\]+ at /', $message)) {
+                return 'engine_exception';
+            }
+            return 'submit_' . $match[1];
+        }
 
         $checks = [
             'execution_context_destroyed' => stripos($message, 'Execution context was destroyed') !== false,

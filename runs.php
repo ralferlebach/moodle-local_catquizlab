@@ -136,7 +136,8 @@ if ($action === 'resetallheld') {
 
     $released = 0;
     $runs = 0;
-    foreach ($DB->get_fieldset_select('local_catquizlab_run', 'id', 'status = ?', [registry::STATUS_FAILED]) as $heldid) {
+    [$heldsql, $heldparams] = \local_catquizlab\local\circuit_breaker::held_sql();
+    foreach ($DB->get_fieldset_select('local_catquizlab_run', 'id', $heldsql, $heldparams) as $heldid) {
         $reset = \local_catquizlab\local\circuit_breaker::reset_and_continue((int) $heldid);
         $released += (int) $reset['released'];
         $runs++;
@@ -285,9 +286,11 @@ if ($action === 'resetcircuit' && $runid > 0) {
 
     redirect(
         new moodle_url('/local/catquizlab/runs.php', ['runid' => $runid]),
-        get_string('circuit:reset', $component, $reset['released']),
+        $reset['ok']
+            ? get_string('circuit:reset', $component, $reset['released'])
+            : get_string('circuit:resumerefused', $component, $reset['reason'] ?? ''),
         null,
-        \core\output\notification::NOTIFY_SUCCESS
+        $reset['ok'] ? \core\output\notification::NOTIFY_SUCCESS : \core\output\notification::NOTIFY_WARNING
     );
 }
 
@@ -626,59 +629,103 @@ if ($runid > 0) {
     // The parameters this run was given, and what the engine holds for its
     // test (#104): read back from the engine, not repeated from the
     // definition. Where a strategy does not use a parameter, it says so.
-    $effective = \local_catquizlab\local\test_provisioner::effective_parameters(
-        \local_catquizlab\local\run_registry::definition_for($DB->get_record('local_catquizlab_run', ['id' => $runid]))
-    );
     $engine = \local_catquizlab\local\provisioning_check::compare($runid);
-    $na = \local_catquizlab\local\strategy_parameters::NEUTRALISED;
     $fmt = static function ($value): string {
         if ($value === -1) {
             return get_string('budget:unlimited', 'local_catquizlab');
         }
         return is_scalar($value) ? (string) $value : json_encode($value);
     };
-    $pair = static function (string $field) use ($engine, $fmt): string {
-        return isset($engine['checked'][$field]) ? $fmt($engine['checked'][$field]['actual']) : '—';
-    };
     $defined = static function ($value) use ($fmt): string {
         return \local_catquizlab\local\experiment_definition::is_unlimited($value)
             ? get_string('budget:unlimited', 'local_catquizlab')
             : $fmt($value);
     };
-    $subscale = $effective['budgets']['subscale'];
-    $se = $effective['se'];
-    // The classical test plays every item of the scale: no number to show (#104).
-    $allitems = is_array($effective['budgets']['global'])
-        ? null
-        : get_string('form:allitems_short', $component);
+    // The chain of every parameter (#123): what the cell asked for, what the
+    // provisioning made of it, what the engine holds, what the sittings did —
+    // each with its status, and every sitting that broke a limit named.
+    $contract = \local_catquizlab\local\run_contract::chain($runid);
+    $labels = [
+        'strategy' => get_string('form:strategy', $component),
+        'maxquestions' => get_string('form:globalmax', $component),
+        'minquestions' => get_string('form:globalmin', $component),
+        'maxquestionspersubscale' => get_string('form:subscalemax', $component),
+        'minquestionspersubscale' => get_string('form:subscalemin', $component),
+        'se_min' => get_string('form:semin', $component),
+        'se_max' => get_string('form:semax', $component),
+        'includepilot' => get_string('contract:pilot', $component),
+        'scale_min' => get_string('contract:scalemin', $component),
+        'scale_max' => get_string('contract:scalemax', $component),
+        'allitems' => get_string('form:allitems_short', $component),
+    ];
+    $statusclass = [
+        'ok' => 'badge-success', 'neutralised' => 'badge-secondary', 'defaulted' => 'badge-info',
+        'replaced' => 'badge-warning', 'drift' => 'badge-danger', 'violated' => 'badge-danger', 'unknown' => 'badge-light',
+    ];
     $paramtable = new html_table();
     $paramtable->attributes['class'] = 'generaltable table-sm w-auto';
     $paramtable->attributes['data-region'] = 'catquizlab-effective-parameters';
     $paramtable->head = [
         get_string('effective:parameter', $component),
-        get_string('effective:defined', $component),
+        get_string('contract:requested', $component),
+        get_string('contract:effective', $component),
         get_string('effective:engine', $component),
+        get_string('contract:observed', $component),
+        get_string('contract:status', $component),
     ];
-    $paramtable->data = [
-        [get_string('form:strategy', $component),
-            s($effective['strategy']['label']) . ' (' . (int) $effective['strategy']['engineid'] . ')', $pair('strategy')],
-        [get_string('form:globalmin', $component), $allitems ?? $defined($effective['budgets']['global']['minitems']),
-            $pair('minquestions')],
-        [get_string('form:globalmax', $component), $allitems ?? $defined($effective['budgets']['global']['maxitems']),
-            $pair('maxquestions')],
-        [get_string('form:subscalemin', $component), is_array($subscale) ? $defined($subscale['minitems']) : $na,
-            $pair('minquestionspersubscale')],
-        [get_string('form:subscalemax', $component), is_array($subscale) ? $defined($subscale['maxitems']) : $na,
-            $pair('maxquestionspersubscale')],
-        [get_string('form:semin', $component), is_array($se) ? $defined($se['min']) : $na, $pair('se_min')],
-        [get_string('form:semax', $component), is_array($se) ? $defined($se['max']) : $na, $pair('se_max')],
-    ];
+    foreach ($contract['rows'] as $row) {
+        $paramtable->data[] = [
+            $labels[$row['param']] ?? s($row['param']),
+            $row['requested'] === null ? get_string('contract:notrequested', $component) : s($defined($row['requested'])),
+            s($fmt($row['effective'])),
+            $row['provisioned'] === null ? '—' : s($fmt($row['provisioned'])),
+            $row['observed'] === null ? '—' : s($fmt($row['observed'])),
+            html_writer::span(
+                get_string('contract:' . $row['status'], $component),
+                'badge ' . $statusclass[$row['status']],
+                ['data-status' => $row['status']]
+            ),
+        ];
+    }
     echo $OUTPUT->heading(get_string('effective:heading', $component), 4);
+    echo html_writer::tag('p', get_string('contract:explain', $component), ['class' => 'small text-muted']);
     echo html_writer::table($paramtable);
     if ($engine['checked'] !== []) {
         echo $OUTPUT->notification(
             $engine['ok'] ? get_string('effective:match', $component) : implode(' ', $engine['differences']),
             $engine['ok'] ? \core\output\notification::NOTIFY_SUCCESS : \core\output\notification::NOTIFY_ERROR
+        );
+    }
+    if (!empty($contract['violations'])) {
+        $violationlines = [];
+        foreach ($contract['violations'] as $rule => $count) {
+            $sittings = array_keys(array_filter(
+                (array) $contract['violatingsittings'],
+                static fn(array $rules): bool => in_array($rule, $rules, true)
+            ));
+            $violationlines[] = html_writer::tag(
+                'li',
+                get_string('contractrule:' . $rule, $component) . ' — '
+                . get_string('contract:kind_' . \local_catquizlab\local\run_contract::RULES[$rule], $component)
+                . ': ' . $count . ' (' . implode(', ', array_map(
+                    static fn(int $id): string => html_writer::link(
+                        new moodle_url('/local/catquizlab/runs.php', ['runid' => $runid, 'attemptid' => $id]),
+                        '#' . $id
+                    ),
+                    array_slice($sittings, 0, 20)
+                )) . (count($sittings) > 20 ? ', …' : '') . ')',
+                ['data-rule' => $rule]
+            );
+        }
+        echo $OUTPUT->notification(
+            get_string('contract:violations', $component, (int) $contract['sittings'])
+                . html_writer::tag('ul', implode('', $violationlines)),
+            \core\output\notification::NOTIFY_ERROR
+        );
+    } else if (($contract['sittings'] ?? 0) > 0) {
+        echo $OUTPUT->notification(
+            get_string('contract:noviolations', $component, (int) $contract['sittings']),
+            \core\output\notification::NOTIFY_SUCCESS
         );
     }
 

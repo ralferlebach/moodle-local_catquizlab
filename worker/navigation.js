@@ -42,6 +42,9 @@ const MAX_EVENTS = 60;
 /** How many response statuses an attempt keeps. */
 const MAX_STATUSES = 20;
 
+/** How many submissions an attempt keeps in full (#134); all are counted. */
+const MAX_SUBMISSIONS = 40;
+
 /**
  * Whether an error means the page was replaced under the script.
  *
@@ -148,6 +151,110 @@ async function waitForState(page, questionSelectors, {label = 'step', timeout = 
 }
 
 /**
+ * What a submission ended in (#134): one class per cause, never two causes in one.
+ *
+ * OK and REDIRECT are successes; everything else is not, and says why. A 303
+ * is Moodle's ordinary answer to a POST and counts as success only where it led
+ * to the next question or the finish page; a redirect elsewhere is its own case.
+ */
+const SUBMIT = Object.freeze({
+    OK: 'ok',
+    REDIRECT: 'redirect',
+    UNEXPECTED_REDIRECT: 'unexpected_redirect',
+    HTTP_404: 'http_404',
+    HTTP_4XX: 'http_4xx',
+    HTTP_5XX: 'http_5xx',
+    CONNECT_TIMEOUT: 'connect_timeout',
+    CONNECT_FAILED: 'connect_failed',
+    CDP_TIMEOUT: 'cdp_timeout',
+    MOODLE_ERROR_PAGE: 'moodle_error_page',
+    NO_STATE: 'no_state',
+});
+
+/** The classes after which the answer may or may not have been stored: ask the server before going on. */
+const UNCERTAIN = Object.freeze([SUBMIT.UNEXPECTED_REDIRECT, SUBMIT.HTTP_404, SUBMIT.HTTP_4XX, SUBMIT.HTTP_5XX,
+    SUBMIT.CONNECT_TIMEOUT, SUBMIT.CONNECT_FAILED, SUBMIT.CDP_TIMEOUT, SUBMIT.NO_STATE]);
+
+/** Where a submission may legitimately be redirected: the attempt, its finish page, its review. */
+const EXPECTED_TARGETS = /\/mod\/adaptivequiz\/(attempt|attemptfinished|review)\.php/;
+
+/**
+ * The class of a submission from what the browser saw (#134).
+ *
+ * The HTTP status decides before the page does: a 404 or 500 answered with
+ * Moodle's error page is a 404 or 500, not "an error page" — the page used to
+ * hide the status it came with.
+ *
+ * @param {object} record chain (main-frame navigation responses: status, url, location, failure), state, error.
+ * @returns {string} One of SUBMIT.
+ */
+function classifySubmit(record) {
+    const chain = Array.isArray(record.chain) ? record.chain : [];
+    const failure = chain.map((hop) => hop.failure || '').find((text) => text !== '') || '';
+    if (failure) {
+        return /TIMED_OUT/i.test(failure) ? SUBMIT.CONNECT_TIMEOUT : SUBMIT.CONNECT_FAILED;
+    }
+    const statuses = chain.map((hop) => Number(hop.status) || 0);
+    if (statuses.some((status) => status >= 500)) {
+        return SUBMIT.HTTP_5XX;
+    }
+    if (statuses.includes(404)) {
+        return SUBMIT.HTTP_404;
+    }
+    if (statuses.some((status) => status >= 400)) {
+        return SUBMIT.HTTP_4XX;
+    }
+    const error = String(record.error || '');
+    if (record.state === STATE.ERROR) {
+        return SUBMIT.MOODLE_ERROR_PAGE;
+    }
+    const redirected = statuses.some((status) => status >= 300 && status < 400);
+    if (redirected) {
+        const final = chain[chain.length - 1] || {};
+        const target = String(final.url || '');
+        const legitimate = EXPECTED_TARGETS.test(target)
+            && (record.state === STATE.QUESTION || record.state === STATE.FINISH);
+        return legitimate ? SUBMIT.REDIRECT : SUBMIT.UNEXPECTED_REDIRECT;
+    }
+    if (record.state === STATE.QUESTION || record.state === STATE.FINISH) {
+        return SUBMIT.OK;
+    }
+    // No expected page. Either no response reached the browser before its own
+    // wait ran out — nothing in the chain, or the navigation never completed —
+    // or one did, and it is neither a question, the finish page nor an error page.
+    if (chain.length === 0 || record.navigated === false || /timeout|timed out/i.test(error)) {
+        return SUBMIT.CDP_TIMEOUT;
+    }
+    return SUBMIT.NO_STATE;
+}
+
+/**
+ * What became of an uncertain submission, from the server's count (#134).
+ *
+ * @param {number} answered Answers the worker had confirmed before this submission.
+ * @param {object} server sitting_state: found, state, questionsattempted, slots.
+ * @returns {string} 'finished' (the attempt is complete), 'stored' (this answer was stored, the response lost),
+ *      'notstored' (it was not: the question is to be answered again), 'missing' (no attempt on the server),
+ *      'mismatch' (the server counts something the worker cannot account for).
+ */
+function reconcile(answered, server) {
+    if (!server || !server.found) {
+        return 'missing';
+    }
+    const stored = Number(server.questionsattempted) || 0;
+    if (server.state === 'complete') {
+        return stored >= answered ? 'finished' : 'mismatch';
+    }
+    if (stored === answered + 1) {
+        return 'stored';
+    }
+    if (stored === answered) {
+        return 'notstored';
+    }
+    return 'mismatch';
+}
+
+/**
  * Click and wait for the navigation it causes — atomically.
  *
  * The wait for the navigation is registered before the click, so a navigation
@@ -160,7 +267,8 @@ async function waitForState(page, questionSelectors, {label = 'step', timeout = 
  * @param {object} options label, timeout, recorder.
  * @returns {Promise<{clicked: boolean, state: ?string, navigated: boolean}>}
  */
-async function clickAndSettle(page, selectors, questionSelectors, {label = 'click', timeout = 30000, recorder = null} = {}) {
+async function clickAndSettle(page, selectors, questionSelectors,
+    {label = 'click', timeout = 30000, recorder = null, context = null} = {}) {
     let handle = null;
     for (const selector of selectors) {
         handle = await page.$(selector);
@@ -183,6 +291,38 @@ async function clickAndSettle(page, selectors, questionSelectors, {label = 'clic
     if (recorder) {
         recorder.event('click', label);
     }
+    // Every main-frame navigation the click leads to, with its status, its
+    // redirect target and, where the connection failed, why (#134).
+    const started = Date.now();
+    const chain = [];
+    const onResponse = (response) => {
+        const request = response.request();
+        if (request.frame() !== page.mainFrame() || !request.isNavigationRequest()) {
+            return;
+        }
+        for (const hop of request.redirectChain()) {
+            const hopResponse = hop.response();
+            chain.push({method: hop.method(), status: hopResponse ? hopResponse.status() : 0,
+                url: sanitiseUrl(hop.url()), location: sanitiseUrl(hopResponse ? hopResponse.headers().location || '' : '')});
+        }
+        chain.push({method: request.method(), status: response.status(), url: sanitiseUrl(response.url()), location: ''});
+    };
+    const onFailed = (request) => {
+        if (request.frame() === page.mainFrame() && request.isNavigationRequest()) {
+            const failure = request.failure();
+            chain.push({method: request.method(), status: 0, url: sanitiseUrl(request.url()), location: '',
+                failure: failure ? failure.errorText : 'failed'});
+        }
+    };
+    page.on('response', onResponse);
+    page.on('requestfailed', onFailed);
+    let navigated = null;
+    const submission = (state, error) => {
+        const record = {label, context, chain: chain.slice(0, 8), state, navigated,
+            error: error ? String(error.message || error) : '', ms: Date.now() - started};
+        record.class = classifySubmit(record);
+        return record;
+    };
     const [navigation, click] = await Promise.allSettled([
         page.waitForNavigation({waitUntil: 'domcontentloaded', timeout}),
         handle.click(),
@@ -190,18 +330,55 @@ async function clickAndSettle(page, selectors, questionSelectors, {label = 'clic
     if (click.status === 'rejected' && !isContextLost(click.reason)) {
         throw new Error(`Click on ${label} failed: ${click.reason.message}`);
     }
-    const navigated = navigation.status === 'fulfilled';
+    navigated = navigation.status === 'fulfilled';
     if (!navigated && recorder) {
         recorder.event('navigation-failed', `${label}: ${navigation.reason && navigation.reason.message}`);
     }
 
     try {
+        // A navigation whose request failed — connection reset, refused, timed
+        // out — leads to no page worth waiting for: said at once, not after the
+        // full timeout on the browser's own error page (#134).
+        const failedhop = chain.find((hop) => hop.failure);
+        if (failedhop) {
+            throw new Error(`The request failed: ${failedhop.method} ${failedhop.url}: ${failedhop.failure}`);
+        }
         const state = await waitForState(page, questionSelectors, {label, timeout, recorder, marker});
-        return {clicked: true, state, navigated};
+        const submit = submission(state, navigated ? null : navigation.reason);
+        if (recorder) {
+            recorder.submission(submit);
+        }
+        return {clicked: true, state, navigated, submit};
     } catch (error) {
         const why = navigated ? '' : ` Navigation after ${label} did not complete: ${navigation.reason && navigation.reason.message}.`;
-        throw new Error(error.message + why);
+        const submit = submission(null, error);
+        if (recorder) {
+            recorder.submission(submit);
+        }
+        const failed = new Error(`[submit:${submit.class}] ` + error.message + why);
+        failed.submit = submit;
+        throw failed;
+    } finally {
+        page.off('response', onResponse);
+        page.off('requestfailed', onFailed);
     }
+}
+
+/**
+ * One line for a submission: class, statuses, redirect target, where in the attempt.
+ *
+ * @param {object} submit A submission record.
+ * @returns {string}
+ */
+function describeSubmit(submit) {
+    if (!submit) {
+        return '';
+    }
+    const hops = (submit.chain || []).map((hop) => `${hop.method} ${hop.status || hop.failure}`
+        + (hop.location ? ` → ${hop.location}` : '')).join(', ');
+    const where = submit.context ? ` usage=${submit.context.qubaid} slot=${submit.context.slot}`
+        + ` answered=${submit.context.answered}` : '';
+    return `[submit:${submit.class}] ${submit.label}:${where} chain=[${hops}] in ${submit.ms} ms`;
 }
 
 /**
@@ -251,6 +428,8 @@ class Recorder {
         this.events = [];
         this.statuses = [];
         this.shots = [];
+        this.submissions = [];
+        this.submitcounts = {};
         this.started = Date.now();
 
         page.on('console', (message) => {
@@ -290,6 +469,22 @@ class Recorder {
     }
 
     /**
+     * Record one submission (#134): every one is counted by class, the latest kept in full.
+     *
+     * @param {object} submit A submission record.
+     */
+    submission(submit) {
+        this.submitcounts[submit.class] = (this.submitcounts[submit.class] || 0) + 1;
+        this.submissions.push(submit);
+        if (this.submissions.length > MAX_SUBMISSIONS) {
+            this.submissions.shift();
+        }
+        if (submit.class !== SUBMIT.OK && submit.class !== SUBMIT.REDIRECT) {
+            this.event('submit-' + submit.class, describeSubmit(submit));
+        }
+    }
+
+    /**
      * Keep a screenshot of the page as it stands; the two latest are kept.
      *
      * @returns {Promise<void>}
@@ -312,7 +507,8 @@ class Recorder {
      * @returns {object}
      */
     summary() {
-        return {events: this.events.slice(-30), statuses: this.statuses.slice(-10)};
+        return {events: this.events.slice(-30), statuses: this.statuses.slice(-10),
+            submits: {counts: this.submitcounts, last: this.submissions.slice(-5)}};
     }
 
     /**
@@ -353,7 +549,8 @@ class Recorder {
         } catch (titleError) {
             title = '';
         }
-        write('events.json', JSON.stringify({events: this.events, statuses: this.statuses}, null, 2));
+        write('events.json', JSON.stringify({events: this.events, statuses: this.statuses,
+            submits: {counts: this.submitcounts, all: this.submissions}}, null, 2));
         write('error.json', JSON.stringify({
             ...meta,
             timestamp: new Date().toISOString(),
@@ -367,4 +564,5 @@ class Recorder {
     }
 }
 
-module.exports = {STATE, isContextLost, sanitiseUrl, sanitiseHtml, stateInPage, waitForState, clickAndSettle, withContextRetry, Recorder};
+module.exports = {STATE, SUBMIT, UNCERTAIN, isContextLost, sanitiseUrl, sanitiseHtml, stateInPage, waitForState,
+    clickAndSettle, withContextRetry, classifySubmit, reconcile, describeSubmit, Recorder};

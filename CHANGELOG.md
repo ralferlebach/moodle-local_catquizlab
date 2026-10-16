@@ -6,6 +6,87 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.7.38] — 2026-10-13 — #133 lease and circuit breaker, #134 answer submissions, #123 parameter chain, #114
+
+### #133 — A technical pause is not a failed run; leases are kept and reconciled
+
+- Cause behind run 51: a sitting's lease was set once, at the claim, for five
+  minutes, and never renewed. A sitting that took longer lost it while its
+  worker was still answering; it went back to the queue, its person became
+  claimable, and a second worker logged in as the same person into the same
+  attempt (303 "lease_expired" requeues in run 51).
+- Every heartbeat now renews the lease of the sitting its worker holds. A
+  worker whose lease is gone learns it from the heartbeat and stops answering
+  (`lease_lost`) instead of answering into an attempt another execution holds.
+- An expired lease is reconciled with the server before anything else: an
+  engine attempt that is complete is collected, not played again; otherwise
+  the sitting is requeued with the worker and the engine's state in its history.
+- A report from a worker that no longer holds the sitting is recorded
+  ("late report, not applied") and changes nothing — except a completed engine
+  attempt for a sitting still waiting, which is taken as its result.
+- The circuit breaker pauses a run instead of failing it: the run keeps its
+  status, its queued sittings stay out of reach, and the pause names its cause
+  by reason code (`circuit_breaker:<code>`, capacity or deterministic), counted
+  over the failure streak. "Paused by the circuit breaker: …" in every run list.
+- Resuming is idempotent and checks the provisioned test's readiness first;
+  failed sittings go back to the queue with a history row each, their failure
+  history kept. "Resume" and "Reset and continue" take the same path.
+- The queue card shows claimable, in progress, collected, failed for good,
+  retryable (waiting for their retry) and held — with the cause per run.
+- A run that finished with failed sittings says so ("Finished, N failed for good").
+- Every pause and resume is in the run's log with cause, counts and who.
+- Each execution report records how long its lease was held.
+- Upgrade: runs the breaker held as failed before 0.7.38 go back to their
+  status and are paused with their cause; nothing is deleted or reset.
+
+### #134 — Every answer submission says what it ended in
+
+- The worker records each submission's main-frame chain: method, status,
+  redirect target, final address, a failed connection's reason, usage, slot,
+  answers so far. Classes: ok, redirect (303 to the attempt, its finish page or
+  review), unexpected redirect, 404, other 4xx, 5xx, connection timed out,
+  connection failed, no response in time, Moodle error page, no expected page.
+  The status decides before the page: a 404 with Moodle's error page is a 404.
+- An uncertain submission is reconciled with the server before going on
+  (`local_catquizlab_sitting_state`: answered and presented questions, finished
+  or not): stored → counted and on to the next question; not stored → back to
+  the same question; finished → reported finished; anything else → stopped with
+  `submit_state_mismatch`. A lost session is signed in again. At most three per execution.
+- Each class is its own reason code (logs, run page filter, attempt history);
+  each reconciled submission keeps a "recovered" row with its cause.
+- New export level "Executions": every try of every sitting, failed ones
+  included, with reason code, worker, correlation id.
+- Worker tests against a server that answers 200, 303, 404, 500, an error page,
+  a dropped connection and no response; the worker end-to-end job injects a
+  lost response and a lost request into a real sitting and checks that every
+  question was answered exactly once.
+
+### #123 — Every parameter from the cell to the sittings
+
+- The run page follows each parameter through requested (cell), effective,
+  engine and observed (fewest/most items, final SE range, most items on one
+  subscale), with a status: agrees, not used by the strategy, plugin default,
+  replaced, engine differs, broken by sittings.
+- Rules per sitting: global maximum exceeded, global minimum undercut with
+  items left (defects), pool exhausted before the minimum (design), subscale
+  maximum exceeded, classical test without every item. Listed on the run page
+  with their sittings, in the package (`runs[].contract`) and per sitting in
+  the export (`contractviolations`).
+- The smoke test checks the chain after every run; every real strategy passes.
+- `docs/dev/parameter-kette.md`: form → definition → engine → observation.
+
+### #114 — Relevant scales are the engine's
+
+- Which scales are relevant for a person is decided by the engine (strategy
+  relevantscales): the scales whose result it reports. The relevant-scales mode
+  shows recovery on exactly those and their share of the scales with items;
+  recall, precision and ranking do not apply. No rule of CatQuizLab's own.
+
+New web service function `local_catquizlab_sitting_state` (worker service).
+Upgrade step 2026101301 (runs held as failed → paused). No table changes.
+
+---
+
 ## [0.7.37] — 2026-10-12 — #132 logviewer memory, #121 downloads, #122 factor filters
 
 ### #132 — The logs page no longer runs PHP out of memory

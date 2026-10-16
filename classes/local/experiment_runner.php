@@ -215,7 +215,11 @@ class experiment_runner {
             $status = (int) $run->status;
             if ($status === registry::STATUS_FINISHED) {
                 $counts['finished']++;
-            } else if ($status === registry::STATUS_FAILED || $status === registry::STATUS_CANCELLED) {
+            } else if (
+                $status === registry::STATUS_FAILED || $status === registry::STATUS_CANCELLED
+                || circuit_breaker::is_held($run)
+            ) {
+                // Paused by the circuit breaker needs a person as much as failed does (#133).
                 $counts['failed']++;
             } else if (in_array($status, [registry::STATUS_RUNNING, registry::STATUS_AGGREGATING], true)) {
                 $counts['running']++;

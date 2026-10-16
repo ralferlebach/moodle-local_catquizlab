@@ -101,6 +101,15 @@ class results_export {
     /** @var string Export level: mode-specific detection, the summary per mode and baseline (#114). */
     public const LEVEL_DETECTIONSUMMARY = 'detectionsummary';
 
+    /** @var string Export level: one row per execution of a sitting, failed ones included, with its cause (#134). */
+    public const LEVEL_EXECUTION = 'execution';
+
+    /** @var string[] The columns of the execution level. */
+    public const EXECUTION_COLUMNS = [
+        'attemptid', 'runid', 'tryno', 'outcome', 'reasoncode', 'reasonlabel', 'workerid', 'correlationid',
+        'engineattemptid', 'runtimems', 'time', 'detail',
+    ];
+
     /** @var string[] The columns of the step level. */
     public const STEP_COLUMNS = [
         'attemptid', 'runid', 'strategy', 'step', 'questionid', 'subscaleid', 'score',
@@ -123,6 +132,7 @@ class results_export {
             self::LEVEL_STEP     => 'export:levelstep',
             self::LEVEL_DETECTION => 'export:leveldetection',
             self::LEVEL_DETECTIONSUMMARY => 'export:leveldetectionsummary',
+            self::LEVEL_EXECUTION => 'export:levelexecution',
         ];
     }
 
@@ -139,6 +149,8 @@ class results_export {
      * @return int
      */
     public static function row_count(results_query $query, string $level): int {
+        global $DB;
+
         // Counted from the stream, never from a materialised selection.
         $observations = $query->each_observation();
 
@@ -184,6 +196,10 @@ class results_export {
                 // Known once it is computed: every sitting of every validity is read for it.
                 return -1;
 
+            case self::LEVEL_EXECUTION:
+                [$where, $params] = self::execution_select($query);
+                return $where === '' ? 0 : $DB->count_records_select('local_catquizlab_attemptlog', $where, $params);
+
             default:
                 return 0;
         }
@@ -210,8 +226,69 @@ class results_export {
                 return self::subscales($query, true);
             case self::LEVEL_DETECTION:
                 return mode_detection::export($query);
+            case self::LEVEL_EXECUTION:
+                return ['columns' => self::EXECUTION_COLUMNS, 'rows' => self::execution_rows($query)];
             default:
                 return self::dataset($query, $level);
+        }
+    }
+
+    /**
+     * The executions of the selection's runs, as a condition on local_catquizlab_attemptlog.
+     *
+     * Every execution, whatever became of it: a failed one is the point of this level.
+     *
+     * @param results_query $query The selection.
+     * @return array [string $where, array $params]; '' where the selection has no run.
+     */
+    protected static function execution_select(results_query $query): array {
+        global $DB;
+
+        $runids = array_map('intval', array_keys($query->runs()));
+        if ($runids === []) {
+            return ['', []];
+        }
+        [$insql, $params] = $DB->get_in_or_equal($runids, SQL_PARAMS_NAMED, 'exrun');
+
+        return ['runid ' . $insql, $params];
+    }
+
+    /**
+     * One row per execution: when, by whom, how it ended and why (#134).
+     *
+     * @param results_query $query The selection.
+     * @return \Generator<array>
+     */
+    protected static function execution_rows(results_query $query): \Generator {
+        global $DB;
+
+        [$where, $params] = self::execution_select($query);
+        if ($where === '') {
+            return;
+        }
+        $labels = [];
+        $records = $DB->get_recordset_select('local_catquizlab_attemptlog', $where, $params, 'runid ASC, attemptid ASC, id ASC');
+        try {
+            foreach ($records as $record) {
+                $code = (string) ($record->reasoncode ?? '');
+                $labels[$code] ??= $code === '' ? '' : reason_catalog::label($code);
+                yield [
+                    'attemptid' => (int) $record->attemptid,
+                    'runid' => (int) $record->runid,
+                    'tryno' => (int) $record->tryno,
+                    'outcome' => (string) $record->outcome,
+                    'reasoncode' => $code,
+                    'reasonlabel' => $labels[$code],
+                    'workerid' => (string) ($record->workerid ?? ''),
+                    'correlationid' => (string) ($record->correlationid ?? ''),
+                    'engineattemptid' => (int) ($record->engineattemptid ?? 0),
+                    'runtimems' => (int) ($record->runtimems ?? 0),
+                    'time' => date('c', (int) $record->timecreated),
+                    'detail' => attempt_history::redact((string) ($record->detail ?? '')),
+                ];
+            }
+        } finally {
+            $records->close();
         }
     }
 
@@ -237,6 +314,8 @@ class results_export {
         // Both verdicts (#112): the engine's definitions for every strategy, and
         // the engine's own verdict word for word (empty where it gave none).
         'uniformvalid', 'enginevalid',
+        // The limits of its test this sitting broke, as rule keys (#123): empty where none.
+        'contractviolations',
     ];
 
     /** @var array<int, array> Ability distribution and range by run, for this request. */
@@ -386,6 +465,7 @@ class results_export {
             $row['abilitysd'] = $ability['sd'];
             $row['abilitymin'] = $ability['min'];
             $row['abilitymax'] = $ability['max'];
+            $row['contractviolations'] = implode(' ', run_contract::check_observation($observation));
             yield $row;
         }
     }
@@ -415,6 +495,8 @@ class results_export {
                 return ['columns' => $detection['columns'], 'rows' => iterator_to_array($detection['rows'], false)];
             case self::LEVEL_DETECTIONSUMMARY:
                 return mode_detection::summary_rows(mode_detection::analyse(mode_detection::sittings($query)));
+            case self::LEVEL_EXECUTION:
+                return ['columns' => self::EXECUTION_COLUMNS, 'rows' => iterator_to_array(self::execution_rows($query), false)];
             default:
                 throw new \coding_exception('Unknown export level: ' . $level);
         }

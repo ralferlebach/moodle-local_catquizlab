@@ -121,7 +121,9 @@ class run_registry {
             'seed'          => (int) $record->seed,
             'masterseed'    => (int) ($record->masterseed ?? 0),
             'status'        => (int) $record->status,
-            'statuslabel'   => self::status_label((int) $record->status),
+            // Paused by the circuit breaker and finished with failures are not
+            // "running" and "finished" (#133): said with their cause and count.
+            'statuslabel'   => self::status_label_of($record, $attempts - $done),
             'actions'       => registry::allowed_actions((int) $record->status),
             'terminal'      => registry::is_terminal((int) $record->status),
             'strategy'      => $strategy,
@@ -417,6 +419,37 @@ class run_registry {
         ];
 
         return get_string($keys[$status] ?? 'status:draft', 'local_catquizlab');
+    }
+
+    /**
+     * A run's status as shown: with the circuit breaker's cause, or the failures it finished with (#133).
+     *
+     * @param \stdClass $record The run.
+     * @param int $notdone Sittings not finished.
+     * @return string
+     */
+    public static function status_label_of(\stdClass $record, int $notdone = 0): string {
+        global $DB;
+
+        $status = (int) $record->status;
+        $manifest = json_decode((string) ($record->manifestjson ?? ''), true) ?: [];
+        $reason = (string) ($manifest['lifecycle']['pausedreason'] ?? '');
+        if (!empty($manifest['lifecycle']['paused']) && strpos($reason, circuit_breaker::PAUSE_REASON) === 0) {
+            $cause = substr($reason, strlen(circuit_breaker::PAUSE_REASON) + 1);
+
+            return get_string('status:pausedbreaker', 'local_catquizlab', reason_catalog::label($cause));
+        }
+        if ($status === registry::STATUS_FINISHED) {
+            $failed = $DB->count_records(
+                'local_catquizlab_attempt',
+                ['runid' => (int) $record->id, 'status' => attempt_scheduler::STATUS_FAILED]
+            );
+            if ($failed > 0) {
+                return get_string('status:finishedwithfailures', 'local_catquizlab', $failed);
+            }
+        }
+
+        return self::status_label($status);
     }
 
     /**

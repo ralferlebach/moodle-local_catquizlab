@@ -76,7 +76,9 @@ class situation {
         // sittings of a held run are not waiting for a worker; they are waiting
         // for a person, and saying "stalled — start workers" about them sent
         // somebody pressing a button that correctly did nothing.
-        $heldparams = ['queued' => attempt_scheduler::STATUS_QUEUED, 'failed' => registry::STATUS_FAILED];
+        // Held: failed, or paused by the circuit breaker (#133).
+        [$heldsql, $heldparams] = circuit_breaker::held_sql('r.');
+        $heldparams['queued'] = attempt_scheduler::STATUS_QUEUED;
         $heldscope = '';
         if ($experimentid > 0) {
             $heldscope = ' AND r.experimentid = :experimentid';
@@ -86,7 +88,7 @@ class situation {
             'SELECT r.id, r.lasterror, COUNT(a.id) AS waiting
                FROM {local_catquizlab_run} r
                JOIN {local_catquizlab_attempt} a ON a.runid = r.id AND a.status = :queued
-              WHERE r.status = :failed' . $heldscope . '
+              WHERE ' . $heldsql . $heldscope . '
            GROUP BY r.id, r.lasterror
            ORDER BY r.id ASC',
             $heldparams,

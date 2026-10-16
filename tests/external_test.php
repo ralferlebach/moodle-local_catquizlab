@@ -231,16 +231,18 @@ final class external_test extends \advanced_testcase {
             job_complete::execute($attemptid, 'failed', 0, 0, 'Division by zero at attempt ' . $index);
 
             if ($index < 9) {
-                $this->assertNotSame(
-                    \local_catquizlab\local\registry::STATUS_FAILED,
-                    (int) $DB->get_field('local_catquizlab_run', 'status', ['id' => $runid]),
+                $this->assertFalse(
+                    \local_catquizlab\local\run_lifecycle::is_paused($runid),
                     'held after only ' . ($index + 1) . ' failures'
                 );
             }
         }
 
+        // Held as paused, not failed (#133): the run keeps its status and names its cause.
         $held = $DB->get_record('local_catquizlab_run', ['id' => $runid]);
-        $this->assertSame(\local_catquizlab\local\registry::STATUS_FAILED, (int) $held->status);
+        $this->assertSame(\local_catquizlab\local\registry::STATUS_RUNNING, (int) $held->status);
+        $this->assertTrue(\local_catquizlab\local\circuit_breaker::is_held($held));
+        $this->assertSame('circuit_breaker:engine_exception', \local_catquizlab\local\run_lifecycle::pause_reason($runid));
         $this->assertStringContainsString('Division by zero', (string) $held->lasterror);
 
         // The five waiting sittings stay queued and out of reach.
