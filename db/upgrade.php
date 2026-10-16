@@ -616,6 +616,27 @@ function xmldb_local_catquizlab_upgrade($oldversion): bool {
         upgrade_plugin_savepoint(true, 2026101301, 'local', 'catquizlab');
     }
 
+    if ($oldversion < 2026101302) {
+        // The process's own start (#124): the registry row is reused when a
+        // worker identity restarts, and its age is not the process's uptime.
+        $table = new xmldb_table('local_catquizlab_worker');
+        $field = new xmldb_field('timestarted', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, '0', 'startsat');
+        if (!$dbman->field_exists($table, $field)) {
+            $dbman->add_field($table, $field);
+        }
+        upgrade_plugin_savepoint(true, 2026101302, 'local', 'catquizlab');
+    }
+
+    if ($oldversion < 2026101303) {
+        // The load guard counts the last minutes over the whole installation (#124).
+        $log = new xmldb_table('local_catquizlab_attemptlog');
+        $index = new xmldb_index('timecreated-outcome', XMLDB_INDEX_NOTUNIQUE, ['timecreated', 'outcome']);
+        if (!$dbman->index_exists($log, $index)) {
+            $dbman->add_index($log, $index);
+        }
+        upgrade_plugin_savepoint(true, 2026101303, 'local', 'catquizlab');
+    }
+
     return true;
 }
 

@@ -134,6 +134,9 @@ class worker_registry {
                 'currentattempt' => 0,
                 'workerstate'   => 'starting',
                 'heartbeat'     => $now,
+                // A new process: its uptime starts here, not at the identity's
+                // first appearance (#124).
+                'timestarted'   => $now,
                 'timemodified'  => $now,
             ]);
 
@@ -152,6 +155,7 @@ class worker_registry {
                 'currentattempt' => 0,
                 'workerstate'   => 'starting',
                 'heartbeat'     => $now,
+                'timestarted'   => $now,
                 'timecreated'   => $now,
                 'timemodified'  => $now,
             ]);
@@ -283,7 +287,9 @@ class worker_registry {
      * @return bool Whether a slot was free for it.
      */
     public static function adopt(string $workerid): bool {
-        $concurrency = max(1, (int) get_config('local_catquizlab', 'worker_concurrency'));
+        // Within the effective limit (#124): a worker started by hand is not a
+        // way past the safety cap or the load guard.
+        $concurrency = worker_capacity::effective()['limit'];
 
         for ($slot = 1; $slot <= $concurrency; $slot++) {
             if (self::acquire_slot($slot, $workerid) !== null) {

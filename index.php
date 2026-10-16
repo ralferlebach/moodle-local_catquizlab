@@ -80,61 +80,102 @@ function local_catquizlab_status_class(int $status): string {
     return $map[$status] ?? 'badge-secondary';
 }
 
-// Experiments, with the actions the viewer is actually allowed to perform.
+// The experiment library (#129): one row per experiment with where it stands,
+// one main action fitting that, the rest under "More", and deleting apart from
+// everything that keeps the experiment. Searchable and sortable by name, state
+// and last change, as plain GET parameters.
+$canpurge = has_capability('local/catquizlab:purge', $context);
+$search = trim(optional_param('q', '', PARAM_TEXT));
+$sort = optional_param('sort', 'modified', PARAM_ALPHA);
+if (!in_array($sort, ['modified', 'name', 'state'], true)) {
+    $sort = 'modified';
+}
+$allexperiments = experiment_service::overview();
+$library = \local_catquizlab\local\experiment_status::library(array_column($allexperiments, 'id'));
+$listed = array_values(array_filter($allexperiments, static fn(array $row): bool => $search === ''
+    || \core_text::strpos(\core_text::strtolower($row['name']), \core_text::strtolower($search)) !== false));
+$phaseorder = array_flip(\local_catquizlab\local\experiment_status::PHASES);
+usort($listed, static function (array $a, array $b) use ($sort, $library, $phaseorder): int {
+    if ($sort === 'name') {
+        return strnatcasecmp($a['name'], $b['name']);
+    }
+    if ($sort === 'state') {
+        return ($phaseorder[$library[$a['id']]['phase']] <=> $phaseorder[$library[$b['id']]['phase']])
+            ?: $b['timemodified'] <=> $a['timemodified'];
+    }
+    return $b['timemodified'] <=> $a['timemodified'];
+});
 $experimentrows = [];
-foreach (experiment_service::overview() as $row) {
+foreach ($listed as $row) {
     $editurl = new moodle_url('/local/catquizlab/experiment.php', ['id' => $row['id']]);
+    $state = $library[$row['id']];
 
-    $actions = [
-        html_writer::link(
-            new moodle_url('/local/catquizlab/results.php', ['experimentid' => $row['id']]),
-            get_string('manage:results', $component),
-            ['class' => 'mr-2']
-        ),
-        html_writer::link(
-            new moodle_url('/local/catquizlab/compare.php', ['experimentid' => $row['id']]),
-            get_string('manage:compare', $component),
-            ['class' => 'mr-2']
-        ),
+    // The one main action, by where the experiment stands.
+    if (in_array($state['phase'], ['complete', 'completefailures'], true)) {
+        $main = ['label' => get_string('status:nextresults', $component),
+            'url' => (new moodle_url('/local/catquizlab/results.php', ['experimentid' => $row['id']]))->out(false)];
+    } else if (in_array($state['phase'], ['collecting', 'starting', 'blocked', 'preparing'], true)) {
+        $main = ['label' => get_string('status:nextprogress', $component),
+            'url' => (new moodle_url('/local/catquizlab/runs.php', ['experimentid' => $row['id']]))->out(false)];
+    } else {
+        $main = ['label' => get_string('manage:open', $component), 'url' => $editurl->out(false)];
+    }
+
+    // The others, under "More": links, and a form where something is created.
+    $more = [
+        ['label' => get_string('manage:results', $component), 'link' => true,
+            'url' => (new moodle_url('/local/catquizlab/results.php', ['experimentid' => $row['id']]))->out(false)],
+        ['label' => get_string('manage:compare', $component), 'link' => true,
+            'url' => (new moodle_url('/local/catquizlab/compare.php', ['experimentid' => $row['id']]))->out(false)],
     ];
     if ($canedit) {
-        $actions[] = html_writer::link(
-            new moodle_url('/local/catquizlab/experiment.php', [
-                'id' => $row['id'], 'action' => 'duplicate', 'sesskey' => sesskey(),
-            ]),
-            get_string('manage:duplicate', $component),
-            ['class' => 'mr-2']
-        );
+        $more[] = ['label' => get_string('manage:duplicate', $component), 'post' => true,
+            'url' => (new moodle_url('/local/catquizlab/experiment.php'))->out(false),
+            'id' => $row['id'], 'action' => 'duplicate', 'sesskey' => sesskey()];
     }
     if ($canexport) {
-        $actions[] = html_writer::link(
-            new moodle_url('/local/catquizlab/experiment.php', [
-                'id' => $row['id'], 'action' => 'export',
-            ]),
-            get_string('manage:exportjson', $component)
-        );
+        $more[] = ['label' => get_string('manage:exportjson', $component), 'link' => true,
+            'url' => (new moodle_url('/local/catquizlab/experiment.php', ['id' => $row['id'], 'action' => 'export']))->out(false)];
     }
 
-    $status = (int) $row['status'];
     $experimentrows[] = array_merge($row, [
-        'status'       => $row['statuslabel'],
-        'statusclass'  => local_catquizlab_status_class($status),
+        'state'        => $state['label'],
+        'phase'        => $state['phase'],
+        'statebadge'   => ['ok' => 'badge-success', 'active' => 'badge-info', 'warn' => 'badge-warning',
+            'problem' => 'badge-danger'][$state['tone']],
+        // Running ones show how far, not how many workers (#129 AK 2).
+        'progress'     => $state['total'] > 0 ? get_string('status:sittings', $component, (object) $state) : '',
+        'hasprogress'  => $state['total'] > 0,
+        'percent'      => $state['percent'],
         'tierlabel'    => get_string_manager()->string_exists('tier:' . $row['tier'], $component)
             ? get_string('tier:' . $row['tier'], $component)
             : $row['tier'],
         'cells'        => $row['cells'] ?? '—',
         'modified'     => userdate($row['timemodified'], get_string('strftimedatetimeshort')),
-        'candelete'    => has_capability('local/catquizlab:execute', $context),
         'editurl'      => $editurl->out(false),
-        // Deleting outright, distinct from anything that keeps the experiment:
-        // for test, development and mistaken experiments, which the archive is
-        // the wrong home for.
+        'main'         => $main,
+        'more'         => $more,
+        // Deleting outright, apart from everything that keeps the experiment; a
+        // page that shows what goes and asks for the name, then a POST (#129).
+        'candelete'    => $canpurge,
         'deleteurl'    => (new moodle_url('/local/catquizlab/experiment.php', [
             'id' => $row['id'], 'action' => 'delete', 'sesskey' => sesskey(),
         ]))->out(false),
-        'actions'      => implode('', $actions),
     ]);
 }
+$librarycontext = [
+    'q' => $search,
+    'hassearch' => $search !== '',
+    'sorts' => array_map(static fn(string $key): array => [
+        'key' => $key,
+        'label' => get_string('manage:sort' . $key, $component),
+        'selected' => $key === $sort,
+    ], ['modified', 'name', 'state']),
+    'actionurl' => (new moodle_url('/local/catquizlab/index.php'))->out(false),
+    'reseturl' => (new moodle_url('/local/catquizlab/index.php', ['tab' => 'experiments']))->out(false),
+    'total' => count($allexperiments),
+    'shown' => count($experimentrows),
+];
 
 // The most recent runs; the full, filterable listing lives on runs.php.
 $recent = run_registry::listing([], 0, 10);
@@ -160,7 +201,7 @@ foreach ($recent['rows'] as $row) {
 
 // The overview panel: how much is there, and how much of it is in trouble.
 $counts = [
-    'experiments' => count($experimentrows),
+    'experiments' => count($allexperiments),
     'running'     => $DB->count_records('local_catquizlab_run', ['status' => registry::STATUS_RUNNING]),
     'finished'    => $DB->count_records('local_catquizlab_run', ['status' => registry::STATUS_FINISHED]),
     'failed'      => $DB->count_records('local_catquizlab_run', ['status' => registry::STATUS_FAILED]),
@@ -257,7 +298,9 @@ $templatecontext = [
     'overview'    => $overview,
     'environment' => ['items' => $envitems],
     'disabled'    => !get_config($component, 'enabled'),
-    'experiments' => ['hasany' => $experimentrows !== [], 'rows' => $experimentrows],
+    'experiments' => ['hasany' => $experimentrows !== [], 'rows' => $experimentrows,
+        'library' => $librarycontext, 'none' => $allexperiments === [],
+        'nomatch' => $allexperiments !== [] && $experimentrows === []],
     'situation'   => $situation,
     // Superseded by the verdict above when it already says the installation is
     // not ready: two warnings about one thing is one too many.
@@ -333,6 +376,8 @@ if ($tab === 'settings') {
                 set_config($name, $data->$name, $component);
             }
         }
+        // A lowered limit takes effect now, by draining, and is logged (#124).
+        \local_catquizlab\local\worker_capacity::note_change();
         redirect(
             new moodle_url('/local/catquizlab/index.php', ['tab' => 'settings']),
             get_string('settingsform:saved', $component)
@@ -345,6 +390,7 @@ if ($tab === 'settings') {
     }
     // The two that need a value when nothing is stored yet.
     $current['worker_concurrency'] = (int) ($current['worker_concurrency'] ?: 1);
+    $current['worker_safety_cap'] = (int) ($current['worker_safety_cap'] ?: 0);
     $current['debuglevel'] = (string) ($current['debuglevel'] ?: 'off');
 
     $settingsform->set_data((object) $current);
@@ -376,7 +422,7 @@ if ($tab === 'experiments') {
     // Keeps the counters current while workers run, so watching a queue drain
     // does not mean reloading the page during exactly the minutes somebody is
     // watching it.
-    $PAGE->requires->strings_for_js(['live:interrupted', 'live:reconnect'], 'local_catquizlab');
+    $PAGE->requires->strings_for_js(['live:interrupted', 'live:reconnect', 'eta:asof', 'eta:stale'], 'local_catquizlab');
     $PAGE->requires->js_call_amd('local_catquizlab/livestatus', 'init', [
         \local_catquizlab\external\live_status::current_shape(),
         optional_param('experimentid', 0, PARAM_INT),

@@ -1070,6 +1070,7 @@ class run_lifecycle {
                     $counts['open'] += $n;
                     break;
                 case attempt_scheduler::STATUS_COLLECTED:
+                case attempt_scheduler::STATUS_VALIDATED:
                     $counts['collected'] += $n;
                     break;
                 default:

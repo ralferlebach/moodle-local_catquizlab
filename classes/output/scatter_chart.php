@@ -742,41 +742,68 @@ class scatter_chart {
         }
         $name = clean_filename($basename);
         $key = self::keep_for_pdf($drawing, $name);
-        $links = \html_writer::link(
+        $items = [\html_writer::link(
             'data:image/svg+xml;base64,' . base64_encode($drawing),
             get_string('chart:downloadsvg', 'local_catquizlab'),
-            ['download' => $name . '.svg', 'class' => 'btn btn-sm btn-outline-secondary mr-2', 'data-download' => 'svg']
-        );
-        if ($csv !== '') {
-            $links .= \html_writer::link(
-                'data:text/csv;charset=utf-8;base64,' . base64_encode($csv),
-                get_string('chart:downloadcsv', 'local_catquizlab'),
-                ['download' => $name . '.csv', 'class' => 'btn btn-sm btn-outline-secondary', 'data-download' => 'csv']
-            );
-        }
-
+            ['download' => $name . '.svg', 'data-download' => 'svg']
+        )];
         // PNG in the browser, from the SVG; PDF on the server, as vectors (#108).
-        $links .= \html_writer::tag('button', get_string('chart:downloadpng', 'local_catquizlab'), [
-            'type' => 'button', 'class' => 'btn btn-sm btn-outline-secondary ml-2', 'data-download' => 'png',
-            'data-filename' => $name . '.png',
+        $items[] = \html_writer::tag('button', get_string('chart:downloadpng', 'local_catquizlab'), [
+            'type' => 'button', 'data-download' => 'png', 'data-filename' => $name . '.png',
         ]);
-        $links .= \html_writer::link(
+        $items[] = \html_writer::link(
             new \moodle_url('/local/catquizlab/plotpdf.php', ['key' => $key, 'sesskey' => sesskey()]),
             get_string('chart:downloadpdf', 'local_catquizlab'),
-            ['class' => 'btn btn-sm btn-outline-secondary ml-2', 'data-download' => 'pdf']
+            ['data-download' => 'pdf']
         );
-        // The settings beside the drawing (#108): plot-settings.json.
-        $links .= \html_writer::link(
+        if ($csv !== '') {
+            $items[] = \html_writer::link(
+                'data:text/csv;charset=utf-8;base64,' . base64_encode($csv),
+                get_string('chart:downloadcsv', 'local_catquizlab'),
+                ['download' => $name . '.csv', 'data-download' => 'csv']
+            );
+        }
+        // The settings beside the drawing (#108): plot-settings.json — apart
+        // from the downloads of the figure itself (#130).
+        $settings = \html_writer::link(
             'data:application/json;base64,' . base64_encode((string) json_encode(
                 $this->settings,
                 JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE
             )),
             get_string('chart:downloadsettings', 'local_catquizlab'),
-            ['download' => $name . '-plot-settings.json', 'class' => 'btn btn-sm btn-outline-secondary ml-2',
-                'data-download' => 'json']
+            ['download' => $name . '-plot-settings.json', 'class' => 'btn btn-sm btn-link', 'data-download' => 'json']
         );
 
-        return \html_writer::div($links, 'mb-3', ['data-region' => 'catquizlab-plot-export']);
+        return self::download_menu($items, $settings);
+    }
+
+    /**
+     * Downloads of a figure under one "Download ▾" (#130): a menu that needs no script and works by keyboard.
+     *
+     * @param string[] $items The links and buttons, each with its data-download.
+     * @param string $aside What stands beside the menu (the plot settings), or ''.
+     * @return string
+     */
+    public static function download_menu(array $items, string $aside = ''): string {
+        $component = 'local_catquizlab';
+        $list = '';
+        foreach ($items as $item) {
+            // Every entry looks the same, link or button.
+            $item = preg_replace('/^<(a|button) /', '<$1 class="btn btn-sm btn-link text-left p-1" ', $item, 1);
+            $list .= \html_writer::tag('li', $item, ['class' => 'list-unstyled']);
+        }
+        $menu = \html_writer::tag(
+            'details',
+            \html_writer::tag('summary', get_string('chart:downloadmenu', $component), [
+                'class' => 'btn btn-sm btn-outline-secondary',
+            ]) . \html_writer::tag('ul', $list, [
+                'class' => 'border rounded bg-white p-1 mt-1 mb-0',
+                'aria-label' => get_string('chart:downloadmenu', $component),
+            ]),
+            ['class' => 'd-inline-block mr-2 align-top', 'data-region' => 'catquizlab-download']
+        );
+
+        return \html_writer::div($menu . $aside, 'mb-3', ['data-region' => 'catquizlab-plot-export']);
     }
 
     /**

@@ -667,9 +667,20 @@ class results_export {
             'runs'          => $provenance['runs'],
             'attempts'      => $provenance['attempts'],
             'replications'  => $provenance['replications'],
+            'people'        => $provenance['people'],
+            'cells'         => $provenance['cells'],
             'rows'          => $count,
             'columns'       => $dataset['columns'],
             'dispersion'    => $provenance['dispersion'],
+            // How the intervals were computed and over which unit (#127).
+            'uncertainty'   => [
+                'interval' => '95 % confidence interval of the mean, normal approximation (mean ± 1.96 · SE)',
+                'unit' => 'simulated person: a twin in a replication (results_query::unit_key)',
+                'se' => 'standard deviation of the person means / sqrt(number of people); a person with several '
+                    . 'sittings (paired across strategies, repeated measures) counts once',
+                'rmse' => 'no interval',
+                'description' => get_string('dispersion:ci95', 'local_catquizlab'),
+            ],
             // Per run: the distribution of the true abilities, its parameters,
             // the share expected outside the range, and the range written to
             // the engine's root scale (#102) — as the manifest records them.

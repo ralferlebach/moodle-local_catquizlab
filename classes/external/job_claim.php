@@ -83,6 +83,12 @@ class job_claim extends external_api {
             'message'   => get_string('job:none', 'local_catquizlab'),
         ];
 
+        // A worker asked to stop, or in a slot above the limit in force, gets
+        // nothing new (#124): it finishes what it plays and goes.
+        if (!\local_catquizlab\local\worker_capacity::may_claim((string) $params['workerid'])) {
+            return ['message' => get_string('job:draining', 'local_catquizlab')] + $none;
+        }
+
         // Claim the oldest queued attempt inside a transaction so two workers
         // cannot pick up the same one.
         $transaction = $DB->start_delegated_transaction();

@@ -526,34 +526,78 @@ class experiment_form extends \moodleform {
         );
         $models->setMultiple(true);
 
+        // Further factors, optional and folded (#126): empty means "not
+        // varied", and four empty textareas in the normal view explained
+        // nothing. Each is a list of levels; in the browser a small editor
+        // (one row per level, add and remove) writes the same lines the
+        // server reads, and every line it cannot read is refused with its
+        // number — here and on the server alike.
+        $mform->addElement('header', 'sweepmore', get_string('levels:heading', $component));
+        $mform->setExpanded('sweepmore', false);
+        $mform->addElement('static', 'sweepmoreintro', '', \html_writer::span(
+            get_string('levels:intro', $component),
+            'text-muted'
+        ));
         // Budgets and SE windows are pairs: "10 to 15 items" is one condition,
         // and varying the ends independently would produce cells like 40/15.
         // Each line is therefore one level.
-        $mform->addElement('textarea', 'sweepglobalbudgets', get_string('form:sweepglobalbudgets', $component), [
-            'rows' => 4, 'cols' => 30,
-        ]);
-        $mform->setType('sweepglobalbudgets', PARAM_TEXT);
-        $mform->addHelpButton('sweepglobalbudgets', 'form:sweepglobalbudgets', $component);
-
-        $mform->addElement('textarea', 'sweepsubscalebudgets', get_string('form:sweepsubscalebudgets', $component), [
-            'rows' => 4, 'cols' => 30,
-        ]);
-        $mform->setType('sweepsubscalebudgets', PARAM_TEXT);
-        $mform->addHelpButton('sweepsubscalebudgets', 'form:sweepsubscalebudgets', $component);
-
-        $mform->addElement('textarea', 'sweepse', get_string('form:sweepse', $component), [
-            'rows' => 4, 'cols' => 30,
-        ]);
-        $mform->setType('sweepse', PARAM_TEXT);
-        $mform->addHelpButton('sweepse', 'form:sweepse', $component);
-
-        $mform->addElement('textarea', 'sweepstrengths', get_string('form:sweepstrengths', $component), [
-            'rows' => 4, 'cols' => 30,
-        ]);
-        $mform->setType('sweepstrengths', PARAM_TEXT);
-        $mform->addHelpButton('sweepstrengths', 'form:sweepstrengths', $component);
+        $patterns = [
+            'items' => '/^(\s*\d+\s*\/\s*\d+\s*(\r?\n|$))*\s*$/',
+            'se' => '/^(\s*\d+([.,]\d+)?\s*\/\s*\d+([.,]\d+)?\s*(\r?\n|$))*\s*$/',
+            'strength' => '/^(\s*(((fraction|shift|factor|sd)\s*=\s*-?)?\d+([.,]\d+)?)\s*(\r?\n|$))*\s*$/',
+        ];
+        foreach (self::LEVEL_FIELDS as $field => $kind) {
+            $mform->addElement('textarea', $field, get_string('form:' . $field, $component), [
+                'rows' => 3, 'cols' => 30,
+                'placeholder' => get_string('levels:placeholder_' . $kind, $component),
+                'data-catquizlab-levels' => $kind,
+                'aria-describedby' => 'id_' . $field . '_state',
+            ]);
+            $mform->setType($field, PARAM_TEXT);
+            $mform->addHelpButton($field, 'form:' . $field, $component);
+            // The format checked in the browser before sending, and again on the server.
+            $mform->addRule($field, get_string('levels:format_' . $kind, $component), 'regex', $patterns[$kind], 'client');
+            $mform->addElement('static', $field . '_state', '', \html_writer::span(
+                get_string('levels:notvaried_' . $field, $component),
+                'text-muted small',
+                ['id' => 'id_' . $field . '_state', 'data-catquizlab-levels-state' => $field]
+            ));
+        }
+        // A varied factor makes its single value above ineffective: hidden,
+        // and said where the levels are (#126 AK 4).
+        foreach (['globalmin', 'globalmax', 'na_globalmax'] as $base) {
+            $mform->hideIf($base, 'sweepglobalbudgets', 'neq', '');
+        }
+        foreach (['subscalemin', 'subscalemax'] as $base) {
+            $mform->hideIf($base, 'sweepsubscalebudgets', 'neq', '');
+        }
+        foreach (['semin', 'semax'] as $base) {
+            $mform->hideIf($base, 'sweepse', 'neq', '');
+        }
+        $PAGE->requires->js_call_amd('local_catquizlab/levels', 'init', []);
+        $PAGE->requires->strings_for_js([
+            'levels:add', 'levels:remove', 'levels:min', 'levels:max', 'levels:value', 'levels:key',
+            'levels:notvaried', 'levels:varied', 'levels:sharepercent', 'levels:notanumbershort', 'levels:shareshort',
+            'levels:itempairshort', 'levels:sepairshort', 'levels:minmaxshort', 'levels:sepositiveshort',
+        ], $component);
 
         $this->add_action_buttons(true, get_string('form:save', $component));
+    }
+
+    /**
+     * Open the varied-factors section where it holds levels (#126).
+     *
+     * @return void
+     */
+    public function definition_after_data() {
+        parent::definition_after_data();
+        $mform = $this->_form;
+        foreach (array_keys(self::LEVEL_FIELDS) as $field) {
+            if ($mform->elementExists($field) && trim((string) $mform->getElementValue($field)) !== '') {
+                $mform->setExpanded('sweepmore', true);
+                return;
+            }
+        }
     }
 
     /**
@@ -578,6 +622,13 @@ class experiment_form extends \moodleform {
         foreach ($floats as $field) {
             if (array_key_exists($field, $data) && $data[$field] === false) {
                 $errors[$field] = get_string('form:notanumber', 'local_catquizlab');
+            }
+        }
+        // Every level of the varied factors read, or refused with its line (#126).
+        foreach (self::LEVEL_FIELDS as $field => $kind) {
+            $parsed = self::parse_levels((string) ($data[$field] ?? ''), $kind);
+            if ($parsed['errors'] !== []) {
+                $errors[$field] = implode(' ', $parsed['errors']);
             }
         }
         if ($errors !== []) {
@@ -1338,32 +1389,111 @@ JS;
         ] + self::per_strategy_fields($normalised) + self::per_cell_fields($normalised);
     }
 
+    /** @var string[] The keys a disturbance strength may name (#126). */
+    public const STRENGTH_KEYS = ['fraction', 'shift', 'factor', 'sd'];
+
+    /** @var array<string, string> The sweep fields with levels, and the kind of their levels (#126). */
+    public const LEVEL_FIELDS = [
+        'sweepglobalbudgets' => 'items',
+        'sweepsubscalebudgets' => 'items',
+        'sweepse' => 'se',
+        'sweepstrengths' => 'strength',
+    ];
+
+    /**
+     * Read the levels of a sweep field, and say what is wrong with any line (#126).
+     *
+     * Empty means "not varied". A non-empty line that cannot be read is an
+     * error with its line number — never dropped without a word, which is
+     * what the old parsers did: "40-15" vanished and the experiment ran
+     * without the level somebody had typed.
+     *
+     * @param string $value The raw field value, one level per line.
+     * @param string $kind items (min/max integers), se (min/max decimals) or strength.
+     * @return array{levels: array[], errors: string[]}
+     */
+    public static function parse_levels(string $value, string $kind): array {
+        $component = 'local_catquizlab';
+        $levels = [];
+        $errors = [];
+        $seen = [];
+        foreach (preg_split('/\r?\n/', $value) as $index => $line) {
+            $line = trim($line);
+            if ($line === '') {
+                continue;
+            }
+            $a = (object) ['line' => $index + 1, 'text' => $line];
+            $level = null;
+            if ($kind === 'strength') {
+                if (strpos($line, '=') !== false) {
+                    [$key, $raw] = array_map('trim', explode('=', $line, 2));
+                    $raw = str_replace(',', '.', $raw);
+                    if (!in_array($key, self::STRENGTH_KEYS, true)) {
+                        $errors[] = get_string('levels:unknownkey', $component, (object) ((array) $a + [
+                            'keys' => implode(', ', self::STRENGTH_KEYS),
+                        ]));
+                        continue;
+                    }
+                    if (!is_numeric($raw)) {
+                        $errors[] = get_string('levels:notanumber', $component, $a);
+                        continue;
+                    }
+                    $level = [$key => (float) $raw];
+                } else {
+                    $raw = str_replace(',', '.', $line);
+                    if (!is_numeric($raw) || (float) $raw <= 0 || (float) $raw > 100) {
+                        $errors[] = get_string('levels:share', $component, $a);
+                        continue;
+                    }
+                    // A percentage is written as a percentage and stored as a share.
+                    $number = (float) $raw;
+                    $level = ['fraction' => $number > 1.0 ? $number / 100.0 : $number];
+                }
+            } else {
+                $parts = array_map('trim', explode('/', str_replace(',', '.', $line)));
+                $integers = $kind === 'items';
+                $valid = count($parts) === 2 && is_numeric($parts[0]) && is_numeric($parts[1])
+                    && (!$integers || (ctype_digit($parts[0]) && ctype_digit($parts[1])));
+                if (!$valid) {
+                    $errors[] = get_string($integers ? 'levels:itempair' : 'levels:sepair', $component, $a);
+                    continue;
+                }
+                [$min, $max] = $integers ? [(int) $parts[0], (int) $parts[1]] : [(float) $parts[0], (float) $parts[1]];
+                if ($min > $max) {
+                    $errors[] = get_string('levels:minmax', $component, $a);
+                    continue;
+                }
+                if (!$integers && $min <= 0) {
+                    $errors[] = get_string('levels:sepositive', $component, $a);
+                    continue;
+                }
+                if ($integers && $max < 1) {
+                    $errors[] = get_string('levels:itemspositive', $component, $a);
+                    continue;
+                }
+                $level = $integers ? ['minitems' => $min, 'maxitems' => $max] : ['min' => $min, 'max' => $max];
+            }
+            $key = json_encode($level);
+            if (isset($seen[$key])) {
+                $errors[] = get_string('levels:duplicate', $component, $a);
+                continue;
+            }
+            $seen[$key] = true;
+            $levels[] = $level;
+        }
+
+        return ['levels' => $levels, 'errors' => $errors];
+    }
+
     /**
      * Parse one level per line, each written as "min/max".
      *
      * @param string $value The raw field value.
      * @param string $kind 'items' for integer item budgets, 'se' for the SE window.
-     * @return array[] One block per line; empty when nothing parses.
+     * @return array[] One block per readable line; validation() refuses the others.
      */
     public static function parse_pairs(string $value, string $kind): array {
-        $levels = [];
-        foreach (preg_split('/\r?\n/', $value) as $line) {
-            $line = trim($line);
-            if ($line === '') {
-                continue;
-            }
-            $parts = array_map('trim', explode('/', $line));
-            if (count($parts) !== 2 || !is_numeric($parts[0]) || !is_numeric($parts[1])) {
-                continue;
-            }
-            if ($kind === 'se') {
-                $levels[] = ['min' => (float) $parts[0], 'max' => (float) $parts[1]];
-            } else {
-                $levels[] = ['minitems' => (int) $parts[0], 'maxitems' => (int) $parts[1]];
-            }
-        }
-
-        return $levels;
+        return self::parse_levels($value, $kind === 'se' ? 'se' : 'items')['levels'];
     }
 
     /**
@@ -1376,30 +1506,10 @@ JS;
      * not apply is dropped rather than making the cell invalid.
      *
      * @param string $value The raw field value.
-     * @return array[] One recipe block per line.
+     * @return array[] One recipe block per readable line; validation() refuses the others.
      */
     public static function parse_strengths(string $value): array {
-        $levels = [];
-        foreach (preg_split('/\r?\n/', $value) as $line) {
-            $line = trim($line);
-            if ($line === '') {
-                continue;
-            }
-            if (strpos($line, '=') !== false) {
-                [$key, $raw] = array_map('trim', explode('=', $line, 2));
-                if ($key !== '' && is_numeric($raw)) {
-                    $levels[] = [$key => (float) $raw];
-                }
-                continue;
-            }
-            if (is_numeric($line)) {
-                // A percentage is written as a percentage and stored as a share.
-                $number = (float) $line;
-                $levels[] = ['fraction' => $number > 1.0 ? $number / 100.0 : $number];
-            }
-        }
-
-        return $levels;
+        return self::parse_levels($value, 'strength')['levels'];
     }
 
     /**

@@ -49,6 +49,9 @@ class progress_view {
     public static function context(int $experimentid = 0): array {
         global $DB;
 
+        // One snapshot for the whole page, the same the header shows (#128).
+        $status = experiment_status::snapshot($experimentid);
+
         $component = 'local_catquizlab';
 
         // Only what is not finished: this section answers "what is happening",
@@ -103,7 +106,11 @@ class progress_view {
                     ? get_string('worker:statestale', 'local_catquizlab')
                     : ($waiting
                         ? get_string('worker:statewaiting', 'local_catquizlab')
-                        : worker_registry::status_label($state)),
+                        // Asked to finish its sitting and stop: draining (#124).
+                        : ((int) $worker->stoprequested > 0 && in_array($state, [worker_registry::STATUS_STARTING,
+                            worker_registry::STATUS_RUNNING], true)
+                            ? get_string('worker:statedraining', 'local_catquizlab')
+                            : worker_registry::status_label($state))),
                 'waiting'    => $waiting,
                 'stale'      => $stale,
                 'attemptid'  => (int) $worker->currentattempt,
@@ -115,7 +122,10 @@ class progress_view {
                 'heartbeatago' => (int) $worker->heartbeat > 0
                     ? duration::ago((int) $worker->heartbeat)
                     : '-',
-                'uptime'     => duration::human(max(0, (int) $worker->timemodified - (int) $worker->timecreated)),
+                // Since this process took its slot (#124); the row's age is the
+                // identity's, which a restart reuses.
+                'uptime'     => duration::human(max(0, (int) $worker->timemodified
+                    - ((int) ($worker->timestarted ?? 0) ?: (int) $worker->timecreated))),
                 'lasterror'  => (string) ($worker->lasterror ?? ''),
                 'haserror'   => trim((string) ($worker->lasterror ?? '')) !== '',
                 'log'        => worker_launcher::log_tail((string) $worker->workerid, 10),
@@ -149,8 +159,16 @@ class progress_view {
             'population'  => $population,
             // The two actions the whole interface reduces to, and the line of
             // experiments waiting their turn.
-            'runner'      => $experimentid > 0
-                ? experiment_runner::state($experimentid) + [
+            'runner'      => $status !== null
+                ? [
+                    // The label of the one status; no "start" for an experiment
+                    // already queued or running (#128).
+                    'label'      => $status['label'],
+                    // Create and start are the status bar's one primary action
+                    // above; here only preparing again, for a blocked experiment.
+                    'canstart'   => false,
+                    'canprepare' => $status['phase'] === 'blocked' && !empty($status['runner']['canprepare']),
+                ] + $status['runner'] + [
                     'experimentid' => $experimentid,
                     'queued'       => execution_queue::state_of($experimentid),
                     'formurl'      => (new \moodle_url('/local/catquizlab/runs.php'))->out(false),
@@ -159,7 +177,11 @@ class progress_view {
                 : null,
             // The same snapshot the poll serves, so the first paint and every
             // update after it come from one place.
-            'progress'    => $experimentid > 0 ? live_progress::snapshot($experimentid) : null,
+            // With the experiment's own status label (#128): the header, this
+            // card and the run summary say the same word.
+            'progress'    => $status !== null
+                ? ['label' => $status['label'], 'reason' => $status['reason']] + $status['progress']
+                : null,
             // Null when nothing is wrong, which is what keeps the recovery
             // section folded and out of a normal day's way.
             'recovery'    => recovery_advisor::advise($experimentid),
@@ -179,7 +201,9 @@ class progress_view {
             'situation'   => situation::assess($experimentid, $breakdown),
             'runs'        => ['hasany' => $runs !== [], 'rows' => $runs],
             'tasks'       => task_overview::state(),
-            'workers'     => ['hasany' => $workers !== [], 'rows' => $workers],
+            'workers'     => ['hasany' => $workers !== [], 'rows' => $workers, 'count' => count($workers)],
+            // Configured, in force, live, starting, waiting, draining, free (#124).
+            'capacity'    => worker_capacity::snapshot(),
             // How starts and retries are spread, and when the waiting retries are due (#120).
             'loadspreading' => worker_launcher::load_spreading(),
             'retrywindow' => worker_launcher::retry_window_message($experimentid),

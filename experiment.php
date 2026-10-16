@@ -126,6 +126,12 @@ if ($action === 'delete' && $id > 0) {
         exit;
     }
 
+    // Executed by the confirmation form's POST only (#129): a GET carrying
+    // the name — a link, a prefetch, a history entry — deletes nothing.
+    if (!data_submitted()) {
+        redirect($manageurl, get_string('purge:postonly', $component), null, \core\output\notification::NOTIFY_WARNING);
+    }
+
     $result = \local_catquizlab\local\purger::delete_experiment(
         $id,
         (bool) $deep,
@@ -186,6 +192,10 @@ if ($action === 'export' && $id > 0) {
 if ($action === 'duplicate' && $id > 0) {
     require_sesskey();
     require_capability('local/catquizlab:edit', $context);
+    // A copy is made by its button (a POST), not by following a link (#129).
+    if (!data_submitted()) {
+        redirect($manageurl, get_string('manage:postonly', $component), null, \core\output\notification::NOTIFY_WARNING);
+    }
     $copyid = experiment_service::duplicate($id);
     redirect(
         new moodle_url('/local/catquizlab/experiment.php', ['id' => $copyid]),

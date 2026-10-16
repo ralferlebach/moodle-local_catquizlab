@@ -229,7 +229,7 @@ test.describe('CatQuizLab, through the interface', () => {
         await expect(page.locator('body')).toContainText(name);
 
         const prepare = page.locator('button[type=submit]', {
-            hasText: /Prepare experiment|Experiment vorbereiten/,
+            hasText: /Create runs|Läufe anlegen|Prepare experiment|Experiment vorbereiten/,
         }).first();
         await expect(prepare).toBeVisible();
         await prepare.click();
@@ -240,7 +240,7 @@ test.describe('CatQuizLab, through the interface', () => {
         await expect(page.locator('body')).not.toContainText(/Preparation stopped|Vorbereitung gestoppt/);
 
         const start = page.locator('button[type=submit]', {
-            hasText: /Run experiment|Experiment ausführen/,
+            hasText: /Start experiment|Experiment starten|Run experiment|Experiment ausführen/,
         }).first();
         await expect(start).toBeVisible();
         await start.click();

@@ -43,7 +43,10 @@
     * overview array of { count int, label string, url string, class string }
     * environment object - has items array of { text string, class string }
     * disabled bool - true when the master switch is off
-    * experiments object - has hasany bool and rows array
+    * experiments object - hasany, none, nomatch, library (q, hassearch, sorts, actionurl, reseturl, total, shown),
+      rows of id, name, editurl, state, statebadge, phase, progress, hasprogress, percent, tierlabel,
+      modellabel, strategylabel, cells, runs, modified, main (label, url), more (label, url, link|post, id, action,
+      sesskey), candelete, deleteurl (#129)
     * runs object - has hasany bool, hassummary bool, summary string, rows array
 
     Example context (json):
@@ -65,12 +68,22 @@
             "items": [ { "text": "CAT engine detected", "class": "text-success" } ]
         },
         "disabled": false,
-        "experiments": { "hasany": false, "rows": [] },
+        "experiments": { "hasany": true, "none": false, "nomatch": false,
+            "library": {"q": "", "hassearch": false, "sorts": [{"key": "modified", "label": "Last change", "selected": true}],
+                "actionurl": "/local/catquizlab/index.php", "reseturl": "/local/catquizlab/index.php?tab=experiments",
+                "total": 1, "shown": 1},
+            "rows": [{"id": 1, "name": "Pilot", "editurl": "#", "state": "Collecting sittings", "statebadge": "badge-info",
+                "phase": "collecting", "progress": "28 of 40 sittings (70 %)", "hasprogress": true, "percent": 70,
+                "tierlabel": "Smoke", "modellabel": "2PL", "strategylabel": "CAT", "cells": 2, "runs": 2,
+                "modified": "13/10/26", "main": {"label": "View progress", "url": "#"},
+                "more": [{"label": "Compare", "url": "#", "link": true}], "candelete": true, "deleteurl": "#"}
+            ]
+        },
         "runs": { "hasany": false, "hassummary": false, "summary": "", "rows": [] }
     }
 }}
 <div class="local-catquizlab-manage">
-    <div class="row">
+    <div class="row mx-0">
         <div class="col-lg-8">
             <p class="text-muted">{{intro}}</p>
 
@@ -145,50 +158,98 @@
 }}
 
 {{#experiments}}
-        <h2 class="h4">{{#str}}manage:experiments, local_catquizlab{{/str}}</h2>
+        <h2 class="h4" id="experiments">{{#str}}manage:experiments, local_catquizlab{{/str}}</h2>
+        {{! The library (#129): search and sort, one main action per row, the rest under More, delete apart. }}
+        {{^none}}
+        {{#library}}
+            <form method="get" action="{{actionurl}}" class="form-inline mb-2" role="search" data-region="catquizlab-library-search">
+                <input type="hidden" name="tab" value="experiments">
+                <label for="catquizlab-library-q" class="mr-2">{{#str}}manage:search, local_catquizlab{{/str}}</label>
+                <input type="search" name="q" id="catquizlab-library-q" value="{{q}}" class="form-control form-control-sm mr-2">
+                <label for="catquizlab-library-sort" class="mr-2">{{#str}}manage:sort, local_catquizlab{{/str}}</label>
+                <select name="sort" id="catquizlab-library-sort" class="custom-select custom-select-sm mr-2">
+                    {{#sorts}}<option value="{{key}}" {{#selected}}selected{{/selected}}>{{label}}</option>{{/sorts}}
+                </select>
+                <button type="submit" class="btn btn-sm btn-secondary">{{#str}}manage:apply, local_catquizlab{{/str}}</button>
+                {{#hassearch}}<a href="{{reseturl}}" class="btn btn-sm btn-link">{{#str}}filter:reset, local_catquizlab{{/str}}</a>{{/hassearch}}
+                <span class="small text-muted ml-2" data-region="catquizlab-library-count">{{#str}}manage:shownof, local_catquizlab, { "shown": {{shown}}, "total": {{total}} }{{/str}}</span>
+            </form>
+        {{/library}}
+        {{/none}}
         {{#hasany}}
-            <table class="generaltable table-sm">
+            <div class="table-responsive">
+            <table class="generaltable table-sm" data-region="catquizlab-library">
                 <caption class="sr-only">{{#str}}manage:experiments, local_catquizlab{{/str}}</caption>
                 <thead>
                     <tr>
                         <th scope="col">{{#str}}manage:col_name, local_catquizlab{{/str}}</th>
-                        <th scope="col">{{#str}}manage:col_tier, local_catquizlab{{/str}}</th>
-                        <th scope="col">{{#str}}manage:col_model, local_catquizlab{{/str}}</th>
-                        <th scope="col">{{#str}}manage:col_strategy, local_catquizlab{{/str}}</th>
                         <th scope="col">{{#str}}manage:col_status, local_catquizlab{{/str}}</th>
-                        <th scope="col">{{#str}}manage:col_cells, local_catquizlab{{/str}}</th>
-                        <th scope="col">{{#str}}manage:col_runs, local_catquizlab{{/str}}</th>
+                        <th scope="col">{{#str}}manage:col_design, local_catquizlab{{/str}}</th>
                         <th scope="col">{{#str}}manage:col_modified, local_catquizlab{{/str}}</th>
                         <th scope="col">{{#str}}manage:col_actions, local_catquizlab{{/str}}</th>
+                        <th scope="col"><span class="sr-only">{{#str}}manage:col_delete, local_catquizlab{{/str}}</span></th>
                     </tr>
                 </thead>
                 <tbody>
                     {{#rows}}
-                        <tr>
+                        <tr data-experiment="{{id}}" data-phase="{{phase}}">
+                            <th scope="row"><a href="{{editurl}}">{{name}}</a></th>
                             <td>
-                                <a href="{{editurl}}">{{name}}</a>
+                                <span class="badge {{statebadge}}">{{state}}</span>
+                                {{#hasprogress}}
+                                    <div class="small text-muted">{{progress}}</div>
+                                {{/hasprogress}}
+                            </td>
+                            <td class="small">
+                                {{strategylabel}} · {{modellabel}} · {{tierlabel}}
+                                <div class="text-muted">{{#str}}manage:scope, local_catquizlab, { "cells": "{{cells}}", "runs": {{runs}} }{{/str}}</div>
+                            </td>
+                            <td class="small">{{modified}}</td>
+                            <td class="text-nowrap">
+                                <a href="{{main.url}}" class="btn btn-sm btn-primary" data-region="catquizlab-library-main">{{main.label}}</a>
+                                <details class="d-inline-block align-top ml-1" data-region="catquizlab-library-more">
+                                    <summary class="btn btn-sm btn-outline-secondary">{{#str}}manage:more, local_catquizlab{{/str}}</summary>
+                                    <ul class="list-unstyled border rounded bg-white p-1 mt-1 mb-0">
+                                        {{#more}}
+                                            <li>
+                                                {{#link}}<a href="{{url}}" class="btn btn-sm btn-link">{{label}}</a>{{/link}}
+                                                {{#post}}
+                                                    <form method="post" action="{{url}}" class="d-inline">
+                                                        <input type="hidden" name="id" value="{{id}}">
+                                                        <input type="hidden" name="action" value="{{action}}">
+                                                        <input type="hidden" name="sesskey" value="{{sesskey}}">
+                                                        <button type="submit" class="btn btn-sm btn-link">{{label}}</button>
+                                                    </form>
+                                                {{/post}}
+                                            </li>
+                                        {{/more}}
+                                    </ul>
+                                </details>
+                            </td>
+                            <td class="text-right">
                                 {{#candelete}}
-                                    <a href="{{deleteurl}}" class="small text-danger ml-2">
-                                        {{#str}}purge:deletefull, local_catquizlab{{/str}}
+                                    <a href="{{deleteurl}}" class="btn btn-sm btn-outline-danger" data-region="catquizlab-library-delete"
+                                       aria-label="{{#str}}manage:deletenamed, local_catquizlab, {{name}}{{/str}}">
+                                        {{#str}}manage:delete, local_catquizlab{{/str}}
                                     </a>
                                 {{/candelete}}
                             </td>
-                            <td>{{tierlabel}}</td>
-                            <td>{{modellabel}}</td>
-                            <td>{{strategylabel}} <span class="text-muted small">({{strategy}})</span></td>
-                            <td><span class="badge {{statusclass}}">{{status}}</span></td>
-                            <td>{{cells}}</td>
-                            <td>{{runs}}</td>
-                            <td>{{modified}}</td>
-                            <td>{{{actions}}}</td>
                         </tr>
                     {{/rows}}
                 </tbody>
             </table>
+            </div>
         {{/hasany}}
-        {{^hasany}}
-            <div class="alert alert-info">{{#str}}manage:noexperiments, local_catquizlab{{/str}}</div>
-        {{/hasany}}
+        {{#none}}
+            <div class="alert alert-info" data-region="catquizlab-library-empty">{{#str}}manage:noexperiments, local_catquizlab{{/str}}
+                {{#canedit}}<a href="{{newurl}}" class="btn btn-sm btn-primary ml-2">{{#str}}shell:newexperiment, local_catquizlab{{/str}}</a>{{/canedit}}
+            </div>
+        {{/none}}
+        {{#nomatch}}
+            <div class="alert alert-secondary" data-region="catquizlab-library-nomatch">{{#str}}manage:nomatch, local_catquizlab, {{library.q}}{{/str}}
+                <a href="{{library.reseturl}}">{{#str}}filter:reset, local_catquizlab{{/str}}</a>
+            </div>
+        {{/nomatch}}
     {{/experiments}}
 
 </div>

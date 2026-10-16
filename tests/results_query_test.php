@@ -307,6 +307,9 @@ final class results_query_test extends \advanced_testcase {
         $this->assertSame(4, $provenance['runs']);
         $this->assertSame(12, $provenance['attempts']);
         $this->assertSame(2, $provenance['replications']);
+        // The same three twins under both strategies, in each of two replications: six people, two cells (#127).
+        $this->assertSame(6, $provenance['people']);
+        $this->assertSame(2, $provenance['cells']);
         $this->assertSame(results_query::DISPERSION_CI95, $provenance['dispersion']);
     }
 

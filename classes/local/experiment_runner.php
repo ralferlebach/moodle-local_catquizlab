@@ -234,8 +234,9 @@ class experiment_runner {
             $attempts['planned'] = $DB->count_records_select('local_catquizlab_attempt', 'runid ' . $insql, $params);
             $attempts['collected'] = $DB->count_records_select(
                 'local_catquizlab_attempt',
-                'runid ' . $insql . ' AND status = :collected',
-                $params + ['collected' => attempt_scheduler::STATUS_COLLECTED]
+                'runid ' . $insql . ' AND status IN (:collected, :validated)',
+                $params + ['collected' => attempt_scheduler::STATUS_COLLECTED,
+                    'validated' => attempt_scheduler::STATUS_VALIDATED]
             );
         }
 

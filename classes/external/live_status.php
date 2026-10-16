@@ -73,6 +73,8 @@ class live_status extends external_api {
 
         $workers = worker_registry::summary();
         $breakdown = attempt_scheduler::queue_breakdown($experimentid);
+        // One snapshot per poll, for every region that shows the experiment (#128).
+        $status = \local_catquizlab\local\experiment_status::snapshot($experimentid, true);
         $verdict = situation::assess($experimentid, $breakdown);
 
         // Scoped to the experiment in view. Counting the whole installation
@@ -119,8 +121,13 @@ class live_status extends external_api {
             // questions a few seconds apart.
             'runs'           => self::run_rows($experimentid),
             'experiment'     => self::experiment_summary($experimentid),
-            'progress'       => live_progress::snapshot($experimentid),
-        ];
+            'progress'       => $status !== null
+                ? ['label' => $status['label'], 'reason' => $status['reason']] + $status['progress']
+                : live_progress::snapshot($experimentid),
+        ] + ($status !== null ? [
+            // The experiment's status bar (#128), from the same snapshot.
+            'status'         => self::status_view($status),
+        ] : []);
     }
 
     /**
@@ -184,20 +191,40 @@ class live_status extends external_api {
      * @return array
      */
     protected static function experiment_summary(int $experimentid): array {
-        if ($experimentid === 0) {
+        $status = \local_catquizlab\local\experiment_status::snapshot($experimentid);
+        if ($status === null) {
             return ['state' => '', 'label' => '', 'done' => 0, 'total' => 0, 'percent' => 0];
         }
 
-        $state = \local_catquizlab\local\experiment_runner::state($experimentid);
-        $done = (int) $state['attempts']['collected'];
-        $total = (int) $state['attempts']['planned'];
-
+        // The one status (#128): the runner's own label said "Running" while
+        // the header said "Blocked".
         return [
-            'state'   => (string) $state['state'],
-            'label'   => (string) $state['label'],
-            'done'    => $done,
-            'total'   => $total,
-            'percent' => $total > 0 ? (int) round(($done / $total) * 100) : 0,
+            'state'   => (string) $status['phase'],
+            'label'   => (string) $status['label'],
+            'done'    => (int) $status['done'],
+            'total'   => (int) $status['total'],
+            'percent' => (int) $status['percent'],
+        ];
+    }
+
+    /**
+     * The status bar's fields, as the poll serves them.
+     *
+     * @param array $status experiment_status::snapshot().
+     * @return array
+     */
+    protected static function status_view(array $status): array {
+        return [
+            'phase'       => (string) $status['phase'],
+            'label'       => (string) $status['label'],
+            'sittings'    => (string) $status['sittings'],
+            'problems'    => (int) $status['problems'],
+            'problemtext' => (string) $status['problemtext'],
+            'reason'      => (string) $status['reason'],
+            'technical'   => (string) $status['technical'],
+            'computed'    => (int) $status['computed'],
+            'computedtext' => (string) $status['computedtext'],
+            'next'        => (string) $status['next']['kind'],
         ];
     }
 
@@ -330,7 +357,48 @@ class live_status extends external_api {
                     'collected' => new external_value(PARAM_INT, 'Sittings done.'),
                     'failed'    => new external_value(PARAM_INT, 'Sittings failed for good.'),
                 ], 'What is happening this second.'),
+                // Started, elapsed, finish, remaining (#125): computed on the
+                // server with each poll, so a reload cannot move the start.
+                'time'         => new external_single_structure([
+                    'reliability' => new external_value(PARAM_ALPHA, 'How far to trust the times.'),
+                    'computed'    => new external_value(PARAM_INT, 'When this snapshot was taken.'),
+                    'text'        => new external_single_structure([
+                        'started'   => new external_value(PARAM_TEXT, 'Started, with the time zone.'),
+                        'elapsed'   => new external_value(PARAM_TEXT, 'Elapsed.'),
+                        'finish'    => new external_value(PARAM_TEXT, 'Estimated or actual finish.'),
+                        'remaining' => new external_value(PARAM_TEXT, 'Remaining, with its range.'),
+                        'status'    => new external_value(PARAM_TEXT, 'How far to trust it.'),
+                        'reason'    => new external_value(PARAM_TEXT, 'Why there is no running estimate.'),
+                        'method'    => new external_value(PARAM_TEXT, 'How it was computed.'),
+                        'computed'  => new external_value(PARAM_TEXT, 'The snapshot time.'),
+                    ]),
+                    'runs'        => new \core_external\external_multiple_structure(
+                        new external_single_structure([
+                            'runid'       => new external_value(PARAM_INT, 'The run.'),
+                            'reliability' => new external_value(PARAM_ALPHA, 'How far to trust it.'),
+                            'text'        => new external_single_structure([
+                                'started'   => new external_value(PARAM_TEXT, 'Started.'),
+                                'elapsed'   => new external_value(PARAM_TEXT, 'Elapsed.'),
+                                'remaining' => new external_value(PARAM_TEXT, 'Remaining.'),
+                                'finish'    => new external_value(PARAM_TEXT, 'Finish.'),
+                            ]),
+                        ]),
+                        'Per run.'
+                    ),
+                ], 'The times.'),
             ], 'The progress snapshot the page renders from.'),
+            'status'         => new external_single_structure([
+                'phase'        => new external_value(PARAM_ALPHA, 'The phase.'),
+                'label'        => new external_value(PARAM_TEXT, 'The phase, in words.'),
+                'sittings'     => new external_value(PARAM_TEXT, 'Sittings done of planned.'),
+                'problems'     => new external_value(PARAM_INT, 'Sittings failed for good plus runs held.'),
+                'problemtext'  => new external_value(PARAM_TEXT, 'The problems, in words.'),
+                'reason'       => new external_value(PARAM_TEXT, 'Why, where the phase needs one.'),
+                'technical'    => new external_value(PARAM_TEXT, 'Worker figures, apart.'),
+                'computed'     => new external_value(PARAM_INT, 'When the snapshot was taken.'),
+                'computedtext' => new external_value(PARAM_TEXT, 'That time, in words.'),
+                'next'         => new external_value(PARAM_ALPHA, 'The kind of the next step.'),
+            ], 'The experiment status bar (#128).', VALUE_OPTIONAL),
             'experiment'     => new external_single_structure([
                 'state'   => new external_value(PARAM_TEXT, 'The experiment state.'),
                 'label'   => new external_value(PARAM_TEXT, 'That state, in words.'),

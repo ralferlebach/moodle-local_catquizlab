@@ -118,6 +118,15 @@ class worker_heartbeat extends external_api {
         $stopping = in_array((string) $params['state'], ['stopping', 'stopped'], true);
         $why = (string) $params['reason'];
 
+        // Above the limit in force — lowered, capped or throttled — and not
+        // yet asked: drain now, which asks every worker above it once (#124).
+        if (
+            $known && !$stopping && !worker_registry::stop_requested((string) $params['workerid'])
+                && !\local_catquizlab\local\worker_capacity::may_claim((string) $params['workerid'])
+        ) {
+            \local_catquizlab\local\worker_capacity::drain();
+        }
+
         if ($stopping) {
             worker_registry::record_stop((string) $params['workerid'], $why);
 

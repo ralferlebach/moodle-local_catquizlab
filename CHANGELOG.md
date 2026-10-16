@@ -6,6 +6,165 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.7.39] — 2026-10-13 — #127 statistics, #125 ETA, #124 worker capacity, #128 status, #130 results, #126 levels, #129 library, #131 logs
+
+Upgrade: new field `local_catquizlab_worker.timestarted` (step 2026101302), an index on attemptlog (timecreated, outcome) (step 2026101303) and
+new setting `worker_safety_cap` (0 = none). Gates: PHPUnit, Behat, Playwright
+(new: `statistics`, `progress_time`, `status_bar`, `results_ux`,
+`sweep_levels`, `library`, `logs_ux`), worker tests, phpcs.
+
+### #131 — Logs: quick filters, advanced filters folded, deep links, one selection, no secrets
+
+- Quick filters above the form: errors, warnings, run lifecycle, workers,
+  attempts, reset — one click each, keeping experiment, run and time window.
+- The rarer filters are folded as "Advanced filters" and open when one is set.
+  The experiment and the user are carried along: applying a filter used to
+  drop them.
+- Error and warning lines show their short part; the JSON or trace is folded in
+  the same line. The time zone is named on the page and in both downloads.
+- Empty log told apart: nothing logged at all, no line matching the filters
+  (with reset), nothing in this time window.
+- What copy, TXT and JSON hold is said under the buttons.
+- Tokens, session keys, passwords, cookies and authorisation headers are
+  removed from every line shown, copied or downloaded.
+- A run paused by the circuit breaker shows its card with the cause, the way to
+  its warnings and errors in the log, and "reset and continue" — since 0.7.38
+  it read "waiting for a worker".
+- `docs/dev/logs-bedienung.md`.
+
+### #129 — The experiment library: one main action, More, delete apart, search and sort
+
+- Each row: name, state in words with its sittings (running ones show how far,
+  not worker figures), design (strategy, model, tier, cells, runs), last
+  change, one main action fitting the state (Open, View progress, View
+  results), and "More ▾" with Results, Compare, Duplicate, Export JSON.
+- Delete is a button of its own at the end of the row, shown only with the
+  purge capability (it was shown with execute, which the delete page then
+  refused). It leads to the page that shows what goes and asks for the name.
+- Deleting and duplicating happen by POST only: a GET carrying the typed
+  name, or a duplicate link, changes nothing.
+- Search by name and sort by last change, name or state; "no experiment
+  matches" with a way back; an empty library offers "New experiment".
+- "New experiment" is a primary button beside the experiment selector.
+- The library no longer overflows on a phone.
+
+### #126 — Varied factors as levels: folded when unused, rows instead of textareas, nothing dropped
+
+- The four sweep textareas (global and subscale budgets, SE window,
+  disturbance strength) are in a folded section "Vary further factors
+  (optional)", which opens once a factor has levels. Empty says "Not varied —
+  the value above applies".
+- In the browser each is an editor: one row per level, add and remove, checked
+  per row with the message beside it. The textarea underneath stays the value
+  sent, in the same lines: save, reload and copy lose nothing.
+- Every non-empty line that cannot be read is refused with its line number,
+  in the browser (format) and on the server (format and content: whole
+  numbers, min ≤ max, at least one item, SE above 0, share up to 100 %, known
+  keys, no duplicates). It used to be dropped without a word.
+- A varied factor hides its single value above and says so.
+- `docs/dev/sweep-stufen.md`.
+
+### #130 — Results: a compact analysis basis, empty states told apart, one download menu
+
+- The page title comes first. The completeness box and the reproducibility
+  button that stood above it are in the analysis basis now.
+- Above the figures: short warnings for an incomplete design (collected of
+  planned, failed for good, the way to the open runs) and, under the engine's
+  rule, a missing engine verdict — told apart. Then the basis in one line and
+  the validity choice. Population, the funnel from plan to valid, abilities,
+  stop rules, completeness and the reproducibility package are under
+  "Analysis basis ▸".
+- Empty states told apart: no matching runs, no runs, not started, nothing
+  collected yet, collected but none valid (with the reasons), no engine
+  verdict (with the way to the uniform rule). "No results yet — nothing has
+  been collected" no longer appears under "250 collected, none valid".
+- Each figure's downloads under one "Download ▾" menu (SVG, PNG, PDF, CSV),
+  usable by keyboard and without script; the plot settings beside it.
+- `cli/seed_results.php --invalid`; `docs/dev/ergebnisse-basis.md`.
+
+### #128 — One status per experiment, the one next step, words instead of "Show"
+
+- A status bar under the five tabs for the experiment in view: name, phase in
+  words (planned, ready, queued, collecting, waiting, paused, needs attention,
+  computing results, complete, complete with failed sittings), sittings done of
+  planned, problems (sittings failed for good, runs held), when it was taken,
+  the worker figures apart, and the one next step the phase allows.
+- Header, progress card, run summary and the live poll read one snapshot
+  (`experiment_status`): they can no longer say "Running", "Blocked" and
+  "working" side by side.
+- "Start" only when the experiment is ready and not yet queued: no "Run
+  experiment" beside "Queued", no second start.
+- Without a chosen experiment the installation line reads in words; it showed
+  the internal state ("working", "failing") because the template read fields
+  the verdict did not have.
+- An experiment whose remaining sittings had all failed for good stayed
+  "Waiting" for ever; it is now complete, with failures.
+- "Show" replaced by what it shows: execution details, this level, this
+  sitting, worker details.
+- `docs/dev/status-snapshot.md`.
+
+### #124 — The worker limit holds: draining, safety cap, load guard, real uptime
+
+- Cause of 248 workers at `worker_concurrency = 50`: the launcher counted free
+  places only up to the limit. After 250 → 50 the workers in slots 51–250 went
+  on, and each tick started new ones below 50. Every live worker now counts.
+- A lowered limit drains: workers above it finish the sitting they are playing
+  and stop — never killed. They get no new claim; their heartbeat says stop.
+  On saving the settings, on every launcher tick and on the heartbeat of a
+  worker above the limit; once per worker.
+- New setting `worker_safety_cap` (0 = none): an upper bound from a
+  measurement of what the web server carries.
+- Load guard: five or more capacity failures (5xx, connection timeouts and
+  failures, also reconciled ones) making up a fifth of the last five minutes'
+  executions halve the limit for ten minutes.
+- The worker card names configured, in force, live, playing, starting,
+  waiting, draining and free places, and why the limit is lower; worker
+  details are folded; a draining worker says so.
+- Uptime is the process's: new field `timestarted`, set whenever a process
+  takes its slot (the row is reused by a restarting identity).
+- Installation events in the log (`capacity_changed`, `workers_draining`,
+  `load_throttled`, `load_released`); `cli/capacity_report.php` as evidence
+  before and after a change. `docs/dev/worker-kapazitaet.md`, with a
+  measurement protocol for the target server.
+
+### #125 — Started, elapsed, estimated finish and remaining
+
+- The progress card shows when the experiment started (first recorded
+  execution, with the viewer's time zone), how long it has been going, when it
+  will probably finish and how long is left — with a range, and "how this is
+  estimated" one click away. The same per run, in a table that folds when an
+  experiment has more than eight runs.
+- The estimate rests on each run's own observed duration (strategies differ
+  a lot), the queue order, and the capacity the experiment actually got in the
+  last ten minutes — not the configured worker count. A run not yet observed
+  takes its strategy's or the experiment's mean, and the estimate says it is
+  provisional.
+- "Calculating…" until three sittings have finished; no running forecast while
+  a run is held, paused, or nothing moves — with the reason. Once everything
+  is done, the recorded end is shown and nothing counts down.
+- The start is read from the execution history: a reload or a poll cannot move
+  it. Each snapshot carries its time; a failed poll marks the figures as
+  possibly out of date at once.
+- Run progress per run on the progress card was never rendered (`runs.length`
+  does not exist in server-side Mustache); it is now.
+- Sittings in status "validated" count as collected in the run counts.
+- Method: `docs/dev/eta-methode.md`. Seeds: `cli/seed_progress.php`.
+
+### #127 — Runs, sittings and people counted apart; intervals over the right unit
+
+- The group tables counted sittings in their "Runs" column: one run of 250
+  sittings read "250 runs". They now show Runs, Sittings and People apart.
+- The basis line above every tab names sittings, simulated people, runs,
+  replications and experimental cells, and the uncertainty method.
+- Intervals are taken over the independent unit, the simulated person (a twin
+  in a replication): a person with several sittings — paired across strategies,
+  or repeated — counts once, its standard error from the person means. The text
+  no longer claims an interval "over replications".
+- Fewer than two people: no interval, shown as "CI n/a".
+- Export metadata: `people`, `cells` and `uncertainty` (interval, unit,
+  standard-error formula).
+- Methodology: `docs/dev/statistik-einheiten.md`.
+
 ## [0.7.38] — 2026-10-13 — #133 lease and circuit breaker, #134 answer submissions, #123 parameter chain, #114
 
 ### #133 — A technical pause is not a failed run; leases are kept and reconciled

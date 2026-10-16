@@ -135,6 +135,25 @@ const poll = async() => {
         // The progress snapshot: the same numbers the page was rendered with,
         // recomputed server-side. There is no arithmetic on this side, so the
         // header and the rows cannot drift apart.
+        // The experiment's status bar (#128): the same snapshot as everything
+        // below. A different next step means a different button: reloaded.
+        if (status.status) {
+            const bar = document.querySelector('[data-region="catquizlab-status"]');
+            if (bar) {
+                if (bar.getAttribute('data-next') && bar.getAttribute('data-next') !== status.status.next) {
+                    window.location.reload();
+                    return;
+                }
+                bar.setAttribute('data-phase', status.status.phase);
+            }
+            setRegion('catquizlab-status-label', status.status.label);
+            setRegion('catquizlab-status-sittings', status.status.sittings);
+            setRegion('catquizlab-status-problems', status.status.problemtext);
+            setRegion('catquizlab-status-reason', status.status.reason);
+            setRegion('catquizlab-status-asof', status.status.computedtext);
+            setRegion('catquizlab-status-technical', status.status.technical);
+        }
+
         if (status.progress) {
             setRegion('catquizlab-progress-label', status.progress.label);
             setRegion('catquizlab-progress-count', `${status.progress.done} / ${status.progress.total}`);
@@ -145,6 +164,29 @@ const poll = async() => {
                 overall.style.width = `${status.progress.percent}%`;
                 overall.setAttribute('aria-valuenow', String(status.progress.percent));
             }
+
+            // The times (#125): text from the server, nothing computed here.
+            const time = status.progress.time;
+            if (time) {
+                setRegion('catquizlab-eta-started', time.text.started);
+                setRegion('catquizlab-eta-elapsed', time.text.elapsed);
+                setRegion('catquizlab-eta-finish', time.text.finish);
+                setRegion('catquizlab-eta-remaining', time.text.remaining);
+                setRegion('catquizlab-eta-status', time.text.status);
+                setRegion('catquizlab-eta-reason', time.text.reason);
+                setRegion('catquizlab-eta-method', time.text.method);
+                setRegion('catquizlab-eta-asof', M.util.get_string('eta:asof', 'local_catquizlab', time.text.computed));
+                const box = document.querySelector('[data-region="catquizlab-eta"]');
+                if (box) {
+                    box.setAttribute('data-reliability', time.reliability);
+                }
+                (time.runs || []).forEach((run) => {
+                    setRegion(`catquizlab-run-${run.runid}-started`, run.text.started);
+                    setRegion(`catquizlab-run-${run.runid}-elapsed`, run.text.elapsed);
+                    setRegion(`catquizlab-run-${run.runid}-remaining`, run.text.remaining);
+                });
+            }
+            setRegion('catquizlab-eta-stale', '');
 
             (status.progress.runs || []).forEach((run) => {
                 setRegion(`catquizlab-run-${run.runid}-progress`, `${run.done} / ${run.total}`);
@@ -178,6 +220,9 @@ const poll = async() => {
         // that had quietly stopped being live, which is worse than a transient
         // network error: they read stale numbers as current ones.
         failures++;
+
+        // The figures on the page are now older than they look (#125).
+        setRegion('catquizlab-eta-stale', M.util.get_string('eta:stale', 'local_catquizlab'));
 
         if (failures >= 3) {
             setRegion('catquizlab-liveerror', M.util.get_string('live:interrupted', 'local_catquizlab'));

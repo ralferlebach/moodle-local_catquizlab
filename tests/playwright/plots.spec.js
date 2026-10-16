@@ -76,8 +76,12 @@ test('plots follow the conventions: symmetric axes, 0 in the middle, a 45° diag
 
     // What the plot is based on, and its exports.
     await expect(page.locator('[data-region="catquizlab-plot-basis"]').first()).toContainText(/Data|Daten/);
-    for (const kind of ['svg', 'csv', 'json', 'png', 'pdf']) {
-        await expect(page.locator('[data-download="' + kind + '"]').first()).toBeVisible();
+    // Under one "Download" menu (#130); the plot settings beside it.
+    await expect(page.locator('[data-download="json"]').first()).toBeVisible();
+    await page.locator('[data-region="catquizlab-download"] summary').first().click();
+    for (const kind of ['svg', 'csv', 'png', 'pdf']) {
+        await expect(page.locator('[data-region="catquizlab-download"]').first()
+            .locator('[data-download="' + kind + '"]')).toBeVisible();
     }
 
     // A single test: the step axis counts, the ability axis is symmetric.

@@ -22,7 +22,8 @@
  * runs. Prints PLOTS_EXPERIMENTID=<id>.
  *
  * Options: --persons=20 (sittings per run), --label=PLOTS (prints <label>_EXPERIMENTID):
- * --persons=2000 --label=LARGE is the large experiment of the export test (#121).
+ * --persons=2000 --label=LARGE is the large experiment of the export test (#121); --invalid --label=INVALID
+ * one whose sittings are collected and none valid (#130).
  *
  * @package    local_catquizlab
  * @copyright  2026 Ralf Erlebach
@@ -43,7 +44,9 @@ use local_catquizlab\local\test_flow;
 
 \core\session\manager::set_user(get_admin());
 
-[$options] = cli_get_params(['persons' => 20, 'label' => 'PLOTS']);
+[$options] = cli_get_params(['persons' => 20, 'label' => 'PLOTS', 'invalid' => false]);
+// Option --invalid: collected, but without a final ability — none of them valid (#130).
+$invalid = !empty($options['invalid']);
 $persons = max(1, (int) $options['persons']);
 $label = preg_replace('/[^A-Z0-9_]/', '', strtoupper((string) $options['label'])) ?: 'PLOTS';
 
@@ -74,6 +77,7 @@ foreach ($DB->get_records('local_catquizlab_run', ['experimentid' => $experiment
             $path[] = ['step' => $k + 1, 'abilities' => ['1' => $estimate, '5' => $estimate]];
         }
         $final = end($path)['abilities']['1'];
+        $finaltheta = $invalid ? [] : ['finaltheta' => $final];
         $information = 0.0;
         foreach ($played as $item) {
             $information += test_flow::item_information($item, $final);
@@ -90,7 +94,7 @@ foreach ($DB->get_records('local_catquizlab_run', ['experimentid' => $experiment
             'runid' => $run->id, 'personid' => $personid, 'status' => attempt_scheduler::STATUS_COLLECTED, 'tries' => 1,
             'runtimems' => 4000, 'timecreated' => time(), 'timemodified' => time(),
             'tracejson' => json_encode([
-                'finaltheta' => $final, 'finalse' => 1 / sqrt($information), 'information' => $information,
+                'finalse' => 1 / sqrt($information), 'information' => $information,
                 'items' => array_keys($played), 'nitems' => count($played),
                 'stopreason' => 'Reached maximum number of questions', 'scaleabilities' => [],
                 'abilitypath' => $path,
@@ -98,7 +102,7 @@ foreach ($DB->get_records('local_catquizlab_run', ['experimentid' => $experiment
                 'responses' => array_combine(array_map('intval', array_keys($played)), [1.0, 0.0, 1.0, 1.0, 0.0, 1.0]),
                 'progress' => ['playedquestions' => $played, 'responses' => [], 'activescales' => [5],
                     'droppedscales' => [], 'lockedscales' => []],
-            ]),
+            ] + $finaltheta),
         ]);
         attempt_history::record($attemptid, attempt_history::COLLECTED, ['tryno' => 1]);
         attempt_history::record_outcome_reason($attemptid, 'Reached maximum number of questions');

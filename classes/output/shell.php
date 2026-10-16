@@ -16,6 +16,7 @@
 
 namespace local_catquizlab\output;
 
+use local_catquizlab\local\experiment_status;
 use local_catquizlab\local\situation;
 
 /**
@@ -178,6 +179,17 @@ class shell {
 
         $verdict = situation::assess();
 
+        // One status for the experiment in view, from one snapshot (#128): the
+        // same the progress card, the run summary and the live poll show.
+        $status = experiment_status::snapshot($experimentid);
+        if ($status !== null) {
+            $next = $status['next'];
+            // The next step, unless it is only "go to the page you are on".
+            $status['shownext'] = $next['post'] || $next['kind'] === 'problems' || $next['step'] !== $current;
+            $status['badge'] = ['ok' => 'success', 'active' => 'info', 'warn' => 'warning', 'problem' => 'danger'][$status['tone']];
+            unset($status['progress'], $status['runner']);
+        }
+
         return [
             'title'        => get_string('pluginname', $component),
             'steps'        => $steps,
@@ -192,7 +204,10 @@ class shell {
                 ? (new \moodle_url('/local/catquizlab/experiment.php'))->out(false)
                 : '',
             'currentstep'  => $current,
-            'situation'    => $verdict,
+            // The installation's verdict where no experiment is chosen; with
+            // one, its status bar says what matters about it.
+            'situation'    => $status === null ? $verdict : null,
+            'status'       => $status,
             'settingsurl'  => (new \moodle_url('/local/catquizlab/index.php', ['tab' => 'settings']))->out(false),
         ];
     }

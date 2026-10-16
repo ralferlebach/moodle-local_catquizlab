@@ -59,6 +59,9 @@ class live_progress {
     /** @var string Everything done. */
     public const FINISHED = 'finished';
 
+    /** @var int More runs than this and the per-run table starts folded (#125). */
+    public const FOLD_RUNS = 8;
+
     /**
      * Everything a page needs to show progress, in one call.
      *
@@ -111,7 +114,7 @@ class live_progress {
         $workers = worker_registry::summary();
         $state = self::derive($runs, $totals, $workers, $experimentid);
 
-        return [
+        $snapshot = [
             'experimentid' => $experimentid,
             'state'        => $state['state'],
             'label'        => get_string('progress:state' . $state['state'], $component),
@@ -131,6 +134,18 @@ class live_progress {
                 'failed'    => $totals['failed'],
             ],
         ];
+        // The times rest on the same counts the bar shows (#125).
+        $snapshot['time'] = eta::estimate($experimentid, $snapshot);
+        $times = array_column($snapshot['time']['runs'], 'text', 'runid');
+        foreach ($snapshot['runs'] as $i => $row) {
+            $snapshot['runs'][$i]['time'] = $times[$row['runid']] ?? null;
+        }
+        // A long run list is folded; the overall figures are what is watched.
+        $snapshot['manyruns'] = count($snapshot['runs']) > self::FOLD_RUNS;
+        // Mustache in PHP has no ".length": the per-run table never rendered.
+        $snapshot['hasruns'] = $snapshot['runs'] !== [];
+
+        return $snapshot;
     }
 
     /**
@@ -164,7 +179,9 @@ class live_progress {
             ];
         }
 
-        if ($totals['total'] > 0 && $totals['done'] >= $totals['total']) {
+        // Nothing left to play: collected or failed for good. A run that ended
+        // with a failed sitting used to stay "Waiting" for ever (#128).
+        if ($totals['total'] > 0 && $totals['done'] + $totals['failed'] >= $totals['total']) {
             $aggregating = in_array(registry::STATUS_AGGREGATING, $statuses, true);
 
             return [
@@ -267,6 +284,7 @@ class live_progress {
                 'collected' => 0,
                 'failed'    => 0,
             ],
+            'time'         => eta::estimate(0, []),
         ];
     }
 }

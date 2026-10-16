@@ -98,6 +98,8 @@ class log_view {
 
         foreach ($lines as &$line) {
             $line['stamp'] = self::stamp($line);
+            // Shown, copied, downloaded: never a token, a session key or a password (#131).
+            $line['text'] = self::redact((string) $line['text']);
         }
         unset($line);
 
@@ -213,6 +215,9 @@ class log_view {
             'from' => $since > 0 ? date('c', $since) : null,
             'to' => date('c', $until > 0 ? $until : time()),
             'order' => !empty($filter['newestfirst']) ? 'newest first' : 'oldest first',
+            // The time zone of the stamps (#131).
+            'timezone' => usertimezone(),
+            'redacted' => 'tokens, session keys, passwords, cookies and authorisation headers',
             'limit' => (int) $window['limit'],
             'count' => count($window['lines']),
             // Cut: there are older lines in the selection than the file holds.
@@ -221,6 +226,46 @@ class log_view {
             'partial' => (bool) $window['scan']['partial'],
             'scan' => $window['scan'],
         ];
+    }
+
+    /** @var string[] Patterns of secrets a log line must not carry, and what replaces them (#131). */
+    protected const REDACTIONS = [
+        '/\\b(wstoken|token|sesskey|password|passwd|secret|apikey|api_key|privatetoken)=([^&\\s"\'<>]+)/i' => '$1=[redacted]',
+        '/"(wstoken|token|sesskey|password|passwd|secret|apikey|api_key|privatetoken)"\\s*:\\s*"[^"]*"/i' => '"$1":"[redacted]"',
+        '/\\b(MoodleSession\\w*)=([^;\\s"\'<>]+)/' => '$1=[redacted]',
+        '/\\b(Authorization:\\s*(Bearer|Basic))\\s+\\S+/i' => '$1 [redacted]',
+        '/\\b(Cookie:)\\s*[^\\r\\n]+/i' => '$1 [redacted]',
+    ];
+
+    /**
+     * A line without the secrets it may carry: tokens, session keys, passwords, cookies (#131).
+     *
+     * @param string $text The line.
+     * @return string
+     */
+    public static function redact(string $text): string {
+        return (string) preg_replace(array_keys(self::REDACTIONS), array_values(self::REDACTIONS), $text);
+    }
+
+    /**
+     * A line split into what it says and its technical part (JSON or a trace), for folding (#131).
+     *
+     * @param string $text The line.
+     * @return array{0: string, 1: string} The head, and the detail ('' when none).
+     */
+    public static function split_detail(string $text): array {
+        $cut = null;
+        foreach ([' {', ' [{', ' Stack trace', ' #0 '] as $marker) {
+            $at = strpos($text, $marker);
+            if ($at !== false && $at > 0 && ($cut === null || $at < $cut)) {
+                $cut = $at;
+            }
+        }
+        if ($cut === null || strlen($text) - $cut < 40) {
+            return [$text, ''];
+        }
+
+        return [substr($text, 0, $cut), substr($text, $cut + 1)];
     }
 
     /** @var int A worker request that took this long, in milliseconds, is worth a warning. */
@@ -554,7 +599,9 @@ class log_view {
         $lines = [];
         foreach ($rows as $row) {
             $detail = json_decode((string) $row->detail, true) ?: [];
-            $text = 'run=' . $row->runid . ' attempt#' . $row->attemptno . ' ' . $row->event
+            // Run 0 is the installation: worker limit, draining, load guard (#124).
+            $text = ((int) $row->runid === 0 ? 'installation' : 'run=' . $row->runid . ' attempt#' . $row->attemptno)
+                . ' ' . $row->event
                 . ($row->stage ? ' stage=' . $row->stage : '')
                 . ($row->dbqueries ? ' queries=' . $row->dbqueries : '')
                 . ($detail !== [] ? ' ' . json_encode($detail, JSON_UNESCAPED_SLASHES) : '');
@@ -565,7 +612,8 @@ class log_view {
                 'failed'        => $row->event === run_log::STAGE_FAILED || $row->event === run_log::RUN_FAILED,
                 'severity'      => in_array($row->event, [run_log::STAGE_FAILED, run_log::RUN_FAILED], true)
                     ? self::ERROR
-                    : (in_array($row->event, [run_log::RUN_AUTOPAUSED, run_log::ABILITIES_OUTSIDE], true)
+                    : (in_array($row->event, [run_log::RUN_AUTOPAUSED, run_log::ABILITIES_OUTSIDE,
+                        run_log::WORKERS_DRAINING, run_log::LOAD_THROTTLED], true)
                         ? self::WARNING : self::INFO),
                 'action'        => (string) $row->event,
                 'attemptno'     => (int) ($row->attemptno ?? 0),

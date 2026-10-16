@@ -99,8 +99,9 @@ test('every download on the results pages delivers a usable file', async({page})
     await signin(page);
     const results = '/local/catquizlab/results.php?experimentid=' + EXPERIMENT;
 
-    // The reproducibility package: a POST button above the analyses.
+    // The reproducibility package: a POST button in the analysis basis (#130).
     await page.goto(results + '&tab=overview', {waitUntil: 'networkidle'});
+    await page.locator('[data-region="catquizlab-analysis-basis"] > summary').click();
     const pkg = await download(page, page.locator('form:has(input[name="action"][value="package"]) button[type="submit"]'));
     check(pkg);
     const content = JSON.parse(pkg.body.toString('utf8'));
@@ -124,6 +125,9 @@ test('every download on the results pages delivers a usable file', async({page})
     // Every plot's own downloads, on the tabs that have plots.
     for (const tab of ['overview', 'global', 'testflow']) {
         await page.goto(results + '&tab=' + tab, {waitUntil: 'networkidle'});
+        // The plot downloads sit in folded "Download" menus (#130): open them all.
+        await page.evaluate(() => document.querySelectorAll('[data-region="catquizlab-download"]')
+            .forEach((menu) => menu.setAttribute('open', '')));
         const controls = page.locator('[data-download]');
         const n = await controls.count();
         expect(n, tab + ' offers plot downloads').toBeGreaterThan(0);

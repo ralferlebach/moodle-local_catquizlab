@@ -9,8 +9,10 @@
 
     Classes required for JS: none.
     Data attributes required for JS:
-    * data-region="catquizlab-situation" - the state line, kept current by the
-      livestatus module.
+    * data-region="catquizlab-situation" - the installation's state line.
+    * data-region="catquizlab-status" (data-phase, data-next) and its
+      catquizlab-status-* regions - the experiment's status bar (#128), kept
+      current by the livestatus module.
 
     Context variables required for this template:
     * title - the plugin name
@@ -20,7 +22,9 @@
     * experimentid - the one in context, or 0
     * selecturl - where the selector posts
     * newurl - where a new experiment is started
-    * situation - state, reason and action for the installation
+    * situation - headline, detail, ok/warn/problem and action for the installation (no experiment chosen)
+    * status - the experiment's status (experiment_status::snapshot): name, phase, label, badge,
+      sittings, problemtext, hasproblems, reason, computedtext, technical, next, shownext
     * settingsurl - where settings live
 
     Example context (json):
@@ -35,7 +39,12 @@
         "newurl": "/local/catquizlab/experiment.php",
         "experimentid": 1,
         "selecturl": "/local/catquizlab/index.php",
-        "situation": {"level": "good", "good": true, "watch": false, "bad": false, "state": "Nothing queued", "reason": "", "action": null},
+        "situation": null,
+        "status": {"name": "Smoke Test 2", "phase": "collecting", "label": "Collecting sittings", "badge": "info",
+            "sittings": "28 of 40 sittings (70 %)", "problemtext": "No problems", "hasproblems": false, "reason": "",
+            "computedtext": "As of 13:20", "technical": "Workers: 2 live, 2 sittings in progress, 10 waiting",
+            "shownext": false, "next": {"kind": "progress", "label": "View progress", "url": "/local/catquizlab/runs.php", "post": false}
+        },
         "settingsurl": "/local/catquizlab/index.php?tab=settings"
     }
 }}
@@ -92,21 +101,58 @@
         whole job is to start them.
     }}
     {{#newurl}}
-        <a href="{{.}}" class="small">{{#str}}shell:newexperiment, local_catquizlab{{/str}}</a>
+        <a href="{{.}}" class="btn btn-sm btn-primary mb-2" data-region="catquizlab-new-experiment">{{#str}}shell:newexperiment, local_catquizlab{{/str}}</a>
     {{/newurl}}
 
+    {{! The installation, where no experiment is chosen. The template read
+        fields the verdict never had (state, reason, good/watch/bad): the bar
+        showed the internal word "working" or "failing" and nothing else (#128). }}
     {{#situation}}
-        <div class="alert {{#good}}alert-info{{/good}}{{#watch}}alert-warning{{/watch}}{{#bad}}alert-danger{{/bad}} py-2 mb-2"
+        <div class="alert {{#ok}}alert-info{{/ok}}{{#warn}}alert-warning{{/warn}}{{#problem}}alert-danger{{/problem}} py-2 mb-2"
              role="status" data-region="catquizlab-situation">
-            <div class="d-flex align-items-center justify-content-between">
+            <div class="d-flex align-items-center justify-content-between flex-wrap">
                 <div>
-                    <strong data-region="catquizlab-situation-state">{{state}}</strong>
-                    <span class="small" data-region="catquizlab-situation-reason">{{reason}}</span>
+                    <strong data-region="catquizlab-situation-state">{{headline}}</strong>
+                    <span class="small" data-region="catquizlab-situation-reason">{{detail}}</span>
                 </div>
                 {{#action}}<a href="{{url}}" class="btn btn-sm btn-primary ml-2">{{label}}</a>{{/action}}
             </div>
         </div>
     {{/situation}}
+
+    {{! The experiment in view (#128): name, phase, sittings, problems, the one next step. }}
+    {{#status}}
+        <section class="card mb-2 border-{{badge}}" data-region="catquizlab-status" data-phase="{{phase}}"
+                 data-next="{{next.kind}}" aria-labelledby="catquizlab-status-name">
+            <div class="card-body py-2 d-flex flex-wrap align-items-center justify-content-between">
+                <div class="mr-2">
+                    <h3 class="h6 d-inline mb-0" id="catquizlab-status-name">{{name}}</h3>
+                    <span class="badge badge-{{badge}} ml-1" data-region="catquizlab-status-label" role="status">{{label}}</span>
+                    <span class="ml-2" data-region="catquizlab-status-sittings">{{sittings}}</span>
+                    <span class="ml-2 {{#hasproblems}}text-danger{{/hasproblems}}{{^hasproblems}}text-muted{{/hasproblems}}"
+                          data-region="catquizlab-status-problems">{{problemtext}}</span>
+                    <div class="small text-muted">
+                        <span data-region="catquizlab-status-reason">{{reason}}</span>
+                        <span data-region="catquizlab-status-asof">{{computedtext}}</span>
+                        <span class="ml-2" data-region="catquizlab-status-technical">{{technical}}</span>
+                    </div>
+                </div>
+                {{#shownext}}
+                    {{#next.post}}
+                        <form method="post" action="{{next.url}}" class="d-inline" data-region="catquizlab-status-next">
+                            <input type="hidden" name="sesskey" value="{{next.sesskey}}">
+                            <input type="hidden" name="action" value="{{next.action}}">
+                            <input type="hidden" name="experimentid" value="{{next.experimentid}}">
+                            <button type="submit" class="btn btn-sm btn-primary">{{next.label}}</button>
+                        </form>
+                    {{/next.post}}
+                    {{^next.post}}
+                        <a href="{{next.url}}" class="btn btn-sm btn-primary" data-region="catquizlab-status-next">{{next.label}}</a>
+                    {{/next.post}}
+                {{/shownext}}
+            </div>
+        </section>
+    {{/status}}
 
 
 </div>

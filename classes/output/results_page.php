@@ -365,15 +365,25 @@ class results_page {
     /**
      * A statement of what the figures on this page rest on.
      *
+     * Compact on top (#130): the problems, a short warning where the design is
+     * incomplete or a verdict is missing, the basis in one line and the
+     * validity choice; everything needed to reproduce the figures — population,
+     * the funnel from plan to valid, abilities, stop rules, completeness and
+     * the reproducibility package — under "Analysis basis".
+     *
+     * @param int $experimentid The experiment, for completeness and the package; 0 for none.
      * @return string
      */
-    public function render_provenance(): string {
+    public function render_provenance(int $experimentid = 0): string {
         $component = 'local_catquizlab';
         $provenance = $this->query->provenance();
 
         // The population first, results or not: a plan the stored people do not
         // match is to be seen before there is anything to read (#117).
         [$problems, $population] = $this->render_population();
+        [$losses, $funnel] = $this->analysis_population_parts();
+        $warnings = $this->basis_warnings($experimentid);
+
         if ($provenance['attempts'] === 0) {
             // Collected, but nothing of it in this view (#112, #115): not
             // "nothing has been played". Forty sittings of which none is valid
@@ -382,44 +392,66 @@ class results_page {
             $counts = $this->query->validity_counts();
             if ($counts['total'] > 0) {
                 $mode = (string) ($this->filter['validity'] ?? 'valid');
-                return $problems . \html_writer::div(
-                    get_string($mode === 'invalid' ? 'results:noneinvalid' : 'results:nonevalid', $component, (object) [
-                        'total' => $counts['total'],
-                    ]),
-                    'alert alert-warning',
-                    ['data-region' => 'catquizlab-nonevalid']
-                ) . $population . $this->render_coverage() . $this->render_analysis_population();
+                $rule = (string) ($this->filter['validityrule'] ?? 'uniform');
+                // No engine verdict is not "invalid" (#130 AK 2): said apart,
+                // with the way to judge by the uniform rule.
+                $noverdict = $rule === 'engine' && $mode !== 'invalid' && $counts['enginevalid'] === 0
+                    && $counts['engineunknown'] > 0;
+                $message = $noverdict
+                    ? \html_writer::div(
+                        get_string('results:noverdict', $component, (object) [
+                        'total' => $counts['total'], 'unknown' => $counts['engineunknown'],
+                        ]) . ' ' . \html_writer::link(
+                            $this->with_filter(['validityrule' => 'uniform']),
+                            get_string('validity:switch_uniform', $component)
+                        ),
+                        'alert alert-warning',
+                        ['data-region' => 'catquizlab-noverdict', 'data-empty' => 'noverdict']
+                    )
+                    : \html_writer::div(
+                        get_string($mode === 'invalid' ? 'results:noneinvalid' : 'results:nonevalid', $component, (object) [
+                            'total' => $counts['total'],
+                        ]),
+                        'alert alert-warning',
+                        ['data-region' => 'catquizlab-nonevalid', 'data-empty' => $mode === 'invalid' ? 'noinvalid' : 'allexcluded']
+                    );
+
+                return $problems . $warnings . $losses . $message . $this->render_coverage()
+                    . $this->basis_details($experimentid, $population . $funnel);
             }
             // The two cases -- "nothing matches this filter" and "nothing has been run" -- look the
             // same from here and mean entirely different things. Saying which
             // one it is turns a dead end into a next step.
-            return $problems . \html_writer::div(
+            return $problems . $warnings . $losses . \html_writer::div(
                 $this->explain_absence(),
-                'alert alert-info'
-            ) . $population . $this->render_analysis_population();
+                'alert alert-info',
+                ['data-region' => 'catquizlab-absence', 'data-empty' => $this->empty_kind()]
+            ) . $this->basis_details($experimentid, $population . $funnel);
         }
 
-        $out = \html_writer::div(
+        $line = \html_writer::div(
             get_string('results:provenance', $component, (object) [
                 'runs'         => $provenance['runs'],
                 'attempts'     => $provenance['attempts'],
                 'replications' => $provenance['replications'],
+                'people'       => $provenance['people'],
+                'cells'        => $provenance['cells'],
                 'dispersion'   => get_string('dispersion:ci95', $component),
                 'computed'     => userdate($provenance['computed'], get_string('strftimedatetimeshort')),
             ]),
-            'small text-muted mb-1'
+            'small text-muted mb-1',
+            ['data-region' => 'catquizlab-basis-line']
         );
-
-        $out = $problems . $out . $population . $this->render_coverage() . $this->render_analysis_population();
 
         // What the ground truth was drawn from, named (#105): mean and
         // standard deviation, distribution and range of the selected runs.
+        $more = $population . $funnel;
         $abilities = [];
         foreach ($this->query->ability_distributions() as $text => $runs) {
             $abilities[] = s($text) . ' (' . get_string('results:stoprulesruns', $component, $runs) . ')';
         }
         if ($abilities !== []) {
-            $out .= \html_writer::div(
+            $more .= \html_writer::div(
                 get_string('results:abilities', $component) . ': ' . implode('; ', $abilities),
                 'small text-muted mb-1',
                 ['data-region' => 'catquizlab-abilities']
@@ -436,16 +468,141 @@ class results_page {
                 . ' (' . get_string('results:stoprulesruns', $component, $group['runs']) . ')', ['data-strategy' => $group['key']]);
         }
         if ($items !== '') {
-            $out .= \html_writer::div(
+            $more .= \html_writer::div(
                 \html_writer::tag('span', get_string('results:stoprules', $component), [
                     'title' => get_string('results:stoprulesexplain', $component),
                 ]) . \html_writer::tag('ul', $items, ['class' => 'mb-0']),
-                'small text-muted mb-3',
+                'small text-muted mb-2',
                 ['data-region' => 'catquizlab-stoprules']
             );
         }
 
+        return $problems . $warnings . $losses . $line . $this->render_coverage() . $this->basis_details($experimentid, $more);
+    }
+
+    /**
+     * Short warnings above the figures: an incomplete design, a missing verdict (#130 AK 2).
+     *
+     * @param int $experimentid The experiment, or 0.
+     * @return string
+     */
+    protected function basis_warnings(int $experimentid): string {
+        $component = 'local_catquizlab';
+        $out = '';
+        if ($experimentid > 0) {
+            $completeness = \local_catquizlab\local\reproducibility::completeness($experimentid);
+            if (!$completeness['complete'] && (int) $completeness['attempts']['planned'] > 0) {
+                $out .= \html_writer::div(
+                    get_string('basis:incomplete', $component, (object) [
+                        'collected' => (int) $completeness['attempts']['collected'],
+                        'planned' => (int) $completeness['attempts']['planned'],
+                        'failed' => (int) $completeness['attempts']['failed'],
+                    ]) . ($completeness['hasunfinished'] ? ' ' . \html_writer::link(
+                        $completeness['progressurl'],
+                        get_string('repro:openprogress', $component)
+                    ) : ''),
+                    'alert alert-warning py-2 small mb-1',
+                    ['data-region' => 'catquizlab-basis-incomplete', 'role' => 'status']
+                );
+            }
+        }
+        $rule = (string) ($this->filter['validityrule'] ?? 'uniform');
+        $counts = $this->query->validity_counts();
+        if ($rule === 'engine' && $counts['engineunknown'] > 0 && $counts['total'] > 0) {
+            $out .= \html_writer::div(
+                get_string('basis:verdictmissing', $component, (object) [
+                    'unknown' => $counts['engineunknown'], 'total' => $counts['total'],
+                ]),
+                'alert alert-secondary py-2 small mb-1',
+                ['data-region' => 'catquizlab-basis-verdict', 'role' => 'status']
+            );
+        }
+
         return $out;
+    }
+
+    /**
+     * "Analysis basis ▸": everything needed to reproduce the figures, folded.
+     *
+     * @param int $experimentid The experiment, or 0.
+     * @param string $content The population, funnel, abilities and stop rules.
+     * @return string
+     */
+    protected function basis_details(int $experimentid, string $content): string {
+        global $OUTPUT;
+
+        $component = 'local_catquizlab';
+        if ($experimentid > 0) {
+            $completeness = \local_catquizlab\local\reproducibility::completeness($experimentid);
+            $content .= \html_writer::div(
+                s(strip_tags($completeness['summary'])),
+                'small text-muted mb-2',
+                ['data-region' => 'catquizlab-completeness']
+            );
+            $content .= $OUTPUT->single_button(
+                new \moodle_url('/local/catquizlab/results.php', [
+                    'experimentid' => $experimentid, 'action' => 'package', 'sesskey' => sesskey(),
+                ]),
+                get_string('repro:download', $component),
+                'post'
+            );
+        }
+        if (trim($content) === '') {
+            return '';
+        }
+
+        return \html_writer::tag(
+            'details',
+            \html_writer::tag('summary', get_string('basis:heading', $component), ['class' => 'small'])
+                . \html_writer::div($content, 'mt-2'),
+            ['class' => 'mb-3', 'data-region' => 'catquizlab-analysis-basis']
+        );
+    }
+
+    /**
+     * Which empty state this view is in, where it has no sittings (#130).
+     *
+     * @return string nomatch, noruns, notstarted, nocollected, allexcluded, noverdict, noinvalid or '' (not empty).
+     */
+    public function empty_kind(): string {
+        if ($this->factor_mismatch() !== '') {
+            return 'nomatch';
+        }
+        if ($this->query->runs() === []) {
+            return 'noruns';
+        }
+        $counts = $this->query->validity_counts();
+        if ($counts['total'] === 0) {
+            $experimentid = (int) ($this->filter['experimentid'] ?? 0);
+            $status = $experimentid > 0 ? \local_catquizlab\local\experiment_status::snapshot($experimentid) : null;
+
+            return $status !== null && in_array($status['phase'], ['planned', 'preparing', 'ready', 'queued'], true)
+                ? 'notstarted' : 'nocollected';
+        }
+        if ($this->query->provenance()['attempts'] > 0) {
+            return '';
+        }
+        $mode = (string) ($this->filter['validity'] ?? 'valid');
+        if ($mode === 'invalid') {
+            return 'noinvalid';
+        }
+        $rule = (string) ($this->filter['validityrule'] ?? 'uniform');
+
+        return $rule === 'engine' && $counts['enginevalid'] === 0 && $counts['engineunknown'] > 0 ? 'noverdict' : 'allexcluded';
+    }
+
+    /**
+     * This page with some filter values changed.
+     *
+     * @param array $changes Parameter => value.
+     * @return \moodle_url
+     */
+    protected function with_filter(array $changes): \moodle_url {
+        return new \moodle_url('/local/catquizlab/results.php', array_merge(
+            array_filter($this->filter, static fn($v): bool => is_scalar($v) && (string) $v !== ''),
+            ['tab' => $this->tab],
+            $changes
+        ));
     }
 
     /** @var string[] The tabs whose figures are made of scale results as well. */
@@ -457,11 +614,20 @@ class results_page {
      * @return string
      */
     protected function render_analysis_population(): string {
+        return implode('', $this->analysis_population_parts());
+    }
+
+    /**
+     * The analysis population as two parts: the design-loss warning, and the funnel table, folded (#130).
+     *
+     * @return array{0: string, 1: string}
+     */
+    protected function analysis_population_parts(): array {
         $component = 'local_catquizlab';
         $population = \local_catquizlab\local\analysis_population::class;
         $funnel = $population::funnel($this->query);
         if ($funnel['scheduled'] === 0 && $funnel['planned'] === 0) {
-            return '';
+            return ['', ''];
         }
         $scales = in_array($this->tab, self::SCALE_TABS, true) ? $this->query->scale_coverage() : null;
         $percent = static fn(int $n, int $of): string => $of > 0 ? format_float(100 * $n / $of, 1) : '–';
@@ -476,10 +642,12 @@ class results_page {
             $out .= \html_writer::div(
                 \html_writer::tag('strong', get_string('population:lossheading', $component))
                     . \html_writer::alist(array_map([$population, 'message'], $losses)),
-                'alert alert-warning',
+                'alert alert-warning py-2 small mb-1',
                 ['data-region' => 'catquizlab-designloss']
             );
         }
+        $losseshtml = $out;
+        $out = '';
 
         $rows = [
             [get_string('population:planned', $component), $funnel['planned']],
@@ -542,7 +710,7 @@ class results_page {
         $table->attributes['class'] = 'generaltable table-sm w-auto mb-2';
         $table->data = $rows;
 
-        return $out . \html_writer::tag(
+        return [$losseshtml, \html_writer::tag(
             'details',
             \html_writer::tag('summary', get_string('population:summary', $component, (object) [
                 'valid' => $funnel['valid'], 'planned' => $funnel['planned'],
@@ -550,8 +718,8 @@ class results_page {
             ]), ['class' => 'small', 'style' => 'cursor: pointer;'])
             . \html_writer::tag('p', get_string('population:heading', $component), ['class' => 'small text-muted mb-1 mt-2'])
             . \html_writer::table($table),
-            ['class' => 'mb-2', 'data-region' => 'catquizlab-analysis-population'] + ($losses !== [] ? ['open' => 'open'] : [])
-        );
+            ['class' => 'mb-2', 'data-region' => 'catquizlab-analysis-population', 'open' => 'open']
+        )];
     }
 
     /**
@@ -696,9 +864,13 @@ class results_page {
         $component = 'local_catquizlab';
         $table = new \html_table();
         $table->attributes['class'] = 'generaltable table-sm';
+        // Runs, sittings and people apart (#127): one run of 250 sittings used
+        // to read "250 runs".
         $table->head = [
             get_string('form:' . $groupby, $component),
             get_string('report:runs', $component),
+            get_string('report:sittings', $component),
+            get_string('report:people', $component),
             get_string('metric:testlength', $component),
             get_string('metric:se', $component),
             get_string('metric:bias', $component),
@@ -708,7 +880,9 @@ class results_page {
         foreach ($groups as $key => $summary) {
             $table->data[] = [
                 s(run_registry::group_label($groupby, (string) $key)),
+                $summary->runs(),
                 $summary->count(),
+                $summary->people(),
                 $this->format_stat($summary->describe('nitems')),
                 $this->format_stat($summary->describe('se')),
                 $this->format_stat($summary->describe('error')),
@@ -739,7 +913,7 @@ class results_page {
             get_string('form:variant', $component),
             get_string('form:stratum', $component),
             get_string('form:severity', $component),
-            'n',
+            get_string('report:sittings', $component),
             get_string('metric:testlength', $component),
             get_string('metric:se', $component),
             get_string('metric:bias', $component),
@@ -786,9 +960,18 @@ class results_page {
             return '';
         }
 
+        // Collected, but none in this view: the basis above already says so,
+        // with the reasons and the way to see them. "No results yet — nothing
+        // has been collected" under "250 collected, none valid" was the
+        // contradiction (#130 AK 1).
+        $kind = $this->empty_kind();
+        if (!in_array($kind, ['noruns', 'notstarted', 'nocollected'], true)) {
+            return '';
+        }
+
         $out = $OUTPUT->notification(
-            \html_writer::tag('strong', get_string('results:nodata', $component))
-                . \html_writer::tag('p', get_string('results:nodataexplain', $component), ['class' => 'mb-0']),
+            \html_writer::tag('strong', get_string('results:empty' . $kind, $component))
+                . \html_writer::tag('p', get_string('results:empty' . $kind . 'explain', $component), ['class' => 'mb-0']),
             \core\output\notification::NOTIFY_INFO
         );
 
@@ -1116,7 +1299,7 @@ class results_page {
         ]);
         $out .= \html_writer::empty_tag('input', [
             'type' => 'submit', 'class' => 'btn btn-secondary',
-            'value' => get_string('flow:show', $component),
+            'value' => get_string('export:showlevel', $component),
         ]);
         $out .= \html_writer::end_tag('form');
 
@@ -1213,7 +1396,7 @@ class results_page {
         $table->attributes['class'] = 'generaltable table-sm w-auto';
         $table->head = [
             get_string('flow:verdict', $component),
-            get_string('report:runs', $component),
+            get_string('report:sittings', $component),
             get_string('flow:share', $component),
         ];
         foreach (['reached', 'stoppedearly', 'budgetexhausted', 'missed', 'unknown'] as $key) {
@@ -1278,7 +1461,7 @@ class results_page {
         ]);
         $out .= \html_writer::empty_tag('input', [
             'type' => 'submit', 'class' => 'btn btn-secondary',
-            'value' => get_string('flow:show', $component),
+            'value' => get_string('flow:showsitting', $component),
         ]);
         $out .= \html_writer::end_tag('form');
 
@@ -1901,27 +2084,26 @@ class results_page {
         $svg = $chart->render();
         $csv = "truetheta\n" . implode("\n", array_map(static fn(float $v): string => (string) round($v, 5), $values)) . "\n";
         $peoplename = 'catquizlab-people-exp' . (int) ($this->filter['experimentid'] ?? 0) . '-' . date('Ymd-His');
-        $links = \html_writer::link(
-            'data:image/svg+xml;base64,' . base64_encode($svg),
-            get_string('chart:downloadsvg', $component),
-            ['download' => $peoplename . '.svg', 'class' => 'btn btn-sm btn-outline-secondary mr-2', 'data-download' => 'svg']
-        )
-            . \html_writer::link(
+        $links = scatter_chart::download_menu([
+            \html_writer::link(
+                'data:image/svg+xml;base64,' . base64_encode($svg),
+                get_string('chart:downloadsvg', $component),
+                ['download' => $peoplename . '.svg', 'data-download' => 'svg']
+            ),
+            \html_writer::tag('button', get_string('chart:downloadpng', $component), [
+                'type' => 'button', 'data-download' => 'png', 'data-filename' => $peoplename . '.png',
+            ]),
+            \html_writer::link(new \moodle_url('/local/catquizlab/plotpdf.php', [
+                'key' => scatter_chart::keep_for_pdf($svg, $peoplename), 'sesskey' => sesskey(),
+            ]), get_string('chart:downloadpdf', $component), ['data-download' => 'pdf']),
+            \html_writer::link(
                 'data:text/csv;charset=utf-8;base64,' . base64_encode($csv),
                 get_string('chart:downloadcsv', $component),
-                ['download' => $peoplename . '.csv', 'class' => 'btn btn-sm btn-outline-secondary', 'data-download' => 'csv']
-            );
-
-        $links .= \html_writer::tag('button', get_string('chart:downloadpng', $component), [
-            'type' => 'button', 'class' => 'btn btn-sm btn-outline-secondary ml-2', 'data-download' => 'png',
-            'data-filename' => $peoplename . '.png',
-        ]) . \html_writer::link(new \moodle_url('/local/catquizlab/plotpdf.php', [
-            'key' => scatter_chart::keep_for_pdf($svg, $peoplename), 'sesskey' => sesskey(),
-        ]), get_string('chart:downloadpdf', $component), [
-            'class' => 'btn btn-sm btn-outline-secondary ml-2', 'data-download' => 'pdf',
+                ['download' => $peoplename . '.csv', 'data-download' => 'csv']
+            ),
         ]);
         return $out . \html_writer::div($svg, '', ['data-region' => 'catquizlab-people'])
-            . \html_writer::div(s($this->plot_basis()), 'small text-muted mt-1') . \html_writer::div($links, 'mb-3')
+            . \html_writer::div(s($this->plot_basis()), 'small text-muted mt-1') . $links
             . $this->render_deviations();
     }
 
@@ -3482,6 +3664,8 @@ class results_page {
         $table->head = [
             get_string('form:' . $groupby, $component),
             get_string('report:runs', $component),
+            get_string('report:sittings', $component),
+            get_string('report:people', $component),
             get_string('metric:testlength', $component),
             get_string('metric:se', $component),
             get_string('metric:bias', $component),
@@ -3491,14 +3675,20 @@ class results_page {
 
         foreach ($groups as $key => $members) {
             $stopped = 0;
+            $runs = [];
+            $people = [];
             foreach ($members as $member) {
                 if ($member['stopreached']) {
                     $stopped++;
                 }
+                $runs[(int) ($member['runid'] ?? 0)] = true;
+                $people[results_query::unit_key($member)] = true;
             }
             $table->data[] = [
                 s(run_registry::group_label($groupby, $key)),
+                count($runs),
                 count($members),
+                count($people),
                 $this->format_stat(results_query::summarise($members, 'nitems')),
                 $this->format_stat(results_query::summarise($members, 'se')),
                 $this->format_stat(results_query::summarise($members, 'error')),
@@ -3537,7 +3727,7 @@ class results_page {
             get_string('form:variant', $component),
             get_string('form:stratum', $component),
             get_string('form:severity', $component),
-            'n',
+            get_string('report:sittings', $component),
             get_string('metric:testlength', $component),
             get_string('metric:se', $component),
             get_string('metric:bias', $component),
@@ -3687,9 +3877,11 @@ class results_page {
         }
         $mean = format_float($stat['mean'], 3);
         if (($stat['ci95lo'] ?? null) === null) {
-            // With a single observation there is no interval, and showing one
-            // would suggest a precision that is not there.
-            return $mean;
+            // With a single person there is no interval, and showing one would
+            // suggest a precision that is not there: "CI n/a", said (#127 req. 5).
+            return $mean . ' <span class="text-muted small" data-region="catquizlab-ci-na" title="'
+                . s(get_string('dispersion:na', 'local_catquizlab')) . '">[' . get_string('dispersion:nashort', 'local_catquizlab')
+                . ']</span>';
         }
 
         return $mean . ' <span class="text-muted small">['

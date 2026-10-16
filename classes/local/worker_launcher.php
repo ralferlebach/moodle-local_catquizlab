@@ -102,8 +102,27 @@ class worker_launcher {
             'loginmode' => (string) get_config('local_catquizlab', 'worker_login_mode'),
             'loginurltemplate' => (string) get_config('local_catquizlab', 'worker_login_url_template'),
             'loginsuffix' => (string) get_config('local_catquizlab', 'worker_login_suffix'),
-            'concurrency' => max(1, (int) get_config('local_catquizlab', 'worker_concurrency')),
+            // The limit in force: configured, safety cap and load guard (#124).
+            'concurrency' => worker_capacity::effective()['limit'],
         ];
+    }
+
+    /**
+     * The slots a launch may fill: free ones within the limit, no more than the limit leaves room for.
+     *
+     * Every live worker counts against the limit, those above it too — they
+     * are draining but still playing. Starting into the free slots below the
+     * limit while 198 above it were still busy is how 250 lowered to 50 became
+     * 248 live workers (#124).
+     *
+     * @param int $limit The limit in force.
+     * @param int $wanted How many would be useful (no more than there is work for).
+     * @return int[] Slot numbers, lowest first.
+     */
+    public static function slots_to_start(int $limit, int $wanted): array {
+        $room = max(0, $limit - count(worker_registry::live()));
+
+        return array_slice(worker_registry::free_slots(min($limit, $wanted)), 0, $room);
     }
 
     /**
@@ -525,11 +544,19 @@ class worker_launcher {
         // attempts means two processes that start, find nothing and exit.
         $concurrency = min($concurrency, $breakdown['claimable']);
 
+        // Workers above a lowered limit are asked to finish and stop (#124).
+        worker_capacity::note_change();
+
         // Only the slots nobody holds. Before this every dispatch started the
         // configured number of workers again, so a site limited to one job at a
         // time accumulated workers with each scheduler tick and claimed several
         // attempts in parallel — exactly what the limit was set to prevent.
-        $free = worker_registry::free_slots($concurrency);
+        //
+        // And only as many as the limit leaves room for, counting every live
+        // worker — those above it too, which are draining but still playing.
+        // Counting the slots up to the limit alone is how 250 lowered to 50
+        // became 248: the 198 above it were invisible to the count (#124).
+        $free = self::slots_to_start((int) ($config['concurrency'] ?? 1), $concurrency);
         if ($free === []) {
             return [
                 'launched' => 0,

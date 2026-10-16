@@ -82,7 +82,8 @@ class recovery_advisor {
                     get_string('recovery:problemheld', $component, (int) $run->id),
                     get_string('circuit:showdetail', $component),
                     null,
-                    (new \moodle_url('/local/catquizlab/logs.php', ['runid' => (int) $run->id]))->out(false)
+                    (new \moodle_url('/local/catquizlab/logs.php', ['runid' => (int) $run->id,
+                        'severity' => log_view::WARNING, 'hours' => 0]))->out(false)
                 );
             }
         }

@@ -71,6 +71,44 @@ class status_report {
     }
 
     /**
+     * The card of a run the circuit breaker holds: its cause, the way to its log, and the way on (#133, #131).
+     *
+     * @param \stdClass $run The run.
+     * @return array
+     */
+    protected static function held_card(\stdClass $run): array {
+        $component = 'local_catquizlab';
+        $causes = circuit_breaker::causes((int) $run->id);
+        $top = $causes[0] ?? ['reason' => run_lifecycle::pause_reason((int) $run->id), 'count' => 0];
+
+        return self::card(
+            self::BAD,
+            get_string('circuit:autopaused', $component),
+            get_string('circuit:cause', $component, (object) [
+                'reason' => $top['reason'],
+                'count'  => $top['count'],
+            ]),
+            [
+                // Read first. "Clear the errors and continue" beside it
+                // would be the easier button, and pressing it without
+                // looking produces the same ten failures again.
+                'label'     => get_string('circuit:showdetail', $component),
+                // The run's warnings and errors, over its whole life (#131).
+                'url'       => (new \moodle_url('/local/catquizlab/logs.php', [
+                    'runid' => (int) $run->id, 'severity' => log_view::WARNING, 'hours' => 0,
+                ]))->out(false),
+                'secondary' => [
+                    'label'   => get_string('circuit:resetcontinue', $component),
+                    'url'     => (new \moodle_url('/local/catquizlab/runs.php'))->out(false),
+                    'command' => 'resetcircuit',
+                    'runid'   => (int) $run->id,
+                    'sesskey' => sesskey(),
+                ],
+            ]
+        );
+    }
+
+    /**
      * The state of one run, with what it is waiting for.
      *
      * @param int|\stdClass $run The run or its id.
@@ -122,33 +160,7 @@ class status_report {
             $streak = circuit_breaker::failure_streak((int) $run->id);
 
             if ($streak['count'] >= circuit_breaker::THRESHOLD) {
-                $causes = circuit_breaker::causes((int) $run->id);
-                $top = $causes[0] ?? ['reason' => '', 'count' => 0];
-
-                return self::card(
-                    self::BAD,
-                    get_string('circuit:autopaused', $component),
-                    get_string('circuit:cause', $component, (object) [
-                        'reason' => $top['reason'],
-                        'count'  => $top['count'],
-                    ]),
-                    [
-                        // Read first. "Clear the errors and continue" beside it
-                        // would be the easier button, and pressing it without
-                        // looking produces the same ten failures again.
-                        'label'     => get_string('circuit:showdetail', $component),
-                        'url'       => (new \moodle_url('/local/catquizlab/logs.php', [
-                            'runid' => (int) $run->id,
-                        ]))->out(false),
-                        'secondary' => [
-                            'label'   => get_string('circuit:resetcontinue', $component),
-                            'url'     => (new \moodle_url('/local/catquizlab/runs.php'))->out(false),
-                            'command' => 'resetcircuit',
-                            'runid'   => (int) $run->id,
-                            'sesskey' => sesskey(),
-                        ],
-                    ]
-                );
+                return self::held_card($run);
             }
 
             $failure = run_lifecycle::failure_details($runid);
@@ -165,6 +177,12 @@ class status_report {
                     'sesskey' => sesskey(),
                 ]
             );
+        }
+
+        // Paused by the breaker since 0.7.38 (#133): the run keeps its status,
+        // and its card said "waiting for a worker" — with no way to the cause.
+        if (in_array($status, [registry::STATUS_READY, registry::STATUS_RUNNING], true) && circuit_breaker::is_held($run)) {
+            return self::held_card($run);
         }
 
         if ($status === registry::STATUS_READY || $status === registry::STATUS_RUNNING) {

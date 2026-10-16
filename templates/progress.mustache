@@ -159,12 +159,54 @@
                      aria-label="{{#str}}progress:overall, local_catquizlab{{/str}}"></div>
             </div>
 
-            {{#runs.length}}
-                <table class="table table-sm mb-3">
+            {{! Started, elapsed, finish, remaining (#125). Recomputed on the server with every poll. }}
+            {{#time}}
+            <div class="mb-3" data-region="catquizlab-eta" data-reliability="{{reliability}}">
+                <dl class="row mx-0 small mb-1">
+                    <dt class="col-6 col-md-3 mb-0">{{#str}}eta:started, local_catquizlab{{/str}}</dt>
+                    <dt class="col-6 col-md-3 mb-0">{{#str}}eta:elapsed, local_catquizlab{{/str}}</dt>
+                    <dt class="col-6 col-md-3 mb-0 d-none d-md-block">{{#str}}eta:finish, local_catquizlab{{/str}}</dt>
+                    <dt class="col-6 col-md-3 mb-0 d-none d-md-block">{{#str}}eta:remaining, local_catquizlab{{/str}}</dt>
+                    <dd class="col-6 col-md-3" data-region="catquizlab-eta-started">{{text.started}}</dd>
+                    <dd class="col-6 col-md-3" data-region="catquizlab-eta-elapsed">{{text.elapsed}}</dd>
+                    <dt class="col-6 mb-0 d-md-none">{{#str}}eta:finish, local_catquizlab{{/str}}</dt>
+                    <dt class="col-6 mb-0 d-md-none">{{#str}}eta:remaining, local_catquizlab{{/str}}</dt>
+                    <dd class="col-6 col-md-3" data-region="catquizlab-eta-finish">{{text.finish}}</dd>
+                    <dd class="col-6 col-md-3" data-region="catquizlab-eta-remaining">{{text.remaining}}</dd>
+                </dl>
+                <p class="small text-muted mb-0">
+                    <span class="badge badge-light" data-region="catquizlab-eta-status">{{text.status}}</span>
+                    <span data-region="catquizlab-eta-reason">{{text.reason}}</span>
+                    <span data-region="catquizlab-eta-asof">{{#str}}eta:asof, local_catquizlab, {{text.computed}}{{/str}}</span>
+                    <span class="text-warning" data-region="catquizlab-eta-stale" style="display: none;" role="status"></span>
+                </p>
+                <details class="small text-muted">
+                    <summary>{{#str}}eta:methodlabel, local_catquizlab{{/str}}</summary>
+                    <span data-region="catquizlab-eta-method">{{text.method}}</span>
+                </details>
+            </div>
+            {{/time}}
+
+            {{#hasruns}}
+                <details class="mb-3" data-region="catquizlab-run-times" {{^manyruns}}open{{/manyruns}}>
+                <summary class="small">{{#str}}eta:rundetails, local_catquizlab{{/str}}</summary>
+                <div class="table-responsive">
+                <table class="table table-sm mb-0">
+                    <thead class="small">
+                        <tr>
+                            <th scope="col">{{#str}}progress:run, local_catquizlab{{/str}}</th>
+                            <th scope="col">{{#str}}progress:cell, local_catquizlab{{/str}}</th>
+                            <th scope="col">{{#str}}progress:bar, local_catquizlab{{/str}}</th>
+                            <th scope="col" class="text-right">{{#str}}report:sittings, local_catquizlab{{/str}}</th>
+                            <th scope="col">{{#str}}eta:started, local_catquizlab{{/str}}</th>
+                            <th scope="col">{{#str}}eta:elapsed, local_catquizlab{{/str}}</th>
+                            <th scope="col">{{#str}}eta:remaining, local_catquizlab{{/str}}</th>
+                        </tr>
+                    </thead>
                     <tbody>
                         {{#runs}}
                             <tr>
-                                <td style="width: 5rem;">#{{runid}}</td>
+                                <th scope="row" style="width: 5rem;">#{{runid}}</th>
                                 <td class="small text-muted">{{cellkey}}</td>
                                 <td style="width: 40%;">
                                     <div class="progress" style="height: 0.4rem;">
@@ -178,11 +220,16 @@
                                 <td class="small text-right" style="width: 7rem;">
                                     <span data-region="catquizlab-run-{{runid}}-progress">{{done}} / {{total}}</span>
                                 </td>
+                                <td class="small" data-region="catquizlab-run-{{runid}}-started">{{time.started}}</td>
+                                <td class="small" data-region="catquizlab-run-{{runid}}-elapsed">{{time.elapsed}}</td>
+                                <td class="small" data-region="catquizlab-run-{{runid}}-remaining">{{time.remaining}}</td>
                             </tr>
                         {{/runs}}
                     </tbody>
                 </table>
-            {{/runs.length}}
+                </div>
+                </details>
+            {{/hasruns}}
 
             <h4 class="h6">{{#str}}progress:nowheading, local_catquizlab{{/str}}</h4>
             <ul class="list-unstyled small mb-0" data-region="catquizlab-progress-now">
@@ -371,10 +418,20 @@
     <div class="card-body">
         <h3 class="h5">{{#str}}worker:heading, local_catquizlab{{/str}}</h3>
         <p class="small text-muted mb-2">{{#str}}worker:environmentheading, local_catquizlab{{/str}}</p>
+        {{! What may play, what does, and why less than configured (#124). }}
+        {{#capacity}}
+            <p class="mb-1" data-region="catquizlab-capacity" data-limit="{{limit}}" data-live="{{live}}" data-draining="{{draining}}">{{text.line}}</p>
+            {{#text.why}}
+                <p class="small text-warning mb-2" data-region="catquizlab-capacity-why" role="status">{{.}}</p>
+            {{/text.why}}
+        {{/capacity}}
         {{#loadspreading}}
             <p class="small mb-2 {{#off}}text-danger{{/off}}{{^off}}text-muted{{/off}}" data-region="catquizlab-load-spreading">{{text}}</p>
         {{/loadspreading}}
         {{#workers.hasany}}
+            {{! Technical detail, on request: the experiment's progress is above (#125, #128). }}
+            <details data-region="catquizlab-worker-details">
+            <summary class="small">{{#str}}worker:details, local_catquizlab, {{workers.count}}{{/str}}</summary>
             {{#workers.rows}}
                 <div class="mb-2">
                     <div class="small text-muted">{{workerid}} — {{statename}}
@@ -399,6 +456,7 @@
                     {{/log}}
                 </div>
             {{/workers.rows}}
+            </details>
         {{/workers.hasany}}
         {{^workers.hasany}}
             <p class="text-muted mb-0">{{#str}}progress:noworkers, local_catquizlab{{/str}}</p>
@@ -501,7 +559,7 @@
         not a claim and which of the five applies today. Running an experiment
         should not require learning the plumbing.
     }}
-    <details class="card mb-3" {{#recovery}}open{{/recovery}}>
+    <details class="card mb-3" id="catquizlab-recovery" {{#recovery}}open{{/recovery}}>
         <summary class="card-body pb-0" style="cursor: pointer;">
             <span class="h5">{{#str}}recovery:heading, local_catquizlab{{/str}}</span>
         </summary>

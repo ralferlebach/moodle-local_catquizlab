@@ -104,6 +104,18 @@ class run_log {
     /** @var string Somebody re-checked a failed run. */
     public const RECHECKED = 'rechecked';
 
+    /** @var string The installation's worker limit changed (runid 0, #124). */
+    public const CAPACITY_CHANGED = 'capacity_changed';
+
+    /** @var string Workers above the limit were asked to finish and stop (runid 0, #124). */
+    public const WORKERS_DRAINING = 'workers_draining';
+
+    /** @var string The load guard reduced the claims (runid 0, #124). */
+    public const LOAD_THROTTLED = 'load_throttled';
+
+    /** @var string The load guard released its reduction (runid 0, #124). */
+    public const LOAD_RELEASED = 'load_released';
+
     /**
      * Record one event.
      *

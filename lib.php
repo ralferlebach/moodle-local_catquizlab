@@ -93,3 +93,12 @@ function local_catquizlab_pluginfile($course, $cm, $context, $filearea, $args, $
     send_stored_file($file, 0, 0, $forcedownload, $options);
     return true;
 }
+
+/**
+ * The worker limit or its cap was changed in the admin settings: note it and drain (#124).
+ *
+ * @return void
+ */
+function local_catquizlab_capacity_updated(): void {
+    \local_catquizlab\local\worker_capacity::note_change();
+}

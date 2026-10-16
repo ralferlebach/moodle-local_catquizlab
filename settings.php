@@ -184,13 +184,25 @@ if ($hassiteconfig) {
         0,
         PARAM_INT
     ));
-    $settings->add(new admin_setting_configtext(
+    $concurrency = new admin_setting_configtext(
         $component . '/worker_concurrency',
         get_string('setting:worker_concurrency', $component),
         get_string('setting:worker_concurrency_desc', $component),
         1,
         PARAM_INT
-    ));
+    );
+    // A lowered limit drains at once, and the change is logged (#124).
+    $concurrency->set_updatedcallback('local_catquizlab_capacity_updated');
+    $settings->add($concurrency);
+    $cap = new admin_setting_configtext(
+        $component . '/worker_safety_cap',
+        get_string('setting:worker_safety_cap', $component),
+        get_string('setting:worker_safety_cap_desc', $component),
+        0,
+        PARAM_INT
+    );
+    $cap->set_updatedcallback('local_catquizlab_capacity_updated');
+    $settings->add($cap);
 
     // Load spread out (#120): workers one after another, retries scattered.
     // Starting all at once, and retrying a whole cohort in the same minute,

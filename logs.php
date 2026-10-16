@@ -146,8 +146,52 @@ echo \local_catquizlab\output\shell::render('logs', (int) $filter['experimentid'
 echo $OUTPUT->heading(get_string('logs:heading', $component), 3);
 echo html_writer::tag('p', get_string('logs:explain', $component), ['class' => 'text-muted']);
 
+// Quick filters (#131): the five views asked for most, one click each,
+// keeping the experiment, the run and the time window.
+$keep = array_filter([
+    'experimentid' => $filter['experimentid'], 'runid' => $filter['runid'], 'hours' => $filter['hours'],
+], static fn($v): bool => $v !== 0 && $v !== '');
+if (!isset($keep['hours'])) {
+    $keep['hours'] = 0;
+}
+$quick = [
+    'errors'    => ['severity' => log_view::ERROR],
+    'warnings'  => ['severity' => log_view::WARNING],
+    'lifecycle' => ['channel' => 'lifecycle'],
+    'workers'   => ['channel' => 'worker'],
+    'attempts'  => ['channel' => 'attempt'],
+];
+$quicklinks = [];
+foreach ($quick as $key => $params) {
+    $active = true;
+    foreach ($params as $param => $value) {
+        $active = $active && (string) $filter[$param] === (string) $value;
+    }
+    $active = $active && count(array_filter([$filter['severity'], $filter['channel']])) === count($params);
+    $quicklinks[] = html_writer::link(
+        new moodle_url($pageurl, $keep + $params),
+        get_string('logs:quick' . $key, $component),
+        ['class' => 'btn btn-sm mr-1 mb-1 ' . ($active ? 'btn-primary' : 'btn-outline-secondary'),
+            'data-quick' => $key] + ($active ? ['aria-current' => 'true'] : [])
+    );
+}
+$quicklinks[] = html_writer::link(
+    new moodle_url($pageurl, array_filter(['experimentid' => $filter['experimentid']])),
+    get_string('logs:quickall', $component),
+    ['class' => 'btn btn-sm btn-link mb-1', 'data-quick' => 'reset']
+);
+echo html_writer::tag('nav', implode('', $quicklinks), [
+    'class' => 'mb-2', 'aria-label' => get_string('logs:quickheading', $component), 'data-region' => 'catquizlab-log-quick',
+]);
+
 // The filters, as a plain GET form: a filtered log is a thing people link to.
 echo html_writer::start_tag('form', ['method' => 'get', 'action' => $pageurl->out(false), 'class' => 'form-inline mb-3']);
+// Carried, not shown: what the page was opened for stays when a filter changes (#131 AK 4).
+foreach (['experimentid', 'userid'] as $carried) {
+    if (!empty($filter[$carried])) {
+        echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => $carried, 'value' => (int) $filter[$carried]]);
+    }
+}
 
 echo html_writer::label(get_string('logs:hours', $component), 'catquizlab-hours', true, ['class' => 'mr-2']);
 echo html_writer::select(
@@ -189,10 +233,18 @@ echo html_writer::empty_tag('input', [
 ]);
 
 // The second row of the filter: a window with two ends, a level, and the
-// identifiers a support thread is usually about.
-// A full-width spacer: the filter row wraps here rather than running off the
-// side of the page.
-echo html_writer::div('', 'w-100 mb-2');
+// identifiers a support thread is usually about — folded as "Advanced
+// filters" (#131), open whenever one of them is set.
+$advanced = $filter['from'] !== '' || $filter['to'] !== '' || $filter['action'] !== '' || $filter['correlationid'] !== ''
+    || $filter['workerid'] !== '' || $filter['taskid'] > 0 || $filter['attemptno'] > 0 || $filter['attemptid'] > 0
+    || $filter['severity'] !== '' || !empty($filter['newestfirst']);
+echo html_writer::empty_tag('input', [
+    'type' => 'submit', 'class' => 'btn btn-secondary mr-3', 'value' => get_string('logs:apply', $component),
+]);
+echo html_writer::start_tag('details', ['class' => 'w-100 mt-2', 'data-region' => 'catquizlab-log-advanced']
+    + ($advanced ? ['open' => 'open'] : []));
+echo html_writer::tag('summary', get_string('logs:advanced', $component), ['class' => 'small mb-2']);
+echo html_writer::start_div('form-inline');
 
 $fields = [
     'from'          => ['logs:from', 'datetime-local'],
@@ -237,9 +289,8 @@ echo html_writer::checkbox(
     ['id' => 'catquizlab-newestfirst', 'class' => 'mr-3']
 );
 
-echo html_writer::empty_tag('input', [
-    'type' => 'submit', 'class' => 'btn btn-secondary', 'value' => get_string('logs:apply', $component),
-]);
+echo html_writer::end_div();
+echo html_writer::end_tag('details');
 echo html_writer::end_tag('form');
 
 if ($window['scan']['partial']) {
@@ -250,11 +301,24 @@ if ($window['scan']['partial']) {
 }
 
 if ($lines === []) {
-    // When the last thing happened, and a way to see it: "nothing recorded in
-    // this window" on a one-hour window read as "nothing is recorded at all".
+    // Three different empties (#131): nothing logged at all, nothing matching
+    // the filters, nothing in this time window — each with its way back.
     $latest = log_view::latest();
-    $message = get_string('logs:empty', $component);
-    if ($latest > 0) {
+    $filtered = array_filter([$filter['channel'], $filter['search'], $filter['severity'], $filter['action'],
+        $filter['correlationid'], $filter['workerid'], $filter['from'], $filter['to'], $filter['runid'],
+        $filter['attemptid'], $filter['taskid'], $filter['attemptno']]);
+    if ($latest === 0) {
+        $message = get_string('logs:emptynothing', $component);
+    } else if ($filtered !== []) {
+        $message = get_string('logs:emptynomatch', $component) . ' ' . html_writer::link(
+            new moodle_url($pageurl, array_filter(['experimentid' => $filter['experimentid']])),
+            get_string('filter:reset', $component),
+            ['data-action' => 'catquizlab-log-reset']
+        );
+    } else {
+        $message = get_string('logs:empty', $component);
+    }
+    if ($latest > 0 && $filtered === []) {
         $message .= ' ' . get_string('logs:latest', $component, (object) [
             'when' => userdate($latest),
             'ago'  => \local_catquizlab\local\duration::ago($latest),
@@ -265,7 +329,8 @@ if ($lines === []) {
             get_string('logs:showall', $component)
         );
     }
-    echo $OUTPUT->notification($message, \core\output\notification::NOTIFY_INFO);
+    echo html_writer::div($message, 'alert alert-info', ['data-region' => 'catquizlab-log-empty',
+        'data-empty' => $latest === 0 ? 'nothing' : ($filtered !== [] ? 'nomatch' : 'window')]);
 } else {
     $pagefilter = array_filter($filter + ['logaction' => $filter['action']], static function ($v): bool {
         return $v !== '' && $v !== 0 && $v !== null;
@@ -312,12 +377,29 @@ if ($lines === []) {
     // as the start or end of the time filter — the text copied stays the text.
     $spans = [];
     foreach ($lines as $line) {
+        // An error or warning reads as its short status; the technical part
+        // (JSON, trace) is folded in the same line (#131). Copying the log
+        // still copies all of it.
+        [$head, $tail] = log_view::split_detail((string) $line['text']);
+        $text = s($line['stamp'] . '  ' . str_pad($line['source'], 9) . '  ' . $head);
+        if ($tail !== '' && in_array($line['severity'] ?? '', [log_view::ERROR, log_view::WARNING], true)) {
+            $text .= html_writer::tag('details', html_writer::tag('summary', get_string('logs:details', $component))
+                . s($tail), ['class' => 'd-inline', 'data-region' => 'catquizlab-log-detail']);
+        } else if ($tail !== '') {
+            $text .= s(' ' . $tail);
+        }
         $spans[] = html_writer::tag(
             'span',
-            s($line['stamp'] . '  ' . str_pad($line['source'], 9) . '  ' . $line['text']),
-            ['data-ms' => (int) $line['ms'], 'data-stamp' => $line['stamp'], 'class' => 'catquizlab-logline']
+            $text,
+            ['data-ms' => (int) $line['ms'], 'data-stamp' => $line['stamp'], 'class' => 'catquizlab-logline',
+                'data-severity' => (string) ($line['severity'] ?? '')]
         );
     }
+    echo html_writer::tag(
+        'p',
+        get_string('logs:timezone', $component, usertimezone()),
+        ['class' => 'small text-muted mb-1', 'data-region' => 'catquizlab-log-timezone']
+    );
     echo html_writer::div(
         html_writer::tag('span', get_string('logs:pickline', $component), ['data-region' => 'catquizlab-log-picked'])
         . html_writer::tag('button', get_string('logs:asfrom', $component), [
@@ -365,6 +447,10 @@ if ($lines === []) {
         ),
         'd-flex flex-wrap align-items-start'
     );
+    // What each of the three holds, so they cannot be mistaken for each other (#131 AK 3).
+    echo html_writer::tag('p', get_string('logs:outputs', $component, (object) [
+        'shown' => count($lines), 'limit' => log_view::EXPORT_LIMIT,
+    ]), ['class' => 'small text-muted', 'data-region' => 'catquizlab-log-outputs']);
 
     // Selecting thirty screens of text with a mouse is not a reasonable ask of
     // somebody who is already having a bad day.
@@ -461,7 +547,10 @@ if ($lines === []) {
                 return;
             }
             button.addEventListener('click', function() {
-                navigator.clipboard.writeText(log.textContent).then(function() {
+                // The text, without the "Details" toggles (#131).
+                var copy = log.cloneNode(true);
+                copy.querySelectorAll("summary").forEach(function(el) { el.remove(); });
+                navigator.clipboard.writeText(copy.textContent).then(function() {
                     button.classList.add('btn-success');
                 }).catch(function(error) {
                     notification.exception(error);

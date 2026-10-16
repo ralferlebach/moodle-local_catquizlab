@@ -86,6 +86,11 @@ class settings_form extends \moodleform {
         $mform->setType('worker_concurrency', PARAM_INT);
         $mform->addHelpButton('worker_concurrency', 'settingsform:concurrency', $component);
 
+        // What the web server carries, measured (#124): 0 is no cap.
+        $mform->addElement('text', 'worker_safety_cap', get_string('setting:worker_safety_cap', $component), ['size' => 5]);
+        $mform->setType('worker_safety_cap', PARAM_INT);
+        $mform->addHelpButton('worker_safety_cap', 'setting:worker_safety_cap', $component);
+
         $mform->addElement('text', 'worker_max_jobs', get_string('settingsform:maxjobs', $component), ['size' => 5]);
         $mform->setType('worker_max_jobs', PARAM_INT);
 
@@ -130,6 +135,7 @@ class settings_form extends \moodleform {
             'worker_base_url',
             'worker_node_path',
             'worker_concurrency',
+            'worker_safety_cap',
             'worker_max_jobs',
             'debuglevel',
         ];
@@ -148,6 +154,10 @@ class settings_form extends \moodleform {
 
         if ((int) $data['worker_concurrency'] < 1) {
             $errors['worker_concurrency'] = get_string('settingsform:concurrencytoolow', $component);
+        }
+
+        if ((int) ($data['worker_safety_cap'] ?? 0) < 0) {
+            $errors['worker_safety_cap'] = get_string('setting:worker_safety_cap_negative', $component);
         }
 
         if ((int) $data['worker_max_jobs'] < 0) {

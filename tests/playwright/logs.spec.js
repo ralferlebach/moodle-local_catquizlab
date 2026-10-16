@@ -54,6 +54,8 @@ test('large request traces: open, filter, page, deep link, tail and download', a
     // Filter: requests, errors only — every server error of the day, found behind the many successes.
     await page.goto('/local/catquizlab/logs.php?hours=24', {waitUntil: 'networkidle'});
     await page.selectOption('#catquizlab-channel', 'request');
+    // The level is an advanced filter (#131).
+    await page.locator('[data-region="catquizlab-log-advanced"] > summary').click();
     await page.selectOption('#catquizlab-severity', 'error');
     await page.click('form:has(#catquizlab-channel) input[type="submit"]');
     await page.waitForLoadState('networkidle');

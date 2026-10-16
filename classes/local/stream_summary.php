@@ -48,6 +48,15 @@ class stream_summary {
     /** @var int Sittings added. */
     protected int $n = 0;
 
+    /** @var array<string, string> Field => the packed index of each value's person (#127). */
+    protected array $units = [];
+
+    /** @var array<string, int> Person key => its index. */
+    protected array $unitindex = [];
+
+    /** @var array<int, true> The runs the sittings came from. */
+    protected array $runs = [];
+
     /** @var int Sittings whose stopping rule was met. */
     protected int $stopped = 0;
 
@@ -68,9 +77,15 @@ class stream_summary {
             $this->stopped++;
         }
 
+        if (isset($row['runid'])) {
+            $this->runs[(int) $row['runid']] = true;
+        }
+        $key = results_query::unit_key($row);
+        $unit = $this->unitindex[$key] ??= count($this->unitindex);
         foreach (self::FIELDS as $field) {
             if (isset($row[$field]) && is_numeric($row[$field])) {
                 $this->values[$field] = ($this->values[$field] ?? '') . pack('e', (float) $row[$field]);
+                $this->units[$field] = ($this->units[$field] ?? '') . pack('V', $unit);
             }
         }
 
@@ -116,8 +131,27 @@ class stream_summary {
     public function describe(string $field): array {
         $packed = $this->values[$field] ?? '';
         $values = $packed === '' ? [] : array_values(unpack('e*', $packed));
+        $units = ($this->units[$field] ?? '') === '' ? [] : array_values(unpack('V*', $this->units[$field]));
 
-        return results_query::describe_values($values);
+        return results_query::describe_values($values, $units);
+    }
+
+    /**
+     * How many runs the sittings came from (#127).
+     *
+     * @return int
+     */
+    public function runs(): int {
+        return count($this->runs);
+    }
+
+    /**
+     * How many simulated people — the independent units — the sittings came from (#127).
+     *
+     * @return int
+     */
+    public function people(): int {
+        return count($this->unitindex);
     }
 
     /**

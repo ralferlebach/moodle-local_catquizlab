@@ -561,10 +561,7 @@ class results_query {
             $bystrategy[$strategy] = $bystrategy[$strategy] ?? new stream_summary();
             $bystrategy[$strategy]->add($observation);
 
-            $cell = implode('|', [
-                $observation['tier'], $observation['strategy'], $observation['model'],
-                $observation['variant'], $observation['stratum'], $observation['severity'],
-            ]);
+            $cell = self::cell_key($observation);
             $bycell[$cell] = $bycell[$cell] ?? new stream_summary();
             $bycell[$cell]->add($observation);
 
@@ -619,7 +616,7 @@ class results_query {
             $this->alltwins = [];
         }
         $this->lastpass = null;
-        $pass = ['attempts' => 0, 'replications' => []];
+        $pass = ['attempts' => 0, 'replications' => [], 'people' => [], 'cells' => []];
 
         $runs = $this->runs();
         if ($runs === []) {
@@ -720,6 +717,8 @@ class results_query {
                     foreach ($this->observation_row($attempt, $runs, $persons, $personfields) as $row) {
                         $pass['attempts']++;
                         $pass['replications'][$row['replication']] = true;
+                        $pass['people'][self::unit_key($row)] = true;
+                        $pass['cells'][self::cell_key($row)] = true;
                         yield $row;
                     }
                 }
@@ -951,31 +950,64 @@ class results_query {
      */
     public static function summarise(array $rows, string $field): array {
         $values = [];
+        $clusters = [];
         foreach ($rows as $row) {
             if (isset($row[$field]) && is_numeric($row[$field])) {
                 $values[] = (float) $row[$field];
+                $clusters[] = self::unit_key($row);
             }
         }
 
-        return self::describe_values($values);
+        return self::describe_values($values, $clusters);
     }
 
+    /** @var string The unit an interval is computed over: the simulated person, a twin in a replication (#127). */
+    public const UNIT_PERSON = 'person';
+
     /**
-     * Descriptive statistics of a list of values.
+     * Descriptive statistics of a list of values — and the 95 % interval of their mean over independent units.
+     *
+     * The independent unit is the simulated person (a twin in a replication):
+     * people are drawn independently, and the sittings of one person — the same
+     * twin under several strategies, a repeated measure — are not independent
+     * of each other (#127). Where a person contributes more than one value, the
+     * standard error of the mean is taken from the person means, and n is the
+     * number of people. The mean, median and quartiles stay those of the values.
      *
      * @param array $values Numeric values.
-     * @return array The statistics; every field is null when there is nothing to describe.
+     * @param array|null $clusters For each value (same order), the key of its person; null: every value its own.
+     * @return array The statistics, with units (independent units) and unit; every field null when there is nothing.
      */
-    public static function describe_values(array $values): array {
+    public static function describe_values(array $values, ?array $clusters = null): array {
+        $values = array_values($values);
         $n = count($values);
         $empty = [
             'n' => 0, 'mean' => null, 'sd' => null, 'se' => null,
             'ci95lo' => null, 'ci95hi' => null, 'median' => null,
             'q1' => null, 'q3' => null, 'min' => null, 'max' => null,
+            'units' => 0, 'unit' => self::UNIT_PERSON,
         ];
         if ($n === 0) {
             return $empty;
         }
+
+        // The person means, where people contribute more than one value.
+        $unitvalues = $values;
+        if ($clusters !== null && count($clusters) === $n) {
+            $sums = [];
+            $counts = [];
+            foreach (array_values($clusters) as $i => $key) {
+                $sums[$key] = ($sums[$key] ?? 0.0) + (float) $values[$i];
+                $counts[$key] = ($counts[$key] ?? 0) + 1;
+            }
+            if (count($sums) < $n) {
+                $unitvalues = [];
+                foreach ($sums as $key => $sum) {
+                    $unitvalues[] = $sum / $counts[$key];
+                }
+            }
+        }
+        $units = count($unitvalues);
 
         sort($values);
         $mean = array_sum($values) / $n;
@@ -990,10 +1022,17 @@ class results_query {
                 $variance += ($value - $mean) ** 2;
             }
             $sd = sqrt($variance / ($n - 1));
-            $stderr = $sd / sqrt($n);
-            // A normal approximation. With one observation there is no
-            // dispersion to report, and inventing one would suggest a precision
-            // the data does not have.
+        }
+        if ($units > 1) {
+            // Over the independent units, normal approximation. With one unit
+            // there is no dispersion to report, and inventing one would suggest
+            // a precision the data does not have.
+            $unitmean = array_sum($unitvalues) / $units;
+            $unitvariance = 0.0;
+            foreach ($unitvalues as $value) {
+                $unitvariance += ($value - $unitmean) ** 2;
+            }
+            $stderr = sqrt($unitvariance / ($units - 1)) / sqrt($units);
             $ci95lo = $mean - 1.96 * $stderr;
             $ci95hi = $mean + 1.96 * $stderr;
         }
@@ -1010,7 +1049,36 @@ class results_query {
             'q3'     => round(self::quantile($values, 0.75), 6),
             'min'    => round($values[0], 6),
             'max'    => round($values[$n - 1], 6),
+            'units'  => $units,
+            'unit'   => self::UNIT_PERSON,
         ];
+    }
+
+    /**
+     * The independent unit an observation belongs to: its simulated person in its replication (#127).
+     *
+     * @param array $row An observation.
+     * @return string
+     */
+    public static function unit_key(array $row): string {
+        $twin = (string) ($row['twinid'] ?? '');
+
+        return $twin !== ''
+            ? (int) ($row['replication'] ?? 0) . '|' . $twin
+            : 'a' . (int) ($row['attemptid'] ?? 0);
+    }
+
+    /**
+     * The experimental cell of an observation: tier, strategy, model, variant, stratum, severity (#127).
+     *
+     * @param array $row An observation.
+     * @return string
+     */
+    public static function cell_key(array $row): string {
+        return implode('|', [
+            $row['tier'] ?? '', $row['strategy'] ?? '', $row['model'] ?? '',
+            $row['variant'] ?? '', $row['stratum'] ?? '', $row['severity'] ?? '',
+        ]);
     }
 
     /**
@@ -1501,7 +1569,7 @@ class results_query {
      * observation count, a number on screen cannot be interpreted.
      *
      * @param bool $fromlastpass From the last whole pass, where one has just ended, rather than reading again.
-     * @return array{runs: int, attempts: int, replications: int, dispersion: string, computed: int}
+     * @return array{runs: int, attempts: int, replications: int, people: int, cells: int, dispersion: string, computed: int}
      */
     public function provenance(bool $fromlastpass = false): array {
         if ($fromlastpass && $this->lastpass !== null) {
@@ -1509,6 +1577,8 @@ class results_query {
                 'runs'         => count($this->runs()),
                 'attempts'     => $this->lastpass['attempts'],
                 'replications' => count($this->lastpass['replications']),
+                'people'       => count($this->lastpass['people']),
+                'cells'        => count($this->lastpass['cells']),
                 'dispersion'   => self::DISPERSION_CI95,
                 'computed'     => time(),
             ];
@@ -1520,15 +1590,21 @@ class results_query {
         $rows = $this->each_observation();
         $attempts = 0;
         $replications = [];
+        $people = [];
+        $cells = [];
         foreach ($rows as $row) {
             $attempts++;
             $replications[$row['replication']] = true;
+            $people[self::unit_key($row)] = true;
+            $cells[self::cell_key($row)] = true;
         }
 
         return [
             'runs'         => count($this->runs()),
             'attempts'     => $attempts,
             'replications' => count($replications),
+            'people'       => count($people),
+            'cells'        => count($cells),
             'dispersion'   => self::DISPERSION_CI95,
             'computed'     => time(),
         ];

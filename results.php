@@ -201,42 +201,18 @@ echo $OUTPUT->header();
 // the reader out of the process they were in the middle of.
 echo \local_catquizlab\output\shell::render('results', optional_param('experimentid', 0, PARAM_INT));
 
-// Above the analyses, not beside them: a mean over 40 of 120 planned attempts
-// is not a worse version of the same number, it is a different number, and the
-// reader has to know that before reading it.
+// The title first, then what the figures rest on (#130): the completeness
+// warning and the reproducibility package used to stand above the page title,
+// a large box and a button before anybody knew which page this was. They are
+// in the analysis basis now — a short warning where the design is incomplete,
+// the rest folded.
 $reproexperiment = optional_param('experimentid', 0, PARAM_INT);
-if ($reproexperiment > 0) {
-    $completeness = \local_catquizlab\local\reproducibility::completeness($reproexperiment);
-
-    echo $OUTPUT->notification(
-        $completeness['summary'],
-        $completeness['complete']
-            ? \core\output\notification::NOTIFY_SUCCESS
-            : \core\output\notification::NOTIFY_WARNING
-    );
-
-    if ($completeness['hasunfinished']) {
-        echo html_writer::tag('p', html_writer::link(
-            $completeness['progressurl'],
-            get_string('repro:openprogress', $component)
-        ));
-    }
-
-    echo $OUTPUT->single_button(
-        new moodle_url('/local/catquizlab/results.php', [
-            'experimentid' => $reproexperiment, 'action' => 'package', 'sesskey' => sesskey(),
-        ]),
-        get_string('repro:download', $component),
-        'post'
-    );
-}
-
 echo $OUTPUT->heading(get_string('heading:results', $component));
 echo html_writer::tag('p', get_string('results:intro', $component), ['class' => 'text-muted']);
 
 echo $page->render_filter_bar();
 echo $page->render_tabs();
-echo $page->render_provenance();
+echo $page->render_provenance($reproexperiment);
 echo $page->render_tab();
 
 // PNG downloads (#108): drawn in the browser from each plot's own SVG, at twice
@@ -248,7 +224,8 @@ $PAGE->requires->js_amd_inline('
             if (!button) {
                 return;
             }
-            var link = button.parentNode.querySelector("[data-download=\\"svg\\"]");
+            var box = button.closest("[data-region=\\"catquizlab-plot-export\\"]") || button.parentNode;
+            var link = box.querySelector("[data-download=\\"svg\\"]");
             if (!link) {
                 return;
             }
