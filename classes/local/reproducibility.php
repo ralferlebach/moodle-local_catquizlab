@@ -142,6 +142,11 @@ class reproducibility {
                 'manifest'    => $manifest,
             ];
 
+            // What the engine was given, not only what was asked for (#121):
+            // the definition as this run used it, the parameters the
+            // provisioning derived from it, and the stop rules they make.
+            $entry += self::effective((object) $run);
+
             if ($includelog) {
                 $entry['log'] = run_log::entries((int) $run->id);
             }
@@ -168,6 +173,52 @@ class reproducibility {
             'runs'        => $runs,
             'completeness' => self::completeness($experimentid),
         ];
+    }
+
+    /**
+     * The package as a file: JSON, with anything that looks like a secret redacted (#121).
+     *
+     * @param int $experimentid The experiment.
+     * @return string
+     * @throws \moodle_exception When there is no such experiment.
+     */
+    public static function package_json(int $experimentid): string {
+        global $DB;
+
+        if (!$DB->record_exists('local_catquizlab_experiment', ['id' => $experimentid])) {
+            throw new \moodle_exception('repro:nosuchexperiment', 'local_catquizlab', '', $experimentid);
+        }
+        $json = (string) json_encode(
+            self::package($experimentid),
+            JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE
+        );
+
+        return attempt_history::redact($json);
+    }
+
+    /**
+     * A run's definition, effective parameters and stop rules.
+     *
+     * @param \stdClass $run The run record.
+     * @return array definition, effective, stoprules — or effectiveerror where they cannot be derived.
+     */
+    protected static function effective(\stdClass $run): array {
+        try {
+            $definition = run_registry::definition_for($run);
+            if ($definition === [] || !isset($definition['strategy'])) {
+                return ['definition' => $definition, 'effective' => null, 'stoprules' => []];
+            }
+            $effective = test_provisioner::effective_parameters($definition);
+
+            return [
+                'definition' => $definition,
+                'effective' => $effective,
+                'stoprules' => strategy_parameters::stop_rules($effective),
+            ];
+        } catch (\Throwable $e) {
+            // Said, not hidden: a package without them cannot claim to be complete.
+            return ['effective' => null, 'effectiveerror' => $e->getMessage()];
+        }
     }
 
     /**

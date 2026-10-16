@@ -780,8 +780,17 @@ if ($runid > 0) {
     }
     $candebug = has_capability('local/catquizlab:debug', $context);
     if ($candebug) {
-        $zipbutton = static function (string $scope, string $label, int $attemptid = 0) use ($runid): string {
+        $zipbutton = static function (string $scope, string $label, int $attemptid = 0) use ($runid, $component): string {
             global $OUTPUT;
+            // Offered only where there is something to put in it: a button that
+            // answers with "nothing to download" is a broken download (#121).
+            if (\local_catquizlab\local\artefact_store::count_in_scope($scope, $runid, $attemptid) === 0) {
+                return html_writer::tag('button', s($label), [
+                    'type' => 'button', 'class' => 'btn btn-secondary mr-1', 'disabled' => 'disabled',
+                    'title' => get_string('artefacts:none', $component),
+                    'data-region' => 'catquizlab-zip-' . $scope . '-empty',
+                ]);
+            }
             return $OUTPUT->single_button(new moodle_url('/local/catquizlab/runs.php', [
                 'runid' => $runid, 'action' => 'artefactzip', 'scope' => $scope,
                 'attemptid' => $attemptid, 'sesskey' => sesskey(),

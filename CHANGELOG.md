@@ -6,6 +6,86 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.7.37] — 2026-10-12 — #132 logviewer memory, #121 downloads, #122 factor filters
+
+### #132 — The logs page no longer runs PHP out of memory
+
+- Cause: `request_trace::read()` read every day file of request traces whole
+  with `file()`, and `log_view::lines()` merged and sorted every source before
+  cutting to 500 lines. A day file of 250 000 lines took 652 MB; the server's
+  512 MB ended in "Allowed memory size exhausted" (`request_trace.php:296`).
+- Request traces are streamed (`request_trace::each()`, a generator); a line
+  outside the time window is skipped on its time stamp without being decoded.
+  One view reads at most 256 MB, from the newest back; what it leaves out is
+  shown ("partial"), not hidden.
+- Every filter is applied line by line before the lines are cut, so the
+  newest 500 are the newest 500 *of the selection*. Each source keeps only
+  what the page needs. Measured: 250 000 lines, 18 MB, 1.3 s (was 652 MB, 5.4 s).
+- Pages: "Older lines" / "Newer lines", up to 20 pages of 500; the total
+  number of matching lines is not counted, and the page says so.
+- The database sources show their newest rows; they used to read the oldest
+  2000 of the window, so a busy window never showed its end.
+- Filtering requests by run or experiment reads the database a fixed number of
+  times, not once per sitting.
+- The live tail reads only from the last line shown.
+- Requests have a channel of their own ("request"); filtering by another
+  channel no longer brings every request along.
+- Both downloads name their filter, time range, line limit, whether they are
+  cut (`truncated`) and whether the traces were read in full (`partial`).
+- The page shows what it read: request lines, megabytes, seconds, peak memory.
+- `cli/seed_request_trace.php` writes a day of traces for the interface test;
+  `docs/dev/logviewer-speicher.md` documents cause and before/after profile.
+
+### #121 — Every download works, and is tested by pressing it
+
+- The reproducibility package ended in "Call to undefined function
+  send_file()": its branch ran before the page setup that loads the file
+  library. It now runs after login and the capability check, with
+  `filelib.php` loaded.
+- The package carries, per run, the definition the run used, the effective
+  parameters the provisioning derived from it and the stop rules they make.
+  Anything that looks like a token, session key or password is redacted.
+- An unknown experiment gives a page that says so, not a database error.
+- The run page offers the debug ZIP of failed sittings only when there are
+  any; otherwise the button is disabled and says why. It used to answer with
+  "nothing to download".
+- `tests/playwright/downloads.spec.js` presses every download on the results,
+  experiment, compare, logs and run pages and opens the file: the package,
+  every export level as CSV, JSON and metadata, every plot as SVG, CSV, JSON,
+  PNG and PDF, both definition variants, the metrics, both log downloads, the
+  debug export and the run ZIPs. Refusals: no session key, an unknown
+  experiment, an unknown export level, a signed-in user without rights. A
+  large export (4000 sittings, 24 000 steps) arrives whole.
+- `cli/seed_plain_user.php` (a user without rights) and
+  `cli/seed_results.php --persons=… --label=…` (a large experiment) for the job.
+- `docs/dev/download-inventar.md`: every download, its endpoint, right, file
+  and test.
+
+### #122 — Factor menus switch freely
+
+- Every factor menu offers every value of the experiment, whatever is
+  selected. Choosing a strategy used to leave it the only one in its own menu,
+  so switching meant resetting first. Beside each value: its runs under the
+  other factors as selected; 0 means the combination has no data.
+- A combination that was not run says so ("No observations match these
+  filters … The combination was not run"), with a reset link — not
+  "no results yet".
+- Reset keeps the experiment; applying a factor keeps the validity choice and
+  the replication.
+- Back and forward show the selection of the address: the browser restored a
+  changed menu over the page it went back to.
+- `tests/playwright/filters.spec.js`: switch without reset, back/forward,
+  reset, validity kept, keyboard, accessible names.
+
+### #110
+
+- The worker end-to-end job plays one long attempt: the classical test over
+  120 questions in one sitting, without a single failed execution.
+
+No change to the database.
+
+---
+
 ## [0.7.36] — 2026-10-07 — scale states: the format of local_catquiz#133
 
 - The plugin reads the engine's record of scale-state changes in the format

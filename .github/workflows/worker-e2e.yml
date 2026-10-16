@@ -229,6 +229,19 @@ jobs:
         run: bash local/catquizlab/cli/smoke_all.sh
 
 
+      - name: Issue 110 — one long attempt, 120 questions in one sitting
+        working-directory: moodle
+        timeout-minutes: 15
+        env:
+          MOODLE_ROOT: ${{ github.workspace }}/moodle
+        # The classical test plays the whole pool: three subscales of 40 items,
+        # 120 questions in one sitting. The HTTP 500s of #110 came in long
+        # classic runs; a short smoke test never gets there. Any failed
+        # execution, retried or not, fails the step.
+        run: >-
+          php local/catquizlab/cli/smoke.php --strategy=classic --persons=1
+          --minanswers=60 --minutes=12 --no-navigation-failures
+
       - name: Issue 100 — load test, several hundred sittings without a navigation failure
         working-directory: moodle
         timeout-minutes: 35

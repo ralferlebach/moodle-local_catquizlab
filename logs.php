@@ -82,7 +82,13 @@ if ($from > 0) {
 if (optional_param('tail', 0, PARAM_BOOL)) {
     $after = optional_param('after', 0, PARAM_INT);
     $new = [];
-    foreach (log_view::lines(['newestfirst' => 0] + $filter, 500) as $line) {
+    // Only from the last line shown on: every poll used to read the whole
+    // window again, request traces included (#132).
+    $tailfilter = ['newestfirst' => 0] + $filter;
+    if ($after > 0) {
+        $tailfilter['since'] = max((int) ($tailfilter['since'] ?? 0), intdiv($after, 1000));
+    }
+    foreach (log_view::lines($tailfilter, 500) as $line) {
         if ((int) $line['ms'] > $after) {
             $new[] = [
                 'ms' => (int) $line['ms'],
@@ -96,17 +102,13 @@ if (optional_param('tail', 0, PARAM_BOOL)) {
     die();
 }
 
+// Both downloads say what they hold: filter, time range, limit, whether they
+// are cut (#132 AK 5).
 if (optional_param('downloadjson', 0, PARAM_BOOL)) {
     require_sesskey();
 
     send_file(
-        json_encode([
-            'generated' => time(),
-            'filter'    => array_filter($filter, static function ($value): bool {
-                return $value !== '' && $value !== 0 && $value !== null;
-            }),
-            'lines'     => log_view::lines($filter, 5000),
-        ], JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES),
+        log_view::export($filter, 'json'),
         'catquizlab-log-' . date('Ymd-His') . '.json',
         0,
         0,
@@ -121,7 +123,7 @@ if (optional_param('download', 0, PARAM_BOOL)) {
     require_sesskey();
 
     send_file(
-        log_view::as_text($filter, 5000),
+        log_view::export($filter, 'txt'),
         'catquizlab-log-' . date('Ymd-His') . '.txt',
         0,
         0,
@@ -132,7 +134,11 @@ if (optional_param('download', 0, PARAM_BOOL)) {
     exit;
 }
 
-$lines = log_view::lines($filter);
+// Paged (#132): page 0 is the newest PAGE lines, page 1 the ones before them.
+$page = optional_param('page', 0, PARAM_INT);
+$window = log_view::window($filter, log_view::PAGE, $page);
+$lines = $window['lines'];
+$page = $window['page'];
 
 echo $OUTPUT->header();
 echo \local_catquizlab\output\shell::render('logs', (int) $filter['experimentid']);
@@ -162,6 +168,7 @@ echo html_writer::select(
         'service'   => 'service',
         'worker'    => 'worker',
         'attempt'   => 'attempt',
+        'request'   => 'request',
     ],
     'channel',
     $filter['channel'],
@@ -235,6 +242,13 @@ echo html_writer::empty_tag('input', [
 ]);
 echo html_writer::end_tag('form');
 
+if ($window['scan']['partial']) {
+    echo $OUTPUT->notification(get_string('logs:partial', $component, (object) [
+        'limit' => round(\local_catquizlab\local\request_trace::SCAN_BYTES / 1048576),
+        'skipped' => round($window['scan']['skippedbytes'] / 1048576, 1),
+    ]), \core\output\notification::NOTIFY_WARNING);
+}
+
 if ($lines === []) {
     // When the last thing happened, and a way to see it: "nothing recorded in
     // this window" on a one-hour window read as "nothing is recorded at all".
@@ -253,7 +267,43 @@ if ($lines === []) {
     }
     echo $OUTPUT->notification($message, \core\output\notification::NOTIFY_INFO);
 } else {
-    echo html_writer::tag('p', get_string('logs:count', $component, count($lines)), ['class' => 'small text-muted']);
+    $pagefilter = array_filter($filter + ['logaction' => $filter['action']], static function ($v): bool {
+        return $v !== '' && $v !== 0 && $v !== null;
+    });
+    unset($pagefilter['action'], $pagefilter['since'], $pagefilter['until']);
+    $pager = [];
+    if ($window['hasnewer']) {
+        $pager[] = html_writer::link(
+            new moodle_url($pageurl, $pagefilter + ['page' => $page - 1]),
+            get_string('logs:newer', $component),
+            ['class' => 'btn btn-sm btn-outline-secondary mr-1', 'data-action' => 'catquizlab-log-newer']
+        );
+    }
+    if ($window['hasolder']) {
+        $pager[] = html_writer::link(
+            new moodle_url($pageurl, $pagefilter + ['page' => $page + 1]),
+            get_string('logs:older', $component),
+            ['class' => 'btn btn-sm btn-outline-secondary mr-1', 'data-action' => 'catquizlab-log-older']
+        );
+    }
+    $count = $page === 0 && !$window['hasolder']
+        ? get_string('logs:count', $component, count($lines))
+        : get_string('logs:pageinfo', $component, (object) [
+            'page' => $page + 1, 'count' => count($lines), 'max' => log_view::MAX_PAGES,
+        ]);
+    echo html_writer::div(
+        html_writer::tag('span', $count, ['class' => 'small text-muted mr-3']) . implode('', $pager),
+        'd-flex flex-wrap align-items-center mb-2',
+        ['data-region' => 'catquizlab-log-pager']
+    );
+    // What the view read, and whether it read all of it (#132).
+    $scanned = $window['scan'];
+    echo html_writer::tag('p', get_string('logs:scan', $component, (object) [
+        'lines' => $scanned['requestlines'],
+        'mb' => round($scanned['requestbytes'] / 1048576, 1),
+        'seconds' => $scanned['seconds'],
+        'peakmb' => $scanned['peakmb'],
+    ]), ['class' => 'small text-muted mb-1', 'data-region' => 'catquizlab-log-scan']);
 
     // One <pre> holding the whole selection. Selecting a table gives somebody
     // the markup around the text; this gives them the text, which is what they

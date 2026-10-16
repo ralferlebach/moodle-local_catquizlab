@@ -164,4 +164,58 @@ final class reproducibility_test extends \advanced_testcase {
         // are what ran.
         $this->assertArrayHasKey('error', $package['experiment']['normalised']);
     }
+
+    /**
+     * Each run carries what the engine was given: definition, effective parameters, stop rules (#121).
+     *
+     * @return void
+     */
+    public function test_each_run_carries_its_effective_parameters(): void {
+        global $DB;
+        $this->resetAfterTest();
+        $this->setAdminUser();
+
+        $experimentid = $this->make_experiment(registry::STATUS_FINISHED, 1);
+        $definition = \local_catquizlab\local\experiment_definition::example_baseline();
+        $definition['strategy'] = 'fastest';
+        $definition['budgets']['global'] = ['minitems' => 7, 'maxitems' => 23];
+        $DB->set_field(
+            'local_catquizlab_run',
+            'manifestjson',
+            json_encode(['config' => ['definition' => $definition]]),
+            ['experimentid' => $experimentid]
+        );
+
+        $run = reproducibility::package($experimentid)['runs'][0];
+
+        $this->assertSame('fastest', $run['definition']['strategy']);
+        $this->assertIsArray($run['effective']);
+        $this->assertNotEmpty($run['stoprules']);
+        $this->assertStringContainsString('23', implode(' ', $run['stoprules']), 'the maximum the run was given');
+    }
+
+    /**
+     * The file is JSON, parseable, without secrets; an unknown experiment is an error that says so.
+     *
+     * @return void
+     */
+    public function test_the_package_file_is_json_without_secrets(): void {
+        global $DB;
+        $this->resetAfterTest();
+        $this->setAdminUser();
+
+        $experimentid = $this->make_experiment(registry::STATUS_FINISHED, 1);
+        $runid = (int) $DB->get_field('local_catquizlab_run', 'id', ['experimentid' => $experimentid]);
+        \local_catquizlab\local\run_log::record($runid, 'start_requested', ['url' => 'https://x/?token=abcdef123&sesskey=XyZ987']);
+
+        $json = reproducibility::package_json($experimentid);
+        $this->assertIsArray(json_decode($json, true), 'parseable');
+        $this->assertStringNotContainsString('abcdef123', $json);
+        $this->assertStringNotContainsString('XyZ987', $json);
+        $this->assertStringContainsString('token=[redacted]', $json);
+
+        $this->expectException(\moodle_exception::class);
+        $this->expectExceptionMessage('There is no experiment with the id 987654');
+        reproducibility::package_json(987654);
+    }
 }

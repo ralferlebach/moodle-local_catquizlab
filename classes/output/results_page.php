@@ -118,6 +118,11 @@ class results_page {
             'method' => 'get',
             'action' => (new \moodle_url('/local/catquizlab/results.php'))->out(false),
             'class'  => 'form-inline mb-3 p-3 bg-light border rounded',
+            // Back and forward show the selection of the address, not the menu
+            // as it was last touched: the browser restored a changed menu over
+            // the page it went back to, and the two disagreed (#122).
+            'autocomplete' => 'off',
+            'data-region' => 'catquizlab-filter-bar',
         ]);
         $out .= \html_writer::empty_tag('input', [
             'type' => 'hidden', 'name' => 'tab', 'value' => $this->tab,
@@ -132,9 +137,23 @@ class results_page {
             'name'  => 'experimentid',
             'value' => (int) ($this->filter['experimentid'] ?? 0),
         ]);
+        // The choices made elsewhere on the page stay as they are when a factor
+        // changes (#122 AK 5): applying a strategy used to put the validity
+        // selection back to its default without a word.
+        foreach (['validity', 'validityrule', 'replication'] as $kept) {
+            if (!empty($this->filter[$kept])) {
+                $out .= \html_writer::empty_tag('input', [
+                    'type' => 'hidden', 'name' => $kept, 'value' => (string) $this->filter[$kept],
+                ]);
+            }
+        }
 
         // The remaining menus describe the experimental coordinates. Every one
         // of them is a factor the design varies, so all of them are filterable.
+        // Every value of the experiment, whatever else is selected (#122): the
+        // menus used to offer only what the current selection left, so a
+        // chosen strategy was the only one left in its own menu. The number
+        // beside a value is its runs under the other factors as selected.
         foreach (
             [
             'tier'     => 'form:tier',
@@ -145,9 +164,9 @@ class results_page {
             'severity' => 'form:severity',
             ] as $field => $labelkey
         ) {
-            $values = $this->query->available($field);
-            if ($field === 'tier') {
-                $values = $this->tier_values();
+            $values = [];
+            foreach ($this->query->factor_options($field) as $value => $option) {
+                $values[$value] = get_string('filter:optionruns', $component, (object) $option);
             }
             if ($values === []) {
                 continue;
@@ -164,11 +183,17 @@ class results_page {
             'class' => 'btn btn-primary',
             'value' => get_string('filter:apply', $component),
         ]);
+        // Reset clears the factors, not the experiment (#122 AK 5): it used to
+        // drop the experiment as well and land on every run of the site.
         $out .= \html_writer::link(
-            new \moodle_url('/local/catquizlab/results.php', ['tab' => $this->tab]),
+            new \moodle_url('/local/catquizlab/results.php', array_filter([
+                'experimentid' => (int) ($this->filter['experimentid'] ?? 0),
+                'tab' => $this->tab,
+            ])),
             get_string('filter:reset', $component),
-            ['class' => 'btn btn-link']
+            ['class' => 'btn btn-link', 'data-action' => 'catquizlab-filter-reset']
         );
+        $out .= \html_writer::div(get_string('filter:runshint', $component), 'w-100 small text-muted');
         $out .= \html_writer::end_tag('form');
 
         return $out;
@@ -216,6 +241,10 @@ class results_page {
         global $DB;
 
         $component = 'local_catquizlab';
+        $mismatch = $this->factor_mismatch();
+        if ($mismatch !== '') {
+            return $mismatch;
+        }
 
         // Scoped to the experiment when one is filtered for, otherwise across
         // every run: the unfiltered view is exactly where a first-time user
@@ -265,6 +294,42 @@ class results_page {
         }
 
         return get_string('results:noobservations', $component) . ' ' . $summary;
+    }
+
+    /**
+     * When the chosen factors match no run of the experiment: which ones, and the way back (#122 AK 4).
+     *
+     * Said as what it is — the combination was not run — rather than as
+     * "no results yet", which sent people to wait for runs that would never come.
+     *
+     * @return string The message with a reset link, or '' when the factors are not the reason.
+     */
+    protected function factor_mismatch(): string {
+        $component = 'local_catquizlab';
+        $chosen = [];
+        foreach (\local_catquizlab\local\results_query::FACTORS as $factor) {
+            $value = (string) ($this->filter[$factor] ?? '');
+            if ($value === '') {
+                continue;
+            }
+            $options = $this->query->factor_options($factor);
+            $chosen[] = get_string('form:' . $factor, $component) . ': '
+                . (isset($options[$value]) ? $options[$value]['label'] : $value);
+        }
+        if ($chosen === [] || $this->query->runs() !== []) {
+            return '';
+        }
+        $reset = new \moodle_url('/local/catquizlab/results.php', array_filter([
+            'experimentid' => (int) ($this->filter['experimentid'] ?? 0),
+            'tab' => $this->tab,
+        ]));
+
+        return \html_writer::span(
+            get_string('results:nomatch', $component, implode(', ', $chosen)),
+            '',
+            ['data-region' => 'catquizlab-nomatch']
+        )
+            . ' ' . \html_writer::link($reset, get_string('filter:reset', $component));
     }
 
     /**
@@ -715,6 +780,11 @@ class results_page {
         global $OUTPUT;
 
         $component = 'local_catquizlab';
+        // A combination that was never run is not "no results yet" (#122 AK 4);
+        // the provenance block above every tab already says what it is.
+        if ($this->factor_mismatch() !== '') {
+            return '';
+        }
 
         $out = $OUTPUT->notification(
             \html_writer::tag('strong', get_string('results:nodata', $component))
@@ -3584,28 +3654,6 @@ class results_page {
         // Drawing one target line when the runs used several would misrepresent
         // all but one of them.
         return count($targets) === 1 ? reset($targets) : null;
-    }
-
-    /**
-     * The available tier values, labelled.
-     *
-     * @return array<string, string>
-     */
-    protected function tier_values(): array {
-        $values = [];
-        foreach ($this->query->runs() as $run) {
-            $tier = (string) ($run['tier'] ?? '');
-            if ($tier === '') {
-                continue;
-            }
-            $key = 'tier:' . $tier;
-            $values[$tier] = get_string_manager()->string_exists($key, 'local_catquizlab')
-                ? get_string($key, 'local_catquizlab')
-                : $tier;
-        }
-        ksort($values);
-
-        return $values;
     }
 
     /**

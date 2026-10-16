@@ -68,6 +68,9 @@ class results_query {
     /** @var array|null Cached observations. */
     protected ?array $observations = null;
 
+    /** @var array<int, array>|null The runs of the scope before any factor filter, read once (#122). */
+    protected ?array $scoperuns = null;
+
     /**
      * Construct for a filter.
      *
@@ -1385,6 +1388,110 @@ class results_query {
         ksort($values);
 
         return $values;
+    }
+
+    /** @var string[] The factors the filter bar offers, each a dropdown (#122). */
+    public const FACTORS = ['tier', 'model', 'strategy', 'variant', 'stratum', 'severity'];
+
+    /**
+     * The values a factor's dropdown offers: every value of the experiment, whatever is selected (#122).
+     *
+     * available() reads the runs the current selection leaves, so choosing a
+     * strategy left that strategy as the only one in its own dropdown — and
+     * every other dropdown cut to the combinations it happened to share.
+     * Switching from one strategy to another meant resetting the filter first.
+     *
+     * Here every value of the experiment (or of the replication, or the run,
+     * where one is chosen) is offered, with the number of runs it has under
+     * the other factors as currently selected: a combination without data is
+     * visible before it is chosen, and still choosable.
+     *
+     * @param string $field One of FACTORS.
+     * @return array<string, array{label: string, runs: int}> Sorted by value.
+     */
+    public function factor_options(string $field): array {
+        $others = array_diff(self::FACTORS, [$field]);
+        $options = [];
+        foreach ($this->runs_in_scope() as $run) {
+            $value = (string) ($run[$field] ?? '');
+            if ($value === '') {
+                continue;
+            }
+            $options[$value] ??= [
+                'label' => $field === 'tier' ? self::tier_label($value) : run_registry::group_label($field, $value),
+                'runs' => 0,
+            ];
+            $fits = true;
+            foreach ($others as $other) {
+                if (!empty($this->filter[$other]) && (string) ($run[$other] ?? '') !== (string) $this->filter[$other]) {
+                    $fits = false;
+                    break;
+                }
+            }
+            foreach (['cellkey', 'budget'] as $other) {
+                if (!empty($this->filter[$other]) && (string) ($run[$other] ?? '') !== (string) $this->filter[$other]) {
+                    $fits = false;
+                }
+            }
+            if ($fits) {
+                $options[$value]['runs']++;
+            }
+        }
+        // A value in the address that the experiment does not have stays
+        // visible as what is selected, with no runs — not silently dropped.
+        $current = (string) ($this->filter[$field] ?? '');
+        if ($current !== '' && !isset($options[$current])) {
+            $options[$current] = [
+                'label' => $field === 'tier' ? self::tier_label($current) : run_registry::group_label($field, $current),
+                'runs' => 0,
+            ];
+        }
+        ksort($options);
+
+        return $options;
+    }
+
+    /**
+     * The runs of the experiment, replication or run chosen — before any factor filter.
+     *
+     * @return array<int, array> Described runs, by id.
+     */
+    protected function runs_in_scope(): array {
+        global $DB;
+
+        if ($this->scoperuns !== null) {
+            return $this->scoperuns;
+        }
+        $conditions = [];
+        if (!empty($this->filter['experimentid'])) {
+            $conditions['experimentid'] = (int) $this->filter['experimentid'];
+        }
+        if (!empty($this->filter['runid'])) {
+            $conditions['id'] = (int) $this->filter['runid'];
+        }
+        if (!empty($this->filter['replication'])) {
+            $conditions['replication'] = (int) $this->filter['replication'];
+        }
+        $this->scoperuns = [];
+        foreach ($DB->get_records('local_catquizlab_run', $conditions, 'id ASC') as $record) {
+            $row = run_registry::describe($record);
+            $row['tier'] = $this->tier_of($record);
+            $this->scoperuns[(int) $row['id']] = $row;
+        }
+
+        return $this->scoperuns;
+    }
+
+    /**
+     * A tier's name as shown.
+     *
+     * @param string $tier The tier.
+     * @return string
+     */
+    protected static function tier_label(string $tier): string {
+        $key = 'tier:' . $tier;
+
+        return get_string_manager()->string_exists($key, 'local_catquizlab') ? get_string($key, 'local_catquizlab') : $tier;
     }
 
     /**

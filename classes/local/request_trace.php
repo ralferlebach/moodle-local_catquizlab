@@ -272,39 +272,166 @@ class request_trace {
         );
     }
 
+    /** @var int The most lines read() hands back: the newest, the rest stays on disk (#132). */
+    public const READ_LIMIT = 5000;
+
     /**
-     * The lines of the days from $from to $until, oldest first.
+     * The lines of the days from $from to $until, oldest first — at most the newest $limit of them.
+     *
+     * Bounded (#132): a day of a load test is several hundred thousand lines,
+     * and holding them all as arrays ran PHP out of memory on the logs page.
+     * Whoever needs more walks each() and keeps what it needs.
      *
      * @param int $from Unix time.
      * @param int $until Unix time.
+     * @param int $limit The most lines to keep, newest; 0 for READ_LIMIT.
      * @return array[]
      */
-    public static function read(int $from, int $until): array {
+    public static function read(int $from, int $until, int $limit = 0): array {
+        $limit = $limit > 0 ? $limit : self::READ_LIMIT;
+        $kept = [];
+        foreach (self::each($from, $until) as $line) {
+            $kept[] = $line;
+            // Trimmed in batches by position in the file (the order the requests
+            // ended in), with a margin of $limit for a long request that began
+            // before shorter ones it ended after.
+            if (count($kept) >= 4 * $limit) {
+                $kept = array_slice($kept, -2 * $limit);
+            }
+        }
+        usort($kept, static fn(array $a, array $b): int => $a['unixms'] <=> $b['unixms']);
+
+        return array_slice($kept, -$limit);
+    }
+
+    /** @var int How many bytes of trace files one view reads at most, from the newest back (#132). */
+    public const SCAN_BYTES = 256 * 1048576;
+
+    /**
+     * Which parts of which day files a read of $from to $until covers, newest first within the byte budget (#132).
+     *
+     * The budget is spent from the end: the newest day file first, back to
+     * the oldest. A file that does not fit any more is read from an offset —
+     * its newest part — and older files are skipped. What was left out is
+     * said, not hidden: 'skippedbytes' is the part of the window not read.
+     *
+     * @param int $from Unix time.
+     * @param int $until Unix time.
+     * @param int $maxbytes The budget; 0 for no limit.
+     * @return array files (list of [path, offset], oldest first), bytes (to read), skippedbytes (left out).
+     */
+    public static function scan_plan(int $from, int $until, int $maxbytes = 0): array {
         global $CFG;
 
+        $plan = ['files' => [], 'bytes' => 0, 'skippedbytes' => 0];
         $dir = $CFG->dataroot . '/' . self::DIRECTORY;
         if (!is_dir($dir)) {
-            return [];
+            return $plan;
         }
-        $lines = [];
+        $days = [];
         for ($day = strtotime(gmdate('Y-m-d', $from) . ' 00:00:00 UTC'); $day <= $until; $day += 86400) {
             $file = $dir . '/' . gmdate('Y-m-d', $day) . '.jsonl';
-            if (!is_readable($file)) {
-                continue;
-            }
-            foreach (file($file, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) ?: [] as $raw) {
-                $line = json_decode($raw, true);
-                if (is_array($line) && isset($line['time'])) {
-                    $line['unixms'] = (int) round(1000 * strtotime(substr((string) $line['time'], 0, 19) . ' UTC'))
-                        + (int) substr((string) $line['time'], 20, 3);
-                    if ($line['unixms'] >= $from * 1000 && $line['unixms'] <= ($until + 1) * 1000) {
-                        $lines[] = $line;
-                    }
-                }
+            if (is_readable($file)) {
+                $days[] = $file;
             }
         }
+        $budget = $maxbytes > 0 ? $maxbytes : PHP_INT_MAX;
+        foreach (array_reverse($days) as $file) {
+            $size = (int) @filesize($file);
+            if ($budget <= 0) {
+                $plan['skippedbytes'] += $size;
+                continue;
+            }
+            $offset = max(0, $size - $budget);
+            $plan['skippedbytes'] += $offset;
+            $plan['bytes'] += $size - $offset;
+            $budget -= $size - $offset;
+            array_unshift($plan['files'], [$file, $offset]);
+        }
 
-        return $lines;
+        return $plan;
+    }
+
+    /**
+     * The lines of the days from $from to $until, one at a time, in the order they were written.
+     *
+     * Streamed (#132): one line in memory at a time, and a line outside the
+     * window is passed over on its time stamp without being decoded — the
+     * time is the first field of every line record() writes.
+     *
+     * @param int $from Unix time.
+     * @param int $until Unix time.
+     * @param array|null $plan A scan_plan() for the same window; the whole window when not given.
+     * @return \Generator<array> Each line, with 'unixms' added.
+     */
+    public static function each(int $from, int $until, ?array $plan = null): \Generator {
+        $plan ??= self::scan_plan($from, $until);
+        $lower = $from * 1000;
+        $upper = ($until + 1) * 1000;
+        foreach ($plan['files'] as [$file, $offset]) {
+            $handle = @fopen($file, 'rb');
+            if ($handle === false) {
+                continue;
+            }
+            try {
+                if ($offset > 0) {
+                    fseek($handle, $offset);
+                    // The rest of a line cut in two by the offset.
+                    fgets($handle);
+                }
+                while (($raw = fgets($handle)) !== false) {
+                    $ms = self::stamp_ms($raw);
+                    if ($ms !== null && ($ms < $lower || $ms > $upper)) {
+                        continue;
+                    }
+                    $line = json_decode($raw, true);
+                    if (!is_array($line) || !isset($line['time'])) {
+                        continue;
+                    }
+                    $line['unixms'] = $ms ?? self::time_ms((string) $line['time']);
+                    if ($line['unixms'] < $lower || $line['unixms'] > $upper) {
+                        continue;
+                    }
+                    yield $line;
+                }
+            } finally {
+                fclose($handle);
+            }
+        }
+    }
+
+    /**
+     * The time of a raw line from its leading field, without decoding it.
+     *
+     * @param string $raw A line as written: {"time":"2026-10-12T08:15:00.123Z",...
+     * @return int|null Milliseconds, or null when the line does not begin that way.
+     */
+    protected static function stamp_ms(string $raw): ?int {
+        if (strncmp($raw, '{"time":"', 9) !== 0 || strlen($raw) < 33 || $raw[32] !== 'Z') {
+            return null;
+        }
+
+        return self::time_ms(substr($raw, 9, 24));
+    }
+
+    /**
+     * Milliseconds since the epoch of a time as record() writes it.
+     *
+     * @param string $time 2026-10-12T08:15:00.123Z
+     * @return int
+     */
+    protected static function time_ms(string $time): int {
+        // Consecutive lines mostly share their second; strtotime() was most of
+        // the time a large day file took to read.
+        static $second = '';
+        static $unix = 0;
+        $prefix = substr($time, 0, 19);
+        if ($prefix !== $second) {
+            $second = $prefix;
+            $unix = (int) strtotime($prefix . ' UTC');
+        }
+
+        return $unix * 1000 + (int) substr($time, 20, 3);
     }
 
     /**

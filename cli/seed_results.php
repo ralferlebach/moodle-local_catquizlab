@@ -21,6 +21,9 @@
  * traces are shaped as the engine keeps them, and one twin family across both
  * runs. Prints PLOTS_EXPERIMENTID=<id>.
  *
+ * Options: --persons=20 (sittings per run), --label=PLOTS (prints <label>_EXPERIMENTID):
+ * --persons=2000 --label=LARGE is the large experiment of the export test (#121).
+ *
  * @package    local_catquizlab
  * @copyright  2026 Ralf Erlebach
  * @license    https://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
@@ -40,13 +43,17 @@ use local_catquizlab\local\test_flow;
 
 \core\session\manager::set_user(get_admin());
 
+[$options] = cli_get_params(['persons' => 20, 'label' => 'PLOTS']);
+$persons = max(1, (int) $options['persons']);
+$label = preg_replace('/[^A-Z0-9_]/', '', strtoupper((string) $options['label'])) ?: 'PLOTS';
+
 $definition = experiment_definition::example_baseline();
-$definition['name'] = 'Plots ' . date('Ymd-His');
+$definition['name'] = ucfirst(strtolower($label)) . ' ' . date('Ymd-His');
 $definition['sweep']['factors']['strategy'] = ['fastest', 'allsubs'];
 // Six questions a sitting: within the budgets, so that the sittings are valid ones.
 $definition['budgets']['global'] = ['minitems' => 3, 'maxitems' => 30];
 $definition['budgets']['subscale'] = ['minitems' => 1, 'maxitems' => 10];
-$definition['persons']['count'] = 20;
+$definition['persons']['count'] = $persons;
 $definition['pool']['scales'] = ['categories' => 1, 'subcategories' => 1, 'itemspersubscale' => 6];
 $experimentid = (int) experiment_service::save($definition)['id'];
 experiment_service::create_sweep($experimentid);
@@ -55,7 +62,7 @@ mt_srand(105);
 $items = [[1.2, -0.5], [0.8, 0.3], [1.5, 1.1], [1.0, -1.2], [0.9, 0.6], [1.3, -0.1]];
 foreach ($DB->get_records('local_catquizlab_run', ['experimentid' => $experimentid], 'id ASC') as $run) {
     \local_catquizlab\local\run_lifecycle::set_status((int) $run->id, registry::STATUS_FINISHED, 'seeded');
-    for ($i = 1; $i <= 20; $i++) {
+    for ($i = 1; $i <= $persons; $i++) {
         $truth = round((mt_rand() / mt_getrandmax() - 0.5) * 5, 3);
         $played = [];
         $path = [];
@@ -98,4 +105,4 @@ foreach ($DB->get_records('local_catquizlab_run', ['experimentid' => $experiment
     }
 }
 
-cli_writeln('PLOTS_EXPERIMENTID=' . $experimentid);
+cli_writeln($label . '_EXPERIMENTID=' . $experimentid);

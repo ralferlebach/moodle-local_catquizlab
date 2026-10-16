@@ -37,26 +37,6 @@ use local_catquizlab\output\results_page;
 
 $tab = optional_param('tab', 'overview', PARAM_ALPHA);
 
-// The package is a file, so it has to be sent before the page starts.
-if (optional_param('action', '', PARAM_ALPHA) === 'package') {
-    require_sesskey();
-    $packageid = required_param('experimentid', PARAM_INT);
-    require_capability('local/catquizlab:view', context_system::instance());
-
-    $package = \local_catquizlab\local\reproducibility::package($packageid);
-
-    send_file(
-        json_encode($package, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE),
-        'catquizlab-experiment-' . $packageid . '.json',
-        0,
-        0,
-        true,
-        true,
-        'application/json'
-    );
-    exit;
-}
-
 $filter = [];
 foreach (['experimentid', 'replication'] as $key) {
     $value = optional_param($key, 0, PARAM_INT);
@@ -107,6 +87,27 @@ $pageurl = new moodle_url('/local/catquizlab/results.php', $filter + ['tab' => $
 $PAGE->set_url($pageurl);
 
 require_capability('local/catquizlab:view', $context);
+
+// The package is a file, so it is sent before the page starts — but after the
+// page's login and access checks, and with the file library loaded: sent
+// before both, every download ended in "Call to undefined function
+// send_file()" (#121).
+if (optional_param('action', '', PARAM_ALPHA) === 'package') {
+    require_sesskey();
+    require_once($CFG->libdir . '/filelib.php');
+    $packageid = required_param('experimentid', PARAM_INT);
+
+    send_file(
+        \local_catquizlab\local\reproducibility::package_json($packageid),
+        'catquizlab-experiment-' . $packageid . '.json',
+        0,
+        0,
+        true,
+        true,
+        'application/json'
+    );
+    exit;
+}
 
 $query = new results_query($filter);
 

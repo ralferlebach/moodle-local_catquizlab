@@ -169,6 +169,20 @@ jobs:
         working-directory: moodle
         run: php local/catquizlab/cli/seed_results.php | grep -E '^PLOTS_EXPERIMENTID=' >> "$GITHUB_ENV"
 
+      - name: Seed a large experiment and a user without rights for the download tests (#121)
+        working-directory: moodle
+        run: |
+          php local/catquizlab/cli/seed_results.php --persons=2000 --label=LARGE | grep -E '^LARGE_EXPERIMENTID=' >> "$GITHUB_ENV"
+          php local/catquizlab/cli/seed_plain_user.php > /tmp/plain.env
+          echo "::add-mask::$(grep '^PLAIN_PASSWORD=' /tmp/plain.env | cut -d= -f2-)"
+          grep -E '^PLAIN_(USER|PASSWORD)=' /tmp/plain.env >> "$GITHUB_ENV"
+          rm -f /tmp/plain.env
+
+      - name: Seed a day of request traces for the logs page (#132)
+        working-directory: moodle
+        # 250 000 lines: the size that ran the logs page out of PHP memory.
+        run: php local/catquizlab/cli/seed_request_trace.php --lines=250000 | grep -E '^LOGS_ERRORS=' >> "$GITHUB_ENV"
+
       - name: Play one experiment through the interface
         working-directory: moodle/local/catquizlab/tests/playwright
         env:

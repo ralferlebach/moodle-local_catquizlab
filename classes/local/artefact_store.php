@@ -211,6 +211,49 @@ class artefact_store {
     }
 
     /**
+     * The sittings a scope covers, as a condition on local_catquizlab_attempt.
+     *
+     * @param string $scope SCOPE_RUN, SCOPE_FAILED or SCOPE_ATTEMPT.
+     * @param int $runid The run.
+     * @param int $attemptid The sitting, for SCOPE_ATTEMPT.
+     * @return array [string $where, array $params]
+     */
+    protected static function scope_select(string $scope, int $runid, int $attemptid = 0): array {
+        $conditions = 'runid = :runid';
+        $params = ['runid' => $runid];
+        if ($scope === self::SCOPE_ATTEMPT) {
+            $conditions .= ' AND id = :attemptid';
+            $params['attemptid'] = $attemptid;
+        } else if ($scope === self::SCOPE_FAILED) {
+            $conditions .= ' AND (status = :failed OR id IN (SELECT attemptid FROM {local_catquizlab_attemptlog}'
+                . ' WHERE runid = :logrunid AND outcome = :logfailed))';
+            $params += [
+                'failed' => attempt_scheduler::STATUS_FAILED,
+                'logrunid' => $runid,
+                'logfailed' => attempt_history::FAILED,
+            ];
+        }
+
+        return [$conditions, $params];
+    }
+
+    /**
+     * How many sittings a scope covers: what a download button can promise before it is pressed (#121).
+     *
+     * @param string $scope SCOPE_RUN, SCOPE_FAILED or SCOPE_ATTEMPT.
+     * @param int $runid The run.
+     * @param int $attemptid The sitting, for SCOPE_ATTEMPT.
+     * @return int
+     */
+    public static function count_in_scope(string $scope, int $runid, int $attemptid = 0): int {
+        global $DB;
+
+        [$conditions, $params] = self::scope_select($scope, $runid, $attemptid);
+
+        return $DB->count_records_select('local_catquizlab_attempt', $conditions, $params);
+    }
+
+    /**
      * Pack artefacts into a ZIP with a structure a person can read.
      *
      *     manifest.json
@@ -231,20 +274,7 @@ class artefact_store {
         global $DB, $CFG;
 
         $run = $DB->get_record('local_catquizlab_run', ['id' => $runid], '*', MUST_EXIST);
-        $conditions = 'runid = :runid';
-        $params = ['runid' => $runid];
-        if ($scope === self::SCOPE_ATTEMPT) {
-            $conditions .= ' AND id = :attemptid';
-            $params['attemptid'] = $attemptid;
-        } else if ($scope === self::SCOPE_FAILED) {
-            $conditions .= ' AND (status = :failed OR id IN (SELECT attemptid FROM {local_catquizlab_attemptlog}'
-                . ' WHERE runid = :logrunid AND outcome = :logfailed))';
-            $params += [
-                'failed' => attempt_scheduler::STATUS_FAILED,
-                'logrunid' => $runid,
-                'logfailed' => attempt_history::FAILED,
-            ];
-        }
+        [$conditions, $params] = self::scope_select($scope, $runid, $attemptid);
         $attempts = $DB->get_records_select('local_catquizlab_attempt', $conditions, $params, 'id ASC');
 
         $includehtml = (bool) get_config('local_catquizlab', 'artefacts_include_html');
