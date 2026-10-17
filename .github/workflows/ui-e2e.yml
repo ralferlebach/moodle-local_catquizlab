@@ -55,8 +55,14 @@ permissions:
 
 jobs:
   ui-e2e:
-    name: "Interface end-to-end (Playwright)"
+    name: "Interface end-to-end (${{ matrix.stack }}, pinned CatQuiz #146)"
     runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { stack: legacy, moodle: MOODLE_405_STABLE, coreroot: moodle, dirroot: moodle, webroot: moodle }
+          - { stack: moodle5, moodle: MOODLE_502_STABLE, coreroot: moodle, dirroot: moodle/public, webroot: moodle/public }
     services:
       postgres:
         image: postgres:16
@@ -90,7 +96,7 @@ jobs:
           ini-values: max_input_vars=8000, memory_limit=1024M
 
       - name: Check out Moodle
-        run: git clone --depth 1 -b MOODLE_405_STABLE https://github.com/moodle/moodle.git moodle
+        run: git clone --depth 1 -b ${{ matrix.moodle }} https://github.com/moodle/moodle.git moodle
 
       # New CatQuiz #146 engine/host candidates, pinned separately in
       # .github/engine-pins-interface.env. This E2E must not silently test the
@@ -98,17 +104,17 @@ jobs:
       # Promote to shared release/worker pins only after CatQuizLab #136 DoDs.
       - name: Check out the CAT engine and its host activity (pinned set)
         env:
-          ENGINE_DIR: ${{ github.workspace }}/moodle
+          ENGINE_DIR: ${{ github.workspace }}/${{ matrix.dirroot }}
           ENGINE_LAYOUT: moodle
           ENGINE_SUBMODULES: '1'
           ENGINE_MANIFEST: ${{ github.workspace }}/engine-manifest.txt
           PINS_FILE: ${{ github.workspace }}/plugin/.github/engine-pins-interface.env
           ENGINE_FOLLOW_HEADS: ${{ github.event.inputs.engine_heads == 'true' && '1' || '0' }}
-          MOODLE_BRANCH: MOODLE_405_STABLE
+          MOODLE_BRANCH: ${{ matrix.moodle }}
         run: |
           bash plugin/.github/scripts/fetch-engine.sh
           echo "local_catquizlab  ${GITHUB_SHA}" >> "$ENGINE_MANIFEST"
-          cp -r plugin moodle/local/catquizlab
+          cp -r plugin ${{ matrix.dirroot }}/local/catquizlab
 
       # A green browser suite against the wrong engine SHA is false evidence.
       # Fail before installation if the manifest does not contain the expected
@@ -118,15 +124,24 @@ jobs:
         if: ${{ github.event.inputs.engine_heads != 'true' }}
         run: |
           set -euo pipefail
-          grep -E '^local_catquiz[[:space:]]' engine-manifest.txt | grep -Fq '8a62ce30db1fa66fb1712e7079dc4caaf5003f20'
-          grep -E '^mod_adaptivequiz[[:space:]]' engine-manifest.txt | grep -Fq '50b7aad7a783003bff30a57e21854120fee0f32d'
-          grep -E '^adaptivequizcatmodel_catquiz[[:space:]]' engine-manifest.txt | grep -Fq '1414a9cc8e0f436f19f4647348217196c9692c95'
-          echo "Interface E2E candidate set verified against actual checkouts"
+          if [[ "${{ matrix.stack }}" == "legacy" ]]; then
+            CATQUIZ_SHA=8a62ce30db1fa66fb1712e7079dc4caaf5003f20
+            HOST_SHA=50b7aad7a783003bff30a57e21854120fee0f32d
+            MODEL_SHA=1414a9cc8e0f436f19f4647348217196c9692c95
+          else
+            CATQUIZ_SHA=02c856f092d91f2387b8499c7c02f8948fb909cc
+            HOST_SHA=d3b0dd12f82c759a5a8d256791570fadb4c0111b
+            MODEL_SHA=e724f6acdb56b05dafc0beb1e955b0277b05f497
+          fi
+          grep -E '^local_catquiz[[:space:]]' engine-manifest.txt | grep -Fq "$CATQUIZ_SHA"
+          grep -E '^mod_adaptivequiz[[:space:]]' engine-manifest.txt | grep -Fq "$HOST_SHA"
+          grep -E '^adaptivequizcatmodel_catquiz[[:space:]]' engine-manifest.txt | grep -Fq "$MODEL_SHA"
+          echo "${{ matrix.stack }} candidate engine set verified against actual checkouts"
 
       - name: Configure Moodle
         run: |
           mkdir -p "$HOME/moodledata"
-          cat > moodle/config.php <<'PHP'
+          cat > ${{ matrix.coreroot }}/config.php <<'PHP'
           <?php
           unset($CFG);
           global $CFG;
@@ -146,24 +161,43 @@ jobs:
           require_once(__DIR__ . '/lib/setup.php');
           PHP
 
+      - name: Check Core, Plugin, and Webroots before installation
+        run: |
+          set -euo pipefail
+          for file in \
+            "${{ matrix.coreroot }}/config.php" \
+            "${{ matrix.coreroot }}/admin/cli/install_database.php" \
+            "${{ matrix.coreroot }}/admin/cli/adhoc_task.php" \
+            "${{ matrix.dirroot }}/local/catquiz/version.php" \
+            "${{ matrix.dirroot }}/mod/adaptivequiz/version.php" \
+            "${{ matrix.dirroot }}/local/catquizlab/version.php" \
+            "${{ matrix.webroot }}/index.php" \
+            "${{ matrix.webroot }}/config.php"; do
+            test -f "$file" || { echo "::error::Missing: $file"; exit 1; }
+          done
+
       - name: Install Moodle
-        working-directory: moodle
+        working-directory: ${{ matrix.coreroot }}
         run: |
           php admin/cli/install_database.php --agree-license \
               --adminuser="$CATLAB_ADMIN_USER" \
               --adminpass="$CATLAB_ADMIN_PASSWORD" --adminemail=admin@example.com \
               --fullname="CATLab E2E" --shortname="CATLabE2E"
 
+      - name: Run the installation's question-bank migration tasks
+        working-directory: ${{ matrix.coreroot }}
+        run: php admin/cli/adhoc_task.php --execute
+
       # Everything the worker needs is prepared by the plugin's own CLI rather
       # than assembled in YAML, so the E2E job exercises the same provisioning
       # path an operator uses.
       - name: Provision an experiment, a run and a worker token
         id: prepare
-        working-directory: moodle
+        working-directory: ${{ matrix.dirroot }}
         run: php local/catquizlab/cli/e2e_prepare.php --persons=1 >> "$GITHUB_OUTPUT"
 
       - name: Start the web server
-        working-directory: moodle
+        working-directory: ${{ matrix.webroot }}
         run: |
           # More than one worker. PHP's development server answers one request
           # at a time by default, and the self-test makes an HTTP call to this
@@ -181,13 +215,13 @@ jobs:
           exit 1
 
       - name: Install Playwright and its browser
-        working-directory: moodle/local/catquizlab/tests/playwright
+        working-directory: ${{ matrix.dirroot }}/local/catquizlab/tests/playwright
         run: |
           npm install --no-audit --no-fund
           npx playwright install --with-deps chromium
 
       - name: Install the worker's dependencies
-        working-directory: moodle/local/catquizlab/worker
+        working-directory: ${{ matrix.dirroot }}/local/catquizlab/worker
         run: npm install --no-audit --no-fund
 
       # The plugin starts its own workers, and the pipeline task is what makes
@@ -195,21 +229,21 @@ jobs:
       # an experiment waiting forever, which is correct behaviour and a useless
       # test.
       - name: Run Moodle cron in the background
-        working-directory: moodle
+        working-directory: ${{ matrix.coreroot }}
         run: |
           nohup bash -c 'while true; do php admin/cli/cron.php >> /tmp/cron.log 2>&1; sleep 20; done' &
           sleep 5
 
       - name: Seed a failed sitting for the recovery test (#98)
-        working-directory: moodle
+        working-directory: ${{ matrix.dirroot }}
         run: php local/catquizlab/cli/seed_failed_attempt.php | grep -E '^RECOVERY_RUNID=' >> "$GITHUB_ENV"
 
       - name: Seed results for the plot checks (#105)
-        working-directory: moodle
+        working-directory: ${{ matrix.dirroot }}
         run: php local/catquizlab/cli/seed_results.php | grep -E '^PLOTS_EXPERIMENTID=' >> "$GITHUB_ENV"
 
       - name: Seed a large experiment and a user without rights for the download tests (#121)
-        working-directory: moodle
+        working-directory: ${{ matrix.dirroot }}
         run: |
           php local/catquizlab/cli/seed_results.php --persons=2000 --label=LARGE | grep -E '^LARGE_EXPERIMENTID=' >> "$GITHUB_ENV"
           php local/catquizlab/cli/seed_plain_user.php > /tmp/plain.env
@@ -218,12 +252,12 @@ jobs:
           rm -f /tmp/plain.env
 
       - name: Seed a day of request traces for the logs page (#132)
-        working-directory: moodle
+        working-directory: ${{ matrix.dirroot }}
         # 250 000 lines: the size that ran the logs page out of PHP memory.
         run: php local/catquizlab/cli/seed_request_trace.php --lines=250000 | grep -E '^LOGS_ERRORS=' >> "$GITHUB_ENV"
 
       - name: Play one experiment through the interface
-        working-directory: moodle/local/catquizlab/tests/playwright
+        working-directory: ${{ matrix.dirroot }}/local/catquizlab/tests/playwright
         env:
           MOODLE_URL: http://127.0.0.1:8000
           MOODLE_ADMIN: ${{ env.CATLAB_ADMIN_USER }}
@@ -236,7 +270,7 @@ jobs:
       # the memory limit this run had (AK 6).
       - name: Server figures of the run
         if: always()
-        working-directory: moodle
+        working-directory: ${{ matrix.dirroot }}
         run: |
           php local/catquizlab/cli/request_report.php --from="$(( $(date +%s) - 7200 ))" | tee /tmp/request-report.txt
           php local/catquizlab/cli/request_report.php --from="$(( $(date +%s) - 7200 ))" --json > /tmp/request-report.json || true
@@ -249,8 +283,8 @@ jobs:
         if: always()
         run: |
           mkdir -p evidence
-          cp -r moodle/local/catquizlab/tests/playwright/artifacts evidence/artifacts || true
-          cp -r moodle/local/catquizlab/tests/playwright/report evidence/report || true
+          cp -r ${{ matrix.dirroot }}/local/catquizlab/tests/playwright/artifacts evidence/artifacts || true
+          cp -r ${{ matrix.dirroot }}/local/catquizlab/tests/playwright/report evidence/report || true
           cp /tmp/webserver.log evidence/webserver.log || true
           cp /tmp/cron.log evidence/cron.log || true
           cp engine-manifest.txt evidence/engine-manifest.txt || true
@@ -264,7 +298,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v6
         with:
-          name: catquizlab-ui-e2e
+          name: catquizlab-ui-e2e-${{ matrix.stack }}
           path: evidence
           retention-days: 14
           if-no-files-found: warn
