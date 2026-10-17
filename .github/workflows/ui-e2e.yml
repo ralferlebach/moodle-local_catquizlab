@@ -2,7 +2,9 @@ name: Interface end-to-end
 
 # The release gate for the interface (re-audit 16.10.2026, AK 3): on every
 # push and pull request to main, and by hand. It installs Moodle with the
-# pinned engine set, provisions an experiment and plays it through a real
+# pinned *candidate* engine set from .github/engine-pins-interface.env,
+# independent of the release/worker baselines in .github/engine-pins.env,
+# provisions an experiment and plays it through a real
 # browser, then runs every Playwright spec — minutes of runner time, which is
 # what a release costs. Development branches run it by hand.
 #
@@ -90,21 +92,36 @@ jobs:
       - name: Check out Moodle
         run: git clone --depth 1 -b MOODLE_405_STABLE https://github.com/moodle/moodle.git moodle
 
-      # The pinned engine set — branch and commit from .github/engine-pins.env,
-      # the same set PHPUnit and Behat test — with the hub subplugins, as the
-      # live installation has them. The manifest records the commits tested.
+      # New CatQuiz #146 engine/host candidates, pinned separately in
+      # .github/engine-pins-interface.env. This E2E must not silently test the
+      # older release baseline: its manifest records the actual installed SHAs.
+      # Promote to shared release/worker pins only after CatQuizLab #136 DoDs.
       - name: Check out the CAT engine and its host activity (pinned set)
         env:
           ENGINE_DIR: ${{ github.workspace }}/moodle
           ENGINE_LAYOUT: moodle
           ENGINE_SUBMODULES: '1'
           ENGINE_MANIFEST: ${{ github.workspace }}/engine-manifest.txt
+          PINS_FILE: ${{ github.workspace }}/plugin/.github/engine-pins-interface.env
           ENGINE_FOLLOW_HEADS: ${{ github.event.inputs.engine_heads == 'true' && '1' || '0' }}
           MOODLE_BRANCH: MOODLE_405_STABLE
         run: |
           bash plugin/.github/scripts/fetch-engine.sh
           echo "local_catquizlab  ${GITHUB_SHA}" >> "$ENGINE_MANIFEST"
           cp -r plugin moodle/local/catquizlab
+
+      # A green browser suite against the wrong engine SHA is false evidence.
+      # Fail before installation if the manifest does not contain the expected
+      # candidate versions. engine_heads deliberately bypasses this candidate
+      # gate for exploratory runs but never for push/PR release evidence.
+      - name: Verify exact Interface E2E candidate commits
+        if: ${{ github.event.inputs.engine_heads != 'true' }}
+        run: |
+          set -euo pipefail
+          grep -E '^local_catquiz[[:space:]]' engine-manifest.txt | grep -Fq '8a62ce30db1fa66fb1712e7079dc4caaf5003f20'
+          grep -E '^mod_adaptivequiz[[:space:]]' engine-manifest.txt | grep -Fq '50b7aad7a783003bff30a57e21854120fee0f32d'
+          grep -E '^adaptivequizcatmodel_catquiz[[:space:]]' engine-manifest.txt | grep -Fq '1414a9cc8e0f436f19f4647348217196c9692c95'
+          echo "Interface E2E candidate set verified against actual checkouts"
 
       - name: Configure Moodle
         run: |
