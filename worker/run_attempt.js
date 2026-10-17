@@ -143,8 +143,18 @@ let leaseLost = 0;
 async function claimJob() {
     // A new job: the previous sitting's headers end here — its report went out with them.
     currentTrace = {};
-    const job = await callWs('local_catquizlab_job_claim', {workerid: WORKER_ID});
-    return job && job.hasjob ? job : null;
+    // "retry": another claim held the queue (the server serialises claims, #135).
+    // That is not an empty queue, so the worker asks again rather than stopping.
+    for (let round = 1; ; round++) {
+        const job = await callWs('local_catquizlab_job_claim', {workerid: WORKER_ID});
+        if (job && job.hasjob) {
+            return job;
+        }
+        if (!(job && job.retry) || round >= 6) {
+            return null;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 500 * round));
+    }
 }
 
 /**

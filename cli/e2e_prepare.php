@@ -145,6 +145,14 @@ function local_catquizlab_e2e_prepare(string $name, int $persons): int {
         fwrite(STDERR, 'The CAT engine or mod_adaptivequiz is missing; an end-to-end run is not possible.' . PHP_EOL);
         return 1;
     }
+    if (environment::question_bank_transfer_pending()) {
+        // Said here, by name: otherwise the worker finds no start button and
+        // reports "No way to start the attempt was found" (#135).
+        fwrite(STDERR, 'Moodle has not finished moving the question banks into question bank activities. '
+            . 'Run the queued ad-hoc tasks first (php admin/cli/adhoc_task.php --execute, from the directory that '
+            . 'holds config.php) or let cron run.' . PHP_EOL);
+        return 1;
+    }
 
     $definition = experiment_definition::example_baseline();
     $definition['name'] = $name . ' ' . time();

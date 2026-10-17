@@ -6,6 +6,87 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.7.42] — 2026-10-17 — #135 Moodle 5.2 worker end-to-end, a sitting handed out twice, question bank transfer
+
+No database change (version 2026101700). Answers the re-audit of 17.10.2026
+(main @ 851cb66). Gates run here:
+
+- PHPUnit: 918 tests on 4.5; `preflight_test` also on 5.2.
+- Behat: 50/50.
+- Playwright, strict: experiment, recovery, experiment_form and status_bar.
+- Worker unit tests: 30/30.
+- phpcs and local_moodlecheck 1.3.2.
+- The Moodle 5.2 worker end-to-end job, replayed step by step on a fresh
+  Moodle 5.2.4+ with the pinned M5 engine set.
+
+### A sitting was handed out to two workers at once (#133, #134, #124)
+
+- **Found** in the 300-sitting load test on Moodle 5.2. Attempt 71, try 1, was
+  "started" by two workers in the same second. Both played it, and Moodle
+  refused the second one's answers as out of sequence (HTTP 404,
+  `submissionoutofsequencefriendlymessage`). The legacy CI run of 17.10. shows
+  4 × HTTP 404 with 4 exceptions and 302 executions for 300 sittings, the same
+  pattern.
+- **Cause.** `job_claim` read the oldest queued sitting and then marked it
+  running "inside a transaction so two workers cannot pick up the same one".
+  A transaction does not make that pair atomic: under PostgreSQL's and
+  MariaDB's default isolation, two claimers read the same row and both mark it.
+  Measured with eight processes claiming at the same instant: 200 claims, 52
+  distinct sittings, 47 handed out more than once.
+- **Fix.** Claims are serialised by a Moodle lock (`local_catquizlab_claim`),
+  held until the claim is committed. The same measurement now gives 200
+  claims, 200 distinct, on Moodle 4.5 and 5.2. A claimer that waits longer
+  than 10 s gets `retry`; the worker then asks again instead of reading it as an
+  empty queue.
+- **Regression check** `cli/claim_race.php --runid=N [--processes=8 --claims=25]`:
+  N claimers at once; it fails on any sitting handed out twice, and on nothing
+  handed out. Against the old claim it fails (exit 1), against the new one it
+  passes. It runs in both worker end-to-end jobs.
+- `cli/request_report.php` now names every request with 4xx/5xx, an exception,
+  a fatal or a broken connection: time, status, page, attempt, correlation id,
+  exception with file and line. It no longer only counts them; this is how the
+  404s above were traced. A gate over an empty window fails ("nothing was
+  measured").
+
+### #135 — Worker end-to-end on Moodle 5.2
+
+- **Three roots, kept apart.** From Moodle 5.1 plugins and the web entry
+  points are under `public/`, while core's command-line scripts and
+  `config.php` stay at the top. The job ran the installer from `moodle/public`
+  and found no `admin/cli/install_database.php`. The matrix now names
+  `coreroot` (installer, ad-hoc tasks), `dirroot` (plugins and their CLI) and
+  `webroot` (web server) separately. A new step "Check the three roots" fails
+  by name if a root lacks what the later steps look for in it.
+- **The question bank transfer.** With the installer fixed, the next defect
+  showed. Moodle 5 queues the transfer of question banks into question bank
+  activities at installation, and without cron it never ran. Until it has run,
+  mod_adaptivequiz shows "Item bank is not configured properly" instead of a
+  start button, and the worker reported only "No way to start the attempt was
+  found on the activity page". The job now runs the queued ad-hoc tasks after
+  installing.
+- **In the plugin, not only in CI.** On a real site the same state exists until
+  cron has run after an upgrade to Moodle 5. `environment::question_bank_transfer_pending()`
+  checks for it. `preflight` then blocks the start, with the reason and what to
+  do (EN/DE). `cli/e2e_prepare.php` stops with the same reason instead of
+  preparing a run that cannot start. New test `preflight_test`: before
+  Moodle 5 nothing is pending; on Moodle 5 a queued transfer blocks the start.
+- `docs/dev/release-gate.md`: the three roots and the ad-hoc step.
+
+Replayed locally, in the job's order, on a fresh Moodle 5.2.4+ (Build 20261013)
+with local_catquiz 2026100923, mod_adaptivequiz 2026100910 and the catmodel
+2026100906 (pins of 0.7.41). Web server at 512M, 4 workers:
+
+- installed from `coreroot`;
+- `e2e_prepare` before the ad-hoc tasks refused with the transfer named;
+- after them, one sitting through the real interface;
+- one experiment per strategy (all six PASS);
+- CLASSIC 120 questions in one sitting;
+- ALLSUBS 105 questions;
+- lost response and lost request reconciled (stored / not stored, nothing
+  answered twice);
+- cases 102 and 104 (engine settings read back);
+- request report: 1646 requests, 0 × 5xx, 0 fatals, PHP peak 18 MB.
+
 ## [0.7.41] — 2026-10-16 — re-audit 16.10.: release CI, release gate, engine 2026100922, unknown ≠ invalid
 
 No database change (version 2026101600). Answers the re-audit of 16.10.2026

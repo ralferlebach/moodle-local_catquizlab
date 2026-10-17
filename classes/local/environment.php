@@ -54,6 +54,25 @@ class environment {
     }
 
     /**
+     * Whether Moodle is still moving question banks into question bank activities (Moodle 5.0 and later).
+     *
+     * From Moodle 5.0 questions live in question bank activities; an installation
+     * or upgrade queues an ad-hoc task that moves the older banks there. Until
+     * it has run — with cron — mod_adaptivequiz offers nobody an attempt ("Item
+     * bank is not configured properly"), and a run waits for sittings no worker
+     * can start. Found by the Moodle 5.2 end-to-end job (#135).
+     *
+     * @return bool False before Moodle 5.0, where there is no such transfer.
+     */
+    public static function question_bank_transfer_pending(): bool {
+        $helper = '\\core_question\\local\\bank\\question_bank_helper';
+        if (!method_exists($helper, 'has_bank_migration_task_completed_successfully')) {
+            return false;
+        }
+        return !$helper::has_bank_migration_task_completed_successfully();
+    }
+
+    /**
      * Are all engine plugins available so that experiments could run?
      *
      * @return bool

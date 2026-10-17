@@ -55,6 +55,10 @@ class preflight {
         if (!environment::adaptivequiz_available()) {
             $blockers[] = get_string('preflight:noactivity', $component);
         }
+        if (environment::question_bank_transfer_pending()) {
+            // Moodle 5.x: until the transfer has run, no quiz can be attempted (#135).
+            $blockers[] = get_string('preflight:qbanktransfer', $component);
+        }
 
         $courseid = (int) get_config($component, 'experimentcourseid');
         if ($courseid <= 0) {

@@ -42,6 +42,9 @@ use local_catquizlab\local\attempt_scheduler;
  * table) lands in E3.2.
  */
 class job_claim extends external_api {
+    /** @var int Seconds a claim waits for another claim to finish. */
+    public const LOCK_TIMEOUT = 10;
+
     /**
      * Describes the parameters.
      *
@@ -89,8 +92,39 @@ class job_claim extends external_api {
             return ['message' => get_string('job:draining', 'local_catquizlab')] + $none;
         }
 
-        // Claim the oldest queued attempt inside a transaction so two workers
-        // cannot pick up the same one.
+        // One claim at a time, site-wide (#135 re-audit, 17.10.2026). The claim
+        // reads the oldest queued sitting and then marks it running; a database
+        // transaction does not make that pair atomic. Under PostgreSQL's (and
+        // MariaDB's) default isolation two workers read the same queued row and
+        // both mark it. A burst of eight workers handed 62 sittings out 200
+        // times; in the 300-sitting load test two executions played attempt 71
+        // at once, and Moodle refused the second's answers as out of sequence
+        // (HTTP 404). The lock is held until the claim is committed, so the next
+        // claimer reads it as running. A claim takes milliseconds; a worker that
+        // waits longer than the timeout is told so and asks again.
+        $factory = \core\lock\lock_config::get_lock_factory('local_catquizlab_claim');
+        $lock = $factory->get_lock('claim', self::LOCK_TIMEOUT);
+        if (!$lock) {
+            // Not an empty queue: the worker asks again instead of stopping.
+            return ['message' => get_string('job:busy', 'local_catquizlab'), 'retry' => true] + $none;
+        }
+        try {
+            return self::claim_next($params, $none);
+        } finally {
+            $lock->release();
+        }
+    }
+
+    /**
+     * Hand out the oldest claimable queued attempt; called with the claim lock held.
+     *
+     * @param array $params The validated parameters.
+     * @param array $none The answer when there is nothing to hand out.
+     * @return array The claim result.
+     */
+    protected static function claim_next(array $params, array $none): array {
+        global $DB;
+
         $transaction = $DB->start_delegated_transaction();
 
         // Runs that cannot hand out work are excluded in the query, not after
@@ -257,6 +291,12 @@ class job_claim extends external_api {
                 'Correlation id of this execution, as recorded in its history.',
                 VALUE_OPTIONAL,
                 ''
+            ),
+            'retry' => new external_value(
+                PARAM_BOOL,
+                'True when no job was handed out because another claim held the queue: ask again, the queue is not empty.',
+                VALUE_OPTIONAL,
+                false
             ),
             'execution'    => new external_value(PARAM_INT, 'Which try of the sitting this is (0 when none).', VALUE_OPTIONAL, 0),
             'message'   => new external_value(PARAM_TEXT, 'Human-readable status.'),

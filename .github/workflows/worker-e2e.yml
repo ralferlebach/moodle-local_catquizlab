@@ -92,10 +92,19 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # Three roots, kept apart (#135):
+          # - coreroot: where config.php and core's admin/cli/*.php live;
+          # - dirroot:  where plugins live ($CFG->dirroot) and their cli/*.php run;
+          # - webroot:  what the web server serves.
+          # On Moodle 4.5 all three are the checkout. From Moodle 5.1 plugins and
+          # the web entry points are under public/, while core's command-line
+          # scripts stay at the top: moodle/admin/cli/install_database.php, not
+          # moodle/public/admin/cli/… — running the installer from dirroot found
+          # nothing to run.
           # Moodle 4.5: local_catquiz 1.2.1, the live line.
-          - { stack: legacy, moodle: MOODLE_405_STABLE, dirroot: moodle, webroot: moodle }
-          # Moodle 5.2: local_catquiz 1.3.0 and the v-3.0 host; code under public/.
-          - { stack: moodle5, moodle: MOODLE_502_STABLE, dirroot: moodle/public, webroot: moodle/public }
+          - { stack: legacy, moodle: MOODLE_405_STABLE, coreroot: moodle, dirroot: moodle, webroot: moodle }
+          # Moodle 5.2: local_catquiz 1.3.0 and the v-3.0 host; plugins and web under public/.
+          - { stack: moodle5, moodle: MOODLE_502_STABLE, coreroot: moodle, dirroot: moodle/public, webroot: moodle/public }
     env:
       PHP_MEMORY_LIMIT: ${{ github.event.inputs.memory_limit || '512M' }}
     services:
@@ -150,7 +159,7 @@ jobs:
       - name: Configure Moodle
         run: |
           mkdir -p "$HOME/moodledata"
-          cat > moodle/config.php <<'PHP'
+          cat > ${{ matrix.coreroot }}/config.php <<'PHP'
           <?php
           unset($CFG);
           global $CFG;
@@ -170,12 +179,49 @@ jobs:
           require_once(__DIR__ . '/lib/setup.php');
           PHP
 
+      # Each root holds what the steps below will look for in it. A layout
+      # mistake fails here, by name, instead of as "Could not open input file"
+      # three steps later (#135).
+      - name: Check the three roots
+        run: |
+          check() { if [ ! -e "$1" ]; then echo "::error::$2: $1 is missing"; missing=1; fi; }
+          missing=0
+          check "${{ matrix.coreroot }}/config.php" "coreroot holds config.php"
+          check "${{ matrix.coreroot }}/admin/cli/install_database.php" "coreroot holds core's command-line scripts"
+          check "${{ matrix.coreroot }}/admin/cli/cron.php" "coreroot holds core's command-line scripts"
+          check "${{ matrix.dirroot }}/local/catquizlab/version.php" "dirroot holds the plugin"
+          check "${{ matrix.dirroot }}/local/catquiz/version.php" "dirroot holds the engine"
+          check "${{ matrix.dirroot }}/mod/adaptivequiz/version.php" "dirroot holds the host activity"
+          check "${{ matrix.dirroot }}/local/catquizlab/cli/e2e_prepare.php" "dirroot holds the plugin's command-line scripts"
+          check "${{ matrix.webroot }}/index.php" "webroot holds the web entry point"
+          check "${{ matrix.webroot }}/config.php" "webroot reaches config.php"
+          echo "coreroot=${{ matrix.coreroot }} dirroot=${{ matrix.dirroot }} webroot=${{ matrix.webroot }}"
+          exit $missing
+
       - name: Install Moodle
-        working-directory: ${{ matrix.dirroot }}
+        id: install
+        working-directory: ${{ matrix.coreroot }}
         run: |
           php admin/cli/install_database.php --agree-license \
               --adminpass='Admin123!' --adminemail=admin@example.com \
               --fullname="CATLab E2E" --shortname="CATLabE2E"
+          # A schema that exists, read back, before anything is measured (#135 AK 4):
+          # core, the engine, the host and this plugin, each with its version.
+          for component in core local_catquiz mod_adaptivequiz local_catquizlab; do
+            if [ "$component" = core ]; then v=$(php admin/cli/cfg.php --name=version);
+            else v=$(php admin/cli/cfg.php --component="$component" --name=version); fi
+            if [ -z "$v" ]; then echo "::error::$component is not installed"; exit 1; fi
+            echo "$component $v" | tee -a "${{ github.workspace }}/installed-versions.txt"
+          done
+
+      # What cron would do after an installation. On Moodle 5 the installer
+      # queues the transfer of question banks into question bank activities;
+      # until it has run, mod_adaptivequiz shows "Item bank is not configured
+      # properly" instead of a start button, and the worker finds no way to
+      # start an attempt (#135). On Moodle 4.5 this runs whatever is queued.
+      - name: Run the installation's ad-hoc tasks
+        working-directory: ${{ matrix.coreroot }}
+        run: php admin/cli/adhoc_task.php --execute
 
       # Everything the worker needs is prepared by the plugin's own CLI rather
       # than assembled in YAML, so the E2E job exercises the same provisioning
@@ -200,7 +246,8 @@ jobs:
         run: cat /tmp/prepare.log || true
 
       - name: Start the web server
-        working-directory: ${{ matrix.dirroot }}
+        id: web
+        working-directory: ${{ matrix.webroot }}
         run: |
           # More than one worker. PHP's development server answers one request
           # at a time by default, and the self-test makes an HTTP call to this
@@ -214,9 +261,10 @@ jobs:
           nohup bash -c 'echo "unixtime,pid,rss_kb" > /tmp/php-rss.csv; while true; do
               ps -C php -o pid=,rss= | while read -r pid rss; do echo "$(date +%s),$pid,$rss"; done >> /tmp/php-rss.csv;
               sleep 2; done' > /dev/null 2>&1 &
-          date +%s > /tmp/e2e-start
+          start=$(date +%s)
           for i in $(seq 1 20); do
-            if curl -sf -o /dev/null http://127.0.0.1:8000/; then exit 0; fi
+            # The measuring window opens only once the server answers (#135 AK 5).
+            if curl -sf -o /dev/null http://127.0.0.1:8000/; then echo "$start" > /tmp/e2e-start; exit 0; fi
             sleep 1
           done
           echo "The web server did not come up." >&2
@@ -241,6 +289,19 @@ jobs:
       - name: Verify the queue reports the attempt as finished
         working-directory: ${{ matrix.dirroot }}
         run: php local/catquizlab/cli/e2e_prepare.php --verify --runid=${{ steps.prepare.outputs.runid }}
+
+      # Eight claimers at the same instant, 200 claims: no sitting may be handed
+      # out twice. Before 0.7.42 the claim was not atomic; locally 200 claims
+      # got 52 sittings, and in the 300-sitting load test two executions played
+      # one sitting (HTTP 404, "submission out of sequence"). The run's sittings
+      # are failed afterwards, so no later step plays them.
+      - name: Claims are exclusive — eight claimers at once, no sitting handed out twice
+        working-directory: ${{ matrix.dirroot }}
+        timeout-minutes: 10
+        run: |
+          set -o pipefail
+          runid=$(php local/catquizlab/cli/e2e_prepare.php --persons=300 | grep -E '^runid=' | cut -d= -f2)
+          php local/catquizlab/cli/claim_race.php --runid="$runid" --processes=8 --claims=25
 
       # One attempt through the UI proves the worker can play a question. It
       # does not prove that an experiment reaches results, and for five
@@ -323,7 +384,9 @@ jobs:
       # PHP's peak memory per page, beside the resident memory of the web
       # server's processes (AK 6).
       - name: AK 6 — no 5xx, no fatal; PHP peak and process memory
-        if: always()
+        # Only what was measured: a job that never reached its web server has
+        # no figures, and "0 requests, 0 HTTP 5xx" from it is not a result (#135 AK 5).
+        if: always() && steps.web.outcome == 'success'
         working-directory: ${{ matrix.dirroot }}
         run: |
           from=$(cat /tmp/e2e-start 2>/dev/null || echo $(( $(date +%s) - 10800 )))
@@ -337,7 +400,15 @@ jobs:
         if: always()
         run: |
           mkdir -p evidence
-          cp engine-manifest.txt /tmp/request-report.* /tmp/php-rss.csv /tmp/php-rss-summary.txt evidence/ 2>/dev/null || true
+          cp engine-manifest.txt installed-versions.txt /tmp/request-report.* /tmp/php-rss.csv /tmp/php-rss-summary.txt \
+              evidence/ 2>/dev/null || true
+          if [ "${{ steps.web.outcome }}" != "success" ]; then
+            # Said in the artefact itself, so that nobody reads an empty report as a clean one.
+            echo "NOT RUN: the job stopped before its web server answered (install: ${{ steps.install.outcome }}, web server: ${{ steps.web.outcome }})." \
+                | tee evidence/NOT-RUN.txt
+            rm -f evidence/request-report.* evidence/php-rss*
+            echo "::warning::No request, memory or 5xx figures were measured in this job."
+          fi
           cp /tmp/webserver.log evidence/ 2>/dev/null || true
           echo "memory_limit=${PHP_MEMORY_LIMIT}" > evidence/php-settings.txt
 

@@ -50,7 +50,12 @@ if ($from <= 0) {
 }
 
 $figures = ['from' => $from, 'until' => $until, 'requests' => 0, 'status' => [], 'http5xx' => 0, 'fatals' => 0,
-    'exceptions' => 0, 'aborted' => 0, 'peakmb' => ['max' => null, 'p50' => null, 'p95' => null], 'bypage' => []];
+    'exceptions' => 0, 'aborted' => 0, 'peakmb' => ['max' => null, 'p50' => null, 'p95' => null], 'bypage' => [],
+    'problems' => [], 'problemsomitted' => 0];
+// Every request that ended in 4xx/5xx, with an exception, a fatal or a broken
+// connection is named, not only counted: "exceptions: 4" and "status 404: 4"
+// in a green run said that something happened, not what (#135 re-audit).
+$maxproblems = 50;
 $peaks = [];
 foreach (request_trace::each($from, $until) as $line) {
     $figures['requests']++;
@@ -67,6 +72,28 @@ foreach (request_trace::each($from, $until) as $line) {
     $figures['bypage'][$page]['n'] = ($figures['bypage'][$page]['n'] ?? 0) + 1;
     $figures['bypage'][$page]['peakmb'] = max((float) ($figures['bypage'][$page]['peakmb'] ?? 0), $peak);
     $figures['bypage'][$page]['http5xx'] = ($figures['bypage'][$page]['http5xx'] ?? 0) + ($status >= 500 ? 1 : 0);
+    if ($status >= 400 || !empty($line['exception']) || !empty($line['fatal']) || ($line['connection'] ?? 'normal') !== 'normal') {
+        if (count($figures['problems']) >= $maxproblems) {
+            $figures['problemsomitted']++;
+            continue;
+        }
+        $exception = is_array($line['exception'] ?? null) ? $line['exception'] : [];
+        $fatal = is_array($line['fatal'] ?? null) ? $line['fatal'] : [];
+        $figures['problems'][] = [
+            'time' => (string) ($line['time'] ?? ''),
+            'status' => $status,
+            'method' => (string) ($line['method'] ?? ''),
+            'page' => $page,
+            'attemptid' => (int) ($line['attemptid'] ?? 0),
+            'correlationid' => (string) ($line['correlationid'] ?? ''),
+            'connection' => (string) ($line['connection'] ?? 'normal'),
+            'exception' => $exception === [] ? '' : trim(($exception['class'] ?? '') . ' '
+                . ($exception['errorcode'] ?? '') . ': ' . ($exception['message'] ?? '')),
+            'where' => $exception === [] ? '' : ($exception['file'] ?? '') . ':' . ($exception['line'] ?? 0),
+            'fatal' => $fatal === [] ? '' : ($fatal['message'] ?? '') . ' @ ' . ($fatal['file'] ?? '') . ':'
+                . ($fatal['line'] ?? 0),
+        ];
+    }
 }
 ksort($figures['status']);
 ksort($figures['bypage']);
@@ -88,6 +115,12 @@ if (
         && $figures['peakmb']['max'] > (float) $options['max-peak-mb']
 ) {
     $broken[] = "peak {$figures['peakmb']['max']} MB > {$options['max-peak-mb']} MB";
+}
+// A gate over nothing is no gate: an empty window (a server that never started,
+// a wrong --from) fails it instead of passing with "0 HTTP 5xx" (#135 AK 5).
+$gated = (int) $options['max-5xx'] >= 0 || (int) $options['max-fatals'] >= 0 || (float) $options['max-peak-mb'] >= 0;
+if ($gated && $figures['requests'] === 0) {
+    $broken[] = 'no request in the window: nothing was measured';
 }
 $figures['broken'] = $broken;
 
@@ -116,6 +149,26 @@ if (!empty($options['json'])) {
     }
     foreach ($figures['bypage'] as $page => $p) {
         cli_writeln(sprintf('  %-48s n=%-6d peak %6.1f MB  5xx %d', substr($page, 0, 48), $p['n'], $p['peakmb'], $p['http5xx']));
+    }
+    if ($figures['problems'] !== []) {
+        cli_writeln('Requests with 4xx/5xx, an exception, a fatal or a broken connection:');
+        foreach ($figures['problems'] as $p) {
+            cli_writeln(sprintf(
+                '  %s %d %s %s attempt %d cid %s%s%s%s',
+                $p['time'],
+                $p['status'],
+                $p['method'],
+                $p['page'],
+                $p['attemptid'],
+                $p['correlationid'],
+                $p['connection'] !== 'normal' ? ' connection ' . $p['connection'] : '',
+                $p['exception'] !== '' ? ' — ' . $p['exception'] . ' (' . $p['where'] . ')' : '',
+                $p['fatal'] !== '' ? ' — FATAL ' . $p['fatal'] : ''
+            ));
+        }
+        if ($figures['problemsomitted'] > 0) {
+            cli_writeln(sprintf('  … and %d more; only the first %d are listed.', $figures['problemsomitted'], $maxproblems));
+        }
     }
     foreach ($broken as $line) {
         cli_writeln('LIMIT BROKEN: ' . $line);

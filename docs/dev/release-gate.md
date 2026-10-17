@@ -38,6 +38,34 @@ Das Set nachziehen:
    gegen die Heads testen.
 3. Die SHAs in einem Commit ersetzen.
 
+## 2a. Moodle 5: drei Wurzeln, und was nach der Installation laufen muss (#135)
+
+Ab Moodle 5.1 liegen Plugins und Web-Einstiegspunkte unter `public/`. Die
+Kommandozeilenskripte von Moodle selbst und `config.php` bleiben oben.
+`worker-e2e.yml` führt die drei Orte deshalb getrennt:
+
+| Matrix-Feld | Inhalt | Moodle 4.5 | Moodle 5.2 |
+|---|---|---|---|
+| `coreroot` | `config.php`, `admin/cli/*.php` (Installation, Ad-hoc-Tasks, Cron) | `moodle` | `moodle` |
+| `dirroot` | Plugins (`$CFG->dirroot`) und ihre `cli/*.php` | `moodle` | `moodle/public` |
+| `webroot` | Was der Webserver ausliefert | `moodle` | `moodle/public` |
+
+Der Schritt „Check the three roots“ prüft vor der Installation, dass jede
+Wurzel enthält, was die folgenden Schritte darin suchen. Ein Layoutfehler
+scheitert dort mit Namen, nicht drei Schritte später als „Could not open input
+file“. Genau so war der Moodle-5.2-Job am 17.10. gescheitert: Er hatte den
+Installer aus `moodle/public` gestartet.
+
+Nach der Installation laufen die Ad-hoc-Tasks einmal von `coreroot`
+(`php admin/cli/adhoc_task.php --execute`). Moodle 5 stellt bei der
+Installation die Übertragung der Fragensammlungen in Fragensammlungs-Aktivitäten
+in die Warteschlange. Bis sie gelaufen ist, zeigt mod_adaptivequiz „Item bank
+is not configured properly“ statt eines Start-Buttons, und der Worker meldet
+nur „No way to start the attempt was found“. Diese Lücke kam erst nach der
+Korrektur der Wurzeln zum Vorschein. Seitdem ist sie auch im Plugin abgefangen:
+`preflight` blockiert den Start mit Begründung, und `cli/e2e_prepare.php`
+bricht mit derselben Begründung ab.
+
 ## 3. Keine stillen Skips im Gate
 
 Playwright-Specs prüfen ihre Fixtures mit `needs()` aus
