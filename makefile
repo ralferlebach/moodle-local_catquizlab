@@ -117,7 +117,10 @@ phpdoc:
 	@if [ -n "$(MPCI)" ]; then cd $(PLUGIN_DIR) && moodle-plugin-ci phpdoc . --max-warnings 0; \
 	elif [ -f "$(MOODLE_ROOT)/local/moodlecheck/cli/moodlecheck.php" ]; then \
 		$(PHP) $(MOODLE_ROOT)/local/moodlecheck/cli/moodlecheck.php --path=$(PLUGIN_DIR) --format=text; \
-	else echo "phpdoc: needs moodle-plugin-ci or local_moodlecheck (skipped)."; fi
+	else \
+		echo "phpdoc: full check needs moodle-plugin-ci or local_moodlecheck; running the parameter-list rule only."; \
+	fi
+	@$(PHP) $(PLUGIN_DIR)/tools/phpdoc_params.php $(PLUGIN_DIR)
 
 # --- Structure validation ----------------------------------------------------
 validate:

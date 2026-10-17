@@ -20,6 +20,7 @@
  */
 
 const {test, expect} = require('@playwright/test');
+const {needs} = require('./support/needs');
 const {execFileSync} = require('child_process');
 const path = require('path');
 
@@ -53,7 +54,7 @@ const bar = (page) => page.locator('[data-region="catquizlab-status"]');
 
 test('running: header, progress card and run summary say the same, and wait for the poll to agree', async({page}) => {
     const id = seeded('running');
-    test.skip(!id, 'No running experiment could be seeded.');
+    needs(!id, 'No running experiment could be seeded.');
     await login(page);
     await page.goto('/local/catquizlab/runs.php?experimentid=' + id, {waitUntil: 'networkidle'});
 
@@ -83,7 +84,7 @@ test('running: header, progress card and run summary say the same, and wait for 
 
 test('blocked: "Needs attention", the problems counted, and the way to them', async({page}) => {
     const id = seeded('blocked');
-    test.skip(!id, 'No blocked experiment could be seeded.');
+    needs(!id, 'No blocked experiment could be seeded.');
     await login(page);
     await page.goto('/local/catquizlab/runs.php?experimentid=' + id, {waitUntil: 'networkidle'});
 
@@ -97,7 +98,7 @@ test('blocked: "Needs attention", the problems counted, and the way to them', as
 test('finished: the next step is the results; planned: create runs, by POST', async({page}) => {
     const finished = seeded('finished');
     const empty = seeded('empty');
-    test.skip(!finished || !empty, 'No experiments could be seeded.');
+    needs(!finished || !empty, 'No experiments could be seeded.');
     await login(page);
 
     await page.goto('/local/catquizlab/runs.php?experimentid=' + finished, {waitUntil: 'networkidle'});
@@ -113,7 +114,7 @@ test('finished: the next step is the results; planned: create runs, by POST', as
 
 test('the five tabs and the result subtabs stay; no bare "Show"; keyboard and screen-reader semantics', async({page}) => {
     const id = seeded('finished');
-    test.skip(!id, 'No experiment could be seeded.');
+    needs(!id, 'No experiment could be seeded.');
     await login(page);
     await page.goto('/local/catquizlab/results.php?experimentid=' + id, {waitUntil: 'networkidle'});
 

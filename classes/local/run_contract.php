@@ -334,6 +334,9 @@ class run_contract {
      * @param int $runid The run.
      * @param array $trace The sitting's trace.
      * @param array|null $map Question id => scale chain; the run's own by default.
+     * @param string $endcode The engine's stop code of the sitting; '' reads it from the trace. A pool
+     *     exhausted before the minimum (e.g. noremainingquestionsbeforeminimum, #141) is reported as
+     *     pool_exhausted_before_min, not as an undercut.
      * @return string[] Keys of RULES.
      */
     public static function check_sitting(int $runid, array $trace, ?array $map = null, string $endcode = ''): array {
@@ -344,7 +347,8 @@ class run_contract {
         $n = (int) ($trace['nitems'] ?? count((array) ($trace['items'] ?? [])));
         $code = $endcode !== '' ? $endcode : (reason_catalog::engine_code(
             (string) ($trace['stopreason'] ?? ''),
-            isset($trace['enginestatus']) ? (int) $trace['enginestatus'] : null
+            isset($trace['enginestatus']) ? (int) $trace['enginestatus'] : null,
+            isset($trace['hoststopcode']) && $trace['hoststopcode'] !== '' ? (string) $trace['hoststopcode'] : null
         ) ?? '');
         $rules = [];
         if (!$limits['usesglobal']) {

@@ -140,7 +140,15 @@ class test_flow {
                 'active'  => array_values((array) ($progress['activescales'] ?? [])),
                 'dropped' => array_values((array) ($progress['droppedscales'] ?? [])),
                 'locked'  => array_values((array) ($progress['lockedscales'] ?? [])),
-                'peritem' => (array) ($progress['playedquestionsbyscale'] ?? []),
+                // Question ids per scale. Since local_catquiz#143 (progressformat 2) the engine
+                // stores the ids itself; older snapshots hold the full questions.
+                'peritem' => array_map(
+                    static fn($entries): array => array_map(
+                        static fn($entry): int => (int) (is_array($entry) ? ($entry['id'] ?? 0) : $entry),
+                        array_values((array) $entries)
+                    ),
+                    (array) ($progress['playedquestionsbyscale'] ?? [])
+                ),
             ];
         } else {
             $scales = ['peritem' => (array) ($trace['questionsperscale'] ?? [])];

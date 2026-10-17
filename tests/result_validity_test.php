@@ -196,4 +196,71 @@ final class result_validity_test extends \advanced_testcase {
         // Known, and nothing answered on it.
         $this->assertSame([engine_validity::NOT_MEASURED], result_validity::scale_reasons(null, 0, $thresholds));
     }
+
+    /**
+     * The engine's newer end codes (status 11, the host's stop code) are read as ends of their own.
+     *
+     * @return void
+     */
+    public function test_the_engine_and_host_stop_codes(): void {
+        // Status 11, target precision of the main scale (mod_adaptivequiz #20): the planned end.
+        $v = $this->evaluate('fastest', 14, ['facts' => ['enginestatus' => 11, 'finalse' => 0.6]]);
+        $this->assertSame([true, 'target_se_reached'], [$v['valid'], $v['endcode']]);
+        // Without the engine's status, the host's code says the same.
+        $v = $this->evaluate('fastest', 14, ['facts' => ['hoststopcode' => 'targetprecision', 'finalse' => 0.6]]);
+        $this->assertSame('target_se_reached', $v['endcode']);
+        $v = $this->evaluate('fastest', 30, ['facts' => ['hoststopcode' => 'maximumquestions']]);
+        $this->assertSame('max_items_reached', $v['endcode']);
+        // The host's "no eligible questions" before the minimum is that, not a regular end.
+        $v = $this->evaluate('fastest', 6, ['facts' => ['hoststopcode' => 'noeligiblequestions']]);
+        $this->assertSame([false, 'no_eligible_item_before_minimum'], [$v['valid'], $v['endcode']]);
+        // The engine's number goes first: it tells "before the minimum" apart, the host's code does not.
+        $v = $this->evaluate('fastest', 6, ['facts' => ['enginestatus' => 10, 'hoststopcode' => 'noeligiblequestions']]);
+        $this->assertSame('no_eligible_item_before_minimum', $v['endcode']);
+        // A host code this version does not know decides nothing.
+        $v = $this->evaluate('fastest', 14, ['facts' => ['hoststopcode' => 'manual', 'finalse' => 0.3]]);
+        $this->assertSame('target_se_reached', $v['endcode']);
+    }
+
+    /**
+     * No verdict is not a negative one (re-audit 16.10., AK 7): valid, invalid and unknown apart.
+     *
+     * @return void
+     */
+    public function test_unknown_is_not_invalid(): void {
+        $noverdict = ['scales' => [1 => ['n' => 14, 'fraction' => 0.5, 'se' => 0.3]], 'n' => 14, 'fraction' => 0.5,
+            'engine' => ['valid' => null, 'scales' => [], 'unknown' => engine_validity::UNKNOWN_NO_SCALE_RESULT]];
+        $facts = ['facts' => ['finalse' => 0.3]];
+
+        // By the engine's rule: no verdict is unknown, with its cause.
+        $v = $this->evaluate('fastest', 14, $facts + ['measure' => $noverdict, 'rule' => engine_validity::RULE_ENGINE]);
+        $this->assertSame(
+            [false, result_validity::UNKNOWN, engine_validity::UNKNOWN_NO_SCALE_RESULT],
+            [$v['valid'], $v['state'], $v['engineunknownreason']]
+        );
+        // By the uniform rule the same sitting is judged — valid — and the missing engine verdict is still named.
+        $v = $this->evaluate('fastest', 14, $facts + ['measure' => $noverdict]);
+        $this->assertSame(
+            [true, result_validity::VALID, engine_validity::UNKNOWN_NO_SCALE_RESULT],
+            [$v['valid'], $v['state'], $v['engineunknownreason']]
+        );
+
+        // The engine's "no" is invalid, its "yes" valid; a verdict has no unknown cause.
+        $no = ['engine' => ['valid' => false, 'scales' => []]] + $noverdict;
+        $v = $this->evaluate('fastest', 14, $facts + ['measure' => $no, 'rule' => engine_validity::RULE_ENGINE]);
+        $this->assertSame([result_validity::INVALID, null], [$v['state'], $v['engineunknownreason']]);
+        $v = $this->evaluate('fastest', 14, $facts + ['rule' => engine_validity::RULE_ENGINE]);
+        $this->assertSame(result_validity::VALID, $v['state']);
+
+        // No engine data at all: by the uniform rule unknown, not invalid — with the cause recorded at collection.
+        $v = $this->evaluate('fastest', 14, ['measure' => null, 'facts' => ['finalse' => 0.3,
+            'engineunknown' => engine_validity::UNKNOWN_NO_CAT_ATTEMPT]]);
+        $this->assertSame([false, result_validity::UNKNOWN, [engine_validity::NO_ENGINE_DATA],
+            engine_validity::UNKNOWN_NO_CAT_ATTEMPT], [$v['valid'], $v['state'], $v['reasons'], $v['engineunknownreason']]);
+        // A sitting invalid for a reason of its own stays invalid, data or not.
+        $v = $this->evaluate('fastest', 6, ['measure' => null, 'facts' => ['finalse' => 0.3]]);
+        $this->assertSame(result_validity::INVALID, $v['state']);
+        // A cause nobody recorded is said to be that, not guessed.
+        $this->assertSame(engine_validity::UNKNOWN_NOT_RECORDED, $v['engineunknownreason']);
+    }
 }

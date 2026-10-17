@@ -162,12 +162,30 @@ final class strategy_engine_catalog_test extends \advanced_testcase {
         $this->assertSame(1, preg_match('/!in_array\(\$ts->id, \[([^\]]*)\]/s', $source, $m));
         $withse = $ids($m[1]);
 
+        // Since local_catquiz 2026100915 (#135) the engine's form shows the classical test the minimum
+        // per scale and the maximum standard error — as reporting thresholds, which decide what is
+        // reported as valid, not as stop rules: the fixed form is played as it is.
+        $classicreporting = strpos($source, 'catquiz_classicreportingnote') !== false;
+
         foreach (strategy_catalog::keys() as $key) {
             if (!strategy_catalog::runnable($key)) {
                 continue;
             }
             $id = strategy_catalog::engine_id($key);
             $this->assertSame(!in_array($id, $nopilot, true), strategy_catalog::uses($key, 'pilot'), $key . ': pilot');
+            if ($classicreporting && strategy_catalog::fixed_form($key)) {
+                // Shown by the engine, but no stop rule: the lab gives the fixed form no subscale
+                // budget and no precision target, and hands the engine neutral values.
+                $this->assertNotContains($id, $noperscale, $key . ': the engine shows the per-scale group');
+                $this->assertContains($id, $withse, $key . ': the engine shows the SE group');
+                $this->assertFalse(strategy_catalog::uses($key, 'subscalemax'), $key . ': no subscale stop rule');
+                $this->assertFalse(strategy_catalog::uses($key, 'standarderror'), $key . ': no precision target');
+                $values = \local_catquizlab\local\strategy_parameters::engine_values($key, [
+                    'subscale' => ['minitems' => 7, 'maxitems' => 9], 'se' => ['min' => 0.3, 'max' => 0.5],
+                ]);
+                $this->assertSame([0, 1.0], [$values['subscalemin'], $values['semax']], $key . ': neutral thresholds');
+                continue;
+            }
             $this->assertSame(
                 !in_array($id, $noperscale, true),
                 strategy_catalog::uses($key, 'subscalemax'),

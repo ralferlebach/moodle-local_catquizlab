@@ -183,10 +183,22 @@ jobs:
           echo "$GITHUB_WORKSPACE/ci/bin"        >> "$GITHUB_PATH"
           echo "$GITHUB_WORKSPACE/ci/vendor/bin" >> "$GITHUB_PATH"
 
-      - name: Install Moodle and plugin
+      # The release gate tests against the engine, as the dev CI does: without
+      # it every engine-facing test skips, and a green release said nothing about
+      # the engine it ships with (re-audit 16.10.2026, AK 1/5). Branch and commit
+      # come from .github/engine-pins.env; the manifest says what was tested.
+      - name: Fetch the CAT engine (pinned set)
+        run: bash plugin/.github/scripts/fetch-engine.sh
+        env:
+          ENGINE_DIR: ${{ github.workspace }}/engine
+          ENGINE_MANIFEST: ${{ github.workspace }}/engine-manifest.txt
+          MOODLE_BRANCH: ${{ matrix.moodle }}
+
+      - name: Install Moodle, engine and plugin
         run: |
           moodle-plugin-ci install \
             --plugin ./plugin \
+            --extra-plugins "$GITHUB_WORKSPACE/engine" \
             --db-host 127.0.0.1 \
             --db-port ${{ matrix.db.port }} \
             --db-user ${{ matrix.db.user }} \
@@ -198,6 +210,15 @@ jobs:
 
       - name: PHPUnit – all tests
         run: moodle-plugin-ci phpunit --fail-on-warning
+
+      - name: Keep the engine manifest
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: engine-manifest-release-phpunit-${{ matrix.moodle }}-${{ matrix.php }}-${{ matrix.db.engine }}
+          path: ${{ github.workspace }}/engine-manifest.txt
+          retention-days: 30
+          if-no-files-found: warn
 
   behat:
     name: "Behat (${{ matrix.moodle }} / PHP ${{ matrix.php }} / Chrome)"
@@ -246,10 +267,22 @@ jobs:
           echo "$GITHUB_WORKSPACE/ci/bin"        >> "$GITHUB_PATH"
           echo "$GITHUB_WORKSPACE/ci/vendor/bin" >> "$GITHUB_PATH"
 
-      - name: Install Moodle and plugin
+      # The release gate tests against the engine, as the dev CI does: without
+      # it every engine-facing test skips, and a green release said nothing about
+      # the engine it ships with (re-audit 16.10.2026, AK 1/5). Branch and commit
+      # come from .github/engine-pins.env; the manifest says what was tested.
+      - name: Fetch the CAT engine (pinned set)
+        run: bash plugin/.github/scripts/fetch-engine.sh
+        env:
+          ENGINE_DIR: ${{ github.workspace }}/engine
+          ENGINE_MANIFEST: ${{ github.workspace }}/engine-manifest.txt
+          MOODLE_BRANCH: ${{ matrix.moodle }}
+
+      - name: Install Moodle, engine and plugin
         run: |
           moodle-plugin-ci install \
             --plugin ./plugin \
+            --extra-plugins "$GITHUB_WORKSPACE/engine" \
             --branch ${{ matrix.moodle }} \
             --db-type mariadb \
             --db-host 127.0.0.1 \
@@ -275,6 +308,15 @@ jobs:
           name: behat-screenshots-release-${{ matrix.moodle }}
           path: ${{ github.workspace }}/moodle/behatfaildumps/
           retention-days: 7
+
+      - name: Keep the engine manifest
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: engine-manifest-release-behat-${{ matrix.moodle }}
+          path: ${{ github.workspace }}/engine-manifest.txt
+          retention-days: 30
+          if-no-files-found: warn
 
   ci-complete:
     name: CI complete (release)

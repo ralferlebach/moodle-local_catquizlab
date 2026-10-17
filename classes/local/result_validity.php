@@ -49,6 +49,18 @@ class result_validity {
     /** @var string Every collected sitting, marked. */
     public const ALL = 'all';
 
+    /**
+     * Results that cannot be judged (re-audit 16.10., AK 7): no verdict is not a negative one.
+     *
+     * By the engine's rule a sitting without the engine's verdict; by the
+     * uniform rule one whose only obstacle is missing data. Kept apart from
+     * INVALID in every count, filter and export.
+     */
+    public const UNKNOWN = 'unknown';
+
+    /** @var string[] Reasons that say only that data is missing — under the uniform rule, unknown rather than invalid. */
+    public const DATA_MISSING = [engine_validity::NO_ENGINE_DATA, self::TRACE_INCOMPLETE];
+
     /** @var string No final ability, or not a number. */
     public const NO_FINAL_THETA = 'no_final_theta';
 
@@ -91,13 +103,15 @@ class result_validity {
      *
      * @param array $trace The sitting's trace.
      * @param array $facts The run's design and the sitting's end: strategy, minitems, maxitems, semin,
-     *      poolsize, played, finalse, dropped, enginestatus.
+     *      poolsize, played, finalse, dropped, enginestatus, hoststopcode, engineunknown (why the engine
+     *      had nothing, as recorded).
      * @param array|null $measure The engine's measures of the sitting (engine_validity::measure()).
      * @param array $thresholds The engine's thresholds of the run's test (engine_validity::thresholds()).
      * @param string $rule engine_validity::RULE_UNIFORM or RULE_ENGINE.
-     * @return array valid, reasoncode (the first reason), reasons, endcode, played_items, answered_items,
-     *      required_min_items, trace_complete, engine_complete, technical_failure, strategy, uniformvalid,
-     *      enginevalid, enginefinished, designstop, criterionstop.
+     * @return array valid, state (VALID, INVALID or UNKNOWN), engineunknownreason, reasoncode (the first
+     *      reason), reasons, endcode, played_items, answered_items, required_min_items, trace_complete,
+     *      engine_complete, technical_failure, strategy, uniformvalid, enginevalid, enginefinished,
+     *      designstop, criterionstop.
      */
     public static function evaluate_attempt(
         array $trace,
@@ -115,7 +129,11 @@ class result_validity {
 
         // The engine's own word on how it ended, where it gave one.
         $status = isset($facts['enginestatus']) && is_numeric($facts['enginestatus']) ? (int) $facts['enginestatus'] : null;
-        $enginecode = reason_catalog::engine_code((string) ($trace['stopreason'] ?? ''), $status);
+        $enginecode = reason_catalog::engine_code(
+            (string) ($trace['stopreason'] ?? ''),
+            $status,
+            isset($facts['hoststopcode']) && $facts['hoststopcode'] !== '' ? (string) $facts['hoststopcode'] : null
+        );
         $enginecomplete = !in_array((string) $enginecode, self::ENGINE_ERRORS, true);
         if (!$enginecomplete) {
             $reasons[] = self::ENGINE_ERROR;
@@ -155,9 +173,23 @@ class result_validity {
         $uniformvalid = $reasons === [];
         $enginevalid = engine_validity::engine_attempt($measure);
         $valid = $rule === engine_validity::RULE_ENGINE ? $enginevalid === true : $uniformvalid;
+        // Valid, invalid — or not to be judged, which is neither (AK 7).
+        $engineunknown = engine_validity::unknown_reason(
+            $measure,
+            isset($facts['engineunknown']) ? (string) $facts['engineunknown'] : null
+        );
+        if ($rule === engine_validity::RULE_ENGINE) {
+            $state = $enginevalid === null ? self::UNKNOWN : ($enginevalid ? self::VALID : self::INVALID);
+        } else {
+            $state = $uniformvalid ? self::VALID
+                : (array_diff($reasons, self::DATA_MISSING) === [] ? self::UNKNOWN : self::INVALID);
+        }
 
         return [
             'valid' => $valid,
+            'state' => $state,
+            // Why the engine gave no verdict, where it gave none: one of engine_validity::UNKNOWN_REASONS.
+            'engineunknownreason' => $engineunknown,
             'reasoncode' => $reasons[0] ?? ($valid ? '' : 'engine'),
             'reasons' => $reasons,
             'endcode' => $endcode,

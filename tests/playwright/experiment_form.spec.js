@@ -24,6 +24,7 @@
  */
 
 const {test, expect} = require('@playwright/test');
+const {needs} = require('./support/needs');
 
 const ADMIN = process.env.MOODLE_ADMIN || 'admin';
 const PASSWORD = process.env.MOODLE_ADMIN_PASSWORD || '';
@@ -44,7 +45,7 @@ async function hidden(page, id) {
 }
 
 test('the form hides and disables what does not apply, and checks budgets against the pool', async({page}) => {
-    test.skip(!PASSWORD, 'MOODLE_ADMIN_PASSWORD not set.');
+    needs(!PASSWORD, 'MOODLE_ADMIN_PASSWORD not set.');
 
     await page.goto('/login/index.php', {waitUntil: 'networkidle'});
     await page.fill('#username', ADMIN);
@@ -127,7 +128,7 @@ test('the form hides and disables what does not apply, and checks budgets agains
 });
 
 test('the preview computes from the form without saving; saving and creating runs is the primary action', async({page}) => {
-    test.skip(!PASSWORD, 'MOODLE_ADMIN_PASSWORD not set.');
+    needs(!PASSWORD, 'MOODLE_ADMIN_PASSWORD not set.');
 
     await page.goto('/login/index.php', {waitUntil: 'networkidle'});
     await page.fill('#username', ADMIN);

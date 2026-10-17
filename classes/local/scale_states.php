@@ -33,7 +33,11 @@ namespace local_catquizlab\local;
  * trace mode the engine is to record every change with its step
  * (local_catquiz#133): progress.scalestatetrace, a list of entries with `step`
  * (questions played so far), `scaleid` and `event` — activated, deactivated,
- * locked, unlocked or dropped. This replays them.
+ * locked, unlocked or removed. This replays them as the engine does
+ * (progress::replay_scale_state_trace()): active, locked and removed are
+ * separate facts — the engine locks a scale and then deactivates it, two events
+ * at one step — and the state shown is removed, else active, else locked, else
+ * inactive.
  *
  * Where a sitting has no such record — an engine before that change, or not in
  * trace mode — nothing is known per step, and nothing is made up: the callers
@@ -56,15 +60,8 @@ class scale_states {
     /** @var string Removed for the rest of the sitting. */
     public const DROPPED = 'dropped';
 
-    /** @var array<string, string> The engine's event => the state a scale is in after it. */
-    protected const EVENTS = [
-        'activated'   => self::ACTIVE,
-        'deactivated' => self::INACTIVE,
-        'locked'      => self::LOCKED,
-        // The lock is lifted; the scale is not active by that alone.
-        'unlocked'    => self::INACTIVE,
-        'dropped'     => self::DROPPED,
-    ];
+    /** @var string[] The engine's events (local_catquiz#133, progress::SCALE_*); "dropped" as prepared before it shipped. */
+    protected const EVENTS = ['activated', 'deactivated', 'locked', 'unlocked', 'removed', 'dropped'];
 
     /**
      * Whether a sitting's trace has the engine's record of state changes.
@@ -96,26 +93,49 @@ class scale_states {
         foreach ((array) $trace['progress']['scalestatetrace'] as $event) {
             $event = (array) $event;
             // An event this version does not know is left out, not guessed at.
-            if (!isset($event['step'], $event['scaleid'], $event['event'], self::EVENTS[(string) $event['event']])) {
+            if (!isset($event['step'], $event['scaleid'], $event['event']) || !in_array($event['event'], self::EVENTS, true)) {
                 continue;
             }
-            $events[(int) $event['step']][] = [(int) $event['scaleid'], self::EVENTS[(string) $event['event']]];
+            $events[(int) $event['step']][] = [(int) $event['scaleid'], (string) $event['event']];
         }
         ksort($events);
 
-        $current = [];
+        $active = [];
+        $locked = [];
+        $removed = [];
+        $seen = [];
         $bystep = [];
         $pending = array_keys($events);
         for ($step = 1; $step <= max(1, $steps); $step++) {
             while ($pending !== [] && $pending[0] <= $step) {
-                foreach ($events[array_shift($pending)] as [$scaleid, $state]) {
-                    // Dropped is for good: the engine activates no dropped scale again.
-                    if (($current[$scaleid] ?? '') === self::DROPPED) {
-                        continue;
+                foreach ($events[array_shift($pending)] as [$scaleid, $event]) {
+                    $seen[$scaleid] = true;
+                    switch ($event) {
+                        case 'activated':
+                            $active[$scaleid] = true;
+                            break;
+                        case 'deactivated':
+                            unset($active[$scaleid]);
+                            break;
+                        case 'locked':
+                            $locked[$scaleid] = true;
+                            break;
+                        case 'unlocked':
+                            unset($locked[$scaleid]);
+                            break;
+                        default:
+                            // Removed for the rest of the sitting.
+                            unset($active[$scaleid]);
+                            $removed[$scaleid] = true;
                     }
-                    $current[$scaleid] = $state;
                 }
             }
+            $current = [];
+            foreach (array_keys($seen) as $scaleid) {
+                $current[$scaleid] = isset($removed[$scaleid]) ? self::DROPPED
+                    : (isset($active[$scaleid]) ? self::ACTIVE : (isset($locked[$scaleid]) ? self::LOCKED : self::INACTIVE));
+            }
+            ksort($current);
             $bystep[$step] = $current;
         }
 

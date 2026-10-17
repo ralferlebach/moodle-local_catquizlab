@@ -316,6 +316,9 @@ class results_export {
         'uniformvalid', 'enginevalid',
         // The limits of its test this sitting broke, as rule keys (#123): empty where none.
         'contractviolations',
+        // Valid, invalid or unknown under the rule in force, and the engine's verdict in the same three
+        // words, with why it gave none (re-audit 16.10., AK 7). Appended: no column moves.
+        'validitystate', 'engineverdict', 'engineunknownreason',
     ];
 
     /** @var array<int, array> Ability distribution and range by run, for this request. */
@@ -466,6 +469,10 @@ class results_export {
             $row['abilitymin'] = $ability['min'];
             $row['abilitymax'] = $ability['max'];
             $row['contractviolations'] = implode(' ', run_contract::check_observation($observation));
+            $row['validitystate'] = (string) ($observation['validitystate'] ?? '');
+            $row['engineverdict'] = $observation['enginevalid'] === null ? result_validity::UNKNOWN
+                : ($observation['enginevalid'] ? result_validity::VALID : result_validity::INVALID);
+            $row['engineunknownreason'] = (string) ($observation['engineunknownreason'] ?? '');
             yield $row;
         }
     }

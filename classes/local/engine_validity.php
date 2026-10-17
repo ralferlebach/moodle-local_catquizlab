@@ -87,6 +87,37 @@ class engine_validity {
     /** @var string The engine's data of the sitting could not be read. */
     public const NO_ENGINE_DATA = 'no_engine_data';
 
+    /** @var string More items administered than the test's maximum (adaptivequizcatmodel_catquiz #8). */
+    public const MAX_QUESTIONS_EXCEEDED = 'max_questions_exceeded';
+
+    /** @var string Why no engine verdict (re-audit 16.10., AK 7): the engine has no validator to ask. */
+    public const UNKNOWN_ENGINE_UNAVAILABLE = 'engine_unavailable';
+
+    /** @var string Why no engine verdict: the sitting has no engine attempt (never started there). */
+    public const UNKNOWN_NO_ENGINE_ATTEMPT = 'no_engine_attempt';
+
+    /** @var string Why no engine verdict: the activity's attempt has no CAT attempt to map it to. */
+    public const UNKNOWN_NO_CAT_ATTEMPT = 'no_cat_attempt';
+
+    /** @var string Why no engine verdict: the CAT attempt's progress is gone or unreadable. */
+    public const UNKNOWN_NO_PROGRESS = 'no_progress';
+
+    /** @var string Why no engine verdict: the engine's validator gave no scale result. */
+    public const UNKNOWN_NO_SCALE_RESULT = 'no_scale_result';
+
+    /** @var string Why no engine verdict: the engine's validator threw. */
+    public const UNKNOWN_VALIDATOR_EXCEPTION = 'validator_exception';
+
+    /** @var string Why no engine verdict: collected before the cause was recorded; not known. */
+    public const UNKNOWN_NOT_RECORDED = 'not_recorded';
+
+    /** @var string[] Every cause of a missing engine verdict, in the order they are checked. */
+    public const UNKNOWN_REASONS = [
+        self::UNKNOWN_ENGINE_UNAVAILABLE, self::UNKNOWN_NO_ENGINE_ATTEMPT, self::UNKNOWN_NO_CAT_ATTEMPT,
+        self::UNKNOWN_NO_PROGRESS, self::UNKNOWN_NO_SCALE_RESULT, self::UNKNOWN_VALIDATOR_EXCEPTION,
+        self::UNKNOWN_NOT_RECORDED,
+    ];
+
     /** @var string The uniform verdict: every rule for every strategy. */
     public const RULE_UNIFORM = 'uniform';
 
@@ -193,6 +224,7 @@ class engine_validity {
         try {
             $progress = \local_catquiz\teststrategy\progress::load_for_reading((int) $catattempt->id);
         } catch (\Throwable $e) {
+            // Not swallowed: unmeasured_reason() names it (no_progress), and the collector keeps that.
             $progress = null;
         }
         if ($progress === null) {
@@ -232,8 +264,13 @@ class engine_validity {
                     ])),
                 ];
             }
+            if ($engine['valid'] === null) {
+                $engine['unknown'] = self::UNKNOWN_NO_SCALE_RESULT;
+            }
         } catch (\Throwable $e) {
-            $engine = ['valid' => null, 'scales' => []];
+            // No verdict, and why: the cause stays with the sitting's trace (re-audit 16.10., AK 7).
+            $engine = ['valid' => null, 'scales' => [], 'unknown' => self::UNKNOWN_VALIDATOR_EXCEPTION,
+                'exception' => \core_text::substr(get_class($e) . ': ' . $e->getMessage(), 0, 300)];
         }
 
         return [
@@ -242,6 +279,58 @@ class engine_validity {
             'fraction' => $progress->get_fraction_for_scale(),
             'engine' => $engine,
         ];
+    }
+
+    /**
+     * Why measure() has nothing for a sitting — a code, not a guess (re-audit 16.10., AK 7).
+     *
+     * Checked in the order measure() needs them: the engine's validator, the
+     * activity's attempt, the CAT attempt it maps to, that attempt's progress.
+     *
+     * @param int $engineattemptid The adaptivequiz attempt.
+     * @return string One of UNKNOWN_REASONS.
+     */
+    public static function unmeasured_reason(int $engineattemptid): string {
+        global $DB;
+
+        if (!self::available()) {
+            return self::UNKNOWN_ENGINE_UNAVAILABLE;
+        }
+        if ($engineattemptid <= 0 || !$DB->record_exists('adaptivequiz_attempt', ['id' => $engineattemptid])) {
+            return self::UNKNOWN_NO_ENGINE_ATTEMPT;
+        }
+        [$insql, $params] = $DB->get_in_or_equal(['adaptivequiz', 'mod_adaptivequiz'], SQL_PARAMS_NAMED, 'comp');
+        $catattemptid = $DB->get_field_select(
+            'local_catquiz_attempts',
+            'id',
+            "attemptid = :attemptid AND component {$insql}",
+            ['attemptid' => $engineattemptid] + $params,
+            IGNORE_MULTIPLE
+        );
+        if (!$catattemptid) {
+            return self::UNKNOWN_NO_CAT_ATTEMPT;
+        }
+
+        return self::UNKNOWN_NO_PROGRESS;
+    }
+
+    /**
+     * Why a sitting has no engine verdict; null where it has one.
+     *
+     * @param array|null $measure From measure(), measure_from_trace() or the trace.
+     * @param string|null $recorded The cause recorded at collection, where measure() had nothing.
+     * @return string|null One of UNKNOWN_REASONS, or null.
+     */
+    public static function unknown_reason(?array $measure, ?string $recorded = null): ?string {
+        if (self::engine_attempt($measure) !== null) {
+            return null;
+        }
+        $reason = (string) ($measure['engine']['unknown'] ?? '');
+        if ($reason === '' && $recorded !== null && $recorded !== '') {
+            $reason = $recorded;
+        }
+
+        return in_array($reason, self::UNKNOWN_REASONS, true) ? $reason : self::UNKNOWN_NOT_RECORDED;
     }
 
     /**

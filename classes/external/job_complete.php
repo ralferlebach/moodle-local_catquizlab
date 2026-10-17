@@ -86,7 +86,6 @@ class job_complete extends external_api {
      * @param string $message The worker's reason, when the attempt did not finish.
      * @param string $diagnostics What the browser saw, as JSON.
      * @param string $workerid The reporting worker; '' from workers before 0.7.38.
-     * @param string $diagnostics The browser's record, as JSON.
      * @return array The acknowledgement.
      */
     public static function execute(

@@ -267,7 +267,8 @@ class results_query {
 
     /** @var array The counts of a pass before it has read anything. */
     protected const EMPTY_COUNTS = [
-        'uniformvalid' => 0, 'enginevalid' => 0, 'engineunknown' => 0, 'invalidreasons' => [],
+        'unknown' => 0, 'uniformvalid' => 0, 'enginevalid' => 0, 'engineinvalid' => 0, 'engineunknown' => 0,
+        'invalidreasons' => [], 'unknownreasons' => [],
         'total' => 0, 'valid' => 0, 'invalid' => 0, 'designstops' => 0, 'reasons' => [], 'bystrategy' => [], 'bycell' => [],
         // Per run, for the analysis population (#115).
         'byrun' => [],
@@ -315,12 +316,15 @@ class results_query {
     /** @var array<int, ?array> Engine measures read in this request, by sitting. */
     protected array $enginemeasures = [];
 
+    /** @var array<int, string> Why the engine had nothing for a sitting, by sitting id (AK 7). */
+    protected array $engineunknown = [];
+
     /**
      * The engine's validity measures of a sitting collected before they were kept in its trace (#112).
      *
      * Read from the engine once and added to the trace, so that the next view
      * does not read them again: they are the engine's data of a finished
-     * sitting and do not change.
+     * sitting and do not change. Where it has none, why is kept in $engineunknown.
      *
      * @param \stdClass $attempt The sitting (id, engineattemptid, tracejson).
      * @return array|null
@@ -331,6 +335,9 @@ class results_query {
         $id = (int) $attempt->id;
         if (!array_key_exists($id, $this->enginemeasures)) {
             $measure = engine_validity::measure((int) ($attempt->engineattemptid ?? 0));
+            if ($measure === null) {
+                $this->engineunknown[$id] = engine_validity::unmeasured_reason((int) ($attempt->engineattemptid ?? 0));
+            }
             if ($measure !== null) {
                 $trace = json_decode((string) ($attempt->tracejson ?? ''), true);
                 if (is_array($trace)) {
@@ -782,6 +789,7 @@ class results_query {
             'dropped' => count((array) ($trace['progress']['droppedscales'] ?? [])),
             'enginestatus' => $trace['enginestatus']
                 ?? ($this->enginestatus[(int) ($attempt->engineattemptid ?? 0)] ?? null),
+            'hoststopcode' => $trace['hoststopcode'] ?? null,
         ];
         // Valid or not: decided in one place for every view alike (#112) —
         // the end against the design, the engine's definitions of SE, items
@@ -789,6 +797,8 @@ class results_query {
         $measure = $trace['enginevalidity'] ?? $this->engine_measure($attempt)
             ?? engine_validity::measure_from_trace($trace, (int) $attempt->runid);
         engine_validity::remember((int) $attempt->id, $measure);
+        // Why the engine had nothing, where it had nothing: recorded at collection, or found just now (AK 7).
+        $facts['engineunknown'] = $trace['enginevalidityunknown'] ?? ($this->engineunknown[(int) $attempt->id] ?? null);
         // The engine's count of answered productive questions, for the minimum (#141).
         if (($measure['source'] ?? '') !== 'trace' && isset($measure['n']) && is_numeric($measure['n'])) {
             $facts['answered'] = (int) $measure['n'];
@@ -809,12 +819,21 @@ class results_query {
         $validity['reason'] = implode(',', $reasons);
         if ($this->onlyattempts === null) {
             $this->validitycounts['total']++;
-            $this->validitycounts[$valid ? 'valid' : 'invalid']++;
+            // Valid, invalid or unknown — unknown is not counted as invalid (AK 7).
+            $this->validitycounts[$validity['state']]++;
             $this->validitycounts['uniformvalid'] += $uniformvalid ? 1 : 0;
             $this->validitycounts['enginevalid'] += $enginevalid === true ? 1 : 0;
+            $this->validitycounts['engineinvalid'] += $enginevalid === false ? 1 : 0;
             $this->validitycounts['engineunknown'] += $enginevalid === null ? 1 : 0;
-            foreach ($reasons as $reason) {
-                $this->validitycounts['invalidreasons'][$reason] = ($this->validitycounts['invalidreasons'][$reason] ?? 0) + 1;
+            if ($validity['engineunknownreason'] !== null) {
+                $why = $validity['engineunknownreason'];
+                $this->validitycounts['unknownreasons'][$why] = ($this->validitycounts['unknownreasons'][$why] ?? 0) + 1;
+            }
+            if ($validity['state'] === result_validity::INVALID) {
+                foreach ($reasons as $reason) {
+                    $this->validitycounts['invalidreasons'][$reason] = ($this->validitycounts['invalidreasons'][$reason] ?? 0)
+                        + 1;
+                }
             }
             $runid = (int) $attempt->runid;
             $this->validitycounts['byrun'][$runid]['total'] = ($this->validitycounts['byrun'][$runid]['total'] ?? 0) + 1;
@@ -843,10 +862,7 @@ class results_query {
             }
         }
         $mode = (string) ($this->filter['validity'] ?? result_validity::VALID);
-        if (
-            ($mode === result_validity::VALID && !$validity['valid'])
-            || ($mode === result_validity::INVALID && $validity['valid'])
-        ) {
+        if ($mode !== result_validity::ALL && $mode !== $validity['state']) {
             return;
         }
 
@@ -887,6 +903,8 @@ class results_query {
             'designstopreached' => $validity['designstop'],
             'enginefinished' => $validity['enginefinished'],
             'valid' => $validity['valid'],
+            'validitystate' => $validity['state'],
+            'engineunknownreason' => $validity['engineunknownreason'],
             'validityreason' => $validity['reason'],
             'uniformvalid' => $uniformvalid,
             'enginevalid' => $enginevalid,
@@ -1283,7 +1301,8 @@ class results_query {
                     // counted, and shown where everything is.
                     $coverage['unknownitems']++;
                     $row['valid'] = false;
-                    if ($mode !== result_validity::VALID) {
+                    $row['validitystate'] = result_validity::UNKNOWN;
+                    if ($mode === result_validity::ALL || $mode === result_validity::UNKNOWN) {
                         yield $row;
                     }
                     continue;
@@ -1292,7 +1311,8 @@ class results_query {
                     // Estimated without an item of its own: nothing local to judge.
                     $coverage['withoutitems']++;
                     $row['valid'] = false;
-                    if ($withzero && $mode !== result_validity::VALID) {
+                    $row['validitystate'] = result_validity::INVALID;
+                    if ($withzero && ($mode === result_validity::ALL || $mode === result_validity::INVALID)) {
                         yield $row;
                     }
                     continue;
@@ -1302,15 +1322,22 @@ class results_query {
                 $coverage['enginevalid'] += $row['enginescalevalid'] === true && $observation['enginevalid'] === true ? 1 : 0;
                 $coverage['engineunknown'] += $row['enginescalevalid'] === null ? 1 : 0;
                 $scalevalid = $rule === engine_validity::RULE_ENGINE ? $row['enginescalevalid'] === true : $row['scalevalid'];
+                // No engine verdict on the scale is not a negative one (AK 7).
+                $scaleunknown = $rule === engine_validity::RULE_ENGINE && $row['enginescalevalid'] === null;
                 $valid = $attemptvalid && $scalevalid;
                 if (!$attemptvalid) {
                     $coverage['frominvalid']++;
+                } else if ($scaleunknown) {
+                    $coverage['reasons']['engine_unknown'] = ($coverage['reasons']['engine_unknown'] ?? 0) + 1;
                 } else if (!$scalevalid) {
                     foreach ($row['scalereasons'] ?: ['engine'] as $reason) {
                         $coverage['reasons'][$reason] = ($coverage['reasons'][$reason] ?? 0) + 1;
                     }
                 }
                 $row['valid'] = $valid;
+                $row['validitystate'] = $valid ? result_validity::VALID
+                    : (($observation['validitystate'] ?? '') === result_validity::UNKNOWN || ($attemptvalid && $scaleunknown)
+                        ? result_validity::UNKNOWN : result_validity::INVALID);
                 if ($attemptvalid) {
                     $coverage['chain']['fromvalid']++;
                     $coverage['chain']['paired']++;
@@ -1320,7 +1347,7 @@ class results_query {
                     $coverage['chain']['withse'] += $row['localse'] !== null ? 1 : 0;
                     self::accumulate($coverage['spread'][$strategy]['valid'], $row);
                 }
-                if ($mode === result_validity::ALL || ($mode === result_validity::VALID) === $valid) {
+                if ($mode === result_validity::ALL || $mode === $row['validitystate']) {
                     $coverage['included'] += $valid ? 1 : 0;
                     yield $row;
                 }

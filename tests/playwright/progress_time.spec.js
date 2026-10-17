@@ -21,6 +21,7 @@
  */
 
 const {test, expect} = require('@playwright/test');
+const {needs} = require('./support/needs');
 const {execFileSync} = require('child_process');
 const path = require('path');
 
@@ -59,7 +60,7 @@ const seeded = (state) => {
 
 const open = async(page, state) => {
     const id = seeded(state);
-    test.skip(!id, `No experiment in state ${state}: set ${'PROGRESS_' + state.toUpperCase()}_EXPERIMENTID or allow php here.`);
+    needs(!id, `No experiment in state ${state}: set ${'PROGRESS_' + state.toUpperCase()}_EXPERIMENTID or allow php here.`);
     await login(page);
     await page.goto('/local/catquizlab/runs.php?experimentid=' + id, {waitUntil: 'networkidle'});
     return page.locator('[data-region="catquizlab-eta"]');

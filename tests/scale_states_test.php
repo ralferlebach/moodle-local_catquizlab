@@ -53,8 +53,12 @@ final class scale_states_test extends \advanced_testcase {
                 ['step' => 0, 'scaleid' => 11, 'event' => 'activated'],
                 ['step' => 0, 'scaleid' => 12, 'event' => 'activated'],
                 ['step' => 0, 'scaleid' => 13, 'event' => 'activated'],
+                // As the engine writes them (local_catquiz#133): locking a scale is
+                // two events, removing one is two.
                 ['step' => 2, 'scaleid' => 13, 'event' => 'locked'],
-                ['step' => 3, 'scaleid' => 12, 'event' => 'dropped'],
+                ['step' => 2, 'scaleid' => 13, 'event' => 'deactivated'],
+                ['step' => 3, 'scaleid' => 12, 'event' => 'deactivated'],
+                ['step' => 3, 'scaleid' => 12, 'event' => 'removed'],
                 ['step' => 4, 'scaleid' => 13, 'event' => 'unlocked'],
                 ['step' => 4, 'scaleid' => 13, 'event' => 'activated'],
             ];
@@ -142,5 +146,30 @@ final class scale_states_test extends \advanced_testcase {
             test_flow::series($flow, $observation['trace'], 'activescales')['points'],
             'y'
         ));
+    }
+
+    /**
+     * The engine's own sequence (local_catquiz progress_scale_state_trace_test) ends where the engine's replay ends.
+     *
+     * @return void
+     */
+    public function test_the_engine_sequence_replays_to_the_engine_state(): void {
+        $events = [
+            [0, 10, 'activated'], [0, 11, 'activated'], [0, 12, 'activated'], [0, 13, 'activated'],
+            [1, 11, 'locked'], [1, 11, 'deactivated'], [1, 12, 'deactivated'], [1, 12, 'removed'],
+            [2, 13, 'locked'], [2, 13, 'deactivated'], [2, 13, 'unlocked'], [2, 11, 'unlocked'],
+            [2, 11, 'activated'], [2, 10, 'deactivated'],
+        ];
+        $trace = ['progress' => ['scalestatetrace' => array_map(
+            static fn(array $e): array => ['step' => $e[0], 'scaleid' => $e[1], 'event' => $e[2]],
+            $events
+        )]];
+        $states = scale_states::by_step($trace, 3);
+
+        // After the first question: 11 locked, 12 removed, 10 and 13 still active.
+        $this->assertSame([10 => 'active', 11 => 'locked', 12 => 'dropped', 13 => 'active'], $states[1]);
+        // The engine's replay: active [11], removed [12], locked [] — 10 and 13 out of the selection.
+        $this->assertSame([10 => 'inactive', 11 => 'active', 12 => 'dropped', 13 => 'inactive'], $states[2]);
+        $this->assertSame($states[2], $states[3]);
     }
 }

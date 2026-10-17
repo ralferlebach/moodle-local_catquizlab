@@ -1,13 +1,20 @@
 name: Interface end-to-end
 
-# Started by hand, because it installs Moodle, provisions an experiment and
-# plays five sittings through a real browser: minutes of runner time for a
-# question nobody asks on every push.
+# The release gate for the interface (re-audit 16.10.2026, AK 3): on every
+# push and pull request to main, and by hand. It installs Moodle with the
+# pinned engine set, provisions an experiment and plays it through a real
+# browser, then runs every Playwright spec — minutes of runner time, which is
+# what a release costs. Development branches run it by hand.
 #
 # Everything it does, it does through the interface. No CLI script sets up the
 # experiment, no SQL seeds the queue — the point is that the buttons work, and a
-# test that reaches around them cannot tell anybody that.
+# test that reaches around them cannot tell anybody that. A spec whose fixture
+# is missing fails here instead of skipping (CATQUIZLAB_E2E_STRICT).
 on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
   workflow_dispatch:
     inputs:
       persons:
@@ -18,11 +25,28 @@ on:
         # every run. A recording that only exists after a failure cannot answer
         # "does the interface still work", which is the question somebody starts
         # this job to ask.
+      memory_limit:
+        description: 'PHP memory_limit of the web server (the production reference is 512M)'
+        required: false
+        default: '512M'
+      engine_heads:
+        description: 'Test the engine branch heads instead of the pinned commits'
+        type: boolean
+        required: false
+        default: false
+
+concurrency:
+  group: ui-e2e-${{ github.ref }}
+  cancel-in-progress: true
 
 env:
   # Used by the installer and by the test. Written once so they cannot drift.
   CATLAB_ADMIN_USER: admin
   CATLAB_ADMIN_PASSWORD: 'Admin123!'
+  # A missing fixture fails a spec instead of skipping it (tests/playwright/support/needs.js).
+  CATQUIZLAB_E2E_STRICT: '1'
+  # The production reference: the HTTP 500s of #110 came at 512M, so a run at 1024M proves nothing about them.
+  PHP_MEMORY_LIMIT: ${{ github.event.inputs.memory_limit || '512M' }}
 
 permissions:
   contents: read
@@ -59,29 +83,27 @@ jobs:
         with:
           php-version: '8.3'
           extensions: pgsql, gd, soap, intl, mbstring, curl, zip, bcmath
+          # The command line keeps room for the seeding scripts; the web server,
+          # which answers the browser, runs at PHP_MEMORY_LIMIT (see its step).
           ini-values: max_input_vars=8000, memory_limit=1024M
 
       - name: Check out Moodle
         run: git clone --depth 1 -b MOODLE_405_STABLE https://github.com/moodle/moodle.git moodle
 
-      - name: Check out the CAT engine and its host activity
+      # The pinned engine set — branch and commit from .github/engine-pins.env,
+      # the same set PHPUnit and Behat test — with the hub subplugins, as the
+      # live installation has them. The manifest records the commits tested.
+      - name: Check out the CAT engine and its host activity (pinned set)
+        env:
+          ENGINE_DIR: ${{ github.workspace }}/moodle
+          ENGINE_LAYOUT: moodle
+          ENGINE_SUBMODULES: '1'
+          ENGINE_MANIFEST: ${{ github.workspace }}/engine-manifest.txt
+          ENGINE_FOLLOW_HEADS: ${{ github.event.inputs.engine_heads == 'true' && '1' || '0' }}
+          MOODLE_BRANCH: MOODLE_405_STABLE
         run: |
-          # The branch the live installation runs, not main: catquiz 1.2.1 on
-          # ALiSe-v-1.2.0-legacy dropped local_catquiz_attemptscale and stopped
-          # writing debug_info, and a CI testing against main tested an engine
-          # nobody uses. Its two hub subplugins are git submodules; a plain
-          # clone leaves their directories empty, and Moodle then fails on a
-          # plugin without a version.php.
-          git clone --depth 1 --recurse-submodules --shallow-submodules \
-              -b "${CATQUIZ_BRANCH:-ALiSe-v-1.2.0-legacy}" \
-              https://github.com/ralferlebach/moodle-local_catquiz.git \
-              moodle/local/catquiz
-          git clone --depth 1 https://github.com/ralferlebach/moodle-mod_adaptivequiz.git \
-              moodle/mod/adaptivequiz
-          git clone --depth 1 https://github.com/ralferlebach/moodle-adaptivequizcatmodel_catquiz.git \
-              moodle/mod/adaptivequiz/catmodel/catquiz
-          git clone --depth 1 https://github.com/ralferlebach/moodle-local_wunderbyte_table.git \
-              moodle/local/wunderbyte_table
+          bash plugin/.github/scripts/fetch-engine.sh
+          echo "local_catquizlab  ${GITHUB_SHA}" >> "$ENGINE_MANIFEST"
           cp -r plugin moodle/local/catquizlab
 
       - name: Configure Moodle
@@ -132,7 +154,7 @@ jobs:
           # until it times out and reports the token as not answering. On a
           # real web server this never happens, which is why the same self-test
           # is green on a production site and red here.
-          PHP_CLI_SERVER_WORKERS=4 nohup php -S 127.0.0.1:8000 -t . > /tmp/webserver.log 2>&1 &
+          PHP_CLI_SERVER_WORKERS=4 nohup php -d memory_limit="${PHP_MEMORY_LIMIT}" -S 127.0.0.1:8000 -t . > /tmp/webserver.log 2>&1 &
           for i in $(seq 1 20); do
             if curl -sf -o /dev/null http://127.0.0.1:8000/; then exit 0; fi
             sleep 1
@@ -190,7 +212,17 @@ jobs:
           MOODLE_ADMIN: ${{ env.CATLAB_ADMIN_USER }}
           MOODLE_ADMIN_PASSWORD: ${{ env.CATLAB_ADMIN_PASSWORD }}
           PERSONS: ${{ github.event.inputs.persons || '5' }}
-        run: npx playwright test --reporter=list,html,json
+        run: npx playwright test
+
+      # What the server did meanwhile, from its own trace of the browser's
+      # requests: HTTP status, PHP fatals and PHP's peak memory per page — at
+      # the memory limit this run had (AK 6).
+      - name: Server figures of the run
+        if: always()
+        working-directory: moodle
+        run: |
+          php local/catquizlab/cli/request_report.php --from="$(( $(date +%s) - 7200 ))" | tee /tmp/request-report.txt
+          php local/catquizlab/cli/request_report.php --from="$(( $(date +%s) - 7200 ))" --json > /tmp/request-report.json || true
 
       # Everything somebody would want to look at afterwards, in one file: the
       # video of the run, the trace, the screenshots, the HTML report, and the
@@ -204,6 +236,9 @@ jobs:
           cp -r moodle/local/catquizlab/tests/playwright/report evidence/report || true
           cp /tmp/webserver.log evidence/webserver.log || true
           cp /tmp/cron.log evidence/cron.log || true
+          cp engine-manifest.txt evidence/engine-manifest.txt || true
+          cp /tmp/request-report.txt /tmp/request-report.json evidence/ 2>/dev/null || true
+          echo "memory_limit=${PHP_MEMORY_LIMIT}" > evidence/php-settings.txt
           mkdir -p evidence/worker-logs
           cp "$HOME"/moodledata*/local_catquizlab/worker-logs/*.log evidence/worker-logs/ 2>/dev/null || true
           find evidence -name '*.webm' -o -name '*.zip' -o -name '*.png' | head -40

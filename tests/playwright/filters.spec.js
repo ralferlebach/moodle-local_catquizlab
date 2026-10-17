@@ -20,13 +20,14 @@
  */
 
 const {test, expect} = require('@playwright/test');
+const {needs} = require('./support/needs');
 
 const ADMIN = process.env.MOODLE_ADMIN || 'admin';
 const PASSWORD = process.env.MOODLE_ADMIN_PASSWORD || '';
 const EXPERIMENT = process.env.PLOTS_EXPERIMENTID || '';
 
 test('a chosen strategy leaves the others in its menu, and switching needs no reset', async({page}) => {
-    test.skip(!EXPERIMENT, 'PLOTS_EXPERIMENTID not set; run cli/seed_results.php first.');
+    needs(!EXPERIMENT, 'PLOTS_EXPERIMENTID not set; run cli/seed_results.php first.');
 
     await page.goto('/login/index.php', {waitUntil: 'networkidle'});
     await page.fill('#username', ADMIN);
@@ -71,7 +72,7 @@ test('a chosen strategy leaves the others in its menu, and switching needs no re
 });
 
 test('a factor keeps the validity choice, and the menus work by keyboard and by name', async({page}) => {
-    test.skip(!EXPERIMENT, 'PLOTS_EXPERIMENTID not set; run cli/seed_results.php first.');
+    needs(!EXPERIMENT, 'PLOTS_EXPERIMENTID not set; run cli/seed_results.php first.');
 
     await page.goto('/login/index.php', {waitUntil: 'networkidle'});
     await page.fill('#username', ADMIN);

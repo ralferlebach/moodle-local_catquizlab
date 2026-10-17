@@ -6,6 +6,103 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.7.41] — 2026-10-16 — re-audit 16.10.: release CI, release gate, engine 2026100922, unknown ≠ invalid
+
+No database change (version 2026101600). Answers the re-audit of 16.10.2026
+(main @ 5cb7831). Gates run here: PHPUnit (also against the pinned engine,
+local_catquiz 2026100922, in a separate installation), Behat, Playwright,
+phpcs, PHPDoc parameter lists, and three real smoke runs at 512M against the
+new engine.
+
+### Release CI (re-audit section 2)
+
+- PHPDoc: `job_complete::execute()` documented `$diagnostics` twice,
+  `run_contract::check_sitting()` lacked `$endcode`. Both fixed; these two
+  stopped PHPUnit and Behat on PHP 8.1/8.2/8.3.
+- `tools/phpdoc_params.php`: every docblock's parameter list against its
+  signature. `make phpdoc` runs it even without moodle-plugin-ci; locally
+  `make check` used to skip PHPDoc altogether. Against the files of 5cb7831 it
+  reports exactly the two CI errors.
+- Checked with local_moodlecheck 1.3.2, the version moodle-plugin-ci 4.5.11
+  installs in the CI, over the whole plugin: no error, no warning (the new
+  tool's own docblock named the tag in its text, which that check refuses;
+  reworded).
+
+### Release gate (section 3; AK 1/3/4/5/6)
+
+- **The release CI installs the engine.** `moodle-release.yml` ran PHPUnit and
+  Behat without it, so every engine-facing test skipped in the release gate;
+  now with the same pinned set as the dev CI.
+- **Engine pinned by branch and commit** (`.github/engine-pins.env`, both
+  lines). `fetch-engine.sh` checks out the pinned commits and writes a manifest
+  of the commits tested; every job keeps it (artifact `engine-manifest-…`).
+  Both end-to-end workflows cloned mod_adaptivequiz and the catmodel from the
+  default branch (`master`/`main`) instead of the legacy line; they now use the
+  script (Moodle layout, with the hub subplugins). `ENGINE_FOLLOW_HEADS=1` /
+  input "engine_heads" tests the branch heads.
+- **Interface E2E is a release gate:** on push and PR to `main`, every
+  Playwright spec. A missing fixture fails a spec instead of skipping it
+  (`tests/playwright/support/needs.js`, `CATQUIZLAB_E2E_STRICT=1`).
+- **Worker E2E is a release gate,** once per engine line: Moodle 4.5 with the
+  legacy set, Moodle 5.2 with the 1.3 set.
+- **512M:** both end-to-end jobs run the web server at `memory_limit=512M`, the
+  production value at which #110's fatals occurred; the CLI keeps 1024M. New:
+  one long ALLSUBS sitting (minimum 100 questions) beside the long CLASSIC one.
+- **`cli/request_report.php`:** HTTP status, PHP fatals and PHP peak memory per
+  page from the server's request trace; with `--max-5xx`, `--max-fatals`,
+  `--max-peak-mb` a gate. The worker E2E ends with `--max-5xx=0 --max-fatals=0`
+  and samples the web server's resident memory every 2 s.
+- `docs/dev/release-gate.md`, including the checks to make required in branch
+  protection (a GitHub setting, not code).
+
+### Engine 2026100922 / 2026100923 (local_catquiz), 2026100909 (mod_adaptivequiz), 2026100906 (catmodel)
+
+- **#133 scale state trace — implemented in the engine, used here.** The engine
+  writes `removed` (prepared here as `dropped`) and locks a scale as two events
+  (locked, deactivated). The replay now follows the engine's own
+  (`progress::replay_scale_state_trace()`): active, locked and removed are kept
+  apart; tested with the engine's own event sequence. With real sittings
+  against the new engine (LOWESTSUB) the case view shows each scale's course
+  ("steps 1–11 active; from step 12 dropped") and the step export fills
+  `scales_active`. **Unblocks #106 (criteria 16/17/18/29) and #109 (7/10/26).**
+- **Status 11 `stoptargetprecision`** (mod_adaptivequiz #20) → target SE reached.
+- **The host's stop code** (`adaptivequiz_attempt.stopcode`) is collected and
+  read where the engine's status is missing (targetprecision, maximumquestions,
+  timelimit, noeligiblequestions); the engine's number goes first, it alone
+  tells "before the minimum" apart.
+- **Progress format 2** (#143): question ids per scale instead of copies; both
+  forms are read.
+- `max_questions_exceeded` (catmodel #8) known as a validity reason (EN/DE).
+- Two tests follow the new engine and still pass with the old: the engine
+  applies the fraction rule itself (#140); CLASSIC shows the per-scale minimum
+  and the maximum SE as reporting thresholds (#135). catquizlab still hands the
+  classical test neutral values; whether it should get the experiment's
+  thresholds instead is an open decision (`docs/dev/validitaet-entscheidung.md`).
+- The case view's help no longer says the engine records scale states only at
+  the end.
+
+### Validity: valid, invalid, unknown (section 4.1, AK 7)
+
+- `result_validity::evaluate_attempt()` returns `state`: valid, invalid or
+  unknown — by the engine's rule a missing verdict, by the uniform rule missing
+  data only (`no_engine_data`, `trace_incomplete`).
+- Counts `valid`, `invalid`, `unknown` apart, plus `unknownreasons`; reasons of
+  invalidity only for invalid sittings. "Invalid only" no longer lists sittings
+  without a verdict; new switch "no verdict only" (`validity=unknown`). On the
+  scale level a missing engine verdict counts as `engine_unknown`, not invalid.
+  Coverage line, population funnel and plot notes name "not judgeable" with its
+  cause.
+- Why there is no verdict, as a code kept with the sitting at collection:
+  `engine_unavailable`, `no_engine_attempt`, `no_cat_attempt`, `no_progress`,
+  `no_scale_result`, `validator_exception` (class and message in the trace),
+  `not_recorded` (collected before 0.7.41). No catch-all swallows the cause.
+- Attempt export, appended (no column moves): `validitystate`, `engineverdict`
+  (valid/invalid/unknown), `engineunknownreason`.
+- The default stays as decided (uniform rule, the engine's verdict beside it as
+  column and filter), documented in `docs/dev/validitaet-entscheidung.md`.
+- Tests: `validity_unknown_test` (counts, filters, export, causes);
+  `result_validity_test` (stop codes, three states).
+
 ## [0.7.40] — 2026-10-14 — engine alignment (local_catquiz #140/#141/#136), #110 engine request timing, #126 preview and primary action
 
 No database change (version 2026101400). Gates: PHPUnit, Behat (two new

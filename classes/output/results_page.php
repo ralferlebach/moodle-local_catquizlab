@@ -395,7 +395,7 @@ class results_page {
                 $rule = (string) ($this->filter['validityrule'] ?? 'uniform');
                 // No engine verdict is not "invalid" (#130 AK 2): said apart,
                 // with the way to judge by the uniform rule.
-                $noverdict = $rule === 'engine' && $mode !== 'invalid' && $counts['enginevalid'] === 0
+                $noverdict = $rule === 'engine' && $mode === 'valid' && $counts['enginevalid'] === 0
                     && $counts['engineunknown'] > 0;
                 $message = $noverdict
                     ? \html_writer::div(
@@ -409,11 +409,14 @@ class results_page {
                         ['data-region' => 'catquizlab-noverdict', 'data-empty' => 'noverdict']
                     )
                     : \html_writer::div(
-                        get_string($mode === 'invalid' ? 'results:noneinvalid' : 'results:nonevalid', $component, (object) [
-                            'total' => $counts['total'],
-                        ]),
+                        get_string(
+                            ['invalid' => 'results:noneinvalid', 'unknown' => 'results:noneunknown'][$mode] ?? 'results:nonevalid',
+                            $component,
+                            (object) ['total' => $counts['total']]
+                        ),
                         'alert alert-warning',
-                        ['data-region' => 'catquizlab-nonevalid', 'data-empty' => $mode === 'invalid' ? 'noinvalid' : 'allexcluded']
+                        ['data-region' => 'catquizlab-nonevalid',
+                            'data-empty' => ['invalid' => 'noinvalid', 'unknown' => 'nounknown'][$mode] ?? 'allexcluded']
                     );
 
                 return $problems . $warnings . $losses . $message . $this->render_coverage()
@@ -562,7 +565,8 @@ class results_page {
     /**
      * Which empty state this view is in, where it has no sittings (#130).
      *
-     * @return string nomatch, noruns, notstarted, nocollected, allexcluded, noverdict, noinvalid or '' (not empty).
+     * @return string nomatch, noruns, notstarted, nocollected, allexcluded, noverdict, noinvalid, nounknown or ''
+     *     (not empty).
      */
     public function empty_kind(): string {
         if ($this->factor_mismatch() !== '') {
@@ -585,6 +589,9 @@ class results_page {
         $mode = (string) ($this->filter['validity'] ?? 'valid');
         if ($mode === 'invalid') {
             return 'noinvalid';
+        }
+        if ($mode === 'unknown') {
+            return 'nounknown';
         }
         $rule = (string) ($this->filter['validityrule'] ?? 'uniform');
 
@@ -667,6 +674,14 @@ class results_page {
         }
         $rows[] = [get_string('population:invalid', $component), $funnel['invalid'] . ($reasons === [] ? ''
             : ' — ' . implode('; ', $reasons))];
+        // Not judgeable, apart from not valid (AK 7).
+        $why = [];
+        foreach ((array) ($funnel['unknownreasons'] ?? []) as $code => $n) {
+            $label = \local_catquizlab\local\engine_validity::label((string) $code);
+            $why[] = s($label) . ' [' . s((string) $code) . ']: ' . (int) $n;
+        }
+        $rows[] = [get_string('population:unknown', $component), (int) ($funnel['unknown'] ?? 0) . ($why === [] ? ''
+            : ' — ' . implode('; ', $why))];
 
         if ($scales !== null) {
             $measured = (int) $scales['measured'];
@@ -790,6 +805,12 @@ class results_page {
             $chart->add_note(get_string('chart:excludedinvalid', 'local_catquizlab', (object) [
                 'n' => $counts['invalid'], 'total' => $counts['total'],
                 'percent' => format_float(100 * $counts['invalid'] / $counts['total'], 1),
+            ]));
+        }
+        if ((int) ($counts['unknown'] ?? 0) > 0 && ($this->filter['validity'] ?? 'valid') === 'valid') {
+            $chart->add_note(get_string('chart:excludedunknown', 'local_catquizlab', (object) [
+                'n' => $counts['unknown'], 'total' => $counts['total'],
+                'percent' => format_float(100 * $counts['unknown'] / $counts['total'], 1),
             ]));
         }
         $chart->set_points($overview['points'])
@@ -2251,6 +2272,17 @@ class results_page {
                 'reason' => $label, 'n' => $n, 'total' => $counts['total'], 'percent' => $percent($n),
             ]);
         }
+        // Not judgeable is neither valid nor invalid (AK 7): its own count, and why.
+        if ((int) ($counts['unknown'] ?? 0) > 0) {
+            $why = [];
+            foreach ((array) ($counts['unknownreasons'] ?? []) as $code => $n) {
+                $why[] = \local_catquizlab\local\engine_validity::label((string) $code) . ': ' . (int) $n;
+            }
+            $parts[] = get_string('validity:unknownpart', $component, (object) [
+                'n' => (int) $counts['unknown'], 'total' => $counts['total'], 'percent' => $percent((int) $counts['unknown']),
+                'reasons' => $why === [] ? '—' : implode(', ', $why),
+            ]);
+        }
         // Which rule decides, and the other beside it.
         $rule = (string) ($this->filter['validityrule'] ?? 'uniform');
         $parts[] = get_string('validity:rule_' . $rule, $component);
@@ -2281,7 +2313,8 @@ class results_page {
         $base = $PAGE->has_set_url() ? $PAGE->url
             : new \moodle_url('/local/catquizlab/results.php', array_filter($this->filter, 'is_scalar'));
         $links = [];
-        foreach (['validity' => ['valid', 'invalid', 'all'], 'validityrule' => ['uniform', 'engine']] as $param => $values) {
+        $switches = ['validity' => ['valid', 'invalid', 'unknown', 'all'], 'validityrule' => ['uniform', 'engine']];
+        foreach ($switches as $param => $values) {
             $current = (string) ($this->filter[$param] ?? $values[0]);
             foreach ($values as $value) {
                 $label = get_string('validity:switch_' . $value, $component);

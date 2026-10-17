@@ -20,6 +20,7 @@
  */
 
 const {test, expect} = require('@playwright/test');
+const {needs} = require('./support/needs');
 const {execFileSync} = require('child_process');
 const fs = require('fs');
 const path = require('path');
@@ -52,7 +53,7 @@ const login = async(page) => {
 
 test('quick filters: one click each, keeping the experiment; reset brings everything back', async({page}) => {
     const id = seeded('blocked');
-    test.skip(!id, 'No experiment could be seeded.');
+    needs(!id, 'No experiment could be seeded.');
     await login(page);
     await page.goto('/local/catquizlab/logs.php?experimentid=' + id + '&hours=0', {waitUntil: 'networkidle'});
 
@@ -84,7 +85,7 @@ test('quick filters: one click each, keeping the experiment; reset brings everyt
 
 test('advanced filters are folded, keep their values, and lose nothing on applying', async({page}) => {
     const id = seeded('blocked');
-    test.skip(!id, 'No experiment could be seeded.');
+    needs(!id, 'No experiment could be seeded.');
     await login(page);
     await page.goto('/local/catquizlab/logs.php?experimentid=' + id + '&hours=0', {waitUntil: 'networkidle'});
 
@@ -108,7 +109,7 @@ test('advanced filters are folded, keep their values, and lose nothing on applyi
 
 test('the progress page leads to the run\'s warnings and errors; text and JSON hold the same selection', async({page}) => {
     const id = seeded('blocked');
-    test.skip(!id, 'No experiment could be seeded.');
+    needs(!id, 'No experiment could be seeded.');
     await login(page);
     await page.goto('/local/catquizlab/runs.php?experimentid=' + id, {waitUntil: 'networkidle'});
 

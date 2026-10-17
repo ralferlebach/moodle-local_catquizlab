@@ -78,6 +78,23 @@ class reason_catalog {
         6 => 'emptyfirstquestionlist', 7 => 'errornoitems', 8 => 'exceededmaxattempttime', 9 => 'attemptclosedbytimelimit',
         // The engine's own word for running out before the minimum (local_catquiz 2026100909, #141).
         10 => 'noremainingquestionsbeforeminimum',
+        // The main scale measured precisely enough, before the maximum (local_catquiz 2026100913,
+        // mod_adaptivequiz #20): it used to be reported as "no remaining questions".
+        11 => 'stoptargetprecision',
+    ];
+
+    /**
+     * The host's end codes (adaptivequiz_attempt.stopcode, mod_adaptivequiz #20) => the engine's code.
+     *
+     * Written by whoever ends the sitting — the host, its algorithm or the CAT
+     * model — and language-independent like the engine's status. "manual" and
+     * "error" have no engine counterpart and decide nothing here.
+     */
+    public const HOST_STOPCODES = [
+        'targetprecision' => 'stoptargetprecision',
+        'maximumquestions' => 'reachedmaximumquestions',
+        'timelimit' => 'attemptclosedbytimelimit',
+        'noeligiblequestions' => 'noremainingquestions',
     ];
 
     /** @var array<string, string>|null The engine's stop texts in every installed language => its code. */
@@ -93,11 +110,20 @@ class reason_catalog {
      *
      * @param string $stopreason The stop text.
      * @param int|null $status The engine's status number, if known.
+     * @param string|null $hostcode The host's stop code (adaptivequiz_attempt.stopcode), if known.
      * @return string|null The code, such as "noremainingquestions"; null if unknown.
      */
-    public static function engine_code(string $stopreason, ?int $status = null): ?string {
-        if ($status !== null && isset(self::ENGINE_STATUS[$status]) && $status >= 0) {
+    public static function engine_code(string $stopreason, ?int $status = null, ?string $hostcode = null): ?string {
+        // The engine's number first: it tells "before the minimum" apart, the host's code does not.
+        // A status of 0 is the engine's "ok" — it says nothing about the end, the host's code may.
+        if ($status !== null && isset(self::ENGINE_STATUS[$status]) && $status > 0) {
             return self::ENGINE_STATUS[$status];
+        }
+        if ($hostcode !== null && isset(self::HOST_STOPCODES[$hostcode])) {
+            return self::HOST_STOPCODES[$hostcode];
+        }
+        if ($status === 0) {
+            return self::ENGINE_STATUS[0];
         }
         $text = \core_text::strtolower(trim($stopreason));
         if ($text === '') {
@@ -265,7 +291,8 @@ class reason_catalog {
         // The engine's code first (#118): its number where it was read, its
         // text — in any installed language — where not, then the old patterns.
         $status = isset($facts['enginestatus']) && is_numeric($facts['enginestatus']) ? (int) $facts['enginestatus'] : null;
-        $code = self::engine_code($stopreason, $status);
+        $hostcode = isset($facts['hoststopcode']) && $facts['hoststopcode'] !== '' ? (string) $facts['hoststopcode'] : null;
+        $code = self::engine_code($stopreason, $status, $hostcode);
         if ($code === null) {
             if (preg_match('/maximum number of questions|reachedmaximumquestions|max\.? number of questions/i', $stopreason)) {
                 $code = 'reachedmaximumquestions';
@@ -303,6 +330,11 @@ class reason_catalog {
         // The engine says itself that it ran out before the minimum (#141).
         if ($code === 'noremainingquestionsbeforeminimum') {
             return 'no_eligible_item_before_minimum';
+        }
+        // The engine says itself that the main scale is precise enough (mod_adaptivequiz #20); it
+        // stops so only after the minimum.
+        if ($code === 'stoptargetprecision') {
+            return 'target_se_reached';
         }
         // Before the minimum number of questions no end is a regular one (#118):
         // not even a standard error at its target — the design does not allow a

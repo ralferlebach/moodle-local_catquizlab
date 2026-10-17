@@ -146,9 +146,16 @@ final class engine_validity_test extends \advanced_testcase {
         );
         $this->assertSame([engine_validity::SE_MAX], engine_validity::judge_scale($measure['scales'][6], $thresholds));
         $this->assertSame([], engine_validity::judge_attempt($measure, $thresholds));
-        // The engine's verdict, word for word: valid — it flagged nothing.
+        // The engine's verdict, word for word: the test as a whole is valid.
         $this->assertTrue(engine_validity::engine_attempt($measure));
-        $this->assertTrue($measure['engine']['scales'][5]['valid'], 'the engine does not check the pattern here');
+        if (defined(\local_catquiz\local\result\scale_result::class . '::REASON_FRACTION_ALL_CORRECT')) {
+            // Since local_catquiz #140 the engine applies the fraction rule itself, to every scale
+            // measured in the attempt: scale 5, all correct, is not valid — as by the uniform rule.
+            $this->assertFalse($measure['engine']['scales'][5]['valid']);
+            $this->assertContains(engine_validity::FRACTION_ALL_CORRECT, $measure['engine']['scales'][5]['reasons']);
+        } else {
+            $this->assertTrue($measure['engine']['scales'][5]['valid'], 'an engine before #140 does not check the pattern');
+        }
     }
 
     /**

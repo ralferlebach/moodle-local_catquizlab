@@ -119,10 +119,14 @@ class attempt_collector {
             $engine['stopreason']
         );
         $trace['enginestatus'] = $engine['enginestatus'] ?? null;
+        $trace['hoststopcode'] = $engine['hoststopcode'] ?? null;
         // What the engine knows about the validity of this sitting (#112): N,
         // share of points and SE per scale by its own functions, and its own
         // verdict. Kept here so that results need not ask the engine again.
         $trace['enginevalidity'] = engine_validity::measure((int) $attempt->engineattemptid);
+        // Where the engine has nothing, why — kept with the sitting, not guessed later (AK 7).
+        $trace['enginevalidityunknown'] = $trace['enginevalidity'] === null
+            ? engine_validity::unmeasured_reason((int) $attempt->engineattemptid) : null;
         // The engine's own request timing for this sitting, where it traced it
         // (local_catquiz #136): kept here, beyond the engine's retention (#110).
         $trace['engineperf'] = engine_perf::for_sitting((int) $attempt->engineattemptid);
@@ -236,6 +240,7 @@ class attempt_collector {
             'minitems' => $options !== [] && strategy_catalog::uses($strategy, 'globalmin') ? (int) $options['minquestions'] : 0,
             'maxitems' => $options !== [] ? (int) $options['maxquestions'] : 0,
             'enginestatus' => $trace['enginestatus'] ?? null,
+            'hoststopcode' => $trace['hoststopcode'] ?? null,
             'dropped'  => count((array) ($trace['progress']['droppedscales'] ?? [])),
             'played'   => (int) ($trace['nitems'] ?? count((array) ($trace['items'] ?? []))),
             'poolsize' => $DB->count_records('local_catquizlab_item', ['runid' => $runid]),
@@ -308,6 +313,8 @@ class attempt_collector {
             // The engine's own end code beside its text (#118): the text is in
             // the language of the moment, the number is not.
             'enginestatus' => ($catquiz && $catquiz->status !== null) ? (int) $catquiz->status : null,
+            // The host's code of the end (mod_adaptivequiz #20, 2026100905 on); null before.
+            'hoststopcode' => isset($aq->stopcode) && $aq->stopcode !== '' ? (string) $aq->stopcode : null,
             'debug'      => self::parse_debug_info(
                 (string) ($catquiz->debug_info ?? ''),
                 (int) ($catquiz->contextid ?? 0)

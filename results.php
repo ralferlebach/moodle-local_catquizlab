@@ -62,7 +62,7 @@ foreach (['budget', 'cellkey'] as $key) {
 // Which sittings by validity (#118): every aggregated view the valid ones,
 // the raw data all of them, marked — unless asked otherwise.
 $validity = optional_param('validity', '', PARAM_ALPHA);
-if (!in_array($validity, ['valid', 'invalid', 'all'], true)) {
+if (!in_array($validity, ['valid', 'invalid', 'unknown', 'all'], true)) {
     $validity = $tab === 'rawdata' ? 'all' : 'valid';
 }
 $filter['validity'] = $validity;

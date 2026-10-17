@@ -22,13 +22,14 @@
  */
 
 const {test, expect} = require('@playwright/test');
+const {needs} = require('./support/needs');
 
 const ADMIN = process.env.MOODLE_ADMIN || 'admin';
 const PASSWORD = process.env.MOODLE_ADMIN_PASSWORD || '';
 const RUNID = process.env.RECOVERY_RUNID || '';
 
 test('a failed sitting is diagnosed, retried, and its history kept', async({page}) => {
-    test.skip(!RUNID, 'RECOVERY_RUNID not set; run cli/seed_failed_attempt.php first.');
+    needs(!RUNID, 'RECOVERY_RUNID not set; run cli/seed_failed_attempt.php first.');
 
     await page.goto('/login/index.php', {waitUntil: 'networkidle'});
     await page.fill('#username', ADMIN);

@@ -249,6 +249,7 @@ jobs:
         run: bash plugin/.github/scripts/fetch-engine.sh
         env:
           ENGINE_DIR: ${{ github.workspace }}/engine
+          ENGINE_MANIFEST: ${{ github.workspace }}/engine-manifest.txt
           MOODLE_BRANCH: ${{ matrix.moodle }}
 
       - name: Install Moodle, engine and plugin
@@ -267,6 +268,15 @@ jobs:
 
       - name: PHPUnit – all tests
         run: moodle-plugin-ci phpunit --fail-on-warning
+
+      - name: Keep the engine manifest
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: engine-manifest-phpunit-${{ matrix.moodle }}-${{ matrix.php }}-${{ matrix.db.engine }}
+          path: ${{ github.workspace }}/engine-manifest.txt
+          retention-days: 30
+          if-no-files-found: warn
 
   # ── 3. Behat ─────────────────────────────────────────────────────────────
   behat:
@@ -323,6 +333,7 @@ jobs:
         run: bash plugin/.github/scripts/fetch-engine.sh
         env:
           ENGINE_DIR: ${{ github.workspace }}/engine
+          ENGINE_MANIFEST: ${{ github.workspace }}/engine-manifest.txt
           MOODLE_BRANCH: ${{ matrix.moodle }}
 
       - name: Install Moodle, engine and plugin
@@ -355,6 +366,15 @@ jobs:
           name: behat-screenshots-${{ matrix.moodle }}
           path: ${{ github.workspace }}/moodle/behatfaildumps/
           retention-days: 7
+
+      - name: Keep the engine manifest
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: engine-manifest-behat-${{ matrix.moodle }}
+          path: ${{ github.workspace }}/engine-manifest.txt
+          retention-days: 30
+          if-no-files-found: warn
 
   # ── Gate ─────────────────────────────────────────────────────────────────
   ci-complete:

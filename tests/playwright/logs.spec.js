@@ -23,13 +23,14 @@
 
 const fs = require('fs');
 const {test, expect} = require('@playwright/test');
+const {needs} = require('./support/needs');
 
 const ADMIN = process.env.MOODLE_ADMIN || 'admin';
 const PASSWORD = process.env.MOODLE_ADMIN_PASSWORD || '';
 const ERRORS = parseInt(process.env.LOGS_ERRORS || '0', 10);
 
 test('large request traces: open, filter, page, deep link, tail and download', async({page}) => {
-    test.skip(!ERRORS, 'LOGS_ERRORS not set; run cli/seed_request_trace.php first.');
+    needs(!ERRORS, 'LOGS_ERRORS not set; run cli/seed_request_trace.php first.');
 
     await page.goto('/login/index.php', {waitUntil: 'networkidle'});
     await page.fill('#username', ADMIN);

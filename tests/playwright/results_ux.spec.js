@@ -21,6 +21,7 @@
  */
 
 const {test, expect} = require('@playwright/test');
+const {needs} = require('./support/needs');
 const {execFileSync} = require('child_process');
 const path = require('path');
 
@@ -52,7 +53,7 @@ const login = async(page) => {
 
 test('collected but none valid: said with the reasons, never "nothing collected"', async({page}) => {
     const id = seeded('INVALID', ['--persons=5', '--invalid']);
-    test.skip(!id, 'No experiment could be seeded.');
+    needs(!id, 'No experiment could be seeded.');
     await login(page);
     await page.goto('/local/catquizlab/results.php?experimentid=' + id, {waitUntil: 'networkidle'});
 
@@ -76,7 +77,7 @@ test('collected but none valid: said with the reasons, never "nothing collected"
 
 test('the basis is one line plus a folded part that holds everything to reproduce', async({page}) => {
     const id = seeded('PLOTS', []);
-    test.skip(!id, 'No experiment could be seeded.');
+    needs(!id, 'No experiment could be seeded.');
     await login(page);
     await page.goto('/local/catquizlab/results.php?experimentid=' + id, {waitUntil: 'networkidle'});
 
@@ -98,7 +99,7 @@ test('the basis is one line plus a folded part that holds everything to reproduc
 
 test('a filter change and a validity switch change the basis; the export follows the selection', async({page}) => {
     const id = seeded('PLOTS', []);
-    test.skip(!id, 'No experiment could be seeded.');
+    needs(!id, 'No experiment could be seeded.');
     await login(page);
     const base = '/local/catquizlab/results.php?experimentid=' + id;
     await page.goto(base, {waitUntil: 'networkidle'});
@@ -122,7 +123,7 @@ test('a filter change and a validity switch change the basis; the export follows
 
 test('the download menu: closed, opens by keyboard, offers SVG, PNG, PDF and CSV; settings apart', async({page}) => {
     const id = seeded('PLOTS', []);
-    test.skip(!id, 'No experiment could be seeded.');
+    needs(!id, 'No experiment could be seeded.');
     await login(page);
     await page.goto('/local/catquizlab/results.php?experimentid=' + id + '&tab=global', {waitUntil: 'networkidle'});
 

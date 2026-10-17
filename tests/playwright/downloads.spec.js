@@ -27,6 +27,7 @@
 
 const fs = require('fs');
 const {test, expect} = require('@playwright/test');
+const {needs} = require('./support/needs');
 
 const ADMIN = process.env.MOODLE_ADMIN || 'admin';
 const PASSWORD = process.env.MOODLE_ADMIN_PASSWORD || '';
@@ -95,7 +96,7 @@ function check(file, options = {}) {
 }
 
 test('every download on the results pages delivers a usable file', async({page}) => {
-    test.skip(!EXPERIMENT, 'PLOTS_EXPERIMENTID not set; run cli/seed_results.php first.');
+    needs(!EXPERIMENT, 'PLOTS_EXPERIMENTID not set; run cli/seed_results.php first.');
     await signin(page);
     const results = '/local/catquizlab/results.php?experimentid=' + EXPERIMENT;
 
@@ -149,7 +150,7 @@ test('every download on the results pages delivers a usable file', async({page})
 });
 
 test('the logs and a run\'s debug artefacts download', async({page}) => {
-    test.skip(!RUN, 'RECOVERY_RUNID not set; run cli/seed_failed_attempt.php first.');
+    needs(!RUN, 'RECOVERY_RUNID not set; run cli/seed_failed_attempt.php first.');
     await signin(page);
 
     await page.goto('/local/catquizlab/logs.php?hours=0', {waitUntil: 'networkidle'});
@@ -180,7 +181,7 @@ test('the logs and a run\'s debug artefacts download', async({page}) => {
 });
 
 test('downloads refuse cleanly: no session key, an unknown experiment, a user without rights', async({page, browser}) => {
-    test.skip(!EXPERIMENT, 'PLOTS_EXPERIMENTID not set; run cli/seed_results.php first.');
+    needs(!EXPERIMENT, 'PLOTS_EXPERIMENTID not set; run cli/seed_results.php first.');
     await signin(page);
     await page.goto('/local/catquizlab/results.php?experimentid=' + EXPERIMENT + '&tab=export', {waitUntil: 'networkidle'});
     const sesskey = await page.evaluate(() => window.M.cfg.sesskey);
@@ -215,7 +216,7 @@ test('downloads refuse cleanly: no session key, an unknown experiment, a user wi
     expect(fallback.headers()['content-disposition']).toContain('catquizlab_attempt_');
 
     // A colleague with an account and no rights: refused, no file.
-    test.skip(!process.env.PLAIN_USER, 'PLAIN_USER not set; run cli/seed_plain_user.php first.');
+    needs(!process.env.PLAIN_USER, 'PLAIN_USER not set; run cli/seed_plain_user.php first.');
     const context = await browser.newContext();
     const plain = await context.newPage();
     await plain.goto('/login/index.php', {waitUntil: 'networkidle'});
@@ -238,7 +239,7 @@ test('downloads refuse cleanly: no session key, an unknown experiment, a user wi
 });
 
 test('a large export arrives whole', async({page}) => {
-    test.skip(!process.env.LARGE_EXPERIMENTID, 'LARGE_EXPERIMENTID not set; run cli/seed_results.php --persons=2000 --label=LARGE.');
+    needs(!process.env.LARGE_EXPERIMENTID, 'LARGE_EXPERIMENTID not set; run cli/seed_results.php --persons=2000 --label=LARGE.');
     await signin(page);
     const base = '/local/catquizlab/results.php?experimentid=' + process.env.LARGE_EXPERIMENTID + '&tab=export';
 

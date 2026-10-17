@@ -21,6 +21,7 @@
  */
 
 const {test, expect} = require('@playwright/test');
+const {needs} = require('./support/needs');
 
 const ADMIN = process.env.MOODLE_ADMIN || 'admin';
 const PASSWORD = process.env.MOODLE_ADMIN_PASSWORD || '';
@@ -39,7 +40,7 @@ async function ticks(svg, anchor) {
 }
 
 test('plots follow the conventions: symmetric axes, 0 in the middle, a 45° diagonal, integer steps', async({page}) => {
-    test.skip(!EXPERIMENT, 'PLOTS_EXPERIMENTID not set; run cli/seed_results.php first.');
+    needs(!EXPERIMENT, 'PLOTS_EXPERIMENTID not set; run cli/seed_results.php first.');
 
     await page.goto('/login/index.php', {waitUntil: 'networkidle'});
     await page.fill('#username', ADMIN);

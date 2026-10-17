@@ -155,6 +155,9 @@ class analysis_population {
 
         return $total + [
             'invalid' => (int) $counts['invalid'],
+            // Not judgeable — no verdict — kept apart from invalid (AK 7).
+            'unknown' => (int) ($counts['unknown'] ?? 0),
+            'unknownreasons' => (array) ($counts['unknownreasons'] ?? []),
             'evaluated' => (int) $counts['total'],
             'invalidreasons' => (array) $counts['invalidreasons'],
             'runs' => $perrun,
