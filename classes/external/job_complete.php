@@ -175,7 +175,6 @@ class job_complete extends external_api {
         if ($finished) {
             $update = (object) [
                 'id'           => $attemptid,
-                'status'       => attempt_scheduler::STATUS_COLLECTED,
                 'timemodified' => time(),
             ];
             if ($runtimems > 0) {
@@ -188,7 +187,15 @@ class job_complete extends external_api {
 
             // Pull the engine trace into the attempt when possible (no-op without the engine).
             if ($engineattemptid > 0) {
-                attempt_collector::collect($attemptid);
+                // The status "collected" and the trace become visible together: the collector
+                // writes both in one update. The status used to be set first, and a
+                // reader in between saw a collected sitting with no trace — the
+                // smoke test read 0 answered questions for a CLASSIC sitting of 120
+                // (#136, local run against the engine heads, 18.10.2026).
+                if (attempt_collector::collect($attemptid) === null) {
+                    // No trace to collect: collected all the same, as before.
+                    $DB->set_field('local_catquizlab_attempt', 'status', attempt_scheduler::STATUS_COLLECTED, ['id' => $attemptid]);
+                }
 
                 // The sitting is in this plugin's tables now. The engine's
                 // person parameters for this simulated person go, so the next

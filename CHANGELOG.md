@@ -6,6 +6,59 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.7.43] — 2026-10-18 — #136 new engine set: an attempt in progress is continued, never restarted
+
+No database change (version 2026101800). Built on `main` @ 090344c: the five CI
+commits after 0.7.42 (interface E2E pins for local_catquiz #146, Moodle 5.3 in
+the CI matrices, healthchecks, `\core_external\util::generate_token()`) are
+kept as they are; this release touches none of their files except the version
+line of `version.php`, where `$plugin->supported = [405, 503]` stays.
+
+Answers the addendum to the re-audit
+(local_catquiz #146, 17.10.2026) and the worker end-to-end run against the
+engine heads (`engine_heads`, run of 17.10.2026 evening).
+
+### #136 — The new host offers to restart an attempt in progress
+
+- **Found** by the worker end-to-end run against the heads. local_catquiz
+  2026101701/2026101702 and mod_adaptivequiz 2026101701/2026101702 were used,
+  with the catmodel at its heads. Both jobs, Moodle 4.5 and 5.2, passed every
+  step up to the #134 step (lost response, lost request): 0 collected in 480 s.
+  Everything before it was green with the new set: install, one sitting,
+  claims, six strategies, CLASSIC 120 and ALLSUBS 105.
+- **Cause.** mod_adaptivequiz host issue #5 changes the activity page for an
+  attempt in progress. It no longer only continues; it offers "Start a new
+  attempt" (primary, POST `resume=restart`) before "Continue attempt". After
+  the lost response the worker reopened the activity and clicked the first
+  submit button, which was the restart. Navigation then never completed, and
+  the sitting hung until the step's time ran out. Reproduced on Moodle 5.2 with
+  the heads.
+- **Fix in the worker.** When the page shows a restart form, the worker uses
+  only the continue form and records "resume: continued, not restarted". A page
+  that offers only a restart is reported by name and nothing is clicked:
+  restarting would discard the sitting's answers, and a retried sitting would
+  count twice. A page without an attempt in progress starts as before.
+- `test/resume.test.js` (worker, against the host's markup): continued
+  although the restart comes first; restart only → reported, nothing sent; new
+  attempt → started as before.
+- **Against the heads on Moodle 5.2:** #134 step PASS (stored / notstored
+  reconciled, sitting finished); see the issue comment for the full sequence.
+- **"Collected" without its trace.** Against the legacy heads the CLASSIC
+  120-question step read 0 answered questions for a sitting of 120. In
+  `job_complete` the status went to "collected" first and the trace was
+  written afterwards; a reader in between saw a collected sitting with no
+  trace. Now the collector writes both in one update. A sitting without an
+  engine trace is still marked collected, as before.
+- **Engine defect found, not fixed here** (`issues/local_catquiz-progress-create_new-typeerror.md`):
+  on the Moodle 5 heads, `attemptfinished.php` sometimes raises
+  `progress::create_new(): Argument #4 ($quizsettings) … null given`. A
+  reading caller without quiz settings finds no progress in cache or database
+  and still creates one. It was seen in the load test and once in the
+  per-strategy smoke; a repeat was green. It is raised as an engine issue.
+- **Pins.** `.github/engine-pins.env` stays on the set of 0.7.41 until the
+  worker end-to-end run against the heads is green in CI with this fix. The
+  next step is in `docs/dev/release-gate.md`.
+
 ## [0.7.42] — 2026-10-17 — #135 Moodle 5.2 worker end-to-end, a sitting handed out twice, question bank transfer
 
 No database change (version 2026101700). Answers the re-audit of 17.10.2026

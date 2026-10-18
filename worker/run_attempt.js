@@ -54,6 +54,21 @@ const START_SELECTORS = [
     'button[type="submit"]',
     'a.btn-primary',
 ];
+/**
+ * An attempt in progress: continue it, never start it again (#136).
+ *
+ * From mod_adaptivequiz 2026101701/2026101702 the activity page offers two
+ * forms for an attempt in progress: "Start a new attempt" (primary, POST with
+ * resume=restart) and "Continue attempt". The first submit button on the page
+ * is the restart; clicking it after a lost response (#134) abandoned the
+ * answers given and left the worker without a navigation. A sitting is
+ * continued, so the restart form is excluded by its own field.
+ */
+const RESTART_FORM = 'form[action*="attempt.php"] input[name="resume"][value="restart"]';
+const CONTINUE_SELECTORS = [
+    'form[action*="attempt.php"]:not(:has(input[name="resume"][value="restart"])) button[type="submit"]',
+    'form[action*="attempt.php"]:not(:has(input[name="resume"][value="restart"])) input[type="submit"]',
+];
 
 const NAV_TIMEOUT = 30000;
 
@@ -562,8 +577,17 @@ async function startAttempt(page, recorder) {
     if (await hasQuestion(page)) {
         return nav.STATE.QUESTION;
     }
-    const result = await nav.clickAndSettle(page, START_SELECTORS, QUESTION_SELECTORS, {
-        label: 'start attempt',
+    // An attempt in progress is continued; a page that offers only a restart is
+    // said, not clicked: restarting would discard the sitting's answers.
+    const resumable = Boolean(await page.$(RESTART_FORM));
+    if (resumable && !(await page.$(CONTINUE_SELECTORS[0])) && !(await page.$(CONTINUE_SELECTORS[1]))) {
+        throw new Error('The activity page offers only to start the attempt again, not to continue it.');
+    }
+    if (resumable && recorder) {
+        recorder.event('resume', 'attempt in progress: continued, not restarted');
+    }
+    const result = await nav.clickAndSettle(page, resumable ? CONTINUE_SELECTORS : START_SELECTORS, QUESTION_SELECTORS, {
+        label: resumable ? 'continue attempt' : 'start attempt',
         timeout: NAV_TIMEOUT,
         recorder,
     });
@@ -1595,6 +1619,7 @@ function describeTransportError(wsfunction, url, error, elapsedms, status, who) 
 
 module.exports = {
     login,
+    startAttempt,
     describeTransportError,
     artefactPath,
     selfTest,
