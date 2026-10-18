@@ -35,6 +35,7 @@ branch_version() {
         MOODLE_500_STABLE) echo 2025041400 ;;
         MOODLE_501_STABLE) echo 2025100600 ;;
         MOODLE_502_STABLE) echo 2026041300 ;;
+        MOODLE_503_STABLE) echo 2026100500 ;;
         *)                 echo 0 ;;
     esac
 }

@@ -63,9 +63,10 @@ jobs:
         include:
           - { stack: legacy, moodle: MOODLE_405_STABLE, coreroot: moodle, dirroot: moodle, webroot: moodle }
           - { stack: moodle5, moodle: MOODLE_502_STABLE, coreroot: moodle, dirroot: moodle/public, webroot: moodle/public }
+          - { stack: moodle53, moodle: MOODLE_503_STABLE, coreroot: moodle, dirroot: moodle/public, webroot: moodle/public }
     services:
       postgres:
-        image: postgres:16
+        image: ${{ matrix.moodle == 'MOODLE_503_STABLE' && 'postgres:17' || 'postgres:16' }}
         env:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: moodle

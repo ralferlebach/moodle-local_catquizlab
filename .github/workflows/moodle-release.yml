@@ -128,7 +128,7 @@ jobs:
       fail-fast: false
       matrix:
         # Moodle 5.0 is out of support upstream and was dropped from the matrix.
-        moodle: [MOODLE_405_STABLE, MOODLE_502_STABLE]
+        moodle: [MOODLE_405_STABLE, MOODLE_502_STABLE, MOODLE_503_STABLE]
         php: ['8.1', '8.2', '8.3']
         db:
           - { engine: mariadb, type: mariadb, port: 3306, user: root,   pass: root   }
@@ -136,10 +136,16 @@ jobs:
         exclude:
           - { moodle: MOODLE_502_STABLE, php: '8.1' }
           - { moodle: MOODLE_502_STABLE, php: '8.2' }
+          - { moodle: MOODLE_503_STABLE, php: '8.1' }
+          - { moodle: MOODLE_503_STABLE, php: '8.2' }
+        # Explicit additional PHP 8.4 coverage only for Moodle 5.3.
+        include:
+          - { moodle: MOODLE_503_STABLE, php: '8.4', db: { engine: mariadb, type: mariadb, port: 3306, user: root, pass: root } }
+          - { moodle: MOODLE_503_STABLE, php: '8.4', db: { engine: pgsql, type: pgsql, port: 5432, user: moodle, pass: moodle } }
 
     services:
       mariadb:
-        image: mariadb:10.11
+        image: ${{ matrix.moodle == 'MOODLE_503_STABLE' && 'mariadb:11.4' || 'mariadb:10.11' }}
         env:
           MYSQL_ROOT_PASSWORD: root
         ports: ['3306:3306']
@@ -147,7 +153,7 @@ jobs:
           --health-cmd="mysqladmin ping --silent"
           --health-interval=10s --health-retries=10
       pgsql:
-        image: postgres:16
+        image: ${{ matrix.moodle == 'MOODLE_503_STABLE' && 'postgres:17' || 'postgres:16' }}
         env:
           POSTGRES_USER:     moodle
           POSTGRES_PASSWORD: moodle
@@ -230,10 +236,11 @@ jobs:
         include:
           - { moodle: MOODLE_405_STABLE, php: '8.2' }
           - { moodle: MOODLE_502_STABLE, php: '8.3' }
+          - { moodle: MOODLE_503_STABLE, php: '8.3' }
 
     services:
       mariadb:
-        image: mariadb:10.11
+        image: ${{ matrix.moodle == 'MOODLE_503_STABLE' && 'mariadb:11.4' || 'mariadb:10.11' }}
         env:
           MYSQL_ROOT_PASSWORD: root
         ports: ['3306:3306']

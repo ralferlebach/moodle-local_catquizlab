@@ -15,8 +15,8 @@
 # "e2e" plays real sittings through the real UI and therefore needs a running
 # Moodle with the CAT engine installed: on every push and pull request to main
 # (the release gate, re-audit 16.10.2026 AK 4) and by hand. It runs twice,
-# once per engine line: Moodle 4.5 with the legacy set and Moodle 5.2 with the
-# 1.3 set, both pinned (.github/engine-pins.env). The web server runs at the
+# each supported Moodle line: 4.5 legacy, 5.2 and 5.3 with the 1.3
+# engine set, all pinned (.github/engine-pins.env). The web server runs at the
 # production memory limit, 512M (AK 6).
 ##############################################################################
 
@@ -103,13 +103,14 @@ jobs:
           # nothing to run.
           # Moodle 4.5: local_catquiz 1.2.1, the live line.
           - { stack: legacy, moodle: MOODLE_405_STABLE, coreroot: moodle, dirroot: moodle, webroot: moodle }
-          # Moodle 5.2: local_catquiz 1.3.0 and the v-3.0 host; plugins and web under public/.
+          # Moodle 5.2 and 5.3: local_catquiz 1.3.0, host v-3.0; plugins and web under public/.
           - { stack: moodle5, moodle: MOODLE_502_STABLE, coreroot: moodle, dirroot: moodle/public, webroot: moodle/public }
+          - { stack: moodle53, moodle: MOODLE_503_STABLE, coreroot: moodle, dirroot: moodle/public, webroot: moodle/public }
     env:
       PHP_MEMORY_LIMIT: ${{ github.event.inputs.memory_limit || '512M' }}
     services:
       postgres:
-        image: postgres:16
+        image: ${{ matrix.moodle == 'MOODLE_503_STABLE' && 'postgres:17' || 'postgres:16' }}
         env:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: moodle

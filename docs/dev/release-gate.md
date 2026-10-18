@@ -1,21 +1,24 @@
 # Release-Gate: was vor einem Release grün sein muss
 
-Stand: 0.7.41 (Re-Audit vom 16.10.2026).
+Stand: CI-Erweiterung vom 18.10.2026; Moodle 5.3 (Candidate), Releaseabnahme noch ausstehend.
 
 ## 1. Die Prüfungen und wann sie laufen
 
 | Workflow | Job | Push/PR auf `main` | Push auf andere Zweige | von Hand |
 |---|---|---|---|---|
-| Moodle Plugin Release CI (`moodle-release.yml`) | Lint, PHPDoc, Struktur; PHPUnit (4.5 und 5.2, MariaDB und PostgreSQL, PHP 8.1–8.3); Behat; **mit der gepinnten Engine** | ja | – | – |
+| Moodle Plugin Release CI (`moodle-release.yml`) | Lint, PHPDoc, Struktur; PHPUnit (4.5/5.2/5.3, MariaDB und PostgreSQL, PHP 8.1–8.4 nur in unterstützten Kombinationen); Behat; **mit der gepinnten Engine** | ja | – | – |
 | Moodle Plugin CI (`moodle-ci.yml`) | dasselbe plus informative Linter, **mit der gepinnten Engine** | – | ja | – |
-| Interface end-to-end (`ui-e2e.yml`) | Moodle 4.5 + Engine-Set, ein Experiment über die Oberfläche, **alle** Playwright-Specs, Webserver mit `memory_limit=512M` | ja | – | ja |
+| Interface end-to-end (`ui-e2e.yml`) | Moodle 4.5/5.2/5.3 mit separaten Candidate-Engine-Pins, ein Experiment über die Oberfläche, **alle** Playwright-Specs, Webserver mit `memory_limit=512M` | ja | – | ja |
 | Worker CI (`worker-e2e.yml`) | Werkzeugkette und Node-Tests | ja | ja | ja |
-| Worker CI (`worker-e2e.yml`) | End-to-end je Engine-Linie (Moodle 4.5 / Legacy, Moodle 5.2 / 1.3): Sittings je Strategie, langer CLASSIC- und ALLSUBS-Lauf, verlorene Antwort/Anfrage, 300 Sittings Last, Webserver mit 512M; danach **keine** 5xx und **kein** PHP-Fatal (`cli/request_report.php --max-5xx=0 --max-fatals=0`) | ja | – | ja |
+| Worker CI (`worker-e2e.yml`) | End-to-end je Engine-Linie (Moodle 4.5 / Legacy, Moodle 5.2 und 5.3 / 1.3): Sittings je Strategie, langer CLASSIC- und ALLSUBS-Lauf, verlorene Antwort/Anfrage, 300 Sittings Last, Webserver mit 512M; danach **keine** 5xx und **kein** PHP-Fatal (`cli/request_report.php --max-5xx=0 --max-fatals=0`) | ja | – | ja |
 
 Für den Branch-Schutz von `main` gehören als Pflicht-Checks dazu:
-„CI complete (release)“, „Interface end-to-end (Playwright)“,
+„CI complete (release)“, „Interface end-to-end (legacy, pinned CatQuiz #146)“,
+„Interface end-to-end (moodle5, pinned CatQuiz #146)“,
+„Interface end-to-end (moodle53, pinned CatQuiz #146)“,
 „Worker end-to-end (legacy, needs the CAT engine)“ und
-„Worker end-to-end (moodle5, needs the CAT engine)“. Diese Einstellung liegt
+„Worker end-to-end (moodle5, needs the CAT engine)“ und
+„Worker end-to-end (moodle53, needs the CAT engine)“. Diese Einstellung liegt
 im Repository auf GitHub, nicht im Code.
 
 ## 2. Engine-Set: Zweig und Commit
@@ -24,7 +27,10 @@ im Repository auf GitHub, nicht im Code.
 local_catquiz, mod_adaptivequiz und adaptivequizcatmodel_catquiz, dazu
 local_wunderbyte_table. Alle Jobs, die die Engine installieren, holen sie über
 `.github/scripts/fetch-engine.sh`. Dazu gehören PHPUnit, Behat, UI-E2E und
-Worker-E2E. Jeder dieser Jobs legt ein Manifest der tatsächlich getesteten
+Worker-E2E. Die Interface-Matrix nutzt vorläufig `.github/engine-pins-interface.env` mit
+neueren CatQuiz-#146-Commits; PHPUnit/Behat und Worker behalten bis zur
+Abnahme `.github/engine-pins.env`. Dieser Unterschied ist im Gate nachzuweisen.
+Jeder dieser Jobs legt ein Manifest der tatsächlich getesteten
 Commits ab, als Artefakt `engine-manifest-…` bzw. in den E2E-Evidenzen.
 
 Vor 0.7.41 holten die beiden E2E-Workflows mod_adaptivequiz und das Catmodel
@@ -44,7 +50,7 @@ Ab Moodle 5.1 liegen Plugins und Web-Einstiegspunkte unter `public/`. Die
 Kommandozeilenskripte von Moodle selbst und `config.php` bleiben oben.
 `worker-e2e.yml` führt die drei Orte deshalb getrennt:
 
-| Matrix-Feld | Inhalt | Moodle 4.5 | Moodle 5.2 |
+| Matrix-Feld | Inhalt | Moodle 4.5 | Moodle 5.2 und 5.3 |
 |---|---|---|---|
 | `coreroot` | `config.php`, `admin/cli/*.php` (Installation, Ad-hoc-Tasks, Cron) | `moodle` | `moodle` |
 | `dirroot` | Plugins (`$CFG->dirroot`) und ihre `cli/*.php` | `moodle` | `moodle/public` |
@@ -65,6 +71,28 @@ nur „No way to start the attempt was found“. Diese Lücke kam erst nach der
 Korrektur der Wurzeln zum Vorschein. Seitdem ist sie auch im Plugin abgefangen:
 `preflight` blockiert den Start mit Begründung, und `cli/e2e_prepare.php`
 bricht mit derselben Begründung ab.
+
+## 2b. Moodle 5.3: tatsächliche Mindestversionen und Releasefreigabe
+
+Der offizielle Branch `MOODLE_503_STABLE` ist am 18.10.2026 vorhanden
+(Core `public/version.php`: 5.3+ Build 20261013, Version 2026100500.02).
+Laut `public/admin/environment.xml` sind **PHP >=8.3, PostgreSQL >=17
+und MariaDB >=11.4** erforderlich. Deshalb verwenden die 5.3-Jobvarianten
+`postgres:17` bzw. `mariadb:11.4`, während 4.5/5.2 ihre bisherigen
+DB-Container behalten. PHPUnit prüft PHP 8.3 und zusätzlich PHP 8.4;
+Behat/Worker/UI nutzen PHP 8.3.
+
+Das Verzeichnislayout entspricht 5.2: CLI und `config.php` unter
+`moodle/`; Plugins und Webroot unter `moodle/public/`.
+`.github/scripts/fetch-engine.sh` ordnet 5.3 der Core-Mindestversion
+`2026100500` zu und verwendet für die CAT-Plugins das M5-Pinset.
+
+**Kein automatischer Stabilitätsnachweis:** Eine grüne 5.3-CI muss
+vollständige Moodle-/Engine-Installation, PHPUnit, Behat, strikte
+Playwright-Tests und echte Worker-Attempts inklusive 512M-Läufen belegen.
+Bis dahin ist 5.3 ein getesteter **Kandidat**, nicht ein bereits
+abgenommener Produktivstack. Bereits bekannte Fehler aus #129/#137
+(Responsive-UI) und #136 (Engine-Integration) gehören zur Abnahme.
 
 ## 3. Keine stillen Skips im Gate
 
