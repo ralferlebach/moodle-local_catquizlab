@@ -358,7 +358,9 @@ function local_catquizlab_e2e_token(): ?string {
 
     require_once($CFG->dirroot . '/lib/externallib.php');
 
-    return external_generate_token(
+    // Since Moodle 4.4 external_generate_token() is a deprecated wrapper; in
+    // 5.3 it emits a fatal coding/deprecation message during E2E setup.
+    return \core_external\util::generate_token(
         EXTERNAL_TOKEN_PERMANENT,
         $service,
         $user->id,

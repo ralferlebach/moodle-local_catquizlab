@@ -195,7 +195,12 @@ jobs:
       - name: Provision an experiment, a run and a worker token
         id: prepare
         working-directory: ${{ matrix.dirroot }}
-        run: php local/catquizlab/cli/e2e_prepare.php --persons=1 >> "$GITHUB_OUTPUT"
+        run: |
+          set -o pipefail
+          # Moodle deprecation/diagnostic output is not a valid GITHUB_OUTPUT record.
+          # Keep the worker token out of public Actions logs; accept only expected keys.
+          php local/catquizlab/cli/e2e_prepare.php --persons=1 \
+            | grep -E '^(experimentid|runid|attempts|token)=' >> "$GITHUB_OUTPUT"
 
       - name: Start the web server
         working-directory: ${{ matrix.webroot }}
