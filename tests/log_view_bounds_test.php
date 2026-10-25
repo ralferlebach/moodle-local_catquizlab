@@ -37,14 +37,15 @@ final class log_view_bounds_test extends \advanced_testcase {
      *
      * @param int $n How many.
      * @param callable|null $status The status of line $i; 200 when not given.
+     * @param int|null $now The moment the lines end a minute before; time() when not given.
      * @return void
      */
-    protected function write_lines(int $n, ?callable $status = null): void {
+    protected function write_lines(int $n, ?callable $status = null, ?int $now = null): void {
         global $CFG;
 
         $dir = $CFG->dataroot . '/' . request_trace::DIRECTORY;
         @mkdir($dir, 0777, true);
-        $start = time() - 60 - $n / 100;
+        $start = ($now ?? time()) - 60 - $n / 100;
         $handles = [];
         for ($i = 0; $i < $n; $i++) {
             $line = request_trace::record(
@@ -98,16 +99,20 @@ final class log_view_bounds_test extends \advanced_testcase {
     public function test_each_keeps_to_the_window(): void {
         global $CFG;
         $this->resetAfterTest();
-        $this->write_lines(300);
-        $file = $CFG->dataroot . '/' . request_trace::DIRECTORY . '/' . gmdate('Y-m-d', time() - 60) . '.jsonl';
+        // One "now" for writing and reading: the lines are 100 per second, and
+        // a second passing between the two moved the window by 100 lines (a
+        // red run on a busy machine, 19.10.2026).
+        $now = time();
+        $this->write_lines(300, null, $now);
+        $file = $CFG->dataroot . '/' . request_trace::DIRECTORY . '/' . gmdate('Y-m-d', $now - 60) . '.jsonl';
         file_put_contents($file, "not json\n{\"time\":\"broken\n", FILE_APPEND);
 
         // The first 100 lines are older than 2 s before the 101st.
-        $lines = iterator_to_array(request_trace::each(time() - 60 - 2, time()), false);
+        $lines = iterator_to_array(request_trace::each($now - 60 - 2, $now), false);
         $this->assertLessThanOrEqual(201, count($lines));
         $this->assertGreaterThanOrEqual(199, count($lines));
         foreach ($lines as $line) {
-            $this->assertGreaterThanOrEqual((time() - 62) * 1000, $line['unixms']);
+            $this->assertGreaterThanOrEqual(($now - 62) * 1000, $line['unixms']);
         }
     }
 

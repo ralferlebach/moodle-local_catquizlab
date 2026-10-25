@@ -732,9 +732,9 @@ class scatter_chart {
         $csv = '';
         if ($rows !== []) {
             $handle = fopen('php://temp', 'r+');
-            fputcsv($handle, array_keys(reset($rows)));
+            fputcsv($handle, array_keys(reset($rows)), ',', '"', '');
             foreach ($rows as $row) {
-                fputcsv($handle, array_values($row));
+                fputcsv($handle, array_values($row), ',', '"', '');
             }
             rewind($handle);
             $csv = (string) stream_get_contents($handle);

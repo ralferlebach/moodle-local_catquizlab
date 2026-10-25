@@ -129,6 +129,9 @@ test('every download on the results pages delivers a usable file', async({page})
         // The plot downloads sit in folded "Download" menus (#130): open them all.
         await page.evaluate(() => document.querySelectorAll('[data-region="catquizlab-download"]')
             .forEach((menu) => menu.setAttribute('open', '')));
+        // The PNG buttons work through a page script; on Moodle 5 it can run
+        // after the network is idle. Clicking before it is there sent nothing.
+        await page.waitForSelector('html[data-catquizlab-png="ready"]', {state: 'attached', timeout: 30 * 1000});
         const controls = page.locator('[data-download]');
         const n = await controls.count();
         expect(n, tab + ' offers plot downloads').toBeGreaterThan(0);

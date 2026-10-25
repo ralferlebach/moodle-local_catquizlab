@@ -70,7 +70,7 @@ class engine_perf_view {
             }
             $out .= \html_writer::div(
                 \html_writer::table($table),
-                'table-responsive',
+                'table-responsive position-relative',
                 ['data-region' => 'catquizlab-engineperf-' . $kind]
             );
         }

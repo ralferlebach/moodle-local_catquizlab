@@ -267,6 +267,66 @@ function reconcile(answered, server) {
  * @param {object} options label, timeout, recorder.
  * @returns {Promise<{clicked: boolean, state: ?string, navigated: boolean}>}
  */
+/**
+ * Click an element as a person would, and still reach it when something covers it.
+ *
+ * Moodle 5.3 keeps a "course linear navigation" footer fixed at the bottom of
+ * the window. A button near the bottom edge — the quiz's "Submit answer" —
+ * was scrolled just into view and then clicked at a point the footer covered:
+ * the click went to the footer, nothing was sent, and the sitting waited for a
+ * navigation that never came. The element is now brought to the middle of the
+ * window first; where something still lies over its centre, it is clicked
+ * through the DOM, which submits its form the same way, and that is recorded.
+ *
+ * @param {object} handle The element handle.
+ * @param {object|null} recorder The attempt's recorder, or null.
+ * @returns {Promise<void>}
+ */
+async function safeClick(handle, recorder = null) {
+    const covered = await handle.evaluate((el) => {
+        el.scrollIntoView({block: 'center', inline: 'center', behavior: 'instant'});
+        const r = el.getBoundingClientRect();
+        const at = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+        if (!at || at === el || el.contains(at) || (at.control && at.control === el)
+            || (at.closest && at.closest('label') && at.closest('label').control === el)) {
+            return '';
+        }
+        return (at.tagName + (at.id ? '#' + at.id : '') + (at.className ? '.' + String(at.className).split(/\s+/)[0] : ''))
+            .slice(0, 80);
+    }).catch(() => '');
+    if (covered === '') {
+        await handle.click();
+        return;
+    }
+    if (recorder) {
+        recorder.event('click-covered', `covered by ${covered}; clicked through the DOM`);
+    }
+    await handle.evaluate((el) => el.click());
+}
+
+/**
+ * Leave pages without being stopped by them.
+ *
+ * Moodle's form change checker asks "leave this page?" when an answer was
+ * chosen but not sent. The worker leaves such a page only on purpose — to go
+ * back through the activity page after an uncertain submission (#134) — and a
+ * dialog nobody answers held every later navigation until it timed out
+ * ("Could not open …/view.php", Moodle 5.3). Every dialog is accepted and
+ * recorded.
+ *
+ * @param {object} page The Puppeteer page.
+ * @param {object|null} recorder The attempt's recorder, or null.
+ * @returns {void}
+ */
+function acceptDialogs(page, recorder = null) {
+    page.on('dialog', (dialog) => {
+        if (recorder) {
+            recorder.event('dialog', `${dialog.type()} accepted${dialog.message() ? ': ' + dialog.message() : ''}`);
+        }
+        dialog.accept().catch(() => undefined);
+    });
+}
+
 async function clickAndSettle(page, selectors, questionSelectors,
     {label = 'click', timeout = 30000, recorder = null, context = null} = {}) {
     let handle = null;
@@ -325,7 +385,7 @@ async function clickAndSettle(page, selectors, questionSelectors,
     };
     const [navigation, click] = await Promise.allSettled([
         page.waitForNavigation({waitUntil: 'domcontentloaded', timeout}),
-        handle.click(),
+        safeClick(handle, recorder),
     ]);
     if (click.status === 'rejected' && !isContextLost(click.reason)) {
         throw new Error(`Click on ${label} failed: ${click.reason.message}`);
@@ -565,4 +625,4 @@ class Recorder {
 }
 
 module.exports = {STATE, SUBMIT, UNCERTAIN, isContextLost, sanitiseUrl, sanitiseHtml, stateInPage, waitForState,
-    clickAndSettle, withContextRetry, classifySubmit, reconcile, describeSubmit, Recorder};
+    clickAndSettle, safeClick, acceptDialogs, withContextRetry, classifySubmit, reconcile, describeSubmit, Recorder};

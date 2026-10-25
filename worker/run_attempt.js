@@ -200,6 +200,7 @@ async function playAttempt(browser, job) {
     // What the browser sees, kept for the attempt history and — on failure —
     // written out as screenshots, DOM and events (#107).
     const recorder = new nav.Recorder(page, {capture: CAPTURE});
+    nav.acceptDialogs(page, recorder);
     // Every request of this sitting carries the execution's correlation id, so
     // that a server-side error can be found by it (#107, #110).
     // And which sitting and execution it is: the server's line for each
@@ -766,7 +767,23 @@ async function answerQuestion(page, decision) {
         return false;
     }
     const index = chooseOptionIndex(decision, options.length);
-    await options[index].click();
+    await nav.safeClick(options[index]);
+    // The click must have chosen the option. On Moodle 5.3 a click now and then
+    // landed on the fixed footer instead (the page was still scrolling), the
+    // option stayed unchosen, and "Submit answer" then sent an empty response:
+    // the question was recorded as "gave up" and the sitting had one answer
+    // less than it showed. Checked, and set directly if the click missed; a
+    // question is never submitted without an answer.
+    if (!(await options[index].evaluate((el) => el.checked))) {
+        await options[index].evaluate((el) => {
+            el.checked = true;
+            el.dispatchEvent(new Event('input', {bubbles: true}));
+            el.dispatchEvent(new Event('change', {bubbles: true}));
+        });
+    }
+    if (!(await options[index].evaluate((el) => el.checked))) {
+        throw new Error('The chosen answer could not be selected; nothing was submitted.');
+    }
     return true;
 }
 
@@ -864,7 +881,7 @@ async function clickFirst(page, selectors) {
     if (!handle) {
         return false;
     }
-    await handle.click();
+    await nav.safeClick(handle);
     return true;
 }
 

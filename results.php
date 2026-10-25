@@ -238,17 +238,25 @@ $PAGE->requires->js_amd_inline('
                 ctx.fillStyle = "#ffffff";
                 ctx.fillRect(0, 0, canvas.width, canvas.height);
                 ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
-                canvas.toBlob(function(blob) {
+                var save = function(href) {
                     var a = document.createElement("a");
-                    a.href = URL.createObjectURL(blob);
+                    a.href = href;
                     a.download = button.getAttribute("data-filename") || "plot.png";
                     document.body.appendChild(a);
                     a.click();
                     a.remove();
+                };
+                // toBlob may hand back null (a canvas the browser will not encode);
+                // the data URL is the same picture, just not streamed.
+                canvas.toBlob(function(blob) {
+                    save(blob ? URL.createObjectURL(blob) : canvas.toDataURL("image/png"));
                 }, "image/png");
             };
             image.src = link.getAttribute("href");
         });
+        // Said on the page, so that a test (and anybody looking) can tell a
+        // button that does nothing yet from one that does nothing at all.
+        document.documentElement.setAttribute("data-catquizlab-png", "ready");
     });
 ');
 

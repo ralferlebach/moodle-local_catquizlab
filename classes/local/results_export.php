@@ -816,13 +816,16 @@ class results_export {
         $out = fopen('php://output', 'w');
 
         if ($format === 'csv') {
-            fputcsv($out, $dataset['columns']);
+            // The escape character is given, as an empty string: RFC 4180 CSV,
+            // quotes doubled. PHP 8.4 deprecates leaving it to the default and
+            // raises the deprecation for every line written.
+            fputcsv($out, $dataset['columns'], ',', '"', '');
             foreach ($dataset['rows'] as $row) {
                 $line = [];
                 foreach ($dataset['columns'] as $column) {
                     $line[] = $row[$column] ?? '';
                 }
-                fputcsv($out, $line);
+                fputcsv($out, $line, ',', '"', '');
             }
         } else {
             // Written by hand rather than json_encode() on the whole thing,

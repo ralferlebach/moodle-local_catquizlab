@@ -35,18 +35,32 @@ use local_catquizlab\local\results_query;
  * @covers     \local_catquizlab\local\results_export
  */
 final class results_scale_test extends \advanced_testcase {
+    /** @var float[] Seconds per step of the smaller size, to judge how the larger one grows. */
+    protected static array $smaller = [];
+
+    /** @var int Sittings of the smaller size measured. */
+    protected static int $smallern = 0;
+
     /**
      * The sizes, and what each may cost.
      *
      * Limits are for this test's work alone, measured from a reset peak, and
      * leave a Moodle page's own overhead room inside the default 128 MB.
      *
+     * The time limits are ceilings against the pathological, not benchmarks.
+     * PHP 8.4 on the CI runners writes the same CSV about 45 % slower than
+     * PHP 8.3 (step csv on 50000 sittings: 68 s against 47 s), growing just
+     * as linearly; with a 60 s ceiling that was a red build about the runtime,
+     * not about the code. What this test guards — that the cost grows with the
+     * number of sittings and not faster — is asserted directly below: the
+     * larger size may take at most 3 times its linear share of the smaller.
+     *
      * @return array[]
      */
     public static function sizes(): array {
         return [
-            'nine thousand'  => [9000, 48, 20],
-            'fifty thousand' => [50000, 64, 60],
+            'nine thousand'  => [9000, 48, 30],
+            'fifty thousand' => [50000, 64, 90],
         ];
     }
 
@@ -261,6 +275,32 @@ final class results_scale_test extends \advanced_testcase {
             fwrite(STDERR, sprintf("  benchmark %6d sittings  %-15s %6.1f MB  %5.1f s\n", $n, $label, $used, $took));
             $this->assertLessThan($megabytes, $used, sprintf('%s on %d sittings used %.1f MB', $label, $n, $used));
             $this->assertLessThan($seconds, $took, sprintf('%s on %d sittings took %.1f s', $label, $n, $took));
+
+            // Growth: against the smaller size, where it was measured and long
+            // enough (1 s) for the ratio to mean something.
+            if (self::$smallern === 0 || self::$smallern === $n) {
+                self::$smaller[$label] = $took;
+            } else if ($n > self::$smallern && (self::$smaller[$label] ?? 0) >= 1.0) {
+                $linear = $n / self::$smallern;
+                $ratio = $took / self::$smaller[$label];
+                $this->assertLessThan(
+                    3.0 * $linear,
+                    $ratio,
+                    sprintf(
+                        '%s grows faster than the sittings: %.1f s for %d, %.1f s for %d (factor %.1f, linear %.1f)',
+                        $label,
+                        self::$smaller[$label],
+                        self::$smallern,
+                        $took,
+                        $n,
+                        $ratio,
+                        $linear
+                    )
+                );
+            }
+        }
+        if (self::$smallern === 0) {
+            self::$smallern = $n;
         }
     }
 }

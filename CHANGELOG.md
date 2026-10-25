@@ -6,6 +6,83 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.7.44] — 2026-10-19 — CI on main @ 2bf9102: Moodle 5.2/5.3 and PHP 8.4
+
+No database change (version 2026101900). Built on `main` @ 2bf9102. Answers
+the CI runs of 18.10.2026 evening on that commit. Release CI: two PHPUnit jobs
+red (5.3/PHP 8.4). Interface end-to-end: moodle5 and moodle53 red. Worker
+end-to-end: moodle53 red.
+
+Each failure was reproduced here on Moodle 5.2.4+ and 5.3+ (Build 20261013),
+with PostgreSQL 17 for 5.3 and PHP 8.4.26 next to 8.3, and checked again after
+the fix.
+
+### Worker on Moodle 5.3: clicks that landed on the footer
+
+- Moodle 5.3 keeps a navigation footer fixed at the bottom of the window. The
+  worker scrolled a button just into view and clicked at a point the footer
+  covered.
+  - "Submit answer" then went nowhere: "Could not open …/view.php: Navigation
+    timeout" (worker end-to-end, moodle53). This was also the cause of the
+    `experiment` spec (interface end-to-end, moodle53).
+  - Now every click checks what lies at the click point. If something covers
+    the target, the click goes to the element through the DOM, and that is
+    recorded (`click-covered`). Scrolling is instant, never smooth, so the
+    position is not taken mid-animation.
+- An answer is checked after the click. Locally on 5.3 one question in about
+  thirty was recorded as "gave up": the click on the option had missed and an
+  empty response was sent. The lost-POST step failed the integrity check
+  "answer steps per question 2/1". The option is now verified as chosen and set
+  directly if the click missed. A question is never submitted without an
+  answer.
+- "Leave this page?" dialogs (the form change checker) are accepted and
+  recorded, so that going back through the activity page after an uncertain
+  submission (#134) is not held up by them.
+- `worker/test/covered_click.test.js`: a submit button under a fixed footer is
+  submitted; the dialog is accepted and recorded. The worker has 35 tests, all
+  green.
+
+### Interface on Moodle 5.x
+
+- **Library on a phone** (`library` spec, moodle5 and moodle53): the page
+  scrolled 439–506 px sideways at 390 px. Under Bootstrap 5 the table's
+  positioned content escaped its scroll box. The three scroll boxes (library,
+  progress, engine timing) are now `position-relative`.
+- **PNG download of a plot** (`downloads` spec, moodle5): the button is driven
+  by a page script that on Moodle 5 can run after the network is idle; a click
+  before it ran did nothing.
+  - The page now marks itself (`data-catquizlab-png="ready"`), and the spec
+    waits for it.
+  - If the browser cannot encode the canvas (`toBlob` gives null), the picture
+    is saved as a data URL instead of nothing.
+
+### PHPUnit on PHP 8.4
+
+- `fputcsv()` is given its escape character (an empty string, RFC 4180: quotes
+  doubled, no backslash escaping). PHP 8.4 deprecates the default; the CI
+  reported "Deprecations: 4". CSV fields containing a backslash before a quote
+  are now quoted as RFC 4180 says.
+- `results_scale_test`: the time limits are ceilings against the pathological,
+  not benchmarks.
+  - Measured in CI: PHP 8.4 writes the same CSV about 45 % slower than 8.3
+    (step csv on 50 000 sittings: 68 s against 47 s), growing just as linearly
+    (50 000/9 000 sittings: factor 5.5 on every job).
+  - New limits: 30 s for 9 000 and 90 s for 50 000 sittings.
+  - New assertion: the larger size may take at most 3 times its linear share
+    of the smaller, so a step that grows faster than the sittings fails
+    whatever the runtime. The highest factor measured was 13.6 for the
+    overview (here, against 16.7 allowed); quadratic growth would be 31.
+- `log_view_bounds_test::test_each_keeps_to_the_window` used two different
+  "now"s for writing and reading 100 lines per second; a second passing
+  between them moved the window by 100 lines (red here once). It uses one now.
+  - Locally on PHP 8.4 / Moodle 5.2: green.
+
+### CI
+
+- The worker token is masked in the worker end-to-end job (`::add-mask::`). The
+  preparation log and the environment of every step that received it printed
+  it in the public job log.
+
 ## [0.7.43] — 2026-10-18 — #136 new engine set: an attempt in progress is continued, never restarted
 
 No database change (version 2026101800). Built on `main` @ 090344c: the five CI
