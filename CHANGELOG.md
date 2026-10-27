@@ -77,6 +77,25 @@ the fix.
   between them moved the window by 100 lines (red here once). It uses one now.
   - Locally on PHP 8.4 / Moodle 5.2: green.
 
+### Follow-up without a version change (27.10.2026): PHPUnit on PHP 8.1
+
+- `resource_guard_test::test_the_message_survives_a_real_exhaustion` failed
+  on both PHP 8.1 jobs (main @ 72ae23f) while every other job was green. The
+  test and the guard are unchanged since 0.6.x; the runtime changed. PHP
+  8.1.34 (the build of 21.10.2026 the runners now install) ends a process that
+  runs out of memory without running any shutdown function. Reproduced here
+  with that build: no shutdown function ran, the fatal error was printed
+  despite `display_errors=0`, exit code 1. PHP 8.3 and 8.4 run shutdown
+  functions as before.
+- The test now first runs a control probe without the guard
+  (`tests/fixtures/runtime_oom_probe.php`). If the runtime runs no shutdown
+  function after the exhaustion, the test is skipped with that reason, which is
+  printed. Otherwise it asserts as before. Results: PHP 8.3 3/3 green, PHP 8.1.34
+  2 green and 1 skipped with the reason.
+- On such a runtime the results page cannot show its "out of memory" message
+  either. That is a limit of PHP 8.1.34, not of the guard. PHP 8.1 has been out
+  of support since 31.12.2025.
+
 ### CI
 
 - The worker token is masked in the worker end-to-end job (`::add-mask::`). The
