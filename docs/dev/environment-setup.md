@@ -22,7 +22,9 @@ apt-get install -y --no-install-recommends \
     postgresql git unzip locales
 ```
 
-Moodle 4.5 läuft mit PHP 8.1 bis 8.3. Die Extensions sind nicht optional:
+Moodle 4.5 läuft mit PHP 8.1 bis 8.3; getestet wird ab PHP 8.2 (PHP 8.1 ist
+seit 31.12.2025 ohne Support und seit 27.10.2026 nicht mehr in der CI). Die
+Extensions sind nicht optional:
 ohne `pgsql` startet PHPUnit nicht, ohne `gd`/`soap`/`intl` bricht der
 Environment-Check der Installation ab.
 

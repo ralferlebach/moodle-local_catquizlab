@@ -59,6 +59,34 @@ async function login(page) {
 }
 
 /**
+ * Reload a page that may be reloading itself.
+ *
+ * The progress page reloads itself when the experiment's next step changes
+ * (livestatus.js). On Moodle 5.3 in CI that happened while the test's own
+ * reload was in flight, and Playwright reported "net::ERR_ABORTED; maybe frame
+ * was detached?" — the test failed on the page doing what it should. A
+ * navigation aborted by another navigation is waited out and the page that
+ * results is read; any other error still fails.
+ *
+ * @param {import('@playwright/test').Page} page The page.
+ */
+async function reloadPolled(page) {
+    const raced = /ERR_ABORTED|frame was detached|interrupted by another navigation|Navigation .* is interrupted/i;
+    for (let attempt = 1; attempt <= 3; attempt++) {
+        try {
+            await page.reload({waitUntil: 'networkidle'});
+            return;
+        } catch (error) {
+            if (!raced.test(String(error && error.message)) || attempt === 3) {
+                throw error;
+            }
+            await page.waitForLoadState('domcontentloaded').catch(() => undefined);
+            await page.waitForTimeout(1000);
+        }
+    }
+}
+
+/**
  * Open one of the plugin's five process steps by its tab.
  *
  * @param {import('@playwright/test').Page} page The page.
@@ -251,9 +279,11 @@ test.describe('CatQuizLab, through the interface', () => {
         let collected = 0;
 
         while (Date.now() < deadline) {
-            await page.reload({waitUntil: 'networkidle'});
+            await reloadPolled(page);
 
-            const text = await page.locator('body').innerText();
+            // The page may reload itself between the two calls; then this
+            // round reads nothing and the next one reads the new page.
+            const text = await page.locator('body').innerText().catch(() => '');
             const progress = text.match(/(\d+)\s*\/\s*(\d+)/);
             let total = 0;
             if (progress) {

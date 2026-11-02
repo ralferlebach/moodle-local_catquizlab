@@ -453,6 +453,29 @@ Feature: Defining and running CAT experiments from the web interface
     And "Download debug ZIP (failed sittings)" "button" should not exist
     And "Download debug ZIP" "button" should not exist
 
+  Scenario: Without the purge capability the library offers no delete (#129)
+    Given the following "users" exist:
+      | username | firstname | lastname | email               |
+      | nopurge  | No        | Purge    | nopurge@example.com |
+    And the following "role assigns" exist:
+      | user    | role    | contextlevel | reference |
+      | nopurge | manager | System       |           |
+    And the following "permission overrides" exist:
+      | capability              | permission | role    | contextlevel | reference |
+      | local/catquizlab:purge  | Prohibit   | manager | System       |           |
+    And the following "local_catquizlab > experiment" exists:
+      | name | Behat keep me |
+    And I log out
+    And I log in as "nopurge"
+    When I navigate to "Reports > CAT experiment suite" in site administration
+    Then I should see "Behat keep me"
+    And "[data-region='catquizlab-library-delete']" "css_element" should not exist
+    And I log out
+    # With it, the same row has its delete.
+    And I log in as "admin"
+    And I navigate to "Reports > CAT experiment suite" in site administration
+    And "[data-region='catquizlab-library-delete']" "css_element" should exist
+
   @javascript
   Scenario: The simulated abilities are set explicitly, and an unbounded distribution is warned about
     Given I navigate to "Reports > CAT experiment suite" in site administration

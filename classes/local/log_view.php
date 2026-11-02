@@ -816,7 +816,9 @@ class log_view {
      * @return string
      */
     protected static function stamp(array $line): string {
-        return userdate((int) $line['time'], '%Y-%m-%d %H:%M:%S')
+        // Without $fixday/$fixhour: userdate() strips the leading zero of %d by default, which made the 3rd of a
+        // month "2026-11-3" — neither ISO nor sortable, on days 1 to 9 only.
+        return userdate((int) $line['time'], '%Y-%m-%d %H:%M:%S', 99, false, false)
             . (!empty($line['hasms']) ? sprintf('.%03d', (int) $line['ms'] % 1000) : '');
     }
 

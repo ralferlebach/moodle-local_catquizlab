@@ -163,6 +163,10 @@ final class reproducibility_test extends \advanced_testcase {
         // different case: the plugin fills its own defaults, and those defaults
         // are what ran.
         $this->assertArrayHasKey('error', $package['experiment']['normalised']);
+        // The analysis basis cannot be computed either, and says why — the package is still delivered (#115).
+        $this->assertArrayHasKey('populationerror', $package['analysis']);
+        $this->assertArrayNotHasKey('population', $package['analysis']);
+        $this->assertStringContainsString('not valid JSON', $package['analysis']['populationerror']);
     }
 
     /**

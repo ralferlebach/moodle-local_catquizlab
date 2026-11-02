@@ -23,7 +23,8 @@
  *
  * Options: --persons=20 (sittings per run), --label=PLOTS (prints <label>_EXPERIMENTID):
  * --persons=2000 --label=LARGE is the large experiment of the export test (#121); --invalid --label=INVALID
- * one whose sittings are collected and none valid (#130).
+ * one whose sittings are collected and none valid (#130); --strategies=all --label=FILTERS one run per strategy the
+ * installed engine can play (#122).
  *
  * @package    local_catquizlab
  * @copyright  2026 Ralf Erlebach
@@ -44,7 +45,7 @@ use local_catquizlab\local\test_flow;
 
 \core\session\manager::set_user(get_admin());
 
-[$options] = cli_get_params(['persons' => 20, 'label' => 'PLOTS', 'invalid' => false]);
+[$options] = cli_get_params(['persons' => 20, 'label' => 'PLOTS', 'invalid' => false, 'strategies' => 'fastest,allsubs']);
 // Option --invalid: collected, but without a final ability — none of them valid (#130).
 $invalid = !empty($options['invalid']);
 $persons = max(1, (int) $options['persons']);
@@ -52,7 +53,25 @@ $label = preg_replace('/[^A-Z0-9_]/', '', strtoupper((string) $options['label'])
 
 $definition = experiment_definition::example_baseline();
 $definition['name'] = ucfirst(strtolower($label)) . ' ' . date('Ymd-His');
-$definition['sweep']['factors']['strategy'] = ['fastest', 'allsubs'];
+// Option --strategies: a list, or "all" — every strategy the installed engine can play (#122: six strategies in
+// one menu). One that the engine cannot play is left out and said, not seeded as a run nobody could have made.
+$strategies = $options['strategies'] === 'all'
+    ? array_keys(\local_catquizlab\local\strategy_catalog::CAPABILITIES)
+    : array_values(array_filter(array_map('trim', explode(',', (string) $options['strategies']))));
+$playable = [];
+foreach ($strategies as $strategy) {
+    $probe = experiment_definition::example_baseline();
+    $probe['strategy'] = $strategy;
+    if (experiment_service::validate($probe)['valid']) {
+        $playable[] = $strategy;
+    } else {
+        cli_writeln('left out (the installed engine cannot play it): ' . $strategy);
+    }
+}
+if (count($playable) < 2) {
+    cli_error('Fewer than two strategies to seed: ' . implode(', ', $playable));
+}
+$definition['sweep']['factors']['strategy'] = $playable;
 // Six questions a sitting: within the budgets, so that the sittings are valid ones.
 $definition['budgets']['global'] = ['minitems' => 3, 'maxitems' => 30];
 $definition['budgets']['subscale'] = ['minitems' => 1, 'maxitems' => 10];

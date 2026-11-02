@@ -319,6 +319,9 @@ class results_export {
         // Valid, invalid or unknown under the rule in force, and the engine's verdict in the same three
         // words, with why it gave none (re-audit 16.10., AK 7). Appended: no column moves.
         'validitystate', 'engineverdict', 'engineunknownreason',
+        // The engine's productive item count beside nitems (#123), and whether the engine gave a verdict at all
+        // (#112) — each separately checkable. Appended: no column moves.
+        'productiveitems', 'engineverdictavailable',
     ];
 
     /** @var array<int, array> Ability distribution and range by run, for this request. */
@@ -473,6 +476,9 @@ class results_export {
             $row['engineverdict'] = $observation['enginevalid'] === null ? result_validity::UNKNOWN
                 : ($observation['enginevalid'] ? result_validity::VALID : result_validity::INVALID);
             $row['engineunknownreason'] = (string) ($observation['engineunknownreason'] ?? '');
+            $row['productiveitems'] = ($observation['productiveitems'] ?? null) === null ? ''
+                : (int) $observation['productiveitems'];
+            $row['engineverdictavailable'] = $observation['enginevalid'] === null ? 0 : 1;
             yield $row;
         }
     }

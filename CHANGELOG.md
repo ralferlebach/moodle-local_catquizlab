@@ -6,6 +6,107 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.7.45] — 2026-11-02 — CI on main @ 9c34257 (Moodle 5.3) and evidence for the open issues
+
+No database change (version 2026110200). Four new settings for the load guard (defaults as before).
+
+### CI: the interface run on Moodle 5.3
+
+- `experiment.spec.js` failed with "page.reload: net::ERR_ABORTED; maybe frame was detached?". The progress page
+  reloads itself when the experiment's next step changes (`livestatus.js`). On 5.3 that happened while the test's
+  own reload was still running. A reload aborted by the page's own navigation is now waited out and the resulting
+  page is read; any other error still fails the test. Checked locally on Moodle 5.3+ (Build 20261013): the spec
+  passes from definition to results (4.6 min).
+
+### Results: analysis basis (#112, #115, #127, #130)
+
+- The export metadata now carries `attempts.unknown` and `engineverdicts` (the engine's valid / invalid / no
+  verdict, with the reasons for missing verdicts). Before this, 250 sittings without an engine verdict were not
+  counted in the metadata at all.
+- The analysis-basis table shows the engine's verdict as its own row. The reasons for a missing verdict sit
+  there, not next to an "unknown: 0" under the uniform rule.
+- Funnel: a queued sitting with `engineattemptid = 0` counted as "started". Only values > 0 count as an engine
+  attempt now, as everywhere else in the code. Found by the new 1500/1202/48 test.
+- The plot basis line ("… n sittings …") counts the sittings the plots actually show, after the validity filter.
+  Before, it counted every collected sitting, so 250 collected and 0 valid showed as "250 sittings".
+- Reproducibility package: new key `analysis`, with the page's filter, the validity rule, which sittings were
+  shown, and the population including the counting chain and engine verdicts. Above the results page's size
+  limit it says so (`populationerror`) instead of computing.
+- Tab links no longer carry a validity that is just the current tab's default. Raw data → Overview now shows
+  the valid sittings again, and Overview → Raw data shows all of them. A choice that differs from the tab's
+  default still goes along.
+- Independent unit for confidence intervals (#127): experiment, stratum and severity are part of the key. The
+  same twin id in another experiment or stratum is a different person.
+- New tests in `analysis_basis_test`:
+  - 1500 planned / 1202 collected / 48 failed / 250 not played, per run and in total, reconciled against the
+    raw-data export (1202 rows, one per sitting);
+  - 250 collected / 250 without a verdict: page, export metadata, package;
+  - tab defaults.
+
+### Mode-specific detection (#114)
+
+- A targeted mode that was not run in the selection now gets "… not available in the selected
+  experiment/filter", as missing baselines already did. Before, it was left out without a word.
+
+### Validity (#112)
+
+- `engine_validity::verdict()` is separated out of `measure()`. All four cases of the engine validator are
+  tested: valid, invalid, no scale result (`no_scale_result`), and an exception (`validator_exception`, with the
+  message kept).
+- New attempt-level export columns:
+  - `engineverdictavailable` (0/1);
+  - `productiveitems`, the engine's count of answered productive questions (#123); empty, not 0, where the
+    engine gave none.
+
+### Downloads (#121)
+
+- An unknown export level is refused in words ("Unknown export level … Known levels: …"). Before, it quietly
+  delivered the sitting-level file.
+- Stored run exports (`pluginfile`, area `export`) now also require `local/catquizlab:export`, the same as
+  every other export. Before, `view` was enough.
+- Playwright presses every plot download on all six results tabs that draw plots.
+- A user without rights is now also refused the log page, the live tail and the log downloads.
+- `docs/dev/download-inventar.md` is updated to match.
+
+### Worker and recovery (#110, #120, #124, #133)
+
+- The load-guard thresholds are settings: window, minimum number of failures (0 switches the guard off),
+  failure share, and hold time. They are kept within a range and take effect at the next evaluation without a
+  restart. The throttle entry in the log names the thresholds.
+- Orphaned engine attempt, tested:
+  - lease expired with a complete engine attempt → collected, not played again;
+  - lease expired with an engine attempt in progress → back in the queue, with what the engine knew;
+  - a live lease → untouched;
+  - a late report → ignored, unless it brings the finished result of a sitting waiting in the queue.
+- A worker waiting for its staggered start counts as alive for as long as it reports, even past the heartbeat
+  timeout, and is reaped once it stops reporting (test).
+- Worker end-to-end: PHP's peak memory per request is gated at 80 % of the web server's `memory_limit`. The
+  gate step runs with `pipefail`; before, `| tee` swallowed the gate's exit code.
+
+### Sweep levels and library (#126, #129)
+
+- A copy keeps every level: the definition is identical apart from the name. The preview of an unsaved
+  definition equals the runs created later (test).
+- Behat: without `local/catquizlab:purge`, the library shows no delete; with it, the delete is there.
+
+### Found by the full test run on 02./03.11.
+
+- Log and artefact time stamps on days 1 to 9 of a month read "2026-11-3 00:07:46": `userdate()` strips the
+  leading zero of `%d` by default. They are ISO and sortable again (`$fixday`/`$fixhour` off). The test
+  `log_view_bounds_test::test_the_log_is_paged` had been checking this all along, and it failed once the clock
+  passed midnight UTC.
+- The reproducibility package of an experiment whose stored definition no longer reads is still delivered. The
+  new analysis section says why it has no population (`populationerror`) instead of breaking the download.
+
+### Filters (#122)
+
+- `cli/seed_results.php --strategies=all` seeds one run for every strategy the installed engine can play. The
+  ones it cannot play are named and left out.
+- A new Playwright test walks lowestsub → fastest → classic, then the remaining strategies:
+  - every strategy stays in the menu;
+  - the tab links carry the selection;
+  - a tab change keeps it.
+
 ## [0.7.44] — 2026-10-19 — CI on main @ 2bf9102: Moodle 5.2/5.3 and PHP 8.4
 
 No database change (version 2026101900). Built on `main` @ 2bf9102. Answers
@@ -95,6 +196,18 @@ the fix.
 - On such a runtime the results page cannot show its "out of memory" message
   either. That is a limit of PHP 8.1.34, not of the guard. PHP 8.1 has been out
   of support since 31.12.2025.
+
+### Follow-up without a version change (27.10.2026): PHP 8.1 out of the CI
+
+- Decided: PHP 8.1 is no longer tested. Moodle 4.5 runs on PHP 8.2, and PHP 8.1
+  has been out of support since 31.12.2025. The PHP 8.1 jobs (lint, PHPUnit)
+  leave `moodle-ci.yml` and `moodle-release.yml`.
+- The two workflows on `main` carry changes that are not in this line's files,
+  so they are edited by a script that touches only the lines naming PHP 8.1:
+  `php81-entfernen.sh` (delivered next to the release, not part of the
+  plugin). It refuses rather than guesses where a list would become empty.
+- README, `docs/dev/environment-setup.md`, `docs/dev/testen.md`: PHP 8.2–8.4.
+  `docs/dev/release-gate.md` is changed by the script.
 
 ### CI
 

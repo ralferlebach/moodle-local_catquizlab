@@ -6,9 +6,10 @@ JSON geparst, CSV mit Kopfzeile, PDF/PNG/ZIP an der Signatur, SVG am `<svg`.
 
 | Seite (Tab) | Bedienelement | Endpunkt | Methode | Recht | Datei | Prüfung |
 |---|---|---|---|---|---|---|
-| Ergebnisse (Results), über den Analysen | „Reproduzierbarkeitspaket herunterladen“ | `results.php` `action=package` | POST + sesskey | `view` (Seitenzugang `local_catquizlab_manage`) | `catquizlab-experiment-<id>.json` | JSON; Schlüssel generated, experiment, versions, runs (mit definition, effective, stoprules, Seeds, Manifest, Log), completeness; Secrets redigiert |
+| Ergebnisse (Results), über den Analysen | „Reproduzierbarkeitspaket herunterladen“ | `results.php` `action=package` | POST + sesskey | `view` (Seitenzugang `local_catquizlab_manage`) | `catquizlab-experiment-<id>.json` | JSON; Schlüssel generated, experiment, versions, runs (mit definition, effective, stoprules, Seeds, Manifest, Log), completeness, analysis (Filter der Seite, Gültigkeitsregel, gezeigte Gültigkeit, Population mit Zählkette und Engine-Urteilen; seit 0.7.45); Secrets redigiert |
 | Ergebnisse ▸ Export | je Ebene (run, attempt, subscale, item, step, detection, detectionsummary) CSV / JSON / Metadaten | `results.php` `action=csv\|json\|meta&level=…` + aktive Filter | GET | `export` | `catquizlab_<ebene>_<filter>.csv/json/.metadata.json` | CSV mit Kopfzeile, JSON geparst; groß: 4000 Bearbeitungen / 24 000 Schritte vollständig |
-| Ergebnisse ▸ Overview / Global / Test flow (jede Abbildung) | SVG / CSV / JSON / PNG / PDF | SVG/CSV/JSON/PNG im Browser; PDF `plotpdf.php?key=…&sesskey=…` | Klick / GET | `view` | `catquizlab-<plot>-exp<id>-<zeit>.<format>` | Signatur bzw. Parser |
+| Ergebnisse ▸ jede Abbildung (Overview, Global, Subscales, Mode-specific detection, Robustness, Test flow) | SVG / CSV / JSON / PNG / PDF, dazu JSON der Plot-Einstellungen | SVG/CSV/JSON/PNG im Browser; PDF `plotpdf.php?key=…&sesskey=…` | Klick / GET | `view` | `catquizlab-<plot>-exp<id>-<zeit>.<format>` | Signatur bzw. Parser; Playwright drückt jede angebotene Schaltfläche auf allen sechs Reitern (Overview/Global/Test flow müssen Abbildungen haben) |
+| — (keine Schaltfläche) | Gespeicherte Lauf-Exporte aus der Aufgabe `\local_catquizlab\task\export_run` | `pluginfile.php/<systemkontext>/local_catquizlab/export/0/<datei>` | GET | `view` **und** `export` (seit 0.7.45; vorher nur `view`) | wie von `run_exporter` geschrieben | PHPUnit `pluginfile_access_test`; nur über `export_run::queue()` befüllt (`docs/dev/durchfuehrung.md`), kein Bedienelement |
 | Experiment-Plan | Definition exportieren (deklarativ / normalisiert) | `experiment.php?id=…&action=export[&variant=…]` | GET | `view` | `catquizlab-<name>-<variante>.json` | JSON |
 | Vorbereitung (Experimentliste) | Export je Experiment | `experiment.php?id=…&action=export` | GET | `view` | wie oben | JSON |
 | Vergleich | Metriken als CSV | `compare.php?experimentid=…&action=export` | GET | `export` | `catquizlab-metrics-<id>.csv` | CSV (Kopfzeile; ohne gespeicherte Lauf-Metriken nur Kopfzeile) |
@@ -25,8 +26,9 @@ JSON geparst, CSV mit Kopfzeile, PDF/PNG/ZIP an der Signatur, SVG am `<svg`.
 |---|---|---|
 | Paket ohne sesskey | Moodle-Fehlerseite, keine Datei | `downloads refuse cleanly` |
 | Paket für unbekannte Experiment-ID | Fehlerseite „Es gibt kein Experiment mit der ID …“ (HTTP 404) | PHPUnit `reproducibility_test`, Playwright |
-| Unbekannte Exportebene | fällt auf Bearbeitungsebene zurück, liefert Datei | Playwright |
-| Angemeldeter Nutzer ohne Rechte | Zugriff verweigert, keine Datei (Export, Definition, Vergleich, Paket) | Playwright mit `cli/seed_plain_user.php` |
+| Unbekannte Exportebene | Fehlerseite „Unbekannte Exportebene … Bekannte Ebenen: …“, keine Datei (seit 0.7.45; vorher still auf Bearbeitungsebene) | Playwright `downloads refuse cleanly` |
+| Angemeldeter Nutzer ohne Rechte | Zugriff verweigert, keine Datei (Export, Definition, Vergleich, Paket, Logs-Seite, Live-Tail, Log-Download Text/JSON) | Playwright mit `cli/seed_plain_user.php` |
+| Recht `view` ohne `export`, gespeicherter Lauf-Export | `required_capability_exception` | PHPUnit `pluginfile_access_test` |
 | Debug-ZIP ohne Inhalt | Schaltfläche deaktiviert, Hinweis „keine Debug-Artefakte“ | Playwright (Lauf-Seite) |
 
 ## Ursache des Screenshots (DoD 1)

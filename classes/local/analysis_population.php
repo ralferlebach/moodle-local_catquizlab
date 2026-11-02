@@ -79,7 +79,8 @@ class analysis_population {
      * The sittings of a selection, from the plan to the valid ones.
      *
      * @param results_query $query The selection; read once if it has not been.
-     * @return array planned, scheduled, started, failed, collected, valid, invalid, invalidreasons (code => n),
+     * @return array planned, scheduled, started, failed, collected, valid, invalid, unknown, unknownreasons,
+     *      engine (the engine's verdicts: valid, invalid, unknown), invalidreasons (code => n),
      *      runs (run id => strategy, cellkey, planned, scheduled, started, failed, collected, valid),
      *      strategies (strategy => the same, summed), runids, filter, rule, pairs (complete, twins, strategies).
      */
@@ -106,13 +107,13 @@ class analysis_population {
             [$insql, $params] = $DB->get_in_or_equal(array_keys($perrun), SQL_PARAMS_NAMED, 'run');
             $rows = $DB->get_recordset_sql(
                 "SELECT MIN(id) AS id, runid, status,
-                        CASE WHEN tries > 0 OR engineattemptid IS NOT NULL THEN 1 ELSE 0 END AS begun,
+                        CASE WHEN tries > 0 OR engineattemptid > 0 THEN 1 ELSE 0 END AS begun,
                         CASE WHEN tracejson IS NOT NULL THEN 1 ELSE 0 END AS traced,
                         COUNT(1) AS n
                    FROM {local_catquizlab_attempt}
                   WHERE runid {$insql}
                GROUP BY runid, status,
-                        CASE WHEN tries > 0 OR engineattemptid IS NOT NULL THEN 1 ELSE 0 END,
+                        CASE WHEN tries > 0 OR engineattemptid > 0 THEN 1 ELSE 0 END,
                         CASE WHEN tracejson IS NOT NULL THEN 1 ELSE 0 END",
                 $params
             );
@@ -158,6 +159,12 @@ class analysis_population {
             // Not judgeable — no verdict — kept apart from invalid (AK 7).
             'unknown' => (int) ($counts['unknown'] ?? 0),
             'unknownreasons' => (array) ($counts['unknownreasons'] ?? []),
+            // The engine's own verdict, whatever rule decides (#112, #115): three counts that add up to evaluated.
+            'engine' => [
+                'valid' => (int) ($counts['enginevalid'] ?? 0),
+                'invalid' => (int) ($counts['engineinvalid'] ?? 0),
+                'unknown' => (int) ($counts['engineunknown'] ?? 0),
+            ],
             'evaluated' => (int) $counts['total'],
             'invalidreasons' => (array) $counts['invalidreasons'],
             'runs' => $perrun,
@@ -241,8 +248,10 @@ class analysis_population {
         $funnel = self::funnel($query);
         $out = [
             'attempts' => array_intersect_key($funnel, array_flip(['planned', 'scheduled', 'started', 'failed',
-                'collected', 'evaluated', 'valid', 'invalid'])),
+                'collected', 'evaluated', 'valid', 'invalid', 'unknown'])),
             'invalidreasons' => $funnel['invalidreasons'],
+            // Not judgeable is not invalid (#112 AK 7); an export of 250 unknown sittings says so (#115).
+            'engineverdicts' => $funnel['engine'] + ['unknownreasons' => $funnel['unknownreasons']],
             'validityrule' => $funnel['rule'],
             'validityshown' => (string) ($funnel['filter']['validity'] ?? result_validity::VALID),
             'strategies' => $funnel['strategies'],

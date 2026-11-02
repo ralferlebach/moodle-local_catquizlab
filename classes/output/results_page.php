@@ -200,6 +200,16 @@ class results_page {
     }
 
     /**
+     * Which sittings a tab shows when nobody chose: the valid ones, the raw data all of them.
+     *
+     * @param string $tab The tab.
+     * @return string
+     */
+    public static function default_validity(string $tab): string {
+        return $tab === 'rawdata' ? 'all' : 'valid';
+    }
+
+    /**
      * The tab navigation.
      *
      * @return string
@@ -208,8 +218,15 @@ class results_page {
         $items = '';
         // The detection tab has one name whatever is selected (#114): what it
         // shows is said mode by mode inside it.
+        // Validity travels between tabs only where somebody chose it (#112, #122): each tab has its own
+        // default — aggregated views the valid sittings, the raw data all of them — and a link that carried
+        // the current tab's default turned Raw data → Overview into "all" and Overview → Raw data into "valid".
+        $params = $this->filter;
+        if (($params['validity'] ?? '') === self::default_validity($this->tab)) {
+            unset($params['validity']);
+        }
         foreach (self::tabs() as $key => $label) {
-            $url = new \moodle_url('/local/catquizlab/results.php', $this->filter + ['tab' => $key]);
+            $url = new \moodle_url('/local/catquizlab/results.php', $params + ['tab' => $key]);
             $active = $key === $this->tab;
             $items .= \html_writer::tag(
                 'li',
@@ -680,8 +697,22 @@ class results_page {
             $label = \local_catquizlab\local\engine_validity::label((string) $code);
             $why[] = s($label) . ' [' . s((string) $code) . ']: ' . (int) $n;
         }
-        $rows[] = [get_string('population:unknown', $component), (int) ($funnel['unknown'] ?? 0) . ($why === [] ? ''
+        // The reasons belong to the engine's "no verdict"; under the uniform rule those sittings are still
+        // judged, so the state "unknown" can be 0 while the engine had nothing to say about some of them.
+        $unknown = (int) ($funnel['unknown'] ?? 0);
+        $rows[] = [get_string('population:unknown', $component), $unknown . ($why === [] || $unknown === 0 ? ''
             : ' — ' . implode('; ', $why))];
+        $engine = (array) ($funnel['engine'] ?? []);
+        if ($engine !== []) {
+            $rows[] = [get_string('population:engineverdicts', $component), get_string(
+                'population:engineverdictcounts',
+                $component,
+                (object) [
+                    'valid' => (int) $engine['valid'], 'invalid' => (int) $engine['invalid'],
+                    'unknown' => (int) $engine['unknown'], 'of' => (int) ($funnel['evaluated'] ?? 0),
+                ]
+            ) . ($why === [] ? '' : ' — ' . implode('; ', $why))];
+        }
 
         if ($scales !== null) {
             $measured = (int) $scales['measured'];
@@ -2228,7 +2259,10 @@ class results_page {
             'runs'       => count($runs),
             'strategies' => $unique('strategylabel'),
             'models'     => $unique('model'),
-            'attempts'   => (int) ($this->query->size_check()['count'] ?? 0),
+            // The sittings the figures stand on: the selection after the validity filter, as the
+            // provenance line counts them (#115, #127) — not every collected sitting, which a plot of the
+            // valid ones would otherwise claim (250 collected, none valid, "250 sittings").
+            'attempts'   => (int) ($this->query->provenance(true)['attempts'] ?? 0),
             'abilities'  => implode('; ', array_keys($this->query->ability_distributions())),
             'filter'     => $filter === [] ? get_string('chart:nofilter', $component) : implode(', ', $filter),
             'rules'      => implode(' | ', $rules),
@@ -3241,6 +3275,17 @@ class results_page {
         $out .= \html_writer::tag('h3', get_string('mode:summaryheading', $component), ['class' => 'h5 mt-3']);
         $out .= \html_writer::tag('p', get_string('mode:summarynote', $component), ['class' => 'text-muted small']);
         $out .= $this->render_mode_summary($analysis);
+        // A targeted mode that was not run in this selection is said, like a missing baseline (#114) — not
+        // silently left out, which reads as "this experiment has no such mode" when the filter took it away.
+        foreach (\local_catquizlab\local\mode_detection::TARGETS as $target) {
+            if (!isset($analysis['targets'][$target])) {
+                $out .= \html_writer::div(
+                    get_string('mode:notavailable', $component, get_string('mode:' . $target, $component)),
+                    'small text-muted mb-1',
+                    ['data-region' => 'catquizlab-mode-missing-' . $target]
+                );
+            }
+        }
 
         foreach ($analysis['targets'] as $target => $entry) {
             $name = get_string('mode:' . $target, $component);

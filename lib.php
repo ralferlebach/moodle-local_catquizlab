@@ -83,6 +83,9 @@ function local_catquizlab_pluginfile($course, $cm, $context, $filearea, $args, $
     }
     require_login();
     require_capability('local/catquizlab:view', $context);
+    // These files are exports of results; whoever may not download an export from the results page may not
+    // fetch one here either (#121).
+    require_capability('local/catquizlab:export', $context);
 
     $filename = array_pop($args);
     $fs = get_file_storage();

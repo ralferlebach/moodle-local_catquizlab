@@ -58,6 +58,31 @@ class worker_capacity {
     public const GUARD_EVERY = 30;
 
     /**
+     * The guard's thresholds as set by the administrator, the constants above where nothing is set (#124).
+     *
+     * Each is held to a sane range: a window under a minute measures noise, a share of 0 throttles on the first
+     * failure, and a share above 100 % never throttles at all — which is what switching the guard off looks like,
+     * so it is said by its own setting (minimum failures 0) rather than by an impossible share.
+     *
+     * @return array{window: int, minfailures: int, share: float, cooldown: int, enabled: bool}
+     */
+    public static function guard_thresholds(): array {
+        $read = static function (string $name, $default) {
+            $value = get_config('local_catquizlab', $name);
+            return ($value === false || $value === '' || $value === null) ? $default : $value;
+        };
+        $minfailures = max(0, (int) $read('loadguard_minfailures', self::GUARD_MIN_FAILURES));
+
+        return [
+            'window' => min(3600, max(60, (int) $read('loadguard_window', self::GUARD_WINDOW))),
+            'minfailures' => $minfailures,
+            'share' => min(1.0, max(0.01, (float) $read('loadguard_share', 100 * self::GUARD_SHARE) / 100)),
+            'cooldown' => min(7200, max(60, (int) $read('loadguard_cooldown', self::GUARD_COOLDOWN))),
+            'enabled' => $minfailures > 0,
+        ];
+    }
+
+    /**
      * The configured concurrency.
      *
      * @return int At least 1.
@@ -138,7 +163,8 @@ class worker_capacity {
     protected static function evaluate(int $now, array $kept): array {
         global $DB;
 
-        $since = $now - self::GUARD_WINDOW;
+        $thresholds = self::guard_thresholds();
+        $since = $now - $thresholds['window'];
         [$insql, $params] = $DB->get_in_or_equal(circuit_breaker::CAPACITY_CAUSES, SQL_PARAMS_NAMED, 'c');
         // Failed executions and reconciled submissions alike: a 5xx the worker
         // recovered from is still a 5xx the server sent.
@@ -156,15 +182,16 @@ class worker_capacity {
             ['since' => $since, 'collected' => attempt_history::COLLECTED, 'failed' => attempt_history::FAILED]
         );
         $share = $failures / max(1, $executions + $failures);
-        $trips = $failures >= self::GUARD_MIN_FAILURES && $share >= self::GUARD_SHARE;
+        $trips = $thresholds['enabled'] && $failures >= $thresholds['minfailures'] && $share >= $thresholds['share'];
         $until = (int) ($kept['until'] ?? 0);
         $was = $until > $now;
 
         if ($trips) {
-            $until = $now + self::GUARD_COOLDOWN;
+            $until = $now + $thresholds['cooldown'];
             if (!$was) {
                 run_log::record(0, run_log::LOAD_THROTTLED, ['failures' => $failures, 'executions' => $executions,
-                    'share' => round($share, 2), 'causes' => $causes, 'cooldown' => self::GUARD_COOLDOWN]);
+                    'share' => round($share, 2), 'causes' => $causes, 'cooldown' => $thresholds['cooldown'],
+                    'thresholds' => $thresholds]);
             }
         } else if (!$was && $until > 0) {
             // Released by time: said once, then forgotten.

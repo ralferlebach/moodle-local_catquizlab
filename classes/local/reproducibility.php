@@ -119,9 +119,11 @@ class reproducibility {
      *
      * @param int $experimentid The experiment.
      * @param bool $includelog Whether to carry the execution log.
+     * @param array|null $filter The results selection the package was downloaded from; null: the
+     *      experiment's valid sittings under the uniform rule, the results page's default.
      * @return array
      */
-    public static function package(int $experimentid, bool $includelog = true): array {
+    public static function package(int $experimentid, bool $includelog = true, ?array $filter = null): array {
         global $DB, $CFG;
 
         $experiment = $DB->get_record('local_catquizlab_experiment', ['id' => $experimentid], '*', MUST_EXIST);
@@ -175,24 +177,63 @@ class reproducibility {
             'moodle'      => ['release' => $CFG->release, 'version' => $CFG->version],
             'runs'        => $runs,
             'completeness' => self::completeness($experimentid),
+            // Which sittings a figure from this experiment stands on (#115): the selection, the rule that
+            // decided validity, which sittings were shown, and the counting chain behind them.
+            'analysis'    => self::analysis($experimentid, $filter),
         ];
+    }
+
+    /**
+     * The analysis basis: filter, validity rule and population.
+     *
+     * @param int $experimentid The experiment.
+     * @param array|null $filter The selection, or null for the results page's default.
+     * @return array filter, validityrule, validityshown, population — or populationerror where it is not computed.
+     */
+    public static function analysis(int $experimentid, ?array $filter = null): array {
+        $filter = ($filter ?? []) + ['validity' => result_validity::VALID, 'validityrule' => engine_validity::RULE_UNIFORM];
+        // The package is of one experiment; a selection naming another is not this package's.
+        $filter['experimentid'] = $experimentid;
+        ksort($filter);
+        $out = [
+            'filter' => $filter,
+            'validityrule' => (string) $filter['validityrule'],
+            'validityshown' => (string) $filter['validity'],
+        ];
+        try {
+            $query = new results_query($filter);
+            $size = $query->size_check();
+            if ($size['toolarge']) {
+                // Said, not attempted: the same limit the results page keeps.
+                $out['populationerror'] = 'toolarge: ' . $size['count'] . ' > ' . $size['limit'];
+                return $out;
+            }
+            $out['population'] = analysis_population::metadata($query);
+        } catch (\Throwable $e) {
+            // The package is what makes a broken experiment checkable; it does not fail with it. The rest of it —
+            // definition as stored, runs, logs — is what somebody needs to find out why the analysis could not run.
+            $out['populationerror'] = \core_text::substr(get_class($e) . ': ' . $e->getMessage(), 0, 300);
+        }
+
+        return $out;
     }
 
     /**
      * The package as a file: JSON, with anything that looks like a secret redacted (#121).
      *
      * @param int $experimentid The experiment.
+     * @param array|null $filter The results selection it was downloaded from, see package().
      * @return string
      * @throws \moodle_exception When there is no such experiment.
      */
-    public static function package_json(int $experimentid): string {
+    public static function package_json(int $experimentid, ?array $filter = null): string {
         global $DB;
 
         if (!$DB->record_exists('local_catquizlab_experiment', ['id' => $experimentid])) {
             throw new \moodle_exception('repro:nosuchexperiment', 'local_catquizlab', '', $experimentid);
         }
         $json = (string) json_encode(
-            self::package($experimentid),
+            self::package($experimentid, true, $filter),
             JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE
         );
 

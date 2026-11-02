@@ -123,18 +123,26 @@ test('every download on the results pages delivers a usable file', async({page})
         check(await download(page, link), {minrows: /level=(item|detection|detectionsummary|subscale)/.test(href) ? 0 : 1});
     }
 
-    // Every plot's own downloads, on the tabs that have plots.
-    for (const tab of ['overview', 'global', 'testflow']) {
+    // Every plot's own downloads, on every tab that draws plots (#121). The first three always have plots
+    // with the seeded experiment; the others draw them where the selection allows (targeted modes,
+    // replications) — whatever they offer is pressed, and nothing they offer may fail.
+    const always = ['overview', 'global', 'testflow'];
+    for (const tab of [...always, 'subscales', 'deficits', 'robustness']) {
         await page.goto(results + '&tab=' + tab, {waitUntil: 'networkidle'});
         // The plot downloads sit in folded "Download" menus (#130): open them all.
         await page.evaluate(() => document.querySelectorAll('[data-region="catquizlab-download"]')
             .forEach((menu) => menu.setAttribute('open', '')));
+        const controls = page.locator('[data-download]');
+        const n = await controls.count();
+        if (always.includes(tab)) {
+            expect(n, tab + ' offers plot downloads').toBeGreaterThan(0);
+        }
+        if (n === 0) {
+            continue;
+        }
         // The PNG buttons work through a page script; on Moodle 5 it can run
         // after the network is idle. Clicking before it is there sent nothing.
         await page.waitForSelector('html[data-catquizlab-png="ready"]', {state: 'attached', timeout: 30 * 1000});
-        const controls = page.locator('[data-download]');
-        const n = await controls.count();
-        expect(n, tab + ' offers plot downloads').toBeGreaterThan(0);
         for (let i = 0; i < n; i++) {
             check(await download(page, controls.nth(i)), {minrows: 0});
         }
@@ -212,11 +220,9 @@ test('downloads refuse cleanly: no session key, an unknown experiment, a user wi
         form: {experimentid: '987654', action: 'package', sesskey: sesskey},
     }), /no experiment with the id 987654|kein Experiment mit der ID 987654/);
 
-    // An unknown export level falls back to the sittings, as a file.
-    const fallback = await page.request.get('/local/catquizlab/results.php?experimentid=' + EXPERIMENT
-        + '&tab=export&level=nonsense&action=csv');
-    expect(fallback.status()).toBe(200);
-    expect(fallback.headers()['content-disposition']).toContain('catquizlab_attempt_');
+    // An unknown export level is refused in words, not answered with another level's file (#121).
+    await refused(await page.request.get('/local/catquizlab/results.php?experimentid=' + EXPERIMENT
+        + '&tab=export&level=nonsense&action=csv'), /Unknown export level|Unbekannte Exportebene/);
 
     // A colleague with an account and no rights: refused, no file.
     needs(!process.env.PLAIN_USER, 'PLAIN_USER not set; run cli/seed_plain_user.php first.');
@@ -232,12 +238,21 @@ test('downloads refuse cleanly: no session key, an unknown experiment, a user wi
         '/local/catquizlab/results.php?experimentid=' + EXPERIMENT + '&tab=export&level=attempt&action=csv',
         '/local/catquizlab/experiment.php?id=' + EXPERIMENT + '&action=export',
         '/local/catquizlab/compare.php?experimentid=' + EXPERIMENT + '&action=export',
+        // The logs (#132): the page, the live tail — refused like every other way in.
+        '/local/catquizlab/logs.php?hours=24',
+        '/local/catquizlab/logs.php?tail=1&after=0',
     ]) {
         await refused(await plain.request.get(url), /Access denied|Zugriff verweigert|permission|Berechtigung|not allowed/i);
     }
     await refused(await plain.request.post('/local/catquizlab/results.php', {
         form: {experimentid: EXPERIMENT, action: 'package', sesskey: plainkey},
     }), /Access denied|Zugriff verweigert|permission|Berechtigung|not allowed/i);
+    // The log downloads, text and JSON, with a valid session key of their own.
+    for (const kind of ['download', 'downloadjson']) {
+        await refused(await plain.request.post('/local/catquizlab/logs.php', {
+            form: {hours: '24', [kind]: '1', sesskey: plainkey},
+        }), /Access denied|Zugriff verweigert|permission|Berechtigung|not allowed/i);
+    }
     await context.close();
 });
 

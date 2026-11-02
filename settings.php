@@ -222,6 +222,19 @@ if ($hassiteconfig) {
         PARAM_INT
     ));
 
+    // The load guard (#124): when rising 5xx and connection failures halve the worker limit, and for how long.
+    // Running sittings finish either way; only new claims are held back.
+    $guard = [['loadguard_window', 300], ['loadguard_minfailures', 5], ['loadguard_share', 20], ['loadguard_cooldown', 600]];
+    foreach ($guard as [$name, $default]) {
+        $settings->add(new admin_setting_configtext(
+            $component . '/' . $name,
+            get_string('setting:' . $name, $component),
+            get_string('setting:' . $name . '_desc', $component),
+            $default,
+            PARAM_INT
+        ));
+    }
+
     // Results: below which share of the design a loss is said (#115).
     $settings->add(new admin_setting_configtext(
         $component . '/coverage_warning',

@@ -142,6 +142,56 @@ final class worker_capacity_test extends \advanced_testcase {
     }
 
     /**
+     * The guard's thresholds are settings, read on the next evaluation, held to a range; 0 failures switches it off.
+     *
+     * @return void
+     */
+    public function test_the_load_guard_thresholds_are_settings(): void {
+        global $DB;
+        $this->resetAfterTest();
+
+        set_config('worker_concurrency', 40, 'local_catquizlab');
+        $now = time();
+        $row = static function (string $outcome, string $code, int $at) use ($DB): void {
+            $DB->insert_record('local_catquizlab_attemptlog', (object) ['attemptid' => 1, 'runid' => 1, 'tryno' => 1,
+                'outcome' => $outcome, 'reasoncode' => $code, 'timecreated' => $at]);
+        };
+        // Three 5xx among ten executions: below the defaults (5 failures, 20 %).
+        for ($i = 0; $i < 7; $i++) {
+            $row(attempt_history::COLLECTED, '', $now - 10);
+        }
+        for ($i = 0; $i < 3; $i++) {
+            $row(attempt_history::FAILED, 'submit_http_5xx', $now - 10);
+        }
+        $defaults = worker_capacity::guard_thresholds();
+        $this->assertSame([300, 5, 0.2, 600, true], [$defaults['window'], $defaults['minfailures'], $defaults['share'],
+            $defaults['cooldown'], $defaults['enabled']]);
+        $this->assertFalse(worker_capacity::load_guard($now)['throttled']);
+
+        // Stricter: three failures and 22 % are enough (3 of 13 = 23 %) — without a restart, at the next evaluation.
+        set_config('loadguard_minfailures', 3, 'local_catquizlab');
+        set_config('loadguard_share', 22, 'local_catquizlab');
+        set_config('loadguard_cooldown', 120, 'local_catquizlab');
+        $guard = worker_capacity::load_guard($now + 31);
+        $this->assertTrue($guard['throttled']);
+        $this->assertSame(20, $guard['limit']);
+        $this->assertSame($now + 31 + 120, $guard['until'], 'held for the configured time');
+
+        // Switched off: no throttle on the same failures.
+        set_config('loadguard_minfailures', 0, 'local_catquizlab');
+        set_config('loadguard', '', 'local_catquizlab');
+        $this->assertFalse(worker_capacity::guard_thresholds()['enabled']);
+        $this->assertFalse(worker_capacity::load_guard($now + 62)['throttled']);
+
+        // Out of range: held to it.
+        set_config('loadguard_window', 5, 'local_catquizlab');
+        set_config('loadguard_share', 900, 'local_catquizlab');
+        set_config('loadguard_cooldown', 999999, 'local_catquizlab');
+        $held = worker_capacity::guard_thresholds();
+        $this->assertSame([60, 1.0, 7200], [$held['window'], $held['share'], $held['cooldown']]);
+    }
+
+    /**
      * Rising capacity failures halve the limit for a cooldown, logged once; the release is logged too.
      *
      * @return void

@@ -131,4 +131,48 @@ final class sweep_levels_test extends \advanced_testcase {
         $this->assertSame($preview['runs'], $runs);
         $this->assertSame(2 * 2 * (int) $preview['replications'], $runs, 'two strategies × two budgets');
     }
+
+    /**
+     * A copy keeps every level: the same definition but the name, the same form, the same runs (#126).
+     *
+     * And the preview of a definition never saved is the preview of the saved one and the runs it creates.
+     *
+     * @return void
+     */
+    public function test_a_copy_and_an_unsaved_preview_lose_no_level(): void {
+        global $DB;
+        $this->resetAfterTest();
+        $this->setAdminUser();
+
+        $definition = experiment_definition::example_baseline();
+        $definition['name'] = 'Levels to copy';
+        $definition['sweep'] = ['factors' => [
+            'strategy' => ['classic', 'fastest'],
+            'globalbudget' => experiment_form::parse_pairs("10/15\n20/30\n5/40", 'items'),
+            'se' => experiment_form::parse_pairs("0,3/0,5\n0,25/0,4", 'se'),
+        ]];
+        // Before anything is saved: what the preview says.
+        $unsaved = experiment_service::preview($definition);
+
+        $id = (int) experiment_service::save($definition)['id'];
+        $copyid = experiment_service::duplicate($id);
+        $read = static fn(int $experimentid): array => json_decode(
+            (string) $DB->get_field('local_catquizlab_experiment', 'configjson', ['id' => $experimentid]),
+            true
+        );
+        $original = $read($id);
+        $copy = $read($copyid);
+        $this->assertNotSame($original['name'], $copy['name']);
+        unset($original['name'], $copy['name']);
+        $this->assertSame($original, $copy, 'the copy differs in its name only');
+
+        $form = experiment_form::to_form_data($read($copyid), $copyid);
+        $this->assertSame("10/15\n20/30\n5/40", $form['sweepglobalbudgets']);
+        $this->assertSame("0.3/0.5\n0.25/0.4", $form['sweepse']);
+
+        $this->assertSame($unsaved['runs'], experiment_service::preview($read($copyid))['runs']);
+        experiment_service::create_sweep($copyid);
+        $this->assertSame($unsaved['runs'], $DB->count_records('local_catquizlab_run', ['experimentid' => $copyid]));
+        $this->assertSame(2 * 3 * 2 * (int) $unsaved['replications'], (int) $unsaved['runs']);
+    }
 }

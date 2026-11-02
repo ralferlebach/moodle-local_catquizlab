@@ -76,8 +76,9 @@ trace collection) are so far exercised only with the engine absent.
 
 ## Requirements
 
-- Moodle **4.5+** (developed and CI-tested against 4.5 and 5.2 on
-  PHP 8.1–8.3 with MariaDB and PostgreSQL).
+- Moodle **4.5+** (developed and CI-tested against 4.5, 5.2 and 5.3 on
+  PHP 8.2–8.4 with MariaDB and PostgreSQL; PHP 8.4 with Moodle 5.3).
+  PHP 8.1 is no longer tested: it has been out of support since 31.12.2025.
 - For actual experiment runs (not needed to install the plugin):
   [`local_catquiz`](https://github.com/Wunderbyte-GmbH/moodle-local_catquiz)
   and the Wunderbyte fork of `mod_adaptivequiz` including the

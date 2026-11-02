@@ -168,7 +168,7 @@ class artefact_store {
         $out = [];
         foreach (array_reverse($rows) as $row) {
             $out[] = [
-                'time' => userdate((int) $row->timecreated, '%Y-%m-%d %H:%M:%S'),
+                'time' => userdate((int) $row->timecreated, '%Y-%m-%d %H:%M:%S', 99, false, false),
                 'event' => (string) $row->event,
                 'stage' => (string) ($row->stage ?? ''),
                 'detail' => attempt_history::redact((string) ($row->detail ?? '')),

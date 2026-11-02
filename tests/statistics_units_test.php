@@ -115,6 +115,27 @@ final class statistics_units_test extends \advanced_testcase {
     }
 
     /**
+     * The same twin id in another experiment or another stratum is another person (#127).
+     *
+     * @return void
+     */
+    public function test_twin_ids_are_people_only_within_their_experiment_and_stratum(): void {
+        $tag = static fn(array $rows, array $extra): array => array_map(static fn(array $row): array => $extra + $row, $rows);
+        $rows = array_merge(
+            $tag($this->sittings(20, 1, 1, static fn(int $i): int => 10), ['experimentid' => 1, 'stratum' => 'conforming']),
+            $tag($this->sittings(20, 2, 1, static fn(int $i): int => 12), ['experimentid' => 2, 'stratum' => 'conforming']),
+            $tag($this->sittings(20, 3, 1, static fn(int $i): int => 14), ['experimentid' => 1, 'stratum' => 'deficit'])
+        );
+        $this->assertSame(60, results_query::summarise($rows, 'nitems')['units']);
+        // Within one experiment and stratum, two strategies (two runs) of the same twins remain one person each.
+        $paired = array_merge(
+            $tag($this->sittings(20, 1, 1, static fn(int $i): int => 10), ['experimentid' => 1, 'stratum' => 'conforming']),
+            $tag($this->sittings(20, 4, 1, static fn(int $i): int => 11), ['experimentid' => 1, 'stratum' => 'conforming'])
+        );
+        $this->assertSame(20, results_query::summarise($paired, 'nitems')['units']);
+    }
+
+    /**
      * One person: a mean and no interval — not a precision the data does not have.
      *
      * @return void

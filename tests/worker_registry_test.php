@@ -1483,4 +1483,36 @@ final class worker_registry_test extends \advanced_testcase {
         $row = $DB->get_record('local_catquizlab_worker', ['workerid' => 'w2']);
         $this->assertSame(worker_registry::STATUS_CRASHED, (int) $row->status);
     }
+
+    /**
+     * A worker waiting for its staggered start is alive while it reports, however long it waits (#120).
+     *
+     * Its start lies further ahead than the heartbeat timeout; it reports "waiting" every twenty seconds. The reaper
+     * must count it as live and waiting, not as a dead worker — and must reap it once it stops reporting.
+     *
+     * @return void
+     */
+    public function test_a_waiting_worker_is_not_reaped_while_it_reports(): void {
+        global $DB;
+        $this->resetAfterTest();
+
+        $now = time();
+        $id = worker_registry::acquire_slot(3, 'staggered');
+        // Started twenty minutes ago, begins in ten: thirty minutes of waiting, six heartbeat timeouts.
+        $DB->update_record('local_catquizlab_worker', (object) ['id' => $id, 'startsat' => $now + 600,
+            'timecreated' => $now - 1200, 'timestarted' => $now - 1200]);
+        worker_registry::heartbeat('staggered');
+
+        $this->assertSame(0, worker_registry::reap()['workers']);
+        $this->assertTrue(worker_registry::slot_is_busy(3));
+        $row = $DB->get_record('local_catquizlab_worker', ['id' => $id]);
+        $this->assertGreaterThan(0, worker_registry::waits_for($row));
+        $summary = worker_registry::summary();
+        $this->assertSame([1, 1, 0], [$summary['live'], $summary['waiting'], $summary['crashed']]);
+
+        // It stops reporting: then it is dead, waiting or not, and its slot is free again.
+        $DB->set_field('local_catquizlab_worker', 'heartbeat', $now - worker_registry::HEARTBEAT_TIMEOUT - 60, ['id' => $id]);
+        $this->assertSame(1, worker_registry::reap()['workers']);
+        $this->assertFalse(worker_registry::slot_is_busy(3));
+    }
 }

@@ -23,7 +23,7 @@ Das Plugin trennt bewusst **reine Logik** von **engine-berührendem Code**:
 
 ## 2. Voraussetzungen im Prüf-Container
 
-- PHP 8.1+ mit `php -l`.
+- PHP 8.2+ mit `php -l` (PHP 8.1 wird nicht mehr getestet).
 - Moodle Coding Standard (moodle-cs) über Composer:
   `export PATH=$PATH:~/.config/composer/vendor/bin`.
 - `phpmd` (informativ, siehe unten).

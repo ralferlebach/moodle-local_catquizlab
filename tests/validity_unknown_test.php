@@ -93,6 +93,10 @@ final class validity_unknown_test extends \advanced_testcase {
             [result_validity::UNKNOWN, result_validity::UNKNOWN, $cause, '', 0],
             [$row['validitystate'], $row['engineverdict'], $row['engineunknownreason'], $row['enginevalid'], $row['valid']]
         );
+        // Whether there is a verdict at all, and the engine's productive count, each in a column of its own:
+        // no verdict, no count — empty, not 0 (#112, #123).
+        $this->assertSame([0, ''], [$row['engineverdictavailable'], $row['productiveitems']]);
+        $this->assertSame(4, $row['nitems']);
     }
 
     /**

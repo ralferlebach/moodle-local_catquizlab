@@ -63,7 +63,7 @@ foreach (['budget', 'cellkey'] as $key) {
 // the raw data all of them, marked — unless asked otherwise.
 $validity = optional_param('validity', '', PARAM_ALPHA);
 if (!in_array($validity, ['valid', 'invalid', 'unknown', 'all'], true)) {
-    $validity = $tab === 'rawdata' ? 'all' : 'valid';
+    $validity = \local_catquizlab\output\results_page::default_validity($tab);
 }
 $filter['validity'] = $validity;
 // Which verdict decides (#112): the engine's definitions for every strategy,
@@ -98,7 +98,7 @@ if (optional_param('action', '', PARAM_ALPHA) === 'package') {
     $packageid = required_param('experimentid', PARAM_INT);
 
     send_file(
-        \local_catquizlab\local\reproducibility::package_json($packageid),
+        \local_catquizlab\local\reproducibility::package_json($packageid, $filter),
         'catquizlab-experiment-' . $packageid . '.json',
         0,
         0,
@@ -119,7 +119,10 @@ if (in_array($action, ['csv', 'json', 'meta'], true)) {
 
     $level = optional_param('level', results_export::LEVEL_ATTEMPT, PARAM_ALPHA);
     if (!array_key_exists($level, results_export::levels())) {
-        $level = results_export::LEVEL_ATTEMPT;
+        // Said, not substituted (#121): a file of sittings under a request for something else is a wrong file.
+        throw new moodle_exception('export:unknownlevel', 'local_catquizlab', '', (object) [
+            'level' => s($level), 'known' => implode(', ', array_keys(results_export::levels())),
+        ]);
     }
 
     // Streamed rather than assembled: send_file() takes a finished string, so

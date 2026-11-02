@@ -250,18 +250,42 @@ class engine_validity {
         }
 
         // The engine's own verdict, word for word.
+        $engine = self::verdict(static fn() => \local_catquiz\local\result\attempt_result_validator::validate(
+            $engineattemptid
+        ));
+
+        return [
+            'scales' => $scales,
+            'n' => $progress->get_num_answered_productive_questions(),
+            'fraction' => $progress->get_fraction_for_scale(),
+            'engine' => $engine,
+        ];
+    }
+
+    /**
+     * The engine's verdict from its validator: valid, invalid, or none — and then why (#112).
+     *
+     * Apart from measure() so that every branch can be run: a verdict, an empty set of scale results (no verdict:
+     * no_scale_result) and a validator that throws (no verdict: validator_exception, with the message kept).
+     *
+     * @param callable $validator Returns the engine's attempt result (attempt_result_validator::validate()).
+     * @return array valid (true, false or null), scales (scale id => valid, reasons), unknown and exception where null.
+     */
+    public static function verdict(callable $validator): array {
         $engine = ['valid' => null, 'scales' => []];
         try {
-            $result = \local_catquiz\local\result\attempt_result_validator::validate($engineattemptid);
-            $engine['valid'] = $result->get_scale_results() === [] ? null : $result->is_valid();
+            $result = $validator();
+            $engine['valid'] = $result->get_scale_results() === [] ? null : (bool) $result->is_valid();
+            // What the engine does not count against a result: not primary, hidden, not reported.
+            $ignored = class_exists('\local_catquiz\local\result\scale_result') ? [
+                \local_catquiz\local\result\scale_result::REASON_NOT_PRIMARY,
+                \local_catquiz\local\result\scale_result::REASON_HIDDEN,
+                \local_catquiz\local\result\scale_result::REASON_REPORTING_DISABLED,
+            ] : [];
             foreach ($result->get_scale_results() as $scaleid => $scaleresult) {
                 $engine['scales'][(int) $scaleid] = [
                     'valid' => $scaleresult->statisticallyvalid && $scaleresult->measuredincurrentattempt,
-                    'reasons' => array_values(array_diff((array) $scaleresult->rejectionreasons, [
-                        \local_catquiz\local\result\scale_result::REASON_NOT_PRIMARY,
-                        \local_catquiz\local\result\scale_result::REASON_HIDDEN,
-                        \local_catquiz\local\result\scale_result::REASON_REPORTING_DISABLED,
-                    ])),
+                    'reasons' => array_values(array_diff((array) $scaleresult->rejectionreasons, $ignored)),
                 ];
             }
             if ($engine['valid'] === null) {
@@ -273,12 +297,7 @@ class engine_validity {
                 'exception' => \core_text::substr(get_class($e) . ': ' . $e->getMessage(), 0, 300)];
         }
 
-        return [
-            'scales' => $scales,
-            'n' => $progress->get_num_answered_productive_questions(),
-            'fraction' => $progress->get_fraction_for_scale(),
-            'engine' => $engine,
-        ];
+        return $engine;
     }
 
     /**

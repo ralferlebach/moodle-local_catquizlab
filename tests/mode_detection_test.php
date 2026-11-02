@@ -277,6 +277,10 @@ final class mode_detection_test extends \advanced_testcase {
         $this->assertStringContainsString('data-region="catquizlab-mode-deficit"', $html);
         $this->assertStringContainsString('data-region="catquizlab-mode-relevant"', $html);
         $this->assertStringNotContainsString('data-region="catquizlab-mode-strength"', $html);
+        // Not run here, and said so — not left out without a word.
+        $this->assertStringContainsString('data-region="catquizlab-mode-missing-strength"', $html);
+        $this->assertStringContainsString('Strength oriented: not available in the selected experiment/filter.', $html);
+        $this->assertStringNotContainsString('data-region="catquizlab-mode-missing-deficit"', $html);
         $this->assertStringContainsString('Δs,true ≤ −0.50 logits', $html);
         $this->assertStringContainsString('is decided by the engine (strategy relevantscales)', $html);
         $this->assertStringContainsString('Reported by the engine as relevant: ', $html);
@@ -422,7 +426,10 @@ final class mode_detection_test extends \advanced_testcase {
         $json = json_decode(results_export::to_json(new results_query($filter), results_export::LEVEL_SUBSCALE), true);
         $population = $json['metadata']['population'];
         $this->assertEquals(['planned' => 30, 'scheduled' => 30, 'started' => 30, 'failed' => 6, 'collected' => 24,
-            'valid' => 23, 'evaluated' => 24, 'invalid' => 1], $population['attempts']);
+            'valid' => 23, 'evaluated' => 24, 'invalid' => 1, 'unknown' => 0], $population['attempts']);
+        // The engine's own three counts, beside the rule's, add up to what was evaluated (#112).
+        $this->assertSame(24, $population['engineverdicts']['valid'] + $population['engineverdicts']['invalid']
+            + $population['engineverdicts']['unknown']);
         $this->assertSame(['fraction_all_correct' => 1], $population['invalidreasons']);
         $this->assertSame(count($json['data']), $population['scales']['included']);
         $this->assertSame([72, 68, 68], [$population['scales']['withadministereditem'],

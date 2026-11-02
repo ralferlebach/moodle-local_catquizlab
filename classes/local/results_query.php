@@ -905,6 +905,8 @@ class results_query {
             'valid' => $validity['valid'],
             'validitystate' => $validity['state'],
             'engineunknownreason' => $validity['engineunknownreason'],
+            // The engine's count of answered productive questions (#123); null where it had none to give.
+            'productiveitems' => isset($facts['answered']) ? (int) $facts['answered'] : null,
             'validityreason' => $validity['reason'],
             'uniformvalid' => $uniformvalid,
             'enginevalid' => $enginevalid,
@@ -1079,15 +1081,27 @@ class results_query {
     /**
      * The independent unit an observation belongs to: its simulated person in its replication (#127).
      *
+     * A twin id names a person within one experiment and one population: "r001-t00001" of another experiment, or
+     * of another stratum or severity, is somebody else. Those are part of the key, so that a selection over several
+     * experiments or strata does not merge different people into one cluster. Design factors a person is tested
+     * under (strategy, model, tier, variant) are not: the same person under two of them is one unit, counted once.
+     *
      * @param array $row An observation.
      * @return string
      */
     public static function unit_key(array $row): string {
         $twin = (string) ($row['twinid'] ?? '');
+        if ($twin === '') {
+            return 'a' . (int) ($row['attemptid'] ?? 0);
+        }
 
-        return $twin !== ''
-            ? (int) ($row['replication'] ?? 0) . '|' . $twin
-            : 'a' . (int) ($row['attemptid'] ?? 0);
+        return implode('|', [
+            (int) ($row['experimentid'] ?? 0),
+            (string) ($row['stratum'] ?? ''),
+            (string) ($row['severity'] ?? ''),
+            (int) ($row['replication'] ?? 0),
+            $twin,
+        ]);
     }
 
     /**

@@ -197,4 +197,72 @@ final class engine_validity_test extends \advanced_testcase {
         $this->assertNull(engine_validity::measure_from_trace([], (int) $run->id));
         $this->assertSame([engine_validity::NO_ENGINE_DATA], engine_validity::judge_attempt(null, self::THRESHOLDS));
     }
+
+    /**
+     * The engine's verdict in each case its validator can produce: true, false, none, an exception (#112).
+     *
+     * @return void
+     */
+    public function test_the_verdict_in_each_case(): void {
+        $scale = static fn(bool $valid, array $reasons = []): object => (object) [
+            'statisticallyvalid' => $valid, 'measuredincurrentattempt' => true, 'rejectionreasons' => $reasons,
+        ];
+        $result = static fn(?bool $valid, array $scales): object => new class ($valid, $scales) {
+            /** @var bool|null The verdict. */
+            private $valid;
+            /** @var array The scale results. */
+            private $scales;
+            /**
+             * A result as the engine's validator returns it.
+             *
+             * @param bool|null $valid The verdict.
+             * @param array $scales The scale results.
+             */
+            public function __construct(?bool $valid, array $scales) {
+                $this->valid = $valid;
+                $this->scales = $scales;
+            }
+            /**
+             * The verdict.
+             *
+             * @return bool
+             */
+            public function is_valid(): bool {
+                return (bool) $this->valid;
+            }
+            /**
+             * The scale results.
+             *
+             * @return array
+             */
+            public function get_scale_results(): array {
+                return $this->scales;
+            }
+        };
+
+        // Valid.
+        $verdict = engine_validity::verdict(static fn() => $result(true, [7 => $scale(true)]));
+        $this->assertTrue($verdict['valid']);
+        $this->assertSame([7 => ['valid' => true, 'reasons' => []]], $verdict['scales']);
+        $this->assertArrayNotHasKey('unknown', $verdict);
+
+        // Invalid, with the engine's reason.
+        $verdict = engine_validity::verdict(static fn() => $result(false, [7 => $scale(false, ['se_too_high'])]));
+        $this->assertFalse($verdict['valid']);
+        $this->assertSame(['se_too_high'], $verdict['scales'][7]['reasons']);
+
+        // No scale result: no verdict — and why. Never "invalid".
+        $verdict = engine_validity::verdict(static fn() => $result(false, []));
+        $this->assertNull($verdict['valid']);
+        $this->assertSame(engine_validity::UNKNOWN_NO_SCALE_RESULT, $verdict['unknown']);
+
+        // The validator throws: no verdict, the cause and the message kept.
+        $verdict = engine_validity::verdict(static function () {
+            throw new \coding_exception('progress is gone');
+        });
+        $this->assertNull($verdict['valid']);
+        $this->assertSame(engine_validity::UNKNOWN_VALIDATOR_EXCEPTION, $verdict['unknown']);
+        $this->assertStringContainsString('progress is gone', $verdict['exception']);
+        $this->assertSame([], $verdict['scales']);
+    }
 }
