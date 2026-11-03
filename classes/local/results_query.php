@@ -909,6 +909,7 @@ class results_query {
             'productiveitems' => isset($facts['answered']) ? (int) $facts['answered'] : null,
             'validityreason' => $validity['reason'],
             'uniformvalid' => $uniformvalid,
+            'statisticalvalid' => $validity['statisticalvalid'],
             'enginevalid' => $enginevalid,
             'runtimems'   => (int) ($attempt->runtimems ?? 0),
             // How it ended, as a code and in words, and where it ended (#106).

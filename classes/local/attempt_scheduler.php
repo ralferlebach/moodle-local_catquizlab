@@ -318,24 +318,21 @@ class attempt_scheduler {
                     'tryno' => (int) $attempt->tries,
                     'workerid' => (string) ($attempt->leaseowner ?? ''),
                     'engineattemptid' => (int) $state['engineattemptid'],
-                    'detail' => sprintf(
-                        'lease expired; the engine attempt was complete (%d answered): collected, not replayed',
-                        (int) $state['questionsattempted']
-                    ),
+                    'detail' => get_string('history:leasecollected', 'local_catquizlab', (int) $state['questionsattempted']),
                 ]);
                 attempt_collector::collect((int) $attempt->id);
                 run_lifecycle::attempt_finished((int) $attempt->runid);
                 continue;
             }
-            $why = 'lease_expired' . ($state['found']
-                ? sprintf(
-                    ' (worker %s; engine attempt %s, %d answered, %d presented)',
-                    (string) ($attempt->leaseowner ?? '?'),
-                    $state['state'],
-                    (int) $state['questionsattempted'],
-                    (int) $state['slots']
-                )
-                : sprintf(' (worker %s; no engine attempt: %s)', (string) ($attempt->leaseowner ?? '?'), $state['reason']));
+            // The code first, for whoever counts causes; what the engine knew in words.
+            $why = 'lease_expired ' . ($state['found']
+                ? get_string('history:leaseengine', 'local_catquizlab', (object) [
+                    'worker' => (string) ($attempt->leaseowner ?? '?'), 'state' => $state['state'],
+                    'answered' => (int) $state['questionsattempted'], 'presented' => (int) $state['slots'],
+                ])
+                : get_string('history:leasenoengine', 'local_catquizlab', (object) [
+                    'worker' => (string) ($attempt->leaseowner ?? '?'), 'reason' => $state['reason'],
+                ]));
             self::apply_retry((int) $attempt->id, (int) $attempt->tries, $now, $why);
         }
         return count($stale);
@@ -501,19 +498,16 @@ class attempt_scheduler {
         if ($status === self::STATUS_QUEUED) {
             attempt_history::record($attemptid, attempt_history::REQUEUED, [
                 'tryno'  => $tries,
-                'detail' => sprintf(
-                    '%s; retry after %d s (backoff %d s + spread %d s), at %s',
-                    $why,
-                    (int) $update->nextruntime - $now,
-                    self::RETRY_BACKOFF * max(1, $tries),
-                    $spread,
-                    date('c', (int) $update->nextruntime)
-                ),
+                'detail' => get_string('history:retry', 'local_catquizlab', (object) [
+                    'why' => $why, 'after' => (int) $update->nextruntime - $now,
+                    'backoff' => self::RETRY_BACKOFF * max(1, $tries), 'spread' => $spread,
+                    'at' => date('c', (int) $update->nextruntime),
+                ]),
             ]);
         } else if ($status === self::STATUS_FAILED) {
             attempt_history::record($attemptid, attempt_history::ABANDONED, [
                 'tryno'  => $tries,
-                'detail' => sprintf('%s; no tries left after %d', $why, $tries),
+                'detail' => get_string('history:notriesleft', 'local_catquizlab', (object) ['why' => $why, 'tries' => $tries]),
             ]);
         }
 

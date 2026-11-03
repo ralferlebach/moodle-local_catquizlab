@@ -63,7 +63,7 @@ class scale_provisioner {
         // the engine carries the name into its own feedback structures.
         $rootname = trim((string) ($blueprint['name'] ?? ''));
         if ($rootname === '') {
-            $rootname = 'CATLab';
+            $rootname = get_string('naming:root', 'local_catquizlab');
         }
 
         $nodes = [[
@@ -198,7 +198,7 @@ class scale_provisioner {
         global $DB;
 
         return (int) $DB->insert_record('local_catquiz_catcontext', (object) [
-            'name'              => $name . ' context',
+            'name'              => get_string('naming:context', 'local_catquizlab', $name),
             'description'       => '',
             'descriptionformat' => FORMAT_HTML,
             'starttimestamp'    => $now,

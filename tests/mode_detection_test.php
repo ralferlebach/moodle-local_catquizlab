@@ -49,14 +49,17 @@ final class mode_detection_test extends \advanced_testcase {
         'allsubs' => [1 => -0.4, 2 => 0.7, 3 => 0.3, 4 => -0.2],
         // The whole form: exactly the truth.
         'classic' => [1 => -1.0, 2 => 0.9, 3 => 0.1, 4 => -0.2],
+        // After the strengths: finds the strength, and looks at one scale beside it.
+        'highestsub' => [2 => 0.8, 4 => -0.1],
     ];
 
     /**
      * An experiment of five strategies and six simulated people; one strategy never ran, one twin has an invalid baseline.
      *
+     * @param string[] $strategies The strategies of the sweep.
      * @return int The experiment id.
      */
-    protected function experiment(): int {
+    protected function experiment(array $strategies = ['lowestsub', 'relsubs', 'allsubs', 'classic', 'fastest']): int {
         global $DB;
 
         /** @var \local_catquizlab_generator $generator */
@@ -70,7 +73,7 @@ final class mode_detection_test extends \advanced_testcase {
             'subscale' => ['minitems' => 1, 'maxitems' => 3],
             'se'       => ['min' => 0.35, 'max' => 1.0],
         ];
-        $definition['sweep']['factors']['strategy'] = ['lowestsub', 'relsubs', 'allsubs', 'classic', 'fastest'];
+        $definition['sweep']['factors']['strategy'] = $strategies;
         $experimentid = (int) experiment_service::save($definition)['id'];
         experiment_service::create_sweep($experimentid);
 
@@ -420,6 +423,9 @@ final class mode_detection_test extends \advanced_testcase {
         $tab = (new results_page(new results_query($filter), 'subscales', $filter))->render_tab();
         $this->assertStringContainsString('data-region="catquizlab-spread"', $tab);
         $this->assertStringContainsString('SD(Δ̂) / SD(Δtrue)', $tab);
+        // Each scale-level table says what its unit is, and that the units are not independent (#115).
+        $this->assertStringContainsString('data-unit="scaleresult"', $tab);
+        $this->assertStringContainsString('one scale result per sitting and scale', $tab);
         $this->assertStringNotContainsString('hrinkage', $tab);
 
         // The export says the same about itself, machine-readable — counted by the pass that wrote the rows.
@@ -472,5 +478,43 @@ final class mode_detection_test extends \advanced_testcase {
         $this->assertStringNotContainsString('data-region="catquizlab-nonevalid"', $html);
         $this->assertStringContainsString('Analysis population: 0 valid of 6 planned sittings', $html);
         $this->assertStringContainsString('none of 6 planned sittings was collected', $html);
+    }
+
+    /**
+     * The strength mode on its own (#114): judged by its own targets, never called a deficit; n of N beside the
+     * figures of every row; the modes not run are said.
+     *
+     * @return void
+     */
+    public function test_the_strength_mode_by_its_own_targets(): void {
+        $this->resetAfterTest();
+        $this->setAdminUser();
+        $strategies = array_values(array_filter(['highestsub', 'allsubs', 'classic'], static function (string $s): bool {
+            $probe = experiment_definition::example_baseline();
+            $probe['strategy'] = $s;
+            return experiment_service::validate($probe)['valid'];
+        }));
+        if (!in_array('highestsub', $strategies, true)) {
+            $this->markTestSkipped('The installed engine plays no strength-oriented strategy.');
+        }
+        $experimentid = $this->experiment($strategies);
+        $filter = ['experimentid' => $experimentid];
+
+        $analysis = mode_detection::analyse(mode_detection::sittings(new results_query($filter)));
+        $this->assertSame(['strength'], array_keys($analysis['targets']));
+        $strength = $analysis['targets']['strength'];
+        // The strength of +0.9 is found at +0.8: one true target per sitting, all found, none wrongly.
+        $this->assertSame([6, 6, 1.0, 1.0], [$strength['own']['truetargets'], $strength['own']['targetscovered'],
+            $strength['own']['recall'], $strength['own']['precision']]);
+        $this->assertSame(12, $strength['own']['withitems']);
+
+        $html = (new results_page(new results_query($filter), 'deficits', $filter))->render_tab();
+        $this->assertStringContainsString('data-region="catquizlab-mode-strength"', $html);
+        $this->assertStringNotContainsString('data-region="catquizlab-mode-deficit"', $html);
+        $this->assertStringContainsString('data-region="catquizlab-mode-missing-deficit"', $html);
+        $this->assertStringContainsString('data-region="catquizlab-mode-missing-relevant"', $html);
+        $this->assertStringNotContainsString('Deficit detection', $html);
+        // The n of N beside the figures, in the summary and in the detail.
+        $this->assertStringContainsString('12 / 12 (100.0&nbsp;%)', $html);
     }
 }

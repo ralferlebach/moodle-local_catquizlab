@@ -125,7 +125,7 @@ if ($inspection !== null) {
         ];
 
         echo $OUTPUT->heading(get_string('heading:importpreview', $component), 3);
-        echo html_writer::table($table);
+        echo \local_catquizlab\output\accessible_table::render($table);
 
         if ($inspection['conflict'] !== null) {
             $conflict = $inspection['conflict'];

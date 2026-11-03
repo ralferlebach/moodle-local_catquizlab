@@ -342,7 +342,7 @@ class test_provisioner {
 
         require_once($CFG->dirroot . '/course/modlib.php');
 
-        $name = $options['name'] ?? ('CATLab test ' . $runid);
+        $name = $options['name'] ?? get_string('naming:test', 'local_catquizlab', $runid);
         $course = get_course((int) $run->courseid);
         $moduleinfo = self::build_moduleinfo(
             $name,

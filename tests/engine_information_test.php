@@ -126,4 +126,70 @@ final class engine_information_test extends \advanced_testcase {
         $none = engine_information::step($theta, $pool, 2, $played, 0);
         $this->assertSame([0.0, 0.0], [$none['remaining'], $none['remainingmin']]);
     }
+
+    /**
+     * The test flow of one subscale (#109): TI@n and the remaining TI counted on that scale alone, per step.
+     *
+     * Four steps; items 100 and 102 on scale 7, 103 on scale 8, then 101 on scale 7. On scale 7 the counts are
+     * 1, 1, 1, 2 — the step on scale 8 changes nothing — and there is no value before the scale's first item.
+     * Bounded by four questions per subscale, the rest is 4 − n of the items not yet played.
+     *
+     * @return void
+     */
+    public function test_the_flow_of_one_subscale_counts_its_own_items(): void {
+        [$pool, $records] = $this->pool();
+        $runid = 4242;
+        $model = 'raschbirnbaum';
+        // The pool the flow would read from the engine, put where the reader keeps it.
+        $cache = new \ReflectionProperty(engine_information::class, 'pools');
+        $cache->setAccessible(true);
+        $cache->setValue(null, [$runid . '|7|' . $model => $pool]);
+
+        $item = static fn(int $id, int $scale): array => ['id' => $id, 'componentid' => $id, 'catscaleid' => $scale,
+            'model' => $model, 'difficulty' => (float) $records[$id - 100]->difficulty,
+            'discrimination' => (float) $records[$id - 100]->discrimination];
+        $played = [$item(100, 7), $item(103, 8), $item(102, 7), $item(101, 7)];
+        $trace = [
+            'progress' => ['playedquestions' => $played, 'activescales' => [7]],
+            'abilitypath' => array_fill(0, 4, ['abilities' => [7 => 0.1]]),
+        ];
+        $flow = ['steps' => [['step' => 1], ['step' => 2], ['step' => 3], ['step' => 4]], 'final' => []];
+
+        $tiatn = array_column(test_flow::series($flow, $trace, 'tiatn', 7, [7], $runid, 4)['points'], 'y');
+        $rest = test_flow::series($flow, $trace, 'tiremaining', 7, [7], $runid, 4);
+        $restmin = array_column(test_flow::series($flow, $trace, 'tiremainingmin', 7, [7], $runid, 4)['points'], 'y');
+
+        // Expected from the same arithmetic, fed with the scale's own count and its own played items.
+        $expect = [
+            engine_information::step(0.1, $pool, 1, [100], 3),
+            engine_information::step(0.1, $pool, 1, [100], 3),
+            engine_information::step(0.1, $pool, 2, [100, 102], 2),
+            engine_information::step(0.1, $pool, 3, [100, 102, 101], 1),
+        ];
+        foreach ($expect as $i => $step) {
+            $this->assertEqualsWithDelta($step['tiatn'], $tiatn[$i], 1e-9, 'TI@n at step ' . ($i + 1));
+            $this->assertEqualsWithDelta($step['remaining'], $rest['points'][$i]['y'], 1e-9, 'rest at step ' . ($i + 1));
+            $this->assertEqualsWithDelta($step['remainingmin'], $restmin[$i], 1e-9, 'least rest at step ' . ($i + 1));
+        }
+        // The step on scale 8 does not move scale 7.
+        $this->assertSame($tiatn[0], $tiatn[1]);
+        // The best rest is never below the least.
+        foreach ($restmin as $i => $least) {
+            $this->assertGreaterThanOrEqual($least, $rest['points'][$i]['y']);
+        }
+        $this->assertSame('active', $rest['status']);
+
+        // Unbounded (a category, or no per-subscale maximum): the rest is every unplayed item of the pool.
+        $open = array_column(test_flow::series($flow, $trace, 'tiremaining', 7, [7], $runid, -1)['points'], 'y');
+        $this->assertEqualsWithDelta(engine_information::step(0.1, $pool, 3, [100, 102, 101], 3)['remaining'], $open[3], 1e-9);
+
+        // Before the scale's first item there is no value: the first step here is on scale 8.
+        $late = $trace;
+        $late['progress']['playedquestions'] = [$item(103, 8), $item(100, 7)];
+        $flow2 = ['steps' => [['step' => 1], ['step' => 2]], 'final' => []];
+        $points = array_column(test_flow::series($flow2, $late, 'tiatn', 7, [7], $runid, 4)['points'], 'y');
+        $this->assertNull($points[0]);
+        $this->assertNotNull($points[1]);
+        $cache->setValue(null, []);
+    }
 }

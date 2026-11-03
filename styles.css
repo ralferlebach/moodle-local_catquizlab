@@ -1,0 +1,32 @@
+/* Links set in running text are told apart by more than their colour (WCAG 1.4.1; axe link-in-text-block). */
+.catquizlab-validity-switches a {
+    text-decoration: underline;
+}
+
+/* A primary button inside an alert keeps its own white text: the theme colours every link in an alert with the
+   alert's text colour, which left dark red on blue (contrast 3.15, axe color-contrast). The plugin's pages run
+   as administration pages, hence both body classes. */
+.path-local-catquizlab .alert a.btn-primary,
+.path-admin-local-catquizlab .alert a.btn-primary {
+    color: #fff;
+}
+
+/* Codes in the plugin's tables (engine stop codes, rule keys): the theme's pink on the striped rows reached 4.44,
+   below the 4.5 of WCAG AA. A darker shade of the same colour. */
+.path-local-catquizlab #region-main code,
+.path-admin-local-catquizlab #region-main code {
+    color: #a3134f;
+}
+
+/* Warnings set as text: the theme's amber on white reached 1.94 (WCAG AA asks 4.5). A dark amber says the same. */
+.path-local-catquizlab #region-main .text-warning,
+.path-admin-local-catquizlab #region-main .text-warning {
+    color: #8a5300 !important;
+}
+
+/* Links inside running or muted text are underlined, not told apart by colour alone (WCAG 1.4.1). Buttons, tabs,
+   menu entries and pagination keep their own look. */
+.path-local-catquizlab #region-main :is(p, span, small, .small, .text-muted, td, li, dd, div) > a:not(.btn):not(.nav-link):not(.dropdown-item):not(.page-link),
+.path-admin-local-catquizlab #region-main :is(p, span, small, .small, .text-muted, td, li, dd, div) > a:not(.btn):not(.nav-link):not(.dropdown-item):not(.page-link) {
+    text-decoration: underline;
+}

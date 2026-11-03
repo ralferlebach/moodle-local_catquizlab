@@ -32,6 +32,7 @@ require_once($CFG->libdir . '/adminlib.php');
 use local_catquizlab\form\experiment_form;
 use local_catquizlab\local\experiment_definition;
 use local_catquizlab\local\experiment_io;
+use local_catquizlab\local\reason_catalog;
 use local_catquizlab\local\experiment_service;
 use local_catquizlab\local\preset_library;
 
@@ -143,7 +144,7 @@ if ($action === 'delete' && $id > 0) {
             $manageurl,
             $result['reason'] === 'workers-stopping'
                 ? get_string('purge:workerstopping', $component)
-                : get_string('purge:refused', $component, $result['reason']),
+                : get_string('purge:refused', $component, reason_catalog::text((string) $result['reason'])),
             null,
             \core\output\notification::NOTIFY_WARNING
         );
@@ -213,7 +214,7 @@ if ($action === 'startdrafts' && $id > 0) {
     if ($started['started'] === 0) {
         redirect(
             $manageurl,
-            get_string('run:startblocked', $component, $started['reason']),
+            get_string('run:startblocked', $component, reason_catalog::text((string) $started['reason'])),
             null,
             \core\output\notification::NOTIFY_WARNING
         );
@@ -264,7 +265,7 @@ if (($action === 'createsweep' || $action === 'createsweepandstart') && $id > 0)
             if ($started['started'] === 0) {
                 redirect(
                     $manageurl,
-                    get_string('run:startblocked', $component, $started['reason']),
+                    get_string('run:startblocked', $component, reason_catalog::text((string) $started['reason'])),
                     null,
                     \core\output\notification::NOTIFY_WARNING
                 );

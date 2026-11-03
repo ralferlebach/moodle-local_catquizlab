@@ -16,6 +16,7 @@
 
 namespace local_catquizlab;
 
+use local_catquizlab\local\attempt_history;
 use local_catquizlab\local\log_view;
 use local_catquizlab\local\request_trace;
 
@@ -302,5 +303,79 @@ final class log_view_bounds_test extends \advanced_testcase {
         $this->assertCount(100, $lines);
         $this->assertSame((int) $run->id, $lines[0]['runid']);
         $this->assertLessThan(10, $queries, 'a fixed number of queries, not one per sitting or line');
+    }
+
+    /**
+     * Newest first and paged: the same lines, page by page, as oldest first — only each page turned round (#132).
+     *
+     * @return void
+     */
+    public function test_newest_first_pages_hold_the_same_lines(): void {
+        $this->resetAfterTest();
+        $now = time();
+        $this->write_lines(250, null, $now);
+        $base = ['since' => $now - HOURSECS, 'channel' => 'request'];
+        $texts = static fn(array $window): array => array_column(array_values(array_filter(
+            $window['lines'],
+            static fn(array $l): bool => $l['source'] === 'request'
+        )), 'text');
+
+        $seen = [];
+        foreach ([0, 1, 2] as $page) {
+            $oldest = $texts(log_view::window($base, 100, $page));
+            $newest = log_view::window($base + ['newestfirst' => 1], 100, $page);
+            $this->assertSame(array_reverse($oldest), $texts($newest), 'page ' . $page);
+            $this->assertSame($page > 0, $newest['hasnewer']);
+            $this->assertSame($page < 2, $newest['hasolder']);
+            $seen = array_merge($seen, $texts($newest));
+        }
+        // Newest first from the first line: n=249 on top of page 0, n=0 at the bottom of page 2.
+        $this->assertStringContainsString('?n=249 ', $seen[0]);
+        $this->assertStringContainsString('?n=0 ', end($seen));
+        // Three pages, 250 lines, none twice.
+        $this->assertCount(250, $seen);
+        $this->assertCount(250, array_unique($seen));
+    }
+
+    /**
+     * Paging across sources: request lines and sitting events in one chronology, no line lost or repeated (#132).
+     *
+     * @return void
+     */
+    public function test_pages_across_sources_keep_one_chronology(): void {
+        global $DB;
+        $this->resetAfterTest();
+        $now = time();
+        // 120 request lines over the last 1.2 seconds before now - 60, and 60 sitting events one second apart before.
+        $this->write_lines(120, null, $now);
+        for ($i = 0; $i < 60; $i++) {
+            $DB->insert_record('local_catquizlab_attemptlog', (object) ['attemptid' => 7000 + $i, 'runid' => 1, 'tryno' => 1,
+                'outcome' => attempt_history::STARTED, 'timecreated' => $now - 200 + $i]);
+        }
+        $filter = ['since' => $now - HOURSECS];
+
+        $all = [];
+        $page = 0;
+        do {
+            $window = log_view::window($filter, 50, $page);
+            $own = array_values(array_filter($window['lines'], static fn(array $l): bool
+                => in_array($l['source'], ['request', 'attempt'], true)));
+            // Each page oldest first, each older page before it.
+            $all = array_merge($own, $all);
+            $page++;
+        } while ($window['hasolder'] && $page < 10);
+
+        $sources = array_count_values(array_column($all, 'source'));
+        $this->assertSame(120, $sources['request'] ?? 0);
+        $this->assertSame(60, $sources['attempt'] ?? 0);
+        // One chronology: oldest first throughout, sittings before the requests that followed them.
+        $times = array_map(static fn(array $l): int => (int) ($l['ms'] ?? 0) ?: 1000 * (int) $l['time'], $all);
+        $sorted = $times;
+        sort($sorted);
+        $this->assertSame($sorted, $times);
+        $this->assertSame('attempt', $all[0]['source']);
+        $this->assertSame('request', end($all)['source']);
+        $keys = array_map(static fn(array $l): string => $l['source'] . '|' . $l['time'] . '|' . $l['text'], $all);
+        $this->assertCount(count($keys), array_unique($keys));
     }
 }

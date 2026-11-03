@@ -379,7 +379,7 @@ class purger {
               WHERE status IN (:queued, :running)',
             [
                 'failed' => attempt_scheduler::STATUS_FAILED,
-                'reason' => 'pipeline stopped by an operator',
+                'reason' => get_string('history:pipelinestopped', 'local_catquizlab'),
                 'now'    => time(),
                 'queued' => attempt_scheduler::STATUS_QUEUED,
                 'running' => attempt_scheduler::STATUS_RUNNING,
@@ -504,7 +504,8 @@ class purger {
             ? get_string($key, 'local_catquizlab')
             : $label;
 
-        return $count . ' ' . $name;
+        // Count and name placed by the language, not glued in English order.
+        return get_string('purge:countline', 'local_catquizlab', (object) ['count' => $count, 'name' => $name]);
     }
 
     /**

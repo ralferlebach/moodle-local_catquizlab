@@ -25,6 +25,7 @@
 require(__DIR__ . '/../../config.php');
 require_once($CFG->libdir . '/adminlib.php');
 
+use local_catquizlab\local\reason_catalog;
 use local_catquizlab\local\registry;
 use local_catquizlab\local\run_registry;
 
@@ -203,6 +204,19 @@ if ($action === 'artefactzip' && $runid > 0) {
     die();
 }
 
+// The run's stored export files (#121): prepared in the background, listed below with their links.
+if ($action === 'queueexport' && $runid > 0) {
+    require_sesskey();
+    require_capability('local/catquizlab:export', $context);
+    \local_catquizlab\task\export_run::queue($runid, ['csv', 'json']);
+    redirect(
+        new moodle_url('/local/catquizlab/runs.php', ['runid' => $runid]),
+        get_string('runexport:queued', $component),
+        null,
+        \core\output\notification::NOTIFY_SUCCESS
+    );
+}
+
 // One sitting, not the whole run. The recovery a person actually wants when
 // they are looking at the row that failed.
 if ($action === 'requeueattempt' && optional_param('attemptid', 0, PARAM_INT) > 0) {
@@ -328,7 +342,7 @@ if ($action !== '' && $runid > 0) {
         if (!$result['ok']) {
             redirect(
                 $returnurl,
-                get_string('purge:refused', $component, $result['reason']),
+                get_string('purge:refused', $component, reason_catalog::text((string) $result['reason'])),
                 null,
                 \core\output\notification::NOTIFY_WARNING
             );
@@ -374,7 +388,7 @@ if ($action !== '' && $runid > 0) {
                 $returnurl,
                 $result['reason'] === 'nothing-to-clean'
                     ? get_string('scales:cleanupnothing', $component)
-                    : get_string('scales:cleanuprefused', $component, $result['reason']),
+                    : get_string('scales:cleanuprefused', $component, reason_catalog::text((string) $result['reason'])),
                 null,
                 \core\output\notification::NOTIFY_WARNING
             );
@@ -429,7 +443,7 @@ if ($action !== '' && $runid > 0) {
         if (!$result['ok']) {
             redirect(
                 $returnurl,
-                get_string('run:resetrefused', $component, $result['reason']),
+                get_string('run:resetrefused', $component, reason_catalog::text((string) $result['reason'])),
                 null,
                 \core\output\notification::NOTIFY_WARNING
             );
@@ -472,7 +486,7 @@ if ($action !== '' && $runid > 0) {
             $returnurl,
             $result['ok']
                 ? get_string('run:rechecked', $component, $result['requeued'])
-                : get_string('run:recheckfailed', $component, $result['reason']),
+                : get_string('run:recheckfailed', $component, reason_catalog::text((string) $result['reason'])),
             null,
             $result['ok']
                 ? \core\output\notification::NOTIFY_SUCCESS
@@ -491,7 +505,7 @@ if ($action !== '' && $runid > 0) {
         if (!$result['started']) {
             redirect(
                 $returnurl,
-                get_string('run:startblocked', $component, $result['reason']),
+                get_string('run:startblocked', $component, reason_catalog::text((string) $result['reason'])),
                 null,
                 \core\output\notification::NOTIFY_WARNING
             );
@@ -624,7 +638,7 @@ if ($runid > 0) {
         [get_string('run:runseed', $component), $run['seed']],
         [get_string('run:progress', $component), $run['progress'] . '%'],
     ];
-    echo html_writer::table($table);
+    echo \local_catquizlab\output\accessible_table::render($table);
 
     // The parameters this run was given, and what the engine holds for its
     // test (#104): read back from the engine, not repeated from the
@@ -633,6 +647,13 @@ if ($runid > 0) {
     $fmt = static function ($value): string {
         if ($value === -1) {
             return get_string('budget:unlimited', 'local_catquizlab');
+        }
+        // The engine's sentinel values, in words: the values stay what the engine holds, the reader reads them.
+        if ($value === \local_catquizlab\local\strategy_parameters::ALL_ITEMS) {
+            return get_string('contract:allitemsvalue', 'local_catquizlab');
+        }
+        if ($value === \local_catquizlab\local\strategy_parameters::NEUTRALISED) {
+            return get_string('contract:neutralisedvalue', 'local_catquizlab');
         }
         return is_scalar($value) ? (string) $value : json_encode($value);
     };
@@ -689,7 +710,7 @@ if ($runid > 0) {
     }
     echo $OUTPUT->heading(get_string('effective:heading', $component), 4);
     echo html_writer::tag('p', get_string('contract:explain', $component), ['class' => 'small text-muted']);
-    echo html_writer::table($paramtable);
+    echo \local_catquizlab\output\accessible_table::render($paramtable);
     if ($engine['checked'] !== []) {
         echo $OUTPUT->notification(
             $engine['ok'] ? get_string('effective:match', $component) : implode(' ', $engine['differences']),
@@ -703,17 +724,21 @@ if ($runid > 0) {
                 (array) $contract['violatingsittings'],
                 static fn(array $rules): bool => in_array($rule, $rules, true)
             ));
+            // One sentence per rule, its parts placed by the language (#123).
             $violationlines[] = html_writer::tag(
                 'li',
-                get_string('contractrule:' . $rule, $component) . ' — '
-                . get_string('contract:kind_' . \local_catquizlab\local\run_contract::RULES[$rule], $component)
-                . ': ' . $count . ' (' . implode(', ', array_map(
-                    static fn(int $id): string => html_writer::link(
-                        new moodle_url('/local/catquizlab/runs.php', ['runid' => $runid, 'attemptid' => $id]),
-                        '#' . $id
-                    ),
-                    array_slice($sittings, 0, 20)
-                )) . (count($sittings) > 20 ? ', …' : '') . ')',
+                get_string('contract:violationline', $component, (object) [
+                    'rule' => get_string('contractrule:' . $rule, $component),
+                    'kind' => get_string('contract:kind_' . \local_catquizlab\local\run_contract::RULES[$rule], $component),
+                    'count' => $count,
+                    'sittings' => implode(', ', array_map(
+                        static fn(int $id): string => html_writer::link(
+                            new moodle_url('/local/catquizlab/runs.php', ['runid' => $runid, 'attemptid' => $id]),
+                            '#' . $id
+                        ),
+                        array_slice($sittings, 0, 20)
+                    )) . (count($sittings) > 20 ? ', …' : ''),
+                ]),
                 ['data-rule' => $rule]
             );
         }
@@ -851,6 +876,27 @@ if ($runid > 0) {
             . $zipbutton(\local_catquizlab\local\artefact_store::SCOPE_FAILED, get_string('artefacts:zipfailed', $component)),
             'd-flex flex-wrap mb-2'
         );
+    }
+
+    // Stored export files of this run (#121): the files a background export wrote, each a link, and the button that
+    // writes them. Only with the right to export, the same as the results page's downloads.
+    if (has_capability('local/catquizlab:export', $context)) {
+        echo html_writer::tag('h4', get_string('runexport:heading', $component), ['class' => 'h6 mt-3']);
+        $files = \local_catquizlab\local\run_exporter::stored_files($runid);
+        if ($files === []) {
+            echo html_writer::tag('p', get_string('runexport:none', $component), ['class' => 'small text-muted mb-1',
+                'data-region' => 'catquizlab-runexport-none']);
+        } else {
+            $items = [];
+            foreach ($files as $file) {
+                $items[] = html_writer::link($file['url'], s($file['filename']))
+                    . html_writer::span(' · ' . display_size($file['size']) . ' · ' . userdate($file['modified']), 'text-muted');
+            }
+            echo html_writer::alist($items, ['class' => 'small mb-1', 'data-region' => 'catquizlab-runexport-files']);
+        }
+        echo $OUTPUT->single_button(new moodle_url('/local/catquizlab/runs.php', [
+            'runid' => $runid, 'action' => 'queueexport', 'sesskey' => sesskey(),
+        ]), get_string('runexport:queue', $component), 'post', ['class' => 'mb-2']);
     }
 
     echo html_writer::tag(
@@ -1012,7 +1058,7 @@ if ($runid > 0) {
             ];
         }
 
-        echo html_writer::table($attempttable);
+        echo \local_catquizlab\output\accessible_table::render($attempttable);
     }
 
     // Whether the simulated person can reach the test at all. An access failure
@@ -1037,7 +1083,7 @@ if ($runid > 0) {
                     s($check['detail']),
                 ];
             }
-            echo html_writer::table($accesstable);
+            echo \local_catquizlab\output\accessible_table::render($accesstable);
 
             echo $OUTPUT->single_button(
                 new moodle_url('/local/catquizlab/runs.php', [
@@ -1069,7 +1115,7 @@ if ($runid > 0) {
                 s($check['detail']),
             ];
         }
-        echo html_writer::table($healthtable);
+        echo \local_catquizlab\output\accessible_table::render($healthtable);
     }
 
     // The scale generations this run owns. One is the normal case and says
@@ -1080,7 +1126,8 @@ if ($runid > 0) {
         echo $OUTPUT->heading(get_string('scales:heading', $component), 4);
 
         $scaletable = new html_table();
-        $scaletable->head = ['Root', 'Context', get_string('scales:generations', $component), ''];
+        $scaletable->head = [get_string('scales:root', $component), get_string('scales:context', $component),
+            get_string('scales:generations', $component), ''];
         foreach ($generations as $generation) {
             $scaletable->data[] = [
                 $generation['rootscaleid'],
@@ -1095,7 +1142,7 @@ if ($runid > 0) {
                     ),
             ];
         }
-        echo html_writer::table($scaletable);
+        echo \local_catquizlab\output\accessible_table::render($scaletable);
 
         echo $OUTPUT->single_button(
             new moodle_url('/local/catquizlab/runs.php', [
@@ -1139,13 +1186,19 @@ if ($runid > 0) {
             $logtable->data[] = [
                 '#' . $entry['attemptno'],
                 $entry['time'],
-                s($entry['event']) . ($entry['stage'] !== '' ? ' (' . s($entry['stage']) . ')' : ''),
+                // The event in words, its code beside it for searching the log (data-event).
+                html_writer::span(
+                    s(\local_catquizlab\local\run_log::event_label((string) $entry['event'])),
+                    '',
+                    ['data-event' => (string) $entry['event']]
+                )
+                . ($entry['stage'] !== '' ? ' (' . s($entry['stage']) . ')' : ''),
                 s($entry['summary']),
                 $cost,
             ];
         }
 
-        echo html_writer::table($logtable);
+        echo \local_catquizlab\output\accessible_table::render($logtable);
     }
 
     // A run that says FAILED and nothing else sends the reader to the database.
@@ -1157,7 +1210,7 @@ if ($runid > 0) {
         // an array with a string, and every later access to it — the
         // reproducibility manifest among them — then read a character out of
         // that string instead.
-        $failurehtml = html_writer::tag('p', s($failure['reason']), ['class' => 'mb-1']);
+        $failurehtml = html_writer::tag('p', s(reason_catalog::text((string) $failure['reason'])), ['class' => 'mb-1']);
 
         if ($failure['facts'] !== []) {
             $facts = $failure['facts'];
@@ -1375,7 +1428,7 @@ if ($listing['rows'] === []) {
             $row['progress'] . '%',
         ];
     }
-    echo html_writer::table($table);
+    echo \local_catquizlab\output\accessible_table::render($table);
     echo $OUTPUT->paging_bar($listing['total'], $page, run_registry::PER_PAGE, $baseurl);
 }
 

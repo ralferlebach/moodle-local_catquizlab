@@ -769,7 +769,7 @@ class experiment_definition {
         return [
             'schema'        => self::SCHEMA,
             'schemaversion' => self::SCHEMAVERSION,
-            'name'          => 'Baseline — ideal pool',
+            'name'          => get_string('example:baselinename', 'local_catquizlab'),
             'tier'          => 'baseline',
             'model'         => '2pl',
             'modelparams'   => [
@@ -811,7 +811,7 @@ class experiment_definition {
                 ['shortname' => 'catlab-baseline', 'reference' => null],
             ],
             'tests'         => [
-                ['name' => 'Baseline CAT', 'reference' => null],
+                ['name' => get_string('example:baselinetest', 'local_catquizlab'), 'reference' => null],
             ],
         ];
     }
@@ -823,7 +823,7 @@ class experiment_definition {
      */
     public static function example_publication_2pl(): array {
         $def = self::example_baseline();
-        $def['name'] = 'Article main simulation (2PL)';
+        $def['name'] = get_string('example:articlename', 'local_catquizlab');
         $def['tier'] = 'main';
         $def['strategy'] = 'lowestsub';
         $def['replications'] = 100;

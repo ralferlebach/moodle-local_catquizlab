@@ -418,4 +418,16 @@ class run_log {
 
         return implode(', ', $parts);
     }
+
+    /**
+     * An event in the reader's language; its code where no words are known for it.
+     *
+     * @param string $event The event code.
+     * @return string
+     */
+    public static function event_label(string $event): string {
+        $key = 'runlog:event_' . $event;
+
+        return get_string_manager()->string_exists($key, 'local_catquizlab') ? get_string($key, 'local_catquizlab') : $event;
+    }
 }

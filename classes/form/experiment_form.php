@@ -579,6 +579,8 @@ class experiment_form extends \moodleform {
             'levels:add', 'levels:remove', 'levels:min', 'levels:max', 'levels:value', 'levels:key',
             'levels:notvaried', 'levels:varied', 'levels:sharepercent', 'levels:notanumbershort', 'levels:shareshort',
             'levels:itempairshort', 'levels:sepairshort', 'levels:minmaxshort', 'levels:sepositiveshort',
+            'levels:itemspositiveshort', 'levels:unknownkeyshort', 'levels:duplicateshort', 'levels:removeshort',
+            'levels:key_shift', 'levels:key_factor', 'levels:key_sd', 'levels:key_fraction',
         ], $component);
 
         // One primary action (#126): with the right to run, saving and creating the
@@ -755,7 +757,7 @@ class experiment_form extends \moodleform {
                 ],
                 'questiontemplate' => [
                     'type'   => 'multichoice',
-                    'blanks' => ['stem' => '{category}/{subscale} item {index}'],
+                    'blanks' => ['stem' => get_string('naming:stem', 'local_catquizlab')],
                 ],
                 'itemnaming'       => ['pattern' => 'Q-{category}-{subscale}-{index:03d}'],
             ],
@@ -806,7 +808,7 @@ class experiment_form extends \moodleform {
                 ],
             ],
             'courses'       => [['shortname' => 'catlab-' . time(), 'reference' => null]],
-            'tests'         => [['name' => 'CATLab test', 'reference' => null]],
+            'tests'         => [['name' => get_string('naming:testdefault', 'local_catquizlab'), 'reference' => null]],
         ];
 
         // A conforming stratum has no deviation to scale, so a severity would

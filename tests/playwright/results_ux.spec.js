@@ -75,6 +75,86 @@ test('collected but none valid: said with the reasons, never "nothing collected"
     await expect(page.locator('[data-region="catquizlab-basis-line"]')).toContainText('10 sittings');
 });
 
+test('250 collected, none with an engine verdict: a missing verdict, never "invalid" or "nothing collected"', async({page}) => {
+    // #130 AK 1, #112: 125 people under two strategies, collected without an engine attempt — under the engine's
+    // rule every one of them has no verdict.
+    const id = seeded('NOVERDICT', ['--persons=125']);
+    needs(!id, 'No experiment could be seeded.');
+    await login(page);
+    const base = '/local/catquizlab/results.php?experimentid=' + id + '&validityrule=engine';
+    await page.goto(base + '&tab=overview', {waitUntil: 'networkidle'});
+
+    await expect(page.locator('[data-empty="noverdict"]')).toContainText('250 sitting(s) were collected');
+    await expect(page.locator('[data-empty="noverdict"]')).toContainText('This is a missing verdict, not an invalid result');
+    await expect(page.locator('[data-region="catquizlab-basis-verdict"]')).toBeVisible();
+    for (const wrong of ['No sitting collected yet', 'Nothing has been collected']) {
+        await expect(page.locator('body')).not.toContainText(wrong);
+    }
+    await expect(page.locator('[data-empty="allexcluded"]')).toHaveCount(0);
+
+    // "Invalid only" is empty, and says it is: none was judged invalid.
+    await page.goto(base + '&tab=overview&validity=invalid', {waitUntil: 'networkidle'});
+    await expect(page.locator('[data-empty="noinvalid"]')).toHaveCount(1);
+    // "No verdict only" shows all 250.
+    await page.goto(base + '&tab=overview&validity=unknown', {waitUntil: 'networkidle'});
+    await expect(page.locator('[data-empty]')).toHaveCount(0);
+    await expect(page.locator('[data-region="catquizlab-basis-line"]')).toContainText('250 sittings');
+
+    // The export metadata counts them as unknown, with their causes — not as invalid.
+    const meta = JSON.parse(await (await page.request.get(base + '&tab=export&validity=all&level=attempt&action=meta'))
+        .text());
+    const population = meta.population;
+    expect(population.attempts.collected).toBe(250);
+    expect(population.attempts.unknown).toBe(250);
+    expect(population.attempts.invalid).toBe(0);
+    expect(population.engineverdicts.unknown).toBe(250);
+    expect(population.engineverdicts.invalid).toBe(0);
+    expect(Object.values(population.engineverdicts.unknownreasons).reduce((a, b) => a + b, 0)).toBe(250);
+    expect(population.invalidreasons).toEqual([]);
+
+    // And the raw data says it row by row: "unknown", never "invalid".
+    const csv = (await (await page.request.get(base + '&tab=export&validity=all&level=attempt&action=csv')).text())
+        .split(/\r?\n/).filter((l) => l !== '');
+    // Quoted fields may carry commas: split as CSV, not on every comma.
+    const cellsOf = (line) => {
+        const out = [];
+        let cur = '';
+        let quoted = false;
+        for (let i = 0; i < line.length; i++) {
+            const c = line[i];
+            if (quoted) {
+                if (c === '"' && line[i + 1] === '"') {
+                    cur += '"';
+                    i++;
+                } else if (c === '"') {
+                    quoted = false;
+                } else {
+                    cur += c;
+                }
+            } else if (c === '"') {
+                quoted = true;
+            } else if (c === ',') {
+                out.push(cur);
+                cur = '';
+            } else {
+                cur += c;
+            }
+        }
+        out.push(cur);
+        return out;
+    };
+    const head = cellsOf(csv[0]);
+    const state = head.indexOf('validitystate');
+    const verdict = head.indexOf('engineverdict');
+    expect(state).toBeGreaterThan(-1);
+    expect(csv.length - 1).toBe(250);
+    for (const line of csv.slice(1)) {
+        const cells = cellsOf(line);
+        expect(cells[state]).toBe('unknown');
+        expect(cells[verdict]).toBe('unknown');
+    }
+});
+
 test('the basis is one line plus a folded part that holds everything to reproduce', async({page}) => {
     const id = seeded('PLOTS', []);
     needs(!id, 'No experiment could be seeded.');

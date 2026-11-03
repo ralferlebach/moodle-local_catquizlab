@@ -101,7 +101,9 @@ class user_provisioner {
             'mnethostid' => 1,
             'username'  => $username,
             'firstname' => $label,
-            'lastname'  => ucfirst((string) $person->stratum),
+            // The stratum in words where the language file knows it, its code otherwise.
+            'lastname'  => get_string_manager()->string_exists('stratum:' . $person->stratum, 'local_catquizlab')
+                ? get_string('stratum:' . $person->stratum, 'local_catquizlab') : ucfirst((string) $person->stratum),
             'email'     => $username . '@' . $domain,
         ];
 

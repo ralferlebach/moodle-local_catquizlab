@@ -141,7 +141,9 @@ class run_orchestrator {
         $factory = \core\lock\lock_config::get_lock_factory('local_catquizlab_setup');
         $lock = $factory->get_lock('run_' . $runid, 0);
         if (!$lock) {
-            run_log::record($runid, run_log::SETUP_SKIPPED, ['why' => 'another setup of this run is in progress']);
+            run_log::record($runid, run_log::SETUP_SKIPPED, [
+                'why' => get_string('reasontext:setup_in_progress', 'local_catquizlab'),
+            ]);
             return ['ok' => false, 'reason' => self::REASON_SETUP_IN_PROGRESS, 'stages' => [], 'concurrent' => true];
         }
         try {
@@ -149,7 +151,9 @@ class run_orchestrator {
             $status = (int) $DB->get_field('local_catquizlab_run', 'status', ['id' => $runid]);
             $done = [registry::STATUS_READY, registry::STATUS_RUNNING, registry::STATUS_AGGREGATING, registry::STATUS_FINISHED];
             if (in_array($status, $done, true)) {
-                run_log::record($runid, run_log::SETUP_SKIPPED, ['why' => 'already set up', 'status' => $status]);
+                run_log::record($runid, run_log::SETUP_SKIPPED, [
+                    'why' => get_string('reasontext:already_set_up', 'local_catquizlab'), 'status' => $status,
+                ]);
                 return ['ok' => true, 'reason' => self::REASON_ALREADY_SET_UP, 'stages' => [], 'concurrent' => true];
             }
 
@@ -425,7 +429,9 @@ class run_orchestrator {
             return null;
         }
         if ($available < $minimum) {
-            return self::REASON_POOL_TOO_SMALL . ' (' . $available . ' items for a minimum of ' . $minimum . ')';
+            return self::REASON_POOL_TOO_SMALL . ' (' . get_string('run:pooltoosmall', 'local_catquizlab', (object) [
+                'available' => $available, 'minimum' => $minimum,
+            ]) . ')';
         }
 
         return null;
@@ -684,7 +690,7 @@ class run_orchestrator {
             // The run identifies the scale tree; the cell key alone is empty
             // when nothing is swept, and identical across replications when it
             // is not.
-            'name'          => 'CATLab run ' . (int) $context['runid']
+            'name'          => get_string('naming:runscale', 'local_catquizlab', (int) $context['runid'])
                 . (trim((string) ($context['run']->cellkey ?? '')) !== ''
                     ? ' – ' . $context['run']->cellkey
                     : ''),

@@ -133,4 +133,59 @@ final class filter_factors_test extends \advanced_testcase {
         $this->assertStringNotContainsString('yet', strip_tags($html));
         $this->assertMatchesRegularExpression('/href="[^"]*experimentid=' . $id . '[^"]*"[^>]*>Reset filter/', $html);
     }
+
+    /**
+     * Every factor, not only strategy and model, keeps its own values while one is chosen (#122).
+     *
+     * For tier, variant, stratum and severity: three runs, (a, classic), (b, classic), (a, fastest). Chosen "a",
+     * the menu still offers "a" and "b", counted under the rest of the selection.
+     *
+     * @return void
+     */
+    public function test_every_factor_keeps_its_own_values(): void {
+        $this->resetAfterTest();
+        /** @var \local_catquizlab_generator $generator */
+        $generator = $this->getDataGenerator()->get_plugin_generator('local_catquizlab');
+        $set = [
+            'tier' => static function (array &$manifest, array &$definition, string $v): void {
+                $manifest['config']['experiment']['tier'] = $v;
+            },
+            'variant' => static function (array &$manifest, array &$definition, string $v): void {
+                $definition['pool']['variant'] = $v;
+            },
+            'stratum' => static function (array &$manifest, array &$definition, string $v): void {
+                $definition['persons']['stratum'] = $v;
+            },
+            'severity' => static function (array &$manifest, array &$definition, string $v): void {
+                $definition['persons']['severity'] = $v;
+            },
+        ];
+        $values = ['tier' => ['core', 'extended'], 'variant' => ['ideal', 'miscalibrated'],
+            'stratum' => ['conforming', 'deficit'], 'severity' => ['mild', 'none']];
+        foreach ($set as $factor => $apply) {
+            [$a, $b] = $values[$factor];
+            $experiment = $generator->create_experiment();
+            foreach ([[$a, 'classic'], [$b, 'classic'], [$a, 'fastest']] as [$value, $strategy]) {
+                $definition = experiment_definition::example_baseline();
+                $definition['strategy'] = $strategy;
+                $manifest = [];
+                $apply($manifest, $definition, $value);
+                $manifest['config']['definition'] = $definition;
+                $generator->create_run(['experimentid' => $experiment->id, 'manifestjson' => json_encode($manifest)]);
+            }
+
+            $chosen = new results_query(['experimentid' => (int) $experiment->id, $factor => $a]);
+            $options = $chosen->factor_options($factor);
+            $this->assertSame([$a, $b], array_keys($options), $factor . ': both values stay');
+            $this->assertSame([2, 1], array_column($options, 'runs'), $factor . ': counted under the rest');
+            $this->assertCount(2, $chosen->runs(), $factor . ': the selection itself is filtered');
+
+            // With a strategy chosen too, the other value is offered with its count of zero.
+            $both = new results_query(['experimentid' => (int) $experiment->id, $factor => $a, 'strategy' => 'fastest']);
+            $this->assertSame([$a => 1, $b => 0], array_combine(
+                array_keys($both->factor_options($factor)),
+                array_column($both->factor_options($factor), 'runs')
+            ), $factor);
+        }
+    }
 }

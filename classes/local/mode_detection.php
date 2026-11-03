@@ -413,6 +413,9 @@ class mode_detection {
         return [
             'sittings' => count($sittings),
             'scales' => $n,
+            // The denominator of every figure below (#114): the scale results with an administered item in these
+            // sittings — so that "n of N" can be said beside each metric, not only n.
+            'withitems' => array_sum(array_map(static fn(array $sitting): int => (int) ($sitting['withitems'] ?? 0), $sittings)),
             // Null throughout where the mode's true targets are not defined: not zero.
             'truetargets' => $defined ? $truetargets : null,
             'targetscovered' => $defined ? $covered : null,
@@ -679,7 +682,7 @@ class mode_detection {
                 'mode' => $mode, 'compared' => $compared, 'baseline' => $baseline, 'pairing' => $pairing,
                 'sittings' => $e['sittings'] ?? null, 'sittingsall' => $extra['sittingsall'] ?? null,
                 'pairs' => $extra['pairs'] ?? null, 'pairable' => $extra['pairable'] ?? null,
-                'scales' => $e['scales'] ?? null, 'scaleswithitems' => $extra['withitems'] ?? null,
+                'scales' => $e['scales'] ?? null, 'scaleswithitems' => $extra['withitems'] ?? ($e['withitems'] ?? null),
                 'truetargets' => $e['truetargets'] ?? null, 'targetscovered' => $e['targetscovered'] ?? null,
                 'correlation' => $e['correlation'] ?? null, 'bias' => $e['bias'] ?? null, 'rmse' => $e['rmse'] ?? null,
                 'mae' => $e['mae'] ?? null, 'targetrmse' => $e['targetrmse'] ?? null, 'recall' => $e['recall'] ?? null,

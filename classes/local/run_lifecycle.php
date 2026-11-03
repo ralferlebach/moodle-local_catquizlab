@@ -640,7 +640,7 @@ class run_lifecycle {
             $DB->update_record('local_catquizlab_attempt', (object) [
                 'id'           => $attempt->id,
                 'status'       => attempt_scheduler::STATUS_FAILED,
-                'lasterror'    => \core_text::substr('run failed: ' . $reason, 0, 1000),
+                'lasterror'    => \core_text::substr(get_string('history:runfailed', 'local_catquizlab', $reason), 0, 1000),
                 'leaseowner'   => null,
                 'leaseexpires' => 0,
                 'timemodified' => time(),
@@ -833,7 +833,7 @@ class run_lifecycle {
         // A new execution attempt rather than a clean slate: the log of what
         // went wrong last time is exactly what somebody needs while looking at
         // this one, and the number is what keeps the two apart.
-        run_log::new_attempt($runid, 'reset to draft');
+        run_log::new_attempt($runid, get_string('history:resettodraft', 'local_catquizlab'));
 
         $run = $DB->get_record('local_catquizlab_run', ['id' => $runid]);
         if (!$run) {

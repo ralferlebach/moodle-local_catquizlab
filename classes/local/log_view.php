@@ -214,10 +214,10 @@ class log_view {
             'filter' => array_filter($filter, static fn($value): bool => $value !== '' && $value !== 0 && $value !== null),
             'from' => $since > 0 ? date('c', $since) : null,
             'to' => date('c', $until > 0 ? $until : time()),
-            'order' => !empty($filter['newestfirst']) ? 'newest first' : 'oldest first',
+            'order' => get_string(!empty($filter['newestfirst']) ? 'logs:ordernewest' : 'logs:orderoldest', 'local_catquizlab'),
             // The time zone of the stamps (#131).
             'timezone' => usertimezone(),
-            'redacted' => 'tokens, session keys, passwords, cookies and authorisation headers',
+            'redacted' => get_string('logs:redactednote', 'local_catquizlab'),
             'limit' => (int) $window['limit'],
             'count' => count($window['lines']),
             // Cut: there are older lines in the selection than the file holds.
@@ -341,25 +341,28 @@ class log_view {
             $connection = (string) ($request['connection'] ?? 'normal');
             $exception = $request['exception'] ?? null;
             $fatal = $request['fatal'] ?? null;
-            $text = sprintf(
-                '%s %s → %d in %.1f s',
-                $request['method'] ?? '',
-                $request['path'] ?? '',
-                $status,
-                ((int) ($request['durationms'] ?? 0)) / 1000
-            );
+            // The words of a line from the language file; the figures and paths as the trace holds them.
+            $text = get_string('logline:request', 'local_catquizlab', (object) [
+                'method' => (string) ($request['method'] ?? ''), 'path' => (string) ($request['path'] ?? ''),
+                'status' => $status, 'seconds' => sprintf('%.1f', ((int) ($request['durationms'] ?? 0)) / 1000),
+            ]);
             if ($connection !== 'normal') {
-                $text .= ', connection ' . $connection;
+                $text .= get_string('logline:connection', 'local_catquizlab', $connection);
             }
-            $text .= sprintf(', %.1f MB', (float) ($request['peakmb'] ?? 0));
+            $text .= get_string('logline:peak', 'local_catquizlab', sprintf('%.1f', (float) ($request['peakmb'] ?? 0)));
             if (is_array($exception)) {
-                $text .= ' — ' . $exception['class'] . ($exception['errorcode'] !== '' ? ' [' . $exception['errorcode'] . ']' : '')
-                    . ': ' . $exception['message']
-                    . ($exception['debuginfo'] !== '' ? ' (' . $exception['debuginfo'] . ')' : '')
-                    . ' at ' . $exception['file'] . ':' . $exception['line'];
+                $text .= get_string('logline:exception', 'local_catquizlab', (object) [
+                    'class' => $exception['class'],
+                    'code' => $exception['errorcode'] !== '' ? ' [' . $exception['errorcode'] . ']' : '',
+                    'message' => $exception['message'],
+                    'debug' => $exception['debuginfo'] !== '' ? ' (' . $exception['debuginfo'] . ')' : '',
+                    'file' => $exception['file'], 'line' => $exception['line'],
+                ]);
             }
             if (is_array($fatal)) {
-                $text .= ' — PHP fatal: ' . $fatal['message'] . ' at ' . $fatal['file'] . ':' . $fatal['line'];
+                $text .= get_string('logline:fatal', 'local_catquizlab', (object) [
+                    'message' => $fatal['message'], 'file' => $fatal['file'], 'line' => $fatal['line'],
+                ]);
             }
             $failed = $status >= 500 || is_array($exception) || is_array($fatal) || $connection !== 'normal';
             $slow = (int) ($request['durationms'] ?? 0) >= self::SLOW_REQUEST_MS || $status >= 400;
@@ -600,7 +603,8 @@ class log_view {
         foreach ($rows as $row) {
             $detail = json_decode((string) $row->detail, true) ?: [];
             // Run 0 is the installation: worker limit, draining, load guard (#124).
-            $text = ((int) $row->runid === 0 ? 'installation' : 'run=' . $row->runid . ' attempt#' . $row->attemptno)
+            $text = ((int) $row->runid === 0 ? get_string('logline:installation', 'local_catquizlab')
+                : 'run=' . $row->runid . ' attempt#' . $row->attemptno)
                 . ' ' . $row->event
                 . ($row->stage ? ' stage=' . $row->stage : '')
                 . ($row->dbqueries ? ' queries=' . $row->dbqueries : '')
@@ -654,10 +658,11 @@ class log_view {
                 continue;
             }
 
-            $text = 'queued ' . self::short_class($row->classname)
+            $text = get_string('logline:queued', 'local_catquizlab', self::short_class($row->classname))
                 . ($runid ? ' run=' . $runid : '')
                 . ' due=' . duration::until((int) $row->nextruntime)
-                . ((int) $row->faildelay > 0 ? ' retrying in ' . duration::human((int) $row->faildelay) : '');
+                . ((int) $row->faildelay > 0
+                    ? get_string('logline:retrying', 'local_catquizlab', duration::human((int) $row->faildelay)) : '');
 
             $lines[] = self::line((int) $row->timecreated, (int) $row->id, 'task', $text, [
                 'runid'  => $runid,
@@ -691,9 +696,9 @@ class log_view {
             return [];
         }
 
-        $text = 'pipeline tick: started ' . (int) $last['launched'] . ' worker(s), '
-            . (int) $last['claimable'] . ' sitting(s) claimable'
-            . ((string) $last['reason'] !== '' ? ', reason=' . $last['reason'] : '');
+        $text = get_string('logline:tick', 'local_catquizlab', (object) [
+            'launched' => (int) $last['launched'], 'claimable' => (int) $last['claimable'],
+        ]) . ((string) $last['reason'] !== '' ? ', reason=' . $last['reason'] : '');
 
         return [self::line((int) $last['time'], PHP_INT_MAX, 'task', $text, [
             'failed' => (int) $last['launched'] === 0 && (string) $last['reason'] !== '',

@@ -825,7 +825,7 @@ class scatter_chart {
             foreach ($summary as $label => $value) {
                 $table->data[] = [$label, $value];
             }
-            $out .= \html_writer::table($table);
+            $out .= \local_catquizlab\output\accessible_table::render($table);
         }
 
         return $out;

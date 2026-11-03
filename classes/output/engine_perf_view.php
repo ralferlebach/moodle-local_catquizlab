@@ -58,7 +58,8 @@ class engine_perf_view {
             $table->attributes = ['class' => 'generaltable table-sm w-auto', 'data-kind' => $kind];
             $table->caption = get_string('engineperf:kind_' . $kind, $component) . ' — '
                 . get_string('engineperf:requests', $component, $figures['count']);
-            $table->head = [get_string('engineperf:span', $component), 'n', 'p50 ms', 'p95 ms', 'p99 ms', 'max ms'];
+            $table->head = [get_string('engineperf:span', $component), 'n', 'p50 ms', 'p95 ms', 'p99 ms',
+                get_string('engineperf:colmax', $component)];
             $r = $figures['requestms'];
             $table->data[] = [\html_writer::tag('strong', get_string('engineperf:request', $component)), $r['n'],
                 $ms($r['p50']), $ms($r['p95']), $ms($r['p99']), $ms($r['max'])];
@@ -69,7 +70,7 @@ class engine_perf_view {
                 $table->data[] = [s($name), $p['n'], $ms($p['p50']), $ms($p['p95']), $ms($p['p99']), $ms($p['max'])];
             }
             $out .= \html_writer::div(
-                \html_writer::table($table),
+                \local_catquizlab\output\accessible_table::render($table),
                 'table-responsive position-relative',
                 ['data-region' => 'catquizlab-engineperf-' . $kind]
             );

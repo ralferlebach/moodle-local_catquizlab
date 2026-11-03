@@ -160,7 +160,7 @@ if ($rows === []) {
         $values[] = $row['mean'] ?? 0.0;
     }
 
-    echo html_writer::table($table);
+    echo \local_catquizlab\output\accessible_table::render($table);
 
     $chart->add_series(new \core\chart_series($metric, $values));
     $chart->set_labels($labels);

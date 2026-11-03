@@ -6,6 +6,109 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.7.46] — 2026-11-02 — CI fix, the follow-ups from 0.7.45, language strings
+
+No database change (version 2026110201).
+
+### CI
+
+- The new six-strategy filter test failed in all three interface jobs: "FILTERS_EXPERIMENTID not set". The
+  matching workflow step had not been taken over. The test now seeds its own experiment when the variable is
+  missing, as the status and progress specs already do, so it no longer depends on the workflow. Checked
+  locally without the variable (3/3).
+
+### Follow-ups from the 0.7.45 comments
+
+- **#123:** two new contract rules, each tested with two configurations, plus a negative case:
+  - `se_stop_above_target`: the test stopped for its SE, but the final SE is above the target;
+  - `subscale_min_undercut`: a scale still active at the end has fewer items than its minimum, although the
+    test ended on a criterion of its own. Scales the engine dropped are not counted.
+  The SE and subscale-minimum rows of the contract table show "violated".
+- **#109:** the test-flow series for one subscale (TI@n, best and least remaining TI) are tested. Each counts
+  only the scale's own items; there is no value before the scale's first item; bounded and unbounded remainders
+  are both checked.
+- **#114:**
+  - every row of the mode table (summary and detail) shows "n / N (%)";
+  - the strength mode is tested with its own fixture: its targets, never called a deficit, and the missing
+    modes are named.
+- **#122:** tier, variant, stratum and severity each keep their own values while one is chosen (tested).
+- **#130 / #112:** Playwright with 250 sittings and no engine verdict. It checks:
+  - the page says "missing verdict";
+  - "invalid only" is empty;
+  - "no verdict only" shows all 250;
+  - export metadata and the raw-data CSV say "unknown" row by row.
+- **Accessibility (#126, #128, #130, #131):** new `a11y.spec.js` runs axe-core (WCAG 2.1 A/AA) on every page
+  of the plugin and fails on serious or critical findings. What it found is fixed:
+  - contrast of a primary button inside an alert, of amber warnings and of codes in tables;
+  - links that were told apart by colour alone;
+  - the results tabs, whose list lost its list semantics;
+  - wide tables and the log area, which could not be scrolled by keyboard (new `accessible_table`);
+  - run progress bars without a name.
+- **#132:**
+  - "newest first" with paging holds the same lines as oldest first, only reversed per page;
+  - paging across sources (requests and sitting events) keeps one chronology, with no line lost or repeated.
+- **#131:** the "Copy" button is tested: exactly the lines shown, without the toggles, without secrets.
+- **#126:**
+  - the editor now checks levels by the server's rules: digits only for items, PHP's `is_numeric` for SE and
+    strengths, unknown strength keys, a maximum of at least 1, the same level twice;
+  - a shared fixture (42 cases) is checked by PHPUnit against `parse_levels` and by Node against
+    `amd/src/levels.js`;
+  - new Playwright test with several strategies and levels: names per level, a duplicate refused, the preview
+    multiplies;
+  - the AMD build was regenerated with Moodle's grunt.
+- **#129:** the main action follows the phase ("View progress" or "View results"), and a running experiment
+  shows its progress in its row (Playwright). Behat: no delete without `purge`.
+- **#124:**
+  - draining is lease-safe: the draining worker keeps its sitting, the reaper leaves it alone, nothing is handed
+    out twice;
+  - after a throttle the relaunch is staggered after the worker still waiting (tested);
+  - the progress page explains what a worker slot costs the web server (Apache MaxRequestWorkers, PHP-FPM).
+- **#133:** a sitting resumed after the circuit breaker continues in its engine attempt, with every question
+  and every answer exactly once, and the history only appended to (tested). The step check of the worker
+  end-to-end is now the class `sitting_integrity`, tested against double answers, double questions and lost
+  answers.
+- **#120:** the worker's handshake (`starting`) comes before the staggered wait. Extracted as `beginWork()` and
+  tested in Node.
+- **#112:** new export column `statisticalvalid`: the statistical rules alone, separate from how the test
+  ended (tested).
+- **#121:** stored run exports now have their place in the run view: a button that writes them in the
+  background, then one link per file (PHPUnit and Playwright).
+- **#115:** scale-level tables state their unit, and that the units are not independent.
+
+### Hard-coded strings into the language files (EN/DE)
+
+- **Interface:**
+  - strategy names, descriptions and engine reference names (`strategycat:*`, `strategyref:*`);
+  - model names (`model:*`);
+  - built-in axis profiles (`axes:profile_*`; the stored names stay the same);
+  - the scale table head on the run page;
+  - the operations confirmations;
+  - "max ms";
+  - "OK" in the wizard;
+  - the contract table's sentinel values;
+  - the level editor's labels, with the level number placed by the language;
+  - the run log events in words, with the code kept in `data-event`.
+- **Messages:**
+  - refusal and stop reasons, previously machine codes (`reasontext:*`, through `reason_catalog::text()`);
+  - pool too small;
+  - copy and version names;
+  - counts in the purge and queue lines;
+  - the TI@n note, previously a split sentence.
+- **Exports and logs:**
+  - the uncertainty texts of the export metadata;
+  - order and redaction in the log download;
+  - the words of the synthesised log lines (codes such as `run=`, `reason=`, `sitting=` stay as they are);
+  - the attempt history texts (retry, no tries left, lease, reconciliation, breaker), written in the site's
+    language.
+- **Objects the plugin creates:**
+  - names of tests, scale trees and contexts;
+  - the worker account and token;
+  - the question stem;
+  - the generated question texts, previously German only;
+  - the hub-ingest experiment, still found under its old name;
+  - the simulated users' last names;
+  - the names of the example definitions.
+
 ## [0.7.45] — 2026-11-02 — CI on main @ 9c34257 (Moodle 5.3) and evidence for the open issues
 
 No database change (version 2026110200). Four new settings for the load guard (defaults as before).

@@ -279,8 +279,8 @@ class worker_access {
 
         $new = new \stdClass();
         $new->username = self::USERNAME;
-        $new->firstname = 'CATLab';
-        $new->lastname = 'Worker';
+        $new->firstname = get_string('naming:workerfirstname', 'local_catquizlab');
+        $new->lastname = get_string('naming:workerlastname', 'local_catquizlab');
         // A dedicated technical account: the token it carries is worth exactly
         // the three functions the worker calls, where an administrator's token
         // is worth the administrator.
@@ -372,7 +372,7 @@ class worker_access {
                 $context,
                 0,
                 '',
-                'CATLab worker'
+                get_string('naming:workertoken', 'local_catquizlab')
             );
             $changed[] = 'token';
         }

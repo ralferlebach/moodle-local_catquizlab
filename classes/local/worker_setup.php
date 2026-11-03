@@ -93,7 +93,7 @@ class worker_setup {
             \context_system::instance(),
             0,
             '',
-            'CATLab worker'
+            get_string('naming:workertoken', 'local_catquizlab')
         );
 
         // Written into the plugin's own setting too, so the worker command the

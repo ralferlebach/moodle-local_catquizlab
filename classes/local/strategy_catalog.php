@@ -48,20 +48,18 @@ class strategy_catalog {
     /**
      * Every strategy: engine constant name, contract id, label and description.
      *
-     * @var array<string, array{constant: string, contractid: int, label: string, description: string}>
+     * Names and descriptions are language strings: strategycat:<key> and strategycat:<key>_desc.
+     *
+     * @var array<string, array{constant: string, contractid: int}>
      */
     protected const CATALOG = [
         'fastest'    => [
             'constant'    => 'LOCAL_CATQUIZ_STRATEGY_FASTEST',
             'contractid'  => 1,
-            'label'       => 'Estimate global ability (MFI)',
-            'description' => 'Maximises Fisher information at the current estimate, ignoring content balance.',
         ],
         'balanced'   => [
             'constant'    => 'LOCAL_CATQUIZ_STRATEGY_BALANCED',
             'contractid'  => 2,
-            'label'       => 'Balanced content control',
-            'description' => 'Trades information against an even spread across the content structure.',
         ],
         'allsubs'    => [
             // The only strategy that overrides filterbyquestionsperscale() and
@@ -73,38 +71,26 @@ class strategy_catalog {
             'enforcespersubscaleminimum' => true,
             'constant'    => 'LOCAL_CATQUIZ_STRATEGY_ALLSUBS',
             'contractid'  => 3,
-            'label'       => 'Cover all subscales',
-            'description' => 'Visits every subscale, so each one receives its item budget.',
         ],
         'lowestsub'  => [
             'constant'    => 'LOCAL_CATQUIZ_STRATEGY_LOWESTSUB',
             'contractid'  => 4,
-            'label'       => 'Detect weakest subscale',
-            'description' => 'Concentrates items where ability appears lowest, to pin down the deficit.',
         ],
         'highestsub' => [
             'constant'    => 'LOCAL_CATQUIZ_STRATEGY_HIGHESTSUB',
             'contractid'  => 5,
-            'label'       => 'Detect strongest subscale',
-            'description' => 'The mirror image of the weakest-subscale mode.',
         ],
         'pilot'      => [
             'constant'    => 'LOCAL_CATQUIZ_STRATEGY_PILOT',
             'contractid'  => 6,
-            'label'       => 'Pilot-item mode',
-            'description' => 'Mixes in uncalibrated pilot items alongside the operational selection.',
         ],
         'classic'    => [
             'constant'    => 'LOCAL_CATQUIZ_STRATEGY_CLASSIC',
             'contractid'  => 7,
-            'label'       => 'Fixed-form baseline',
-            'description' => 'A non-adaptive fixed form, the comparison baseline of the design.',
         ],
         'relsubs'    => [
             'constant'    => 'LOCAL_CATQUIZ_STRATEGY_RELSUBS',
             'contractid'  => 8,
-            'label'       => 'Cover relevant subscales',
-            'description' => 'Restricts the budget to the subscales that carry diagnostic information.',
         ],
     ];
 
@@ -143,8 +129,8 @@ class strategy_catalog {
             'key'         => $key,
             'engineid'    => self::engine_id($key),
             'constant'    => $entry['constant'],
-            'label'       => $entry['label'],
-            'description' => $entry['description'],
+            'label'       => self::alias($key),
+            'description' => self::description($key),
         ];
     }
 
@@ -421,11 +407,11 @@ class strategy_catalog {
         if ($engine !== null && $engine['description'] !== '') {
             return $engine['description'];
         }
-        if (!environment::engine_available() && isset(self::REFERENCE_ENGINE[self::engine_id($key)])) {
-            return self::REFERENCE_ENGINE[self::engine_id($key)];
+        if (!environment::engine_available() && in_array(self::engine_id($key), self::REFERENCE_ENGINE, true)) {
+            return get_string('strategyref:' . self::engine_id($key), 'local_catquizlab');
         }
 
-        return self::CATALOG[$key]['label'];
+        return self::alias($key);
     }
 
     /**
@@ -435,7 +421,7 @@ class strategy_catalog {
      * @return string
      */
     public static function alias(string $key): string {
-        return self::has($key) ? self::CATALOG[$key]['label'] : $key;
+        return self::has($key) ? get_string('strategycat:' . $key, 'local_catquizlab') : $key;
     }
 
     /**
@@ -469,7 +455,7 @@ class strategy_catalog {
         if (!self::has($key)) {
             throw new \coding_exception('Unknown CAT strategy key: ' . $key);
         }
-        return self::CATALOG[$key]['description'];
+        return get_string('strategycat:' . $key . '_desc', 'local_catquizlab');
     }
 
     /**
@@ -486,7 +472,7 @@ class strategy_catalog {
             // definition that names one is refused by validation, with the
             // reason, rather than silently changed.
             if (self::runnable($key)) {
-                $menu[$key] = self::CATALOG[$key]['label'];
+                $menu[$key] = self::alias($key);
             }
         }
         return $menu;
@@ -531,7 +517,7 @@ class strategy_catalog {
         // with an empty strategy menu. The reference set stands in: what
         // local_catquiz 1.2.1 and 1.3.0 both play.
         if (!environment::engine_available()) {
-            return array_keys(self::REFERENCE_ENGINE);
+            return self::REFERENCE_ENGINE;
         }
 
         return array_keys(array_filter(self::engine_strategies(), static function (array $strategy): bool {
@@ -544,17 +530,10 @@ class strategy_catalog {
      *
      * Identical in local_catquiz 1.2.1 (ALiSe-v-1.2.0-legacy) and 1.3.0
      * (migration-zu-moodle-5.x): the ids of their strategy classes and what
-     * get_description() returns. Used only where no engine is installed to
+     * get_description() returns, as the language strings strategyref:<id>. Used only where no engine is installed to
      * answer; with an engine, the engine answers.
      */
-    public const REFERENCE_ENGINE = [
-        1 => 'CAT',
-        3 => 'Infer all subscales',
-        4 => 'Infer lowest skill gap',
-        5 => 'Infer greatest strength',
-        7 => 'Classical test',
-        8 => 'Infer relevant subscales',
-    ];
+    public const REFERENCE_ENGINE = [1, 3, 4, 5, 7, 8];
 
     /** @var array|null The engine's strategies as read in this request. */
     protected static ?array $enginestrategies = null;

@@ -108,3 +108,49 @@ test('a bad level is refused on saving, with its line; good levels come back as 
     await expect(reopened.nth(1).locator('input').first()).toHaveValue('20');
     await expect(page.locator('[data-catquizlab-levels-state="sweepstrengths"]')).toContainText('Varied: 1 level(s)');
 });
+
+test('several strategies with levels: each level a row with its own name, twins refused, the preview multiplies', async({page}) => {
+    // #126: strategies × levels, as the server will create them, and the editor's checks named per row.
+    await login(page);
+    await page.goto('/local/catquizlab/experiment.php', {waitUntil: 'networkidle'});
+    await page.fill('#id_name', 'Strategies and levels ' + Date.now());
+    // Every section open, as somebody filling the whole form has it.
+    const expand = page.locator('a.collapseexpand').first();
+    if (await expand.count() && !(await expand.getAttribute('class')).includes('collapse-all')) {
+        await expand.click();
+    }
+    await page.selectOption('#id_sweepstrategies', ['fastest', 'allsubs', 'relsubs']);
+    // A pool every strategy can play within its budget: 2 × 2 subscales, one question each at least.
+    await page.fill('#id_poolcategories', '2');
+    await page.fill('#id_poolsubcategories', '2');
+    await page.fill('#id_subscalemin', '1');
+
+    const budgets = page.locator('[data-region="catquizlab-levels-sweepglobalbudgets"]');
+    for (const [min, max] of [['10', '15'], ['20', '30'], [' 10 ', '15']]) {
+        await budgets.getByRole('button', {name: 'Add level'}).click();
+        await budgets.locator('li').last().locator('input').nth(0).fill(min);
+        await budgets.locator('li').last().locator('input').nth(1).fill(max);
+    }
+    // Each field named with its level, in words a screen reader reads.
+    await expect(budgets.getByRole('textbox', {name: 'Minimum of level 3'})).toHaveCount(1);
+    await expect(budgets.getByRole('button', {name: 'Remove level 3'})).toHaveCount(1);
+    // The third is the first again, only spelt differently: said at the row, as the server would.
+    await expect(budgets.locator('li[data-level="3"] [role="status"]')).toHaveText('The same level twice.');
+    await budgets.getByRole('button', {name: 'Remove level 3'}).click();
+    await expect(budgets.locator('li')).toHaveCount(2);
+    await expect(budgets.locator('[role="status"]').filter({hasText: /\S/})).toHaveCount(0);
+
+    // Disturbance strengths: the keys by name, an unknown one impossible to choose.
+    const strengths = page.locator('[data-region="catquizlab-levels-sweepstrengths"]');
+    await strengths.getByRole('button', {name: 'Add level'}).click();
+    const keys = await strengths.locator('select option').allTextContents();
+    expect(keys).toEqual(expect.arrayContaining(['Shift (shift)', 'Factor (factor)', 'Standard deviation (sd)']));
+
+    await strengths.getByRole('button', {name: 'Remove level 1'}).click();
+    await page.click('#id_previewbutton');
+    await page.waitForLoadState('networkidle');
+    await expect(page.locator('[data-region="catquizlab-preview-unsaved"]')).toBeVisible();
+    // Three strategies × two budgets.
+    const cells = await page.locator('.card', {hasText: 'Sweep preview'}).locator('li').first().locator('strong').innerText();
+    expect(Number(cells)).toBe(6);
+});

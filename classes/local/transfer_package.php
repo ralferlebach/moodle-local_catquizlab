@@ -288,14 +288,21 @@ class transfer_package {
     protected static function ingest_experiment(): int {
         global $DB;
 
-        $existing = $DB->get_record('local_catquizlab_experiment', ['name' => 'Hub ingest']);
+        // Found by its stored name, in whichever language it was created; created in the site's.
+        $existing = $DB->get_record_select(
+            'local_catquizlab_experiment',
+            'name = :en OR name = :local',
+            ['en' => 'Hub ingest', 'local' => get_string('naming:hubingest', 'local_catquizlab')],
+            '*',
+            IGNORE_MULTIPLE
+        );
         if ($existing) {
             return (int) $existing->id;
         }
 
         $now = time();
         return (int) $DB->insert_record('local_catquizlab_experiment', (object) [
-            'name'         => 'Hub ingest',
+            'name'         => get_string('naming:hubingest', 'local_catquizlab'),
             'tier'         => 'ingested',
             'configjson'   => null,
             'status'       => 0,

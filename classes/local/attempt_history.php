@@ -128,18 +128,12 @@ class attempt_history {
             }
             $class = preg_replace('/[^a-z0-9_]/', '', (string) ($entry['class'] ?? ''));
             $server = (array) ($entry['server'] ?? []);
-            $text = sprintf(
-                '[submit:%s] reconciled: %s — usage %d slot %d, %d answered before; server %s, %d answered, %d presented'
-                    . (($entry['session'] ?? '') === 'lost' ? '; session lost, signed in again' : ''),
-                $class,
-                $verdict,
-                (int) ($entry['usage'] ?? 0),
-                (int) ($entry['slot'] ?? 0),
-                (int) ($entry['answered'] ?? 0),
-                (string) ($server['state'] ?? ''),
-                (int) ($server['questionsattempted'] ?? 0),
-                (int) ($server['slots'] ?? 0)
-            );
+            // The class code in brackets stays as it is: the reason catalogue reads it. The rest in words.
+            $text = '[submit:' . $class . '] ' . get_string('history:reconciled', 'local_catquizlab', (object) [
+                'verdict' => $verdict, 'usage' => (int) ($entry['usage'] ?? 0), 'slot' => (int) ($entry['slot'] ?? 0),
+                'answered' => (int) ($entry['answered'] ?? 0), 'state' => (string) ($server['state'] ?? ''),
+                'serveranswered' => (int) ($server['questionsattempted'] ?? 0), 'presented' => (int) ($server['slots'] ?? 0),
+            ]) . (($entry['session'] ?? '') === 'lost' ? get_string('history:sessionlost', 'local_catquizlab') : '');
             $written += self::record($attemptid, self::RECOVERED, [
                 'workerid' => $detail['workerid'] ?? null,
                 'tryno' => $detail['tryno'] ?? null,

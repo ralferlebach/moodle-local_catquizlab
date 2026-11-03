@@ -1,0 +1,257 @@
+{
+ "description": "One level per case, as typed into a sweep field; ok = the server and the editor both accept it (#126).",
+ "cases": [
+  {
+   "kind": "items",
+   "line": "10/15",
+   "ok": true,
+   "why": ""
+  },
+  {
+   "kind": "items",
+   "line": "0/5",
+   "ok": true,
+   "why": "min 0"
+  },
+  {
+   "kind": "items",
+   "line": "5/5",
+   "ok": true,
+   "why": ""
+  },
+  {
+   "kind": "items",
+   "line": "15/10",
+   "ok": false,
+   "why": "min above max"
+  },
+  {
+   "kind": "items",
+   "line": "10",
+   "ok": false,
+   "why": "one number"
+  },
+  {
+   "kind": "items",
+   "line": "10/15/20",
+   "ok": false,
+   "why": "three parts"
+  },
+  {
+   "kind": "items",
+   "line": "a/b",
+   "ok": false,
+   "why": "letters"
+  },
+  {
+   "kind": "items",
+   "line": "3.0/5",
+   "ok": false,
+   "why": "not digits"
+  },
+  {
+   "kind": "items",
+   "line": "-1/5",
+   "ok": false,
+   "why": "negative"
+  },
+  {
+   "kind": "items",
+   "line": "+3/5",
+   "ok": false,
+   "why": "sign"
+  },
+  {
+   "kind": "items",
+   "line": "0/0",
+   "ok": false,
+   "why": "no item"
+  },
+  {
+   "kind": "items",
+   "line": " 10 / 15 ",
+   "ok": true,
+   "why": "spaces"
+  },
+  {
+   "kind": "items",
+   "line": "1e1/20",
+   "ok": false,
+   "why": "exponent"
+  },
+  {
+   "kind": "items",
+   "line": "10,0/15",
+   "ok": false,
+   "why": "comma decimal"
+  },
+  {
+   "kind": "se",
+   "line": "0.3/0.5",
+   "ok": true,
+   "why": ""
+  },
+  {
+   "kind": "se",
+   "line": "0,3/0,5",
+   "ok": true,
+   "why": "decimal comma"
+  },
+  {
+   "kind": "se",
+   "line": "0.5/0.3",
+   "ok": false,
+   "why": "min above max"
+  },
+  {
+   "kind": "se",
+   "line": "0/0.5",
+   "ok": false,
+   "why": "zero min"
+  },
+  {
+   "kind": "se",
+   "line": "-0.1/0.5",
+   "ok": false,
+   "why": "negative"
+  },
+  {
+   "kind": "se",
+   "line": ".3/.5",
+   "ok": true,
+   "why": "leading point"
+  },
+  {
+   "kind": "se",
+   "line": "0.3",
+   "ok": false,
+   "why": "one number"
+  },
+  {
+   "kind": "se",
+   "line": "x/0.5",
+   "ok": false,
+   "why": "letters"
+  },
+  {
+   "kind": "se",
+   "line": "1e-1/0.5",
+   "ok": true,
+   "why": "exponent"
+  },
+  {
+   "kind": "se",
+   "line": "0x1/2",
+   "ok": false,
+   "why": "hex"
+  },
+  {
+   "kind": "se",
+   "line": "Infinity/1",
+   "ok": false,
+   "why": "infinity"
+  },
+  {
+   "kind": "se",
+   "line": "0.3/",
+   "ok": false,
+   "why": "empty max"
+  },
+  {
+   "kind": "strength",
+   "line": "10",
+   "ok": true,
+   "why": "percent"
+  },
+  {
+   "kind": "strength",
+   "line": "0.5",
+   "ok": true,
+   "why": "share"
+  },
+  {
+   "kind": "strength",
+   "line": "100",
+   "ok": true,
+   "why": "all"
+  },
+  {
+   "kind": "strength",
+   "line": "0",
+   "ok": false,
+   "why": "zero"
+  },
+  {
+   "kind": "strength",
+   "line": "101",
+   "ok": false,
+   "why": "over 100"
+  },
+  {
+   "kind": "strength",
+   "line": "-5",
+   "ok": false,
+   "why": "negative"
+  },
+  {
+   "kind": "strength",
+   "line": "abc",
+   "ok": false,
+   "why": "letters"
+  },
+  {
+   "kind": "strength",
+   "line": "shift=1.0",
+   "ok": true,
+   "why": ""
+  },
+  {
+   "kind": "strength",
+   "line": "factor=0,5",
+   "ok": true,
+   "why": "decimal comma"
+  },
+  {
+   "kind": "strength",
+   "line": "sd=-0.2",
+   "ok": true,
+   "why": "negative allowed with key"
+  },
+  {
+   "kind": "strength",
+   "line": "fraction=0.3",
+   "ok": true,
+   "why": ""
+  },
+  {
+   "kind": "strength",
+   "line": "speed=1",
+   "ok": false,
+   "why": "unknown key"
+  },
+  {
+   "kind": "strength",
+   "line": "shift=x",
+   "ok": false,
+   "why": "not a number"
+  },
+  {
+   "kind": "strength",
+   "line": "shift=",
+   "ok": false,
+   "why": "empty value"
+  },
+  {
+   "kind": "strength",
+   "line": "0x10",
+   "ok": false,
+   "why": "hex"
+  },
+  {
+   "kind": "strength",
+   "line": "Infinity",
+   "ok": false,
+   "why": "infinity"
+  }
+ ]
+}

@@ -39,6 +39,8 @@ Neutralisierung) · `Engine weicht ab` · `von Bearbeitungen verletzt` ·
 | `pool_exhausted_before_min` | Design | Fragen < globales Minimum, Stopcode `noremainingquestions` / `no_eligible_item_before_minimum` |
 | `subscale_max_exceeded` | Defekt | eine Subskala (Blatt) mit mehr Fragen als ihr Maximum, wo die Strategie es nutzt |
 | `classic_not_all_items` | Defekt | klassischer Test mit weniger Fragen als der Pool |
+| `se_stop_above_target` | Defekt | Stopcode `standarderror`, End-SE über dem SE-Maximum (+ 0,0005 Rundungstoleranz), wo die Strategie den SE nutzt (seit 0.7.46) |
+| `subscale_min_undercut` | Defekt | eine bei Testende **aktive** Subskala (`progress.activescales`) mit weniger Fragen als ihr Minimum, bei einem Ende aus eigenem Kriterium (nicht Pool erschöpft, nicht globales Maximum), wo die Strategie das Subskalen-Minimum nutzt. Gestrichene oder gesperrte Skalen zählen nicht (seit 0.7.46) |
 
 Ein Defekt der Engine (Grenze überschritten) wird als Issue im Engine-Repository
 gemeldet (https://github.com/ralferlebach/moodle-local_catquiz/issues), nicht

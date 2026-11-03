@@ -336,7 +336,7 @@ class circuit_breaker {
             ]);
             attempt_history::record((int) $attempt->id, attempt_history::REQUEUED, [
                 'tryno' => (int) $attempt->tries,
-                'detail' => 'released after the circuit breaker: run resumed by an operator',
+                'detail' => get_string('history:breakerreleased', 'local_catquizlab'),
             ]);
             $released++;
         }

@@ -165,11 +165,12 @@ class result_validity {
         }
 
         // The engine's definitions, every rule for every strategy.
-        $reasons = array_values(array_unique(array_merge($reasons, engine_validity::judge_attempt(
+        $statistical = engine_validity::judge_attempt(
             $measure,
             $thresholds,
             is_numeric($finalse) ? (float) $finalse : null
-        ))));
+        );
+        $reasons = array_values(array_unique(array_merge($reasons, $statistical)));
         $uniformvalid = $reasons === [];
         $enginevalid = engine_validity::engine_attempt($measure);
         $valid = $rule === engine_validity::RULE_ENGINE ? $enginevalid === true : $uniformvalid;
@@ -205,6 +206,9 @@ class result_validity {
             'uniformvalid' => $uniformvalid,
             'enginevalid' => $enginevalid,
             'enginefinished' => $enginecomplete,
+            // The statistical rules alone (#112): SE, answered items, response pattern — by the engine's
+            // definitions, on an estimate that exists; apart from how the test ended.
+            'statisticalvalid' => $statistical === [] && !in_array(self::NO_FINAL_THETA, $reasons, true),
             'designstop' => $end['designstop'],
             'criterionstop' => $end['criterionstop'],
         ];

@@ -103,7 +103,7 @@ function local_catquizlab_render_run_report(int $runid, string $component): void
         foreach ($metrics as $metric => $value) {
             $table->data[] = [$metric, $value === null ? '—' : format_float($value, 4)];
         }
-        echo html_writer::table($table);
+        echo \local_catquizlab\output\accessible_table::render($table);
     }
 
     $scalars = report_builder::run_scalars($runid);
@@ -163,7 +163,7 @@ function local_catquizlab_render_experiment_report(int $experimentid, string $co
         }
     }
 
-    echo html_writer::table($table);
+    echo \local_catquizlab\output\accessible_table::render($table);
 
     if ($haschart) {
         $chart->set_labels(array_map('strval', $labels));

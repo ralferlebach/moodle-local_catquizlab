@@ -47,15 +47,13 @@ class question_template {
     public static function default_dichotomous(): array {
         return [
             'name'         => '{itemname} — {scalename}',
-            'questiontext' => 'Skala: {scalename} (#{scalenumber}) — Item {itemname} '
-                . '(#{itemnumber}, ID {itemid}). Parameter: Schwierigkeit b={difficulty}, '
-                . 'Trennschärfe a={discrimination}. Wählen Sie die korrekte Option.',
+            'questiontext' => get_string('question:text_single', 'local_catquizlab'),
             'single'       => true,
             'options'      => [
-                ['text' => 'Korrekte Antwort ({scalename} #{itemnumber})', 'fraction' => 1.0],
-                ['text' => 'Distraktor A ({scalename} #{itemnumber})', 'fraction' => 0.0],
-                ['text' => 'Distraktor B ({scalename} #{itemnumber})', 'fraction' => 0.0],
-                ['text' => 'Distraktor C ({scalename} #{itemnumber})', 'fraction' => 0.0],
+                ['text' => get_string('question:correct', 'local_catquizlab'), 'fraction' => 1.0],
+                ['text' => get_string('question:distractor', 'local_catquizlab', 'A'), 'fraction' => 0.0],
+                ['text' => get_string('question:distractor', 'local_catquizlab', 'B'), 'fraction' => 0.0],
+                ['text' => get_string('question:distractor', 'local_catquizlab', 'C'), 'fraction' => 0.0],
             ],
         ];
     }
@@ -75,28 +73,24 @@ class question_template {
         // categories follows the model, because a GPCM item with five
         // categories cannot be answered on a four-option question — the fifth
         // category would be unreachable and the item silently truncated.
-        $labels = [
-            0 => 'keine',
-            1 => 'teilweise',
-            2 => 'überwiegend',
-            3 => 'weitgehend',
-            4 => 'nahezu vollständig',
-        ];
+        $labels = [];
+        foreach ([0, 1, 2, 3, 4] as $k) {
+            $labels[$k] = get_string('question:level_' . $k, 'local_catquizlab');
+        }
 
         $options = [];
         for ($k = 0; $k <= $top; $k++) {
-            $label = $k === $top ? 'vollständig' : ($labels[$k] ?? ('Stufe ' . $k));
+            $label = $k === $top ? get_string('question:level_full', 'local_catquizlab')
+                : ($labels[$k] ?? get_string('question:levelplain', 'local_catquizlab', $k));
             $options[] = [
-                'text'     => 'Stufe ' . $k . ' — ' . $label . ' ({scalename} #{itemnumber})',
+                'text'     => get_string('question:leveloption', 'local_catquizlab', (object) ['k' => $k, 'label' => $label]),
                 'fraction' => $top > 0 ? round($k / $top, 7) : 0.0,
             ];
         }
 
         return [
-            'name'         => '{itemname} — {scalename} (poly)',
-            'questiontext' => 'Skala: {scalename} (#{scalenumber}) — Item {itemname} '
-                . '(#{itemnumber}, ID {itemid}). Parameter: Schwierigkeit b={difficulty}, '
-                . 'Trennschärfe a={discrimination}. Wählen Sie die zutreffende Antwortstufe.',
+            'name'         => get_string('question:name_poly', 'local_catquizlab'),
+            'questiontext' => get_string('question:text_poly', 'local_catquizlab'),
             // Shuffling is disabled on save, so the definition order is the
             // on-screen order and category k stays the k-th option.
             'single'       => true,

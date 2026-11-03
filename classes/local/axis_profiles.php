@@ -71,6 +71,24 @@ class axis_profiles {
         ];
     }
 
+    /** @var array<string, string> The built-in profiles' stable names (kept in addresses and preferences) => lang keys. */
+    public const BUILTIN_LABELS = [
+        'Ability symmetric [-4, 4]' => 'axes:profile_abilitysym',
+        'Error symmetric [-2, 2]' => 'axes:profile_errorsym',
+        'Integer test length' => 'axes:profile_testlength',
+        'Shared comparison axes' => 'axes:profile_sharedaxes',
+    ];
+
+    /**
+     * A profile's name as shown: a built-in one in the reader's language, one somebody saved as they wrote it.
+     *
+     * @param string $name The profile's stored name.
+     * @return string
+     */
+    public static function label(string $name): string {
+        return isset(self::BUILTIN_LABELS[$name]) ? get_string(self::BUILTIN_LABELS[$name], 'local_catquizlab') : $name;
+    }
+
     /**
      * The user's own profiles.
      *

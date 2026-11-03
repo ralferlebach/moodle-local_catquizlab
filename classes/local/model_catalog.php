@@ -59,49 +59,42 @@ class model_catalog {
             'family'    => self::FAMILY_DICHOTOMOUS,
             'requires'  => ['difficulty'],
             'oracle'    => '1pl',
-            'label'     => '1PL (Rasch)',
         ],
         '2pl'  => [
             'enginekey' => 'raschbirnbaum',
             'family'    => self::FAMILY_DICHOTOMOUS,
             'requires'  => ['difficulty', 'discrimination'],
             'oracle'    => '2pl',
-            'label'     => '2PL',
         ],
         '3pl'  => [
             'enginekey' => 'mixedraschbirnbaum',
             'family'    => self::FAMILY_DICHOTOMOUS,
             'requires'  => ['difficulty', 'discrimination', 'guessing'],
             'oracle'    => '3pl',
-            'label'     => '3PL',
         ],
         'pcm'  => [
             'enginekey' => 'pcm',
             'family'    => self::FAMILY_POLYTOMOUS,
             'requires'  => ['difficulty', 'steps'],
             'oracle'    => 'gpcm',
-            'label'     => 'PCM (partial credit)',
         ],
         'gpcm' => [
             'enginekey' => 'pcmgeneralized',
             'family'    => self::FAMILY_POLYTOMOUS,
             'requires'  => ['difficulty', 'discrimination', 'steps'],
             'oracle'    => 'gpcm',
-            'label'     => 'GPCM (generalised partial credit)',
         ],
         'grm'  => [
             'enginekey' => 'grm',
             'family'    => self::FAMILY_POLYTOMOUS,
             'requires'  => ['difficulty', 'steps'],
             'oracle'    => 'grm',
-            'label'     => 'GRM (graded response)',
         ],
         'ggrm' => [
             'enginekey' => 'grmgeneralized',
             'family'    => self::FAMILY_POLYTOMOUS,
             'requires'  => ['difficulty', 'discrimination', 'steps'],
             'oracle'    => 'grm',
-            'label'     => 'GGRM (generalised graded response)',
         ],
     ];
 
@@ -187,7 +180,8 @@ class model_catalog {
         if ($key === null) {
             throw new \coding_exception('Unknown IRT model: ' . $name);
         }
-        return ['key' => $key] + self::CATALOG[$key];
+        // The name a person reads is a language string (model:<key>); the rest is the catalogue.
+        return ['key' => $key, 'label' => get_string('model:' . $key, 'local_catquizlab')] + self::CATALOG[$key];
     }
 
     /**
@@ -252,8 +246,8 @@ class model_catalog {
      */
     public static function menu(): array {
         $menu = [];
-        foreach (self::CATALOG as $key => $entry) {
-            $menu[$key] = $entry['label'];
+        foreach (array_keys(self::CATALOG) as $key) {
+            $menu[$key] = get_string('model:' . $key, 'local_catquizlab');
         }
         return $menu;
     }

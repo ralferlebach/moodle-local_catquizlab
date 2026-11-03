@@ -263,4 +263,33 @@ final class result_validity_test extends \advanced_testcase {
         // A cause nobody recorded is said to be that, not guessed.
         $this->assertSame(engine_validity::UNKNOWN_NOT_RECORDED, $v['engineunknownreason']);
     }
+
+    /**
+     * The statistical rules and the end of the test, each checkable on its own (#112).
+     *
+     * A sitting ended before its minimum by the design but statistically sound; a sitting that ended as planned
+     * with an SE above the engine's maximum; one with no estimate at all.
+     *
+     * @return void
+     */
+    public function test_statistical_validity_is_apart_from_the_end(): void {
+        // Ended too early for the design, statistically fine: not valid, statistically valid, the design stop missed.
+        $v = $this->evaluate('fastest', 7, ['facts' => ['finalse' => 0.3]]);
+        $this->assertSame([false, true, false], [$v['valid'], $v['statisticalvalid'], $v['designstop']]);
+
+        // Ended at its maximum, as planned, but with an SE above the engine's maximum.
+        $v = $this->evaluate('fastest', 30, ['facts' => ['finalse' => 0.9], 'thresholds' => ['semax' => 0.5] + self::THRESHOLDS,
+            'trace' => ['stopreason' => 'reachedmaximumquestions']]);
+        $this->assertFalse($v['statisticalvalid']);
+        $this->assertTrue($v['enginefinished']);
+        $this->assertFalse($v['valid']);
+
+        // No final estimate: nothing statistical to stand on.
+        $v = $this->evaluate('fastest', 14, ['trace' => ['finaltheta' => null], 'facts' => ['finalse' => 0.3]]);
+        $this->assertFalse($v['statisticalvalid']);
+
+        // A planned end, statistically sound: everything true.
+        $v = $this->evaluate('fastest', 14, ['facts' => ['finalse' => 0.3]]);
+        $this->assertSame([true, true, true, true], [$v['valid'], $v['statisticalvalid'], $v['designstop'], $v['enginefinished']]);
+    }
 }

@@ -224,4 +224,37 @@ class run_exporter {
     protected static function extension(string $format): string {
         return $format === 'xlsx' ? 'xlsx' : ($format === 'ods' ? 'ods' : $format);
     }
+
+    /**
+     * The export files stored for a run, newest first, with their download links (#121).
+     *
+     * @param int $runid The run.
+     * @return array[] filename, size, modified, url.
+     */
+    public static function stored_files(int $runid): array {
+        $context = \context_system::instance();
+        $files = [];
+        $stored = get_file_storage()->get_area_files($context->id, 'local_catquizlab', 'export', 0, 'timemodified DESC', false);
+        foreach ($stored as $file) {
+            if (strpos($file->get_filename(), 'run-' . $runid . '-') !== 0) {
+                continue;
+            }
+            $files[] = [
+                'filename' => $file->get_filename(),
+                'size' => (int) $file->get_filesize(),
+                'modified' => (int) $file->get_timemodified(),
+                'url' => \moodle_url::make_pluginfile_url(
+                    $context->id,
+                    'local_catquizlab',
+                    'export',
+                    0,
+                    '/',
+                    $file->get_filename(),
+                    true
+                ),
+            ];
+        }
+
+        return $files;
+    }
 }

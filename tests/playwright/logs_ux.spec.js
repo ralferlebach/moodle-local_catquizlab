@@ -141,3 +141,37 @@ test('the progress page leads to the run\'s warnings and errors; text and JSON h
     expect(txt).toContain('# timezone:');
     expect(txt).not.toMatch(/(wstoken|sesskey|token)=(?!\[redacted\])[A-Za-z0-9]/);
 });
+
+test('"Copy" puts exactly the lines shown on the clipboard, without the toggles and without secrets (#131)', async({page, context}) => {
+    const id = seeded('blocked');
+    needs(!id, 'No experiment could be seeded.');
+    await context.grantPermissions(['clipboard-read', 'clipboard-write']);
+    await login(page);
+    await page.goto('/local/catquizlab/logs.php?experimentid=' + id + '&hours=0', {waitUntil: 'networkidle'});
+
+    const button = page.locator('[data-action="catquizlab-copy-log"]');
+    await expect(button).toBeVisible();
+    await button.click();
+    await expect(button).toHaveClass(/btn-success/);
+
+    const copied = await page.evaluate(() => navigator.clipboard.readText());
+    const shown = await page.evaluate(() => {
+        const log = document.querySelector('[data-region="catquizlab-log"]').cloneNode(true);
+        log.querySelectorAll('summary').forEach((el) => el.remove());
+        return log.textContent;
+    });
+    expect(copied.length, 'something was copied').toBeGreaterThan(0);
+    expect(copied).toBe(shown);
+    // One line per line on screen.
+    const lines = await page.locator('[data-region="catquizlab-log"] .catquizlab-logline').count();
+    expect(lines).toBeGreaterThan(0);
+    for (const toggle of await page.locator('[data-region="catquizlab-log"] summary').allTextContents()) {
+        if (toggle.trim() !== '') {
+            expect(copied).not.toContain(toggle.trim());
+        }
+    }
+    // Never a session key, a token or a password in what leaves the page.
+    expect(copied).not.toMatch(/sesskey=(?!\[redacted\]|\*)[A-Za-z0-9]{6,}/);
+    expect(copied).not.toMatch(/wstoken=(?!\[redacted\]|\*)[a-f0-9]{16,}/);
+});
+

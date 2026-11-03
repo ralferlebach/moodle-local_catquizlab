@@ -422,6 +422,10 @@ if ($lines === []) {
             'class' => 'border rounded p-3 small',
             'style' => 'max-height: 34rem; overflow: auto; white-space: pre;',
             'data-region' => 'catquizlab-log',
+            // Scrolled by keyboard too, and named (WCAG 2.1.1).
+            'tabindex' => '0',
+            'role' => 'region',
+            'aria-label' => get_string('logs:selection', $component),
         ]
     );
 

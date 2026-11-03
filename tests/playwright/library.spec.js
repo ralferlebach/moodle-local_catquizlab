@@ -115,3 +115,48 @@ test('no match is said with a way back; sorting by name; usable on a phone and b
     const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
     expect(overflow).toBeLessThanOrEqual(1);
 });
+
+test('the one main action follows the phase; a running experiment shows its progress in its row (#129)', async({page}) => {
+    const {execFileSync} = require('child_process');
+    const path = require('path');
+    const seed = (state) => {
+        try {
+            const out = execFileSync('php', [path.resolve(__dirname, '../../cli/seed_progress.php'), '--state=' + state],
+                {encoding: 'utf8'});
+            const match = out.match(new RegExp('^PROGRESS_' + state.toUpperCase() + '_EXPERIMENTID=(\\d+)', 'm'));
+            return match ? match[1] : '';
+        } catch (e) {
+            return '';
+        }
+    };
+    const running = seed('running');
+    const finished = seed('finished');
+    expect(running && finished, 'both experiments seeded').toBeTruthy();
+    await login(page);
+
+    const row = async(id) => {
+        await page.goto('/local/catquizlab/experiment.php?id=' + id, {waitUntil: 'networkidle'});
+        const name = await page.locator('#id_name').inputValue();
+        await page.goto(LIBRARY + '&q=' + encodeURIComponent(name), {waitUntil: 'networkidle'});
+        return page.locator('tr[data-experiment="' + id + '"]');
+    };
+
+    // Running: "View progress", to the progress page; its progress in the row.
+    let line = await row(running);
+    await expect(line.locator('[data-region="catquizlab-library-main"]')).toHaveText('View progress');
+    await expect(line.locator('[data-region="catquizlab-library-main"]'))
+        .toHaveAttribute('href', new RegExp('/local/catquizlab/runs\\.php\\?experimentid=' + running + '$'));
+    await expect(line.locator('td').first().locator('.small')).toContainText(/\d+\s*\/\s*\d+|\d+ of \d+/);
+    // One main action, not two.
+    await expect(line.locator('.btn-primary')).toHaveCount(1);
+    await line.locator('[data-region="catquizlab-library-main"]').click();
+    await page.waitForLoadState('networkidle');
+    await expect(page).toHaveURL(new RegExp('runs\\.php\\?experimentid=' + running));
+
+    // Finished: "View results".
+    line = await row(finished);
+    await expect(line.locator('[data-region="catquizlab-library-main"]')).toHaveText('View results');
+    await expect(line.locator('[data-region="catquizlab-library-main"]'))
+        .toHaveAttribute('href', new RegExp('/local/catquizlab/results\\.php\\?experimentid=' + finished + '$'));
+    await expect(line.locator('.btn-primary')).toHaveCount(1);
+});

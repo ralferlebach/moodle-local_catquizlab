@@ -175,4 +175,25 @@ final class sweep_levels_test extends \advanced_testcase {
         $this->assertSame($unsaved['runs'], $DB->count_records('local_catquizlab_run', ['experimentid' => $copyid]));
         $this->assertSame(2 * 3 * 2 * (int) $unsaved['replications'], (int) $unsaved['runs']);
     }
+
+    /**
+     * The server reads every case of the shared fixture as the editor does (#126): one rule set, two places.
+     *
+     * The same file is read by worker/test/levels_parity.test.js against amd/src/levels.js.
+     *
+     * @return void
+     */
+    public function test_the_server_and_the_editor_agree(): void {
+        $this->resetAfterTest();
+        $fixture = json_decode((string) file_get_contents(__DIR__ . '/fixtures/levels_parity.json'), true);
+        $this->assertGreaterThan(30, count($fixture['cases']));
+        foreach ($fixture['cases'] as $case) {
+            $parsed = experiment_form::parse_levels($case['line'], $case['kind']);
+            $this->assertSame(
+                $case['ok'],
+                $parsed['errors'] === [] && count($parsed['levels']) === 1,
+                $case['kind'] . ' "' . $case['line'] . '" (' . $case['why'] . ')'
+            );
+        }
+    }
 }

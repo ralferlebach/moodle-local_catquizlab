@@ -19,6 +19,11 @@ namespace local_catquizlab;
 use local_catquizlab\external\job_complete;
 use local_catquizlab\local\attempt_history;
 use local_catquizlab\local\attempt_scheduler;
+use local_catquizlab\local\circuit_breaker;
+use local_catquizlab\local\registry;
+use local_catquizlab\local\run_lifecycle;
+use local_catquizlab\local\sitting_integrity;
+use local_catquizlab\external\job_claim;
 
 /**
  * A sitting whose execution vanished while the engine kept its attempt (#133, #134).
@@ -177,5 +182,150 @@ final class orphaned_engine_attempt_test extends \advanced_testcase {
         $row = $DB->get_record('local_catquizlab_attempt', ['id' => $attemptid]);
         $this->assertNotEquals(attempt_scheduler::STATUS_QUEUED, (int) $row->status, 'not played a second time');
         $this->assertSame($engine, (int) $row->engineattemptid);
+    }
+
+    /**
+     * Questions presented in an engine attempt, each answered with one step.
+     *
+     * @param int $engine The adaptivequiz attempt.
+     * @param int[] $questions Question ids, in slot order.
+     * @return int[] The question attempts, by slot.
+     */
+    protected function present(int $engine, array $questions): array {
+        global $DB;
+
+        $usage = (int) $DB->get_field('adaptivequiz_attempt', 'uniqueid', ['id' => $engine]);
+        if ($usage === 0) {
+            $usage = (int) $DB->insert_record('question_usages', (object) ['contextid' => 1,
+                'component' => 'mod_adaptivequiz', 'preferredbehaviour' => 'deferredfeedback']);
+            $DB->set_field('adaptivequiz_attempt', 'uniqueid', $usage, ['id' => $engine]);
+        }
+        $slot = (int) $DB->count_records('question_attempts', ['questionusageid' => $usage]);
+        $ids = [];
+        foreach ($questions as $questionid) {
+            $slot++;
+            $qa = (int) $DB->insert_record('question_attempts', (object) ['questionusageid' => $usage, 'slot' => $slot,
+                'behaviour' => 'deferredfeedback', 'questionid' => $questionid, 'variant' => 1, 'maxmark' => 1,
+                'minfraction' => 0, 'maxfraction' => 1, 'flagged' => 0, 'timemodified' => time()]);
+            $this->answer($qa);
+            $ids[$slot] = $qa;
+        }
+        $DB->set_field('adaptivequiz_attempt', 'questionsattempted', $slot, ['id' => $engine]);
+
+        return $ids;
+    }
+
+    /**
+     * One answer step on a question attempt.
+     *
+     * @param int $qa The question attempt.
+     * @return void
+     */
+    protected function answer(int $qa): void {
+        global $DB;
+        $n = (int) $DB->count_records('question_attempt_steps', ['questionattemptid' => $qa]);
+        if ($n === 0) {
+            $DB->insert_record('question_attempt_steps', (object) ['questionattemptid' => $qa, 'sequencenumber' => 0,
+                'state' => 'todo', 'timecreated' => time(), 'userid' => 2]);
+            $n = 1;
+        }
+        $DB->insert_record('question_attempt_steps', (object) ['questionattemptid' => $qa, 'sequencenumber' => $n,
+            'state' => 'complete', 'timecreated' => time(), 'userid' => 2]);
+    }
+
+    /**
+     * A run paused by the circuit breaker mid-sitting, resumed: the same engine attempt goes on, every question
+     * once, every answer once, the history kept (#133).
+     *
+     * @return void
+     */
+    public function test_a_sitting_resumed_after_the_breaker_goes_on_in_its_engine_attempt(): void {
+        global $DB;
+        $this->resetAfterTest();
+        $this->setAdminUser();
+
+        [$attemptid, $engine] = $this->sitting('inprogress', time() + 300);
+        $runid = (int) $DB->get_field('local_catquizlab_attempt', 'runid', ['id' => $attemptid]);
+        $DB->set_field('local_catquizlab_run', 'status', registry::STATUS_RUNNING, ['id' => $runid]);
+        // Five questions presented and answered before the server started failing.
+        $this->present($engine, [101, 102, 103, 104, 105]);
+        $this->assertTrue(sitting_integrity::check($engine)['ok']);
+
+        // The breaker pauses the run; the worker vanishes; its lease runs out.
+        run_lifecycle::set_paused($runid, true, circuit_breaker::PAUSE_REASON . ':submit_http_5xx');
+        $DB->set_field('local_catquizlab_attempt', 'leaseexpires', time() - 5, ['id' => $attemptid]);
+        $this->assertSame(1, attempt_scheduler::reclaim_stale(null, 600));
+        $this->assertSame(attempt_scheduler::STATUS_QUEUED, (int) $DB->get_field(
+            'local_catquizlab_attempt',
+            'status',
+            ['id' => $attemptid]
+        ));
+        // Paused: nobody is handed it.
+        $this->assertFalse(job_claim::execute('worker-new')['hasjob']);
+        $before = attempt_history::of_attempt($attemptid);
+
+        // Resumed by an operator: the sitting is claimable again, its engine attempt untouched, its history kept.
+        // (The readiness check before resuming reads the provisioned CAT test, which this fixture's stand-in activity
+        // is not; it is tested in run_recovery_test. Here the activity is set aside for the resume only.)
+        $cmid = (int) $DB->get_field('local_catquizlab_run', 'testcmid', ['id' => $runid]);
+        $DB->set_field('local_catquizlab_run', 'testcmid', 0, ['id' => $runid]);
+        $this->assertTrue(circuit_breaker::reset_and_continue($runid)['ok']);
+        $DB->set_field('local_catquizlab_run', 'testcmid', $cmid, ['id' => $runid]);
+        $this->assertSame(5, (int) $DB->get_field('adaptivequiz_attempt', 'questionsattempted', ['id' => $engine]));
+        $this->assertSame(1, $DB->count_records('adaptivequiz_attempt', ['instance' => 4712]), 'no second engine attempt');
+        $after = attempt_history::of_attempt($attemptid);
+        $this->assertSame($before, array_slice($after, 0, count($before)), 'appended to, never rewritten');
+        // Its retry is due after the backoff the reaper gave it; the clock moves on to it.
+        $this->assertGreaterThan(time(), (int) $DB->get_field('local_catquizlab_attempt', 'nextruntime', ['id' => $attemptid]));
+        $DB->set_field('local_catquizlab_attempt', 'nextruntime', time() - 1, ['id' => $attemptid]);
+        $claim = job_claim::execute('worker-new');
+        $this->assertTrue($claim['hasjob'], (string) ($claim['message'] ?? ''));
+        $this->assertSame($attemptid, (int) $claim['attemptid']);
+
+        // The worker continues the same engine attempt (worker/test/resume.test.js): three more questions, finished.
+        $this->present($engine, [106, 107, 108]);
+        $DB->set_field('adaptivequiz_attempt', 'attemptstate', 'complete', ['id' => $engine]);
+        $done = job_complete::execute($attemptid, 'finished', 2000, $engine, '', '{}', 'worker-new');
+        $this->assertTrue($done['acknowledged']);
+        $row = $DB->get_record('local_catquizlab_attempt', ['id' => $attemptid]);
+        $this->assertSame($engine, (int) $row->engineattemptid);
+        $this->assertNotEquals(attempt_scheduler::STATUS_QUEUED, (int) $row->status);
+
+        // Eight questions, each presented once, each answered once.
+        $check = sitting_integrity::check($engine);
+        $this->assertSame([true, 8, 8, 8, [1, 1, 1, 1, 1, 1, 1, 1]], [$check['ok'], $check['answered'], $check['presented'],
+            $check['distinct'], $check['steps']]);
+    }
+
+    /**
+     * The check finds what a broken recovery leaves: a question answered twice, a question presented twice, an answer
+     * the engine never counted.
+     *
+     * @return void
+     */
+    public function test_the_integrity_check_finds_doubles_and_losses(): void {
+        global $DB;
+        $this->resetAfterTest();
+
+        [, $engine] = $this->sitting('inprogress', time() + 300);
+        $qas = $this->present($engine, [201, 202, 203]);
+        $this->assertTrue(sitting_integrity::check($engine)['ok']);
+
+        // The second question answered twice: a resubmission that went through.
+        $this->answer($qas[2]);
+        $this->assertSame(['answer-steps-differ'], sitting_integrity::check($engine)['problems']);
+
+        // The first question presented again in a fourth slot.
+        [, $other] = $this->sitting('inprogress', time() + 300);
+        $this->present($other, [301, 302, 301]);
+        $this->assertContains('question-presented-twice', sitting_integrity::check($other)['problems']);
+
+        // An answer the engine did not count.
+        [, $third] = $this->sitting('inprogress', time() + 300);
+        $this->present($third, [401, 402]);
+        $DB->set_field('adaptivequiz_attempt', 'questionsattempted', 1, ['id' => $third]);
+        $this->assertSame(['answered-presented-differ'], sitting_integrity::check($third)['problems']);
+
+        $this->assertSame(['no-engine-attempt'], sitting_integrity::check(0)['problems']);
     }
 }

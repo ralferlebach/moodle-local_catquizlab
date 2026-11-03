@@ -261,3 +261,30 @@ test('a staggered worker waits for its start, reporting in, and can be stopped w
     }, async() => {});
     assert.strictEqual(patient, true);
 });
+
+test('the handshake comes before the staggered wait, then "waiting" reports; a failed handshake ends the worker (#120)', async() => {
+    const {beginWork} = require('../run_attempt.js');
+    const events = [];
+    const ws = async(name, params) => {
+        events.push(params.state);
+        return {stop: false};
+    };
+    const sleep = async(ms) => events.push('sleep ' + ms);
+
+    assert.strictEqual(await beginWork(ws, 'w-7', 45000, sleep), true);
+    assert.deepStrictEqual(events.slice(0, 2), ['starting', 'waiting'], 'handshake first, before any sleep');
+    assert.ok(events.indexOf('starting') < events.findIndex((e) => String(e).startsWith('sleep')));
+    assert.strictEqual(events.filter((e) => e === 'starting').length, 1);
+    assert.strictEqual(events.filter((e) => e === 'waiting').length, 3);
+
+    // No delay: the handshake, and nothing else.
+    events.length = 0;
+    assert.strictEqual(await beginWork(ws, 'w-8', 0, sleep), true);
+    assert.deepStrictEqual(events, ['starting']);
+
+    // Moodle unreachable at the handshake: thrown, not waited out.
+    await assert.rejects(beginWork(async() => {
+        throw new Error('connect ECONNREFUSED');
+    }, 'w-9', 45000, async() => assert.fail('no wait after a failed handshake')), /ECONNREFUSED/);
+});
+

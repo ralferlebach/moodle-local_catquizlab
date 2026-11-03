@@ -342,16 +342,19 @@ class experiment_io {
     protected static function next_version_name(array $definition): string {
         global $DB;
 
-        $base = trim((string) ($definition['name'] ?? 'Experiment'));
+        $base = trim((string) ($definition['name'] ?? get_string('import:defaultname', 'local_catquizlab')));
         $version = 2;
-        while ($DB->record_exists('local_catquizlab_experiment', ['name' => $base . ' v' . $version])) {
+        $named = static fn(int $v): string => get_string('import:versionname', 'local_catquizlab', (object) [
+            'name' => $base, 'version' => $v,
+        ]);
+        while ($DB->record_exists('local_catquizlab_experiment', ['name' => $named($version)])) {
             $version++;
             if ($version > 999) {
                 break;
             }
         }
 
-        return $base . ' v' . $version;
+        return $named($version);
     }
 
     /**

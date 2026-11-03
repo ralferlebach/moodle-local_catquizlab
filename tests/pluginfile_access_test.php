@@ -79,4 +79,31 @@ final class pluginfile_access_test extends \advanced_testcase {
             true
         ));
     }
+
+    /**
+     * The files a background export wrote are listed per run with their links — no export without a way to it.
+     *
+     * @return void
+     */
+    public function test_stored_exports_are_listed_with_their_links(): void {
+        $this->resetAfterTest();
+        $this->setAdminUser();
+        /** @var \local_catquizlab_generator $generator */
+        $generator = $this->getDataGenerator()->get_plugin_generator('local_catquizlab');
+        $run = $generator->create_run();
+        $other = $generator->create_run();
+        $this->assertSame([], \local_catquizlab\local\run_exporter::stored_files((int) $run->id));
+
+        \local_catquizlab\local\run_exporter::export_to_files((int) $run->id, ['csv', 'json']);
+        \local_catquizlab\local\run_exporter::export_to_files((int) $other->id, ['csv']);
+        $files = \local_catquizlab\local\run_exporter::stored_files((int) $run->id);
+        $names = array_column($files, 'filename');
+        sort($names);
+        $this->assertSame(['run-' . $run->id . '-answermatrix.csv', 'run-' . $run->id . '-answermatrix.json'], $names);
+        foreach ($files as $file) {
+            $url = $file['url']->out(false);
+            $this->assertStringContainsString('/pluginfile.php/' . \context_system::instance()->id
+                . '/local_catquizlab/export/0/' . $file['filename'], $url);
+        }
+    }
 }

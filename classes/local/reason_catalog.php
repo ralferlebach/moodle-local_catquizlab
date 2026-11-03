@@ -390,4 +390,40 @@ class reason_catalog {
     public static function is_criterion_stop(string $code): bool {
         return in_array($code, self::CRITERION_STOPS, true);
     }
+
+    /**
+     * A reason a step was refused or stopped, in the reader's language (#hard-coded strings, 02.11.2026).
+     *
+     * The plugin's steps answer with machine codes — "setup-incomplete: …", "stage:materialise (…)", "not-held" —
+     * and those went into translated messages as they were. Known codes are said in words (reasontext:<code>,
+     * with what followed the code as {$a}); an unknown one stays as it was, so that nothing is hidden.
+     *
+     * @param string $reason The code, optionally followed by ": detail", or "stage:name (detail)".
+     * @return string
+     */
+    public static function text(string $reason): string {
+        $reason = trim($reason);
+        if ($reason === '') {
+            return '';
+        }
+        $manager = get_string_manager();
+        $component = 'local_catquizlab';
+        if (preg_match('/^stage:([a-z_]+)(?:\s*\((.*)\))?$/s', $reason, $m)) {
+            return get_string('reasontext:stage', $component, (object) [
+                'stage' => $manager->string_exists('stage:' . $m[1], $component) ? get_string('stage:' . $m[1], $component)
+                    : $m[1],
+                'detail' => isset($m[2]) && $m[2] !== '' ? self::text($m[2]) : '',
+            ]);
+        }
+        if (!preg_match('/^([a-z][a-z0-9_-]*)(?::\s*(.*)|\s*\((.*)\))?$/s', $reason, $m)) {
+            return $reason;
+        }
+        $key = 'reasontext:' . $m[1];
+        if (!$manager->string_exists($key, $component)) {
+            return $reason;
+        }
+        $detail = trim((string) (($m[2] ?? '') !== '' ? $m[2] : ($m[3] ?? '')));
+
+        return get_string($key, $component, $detail);
+    }
 }

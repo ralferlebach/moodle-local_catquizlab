@@ -20,7 +20,31 @@
  */
 
 const {test, expect} = require('@playwright/test');
+const {execFileSync} = require('child_process');
+const path = require('path');
 const {needs} = require('./support/needs');
+
+/**
+ * The six-strategy experiment (#122): from the environment, or seeded now on the installation under test.
+ *
+ * Seeded here, as the status and progress specs seed theirs, so that the test does not hang on a workflow step
+ * that may not be there — the CI run of 02.11. failed for exactly that.
+ *
+ * @returns {string} The experiment id, or '' where it could not be seeded.
+ */
+const filtersExperiment = () => {
+    if (process.env.FILTERS_EXPERIMENTID) {
+        return process.env.FILTERS_EXPERIMENTID;
+    }
+    try {
+        const out = execFileSync('php', [path.resolve(__dirname, '../../cli/seed_results.php'), '--persons=4',
+            '--strategies=all', '--label=FILTERS'], {encoding: 'utf8'});
+        const match = out.match(/^FILTERS_EXPERIMENTID=(\d+)/m);
+        return match ? match[1] : '';
+    } catch (e) {
+        return '';
+    }
+};
 
 const ADMIN = process.env.MOODLE_ADMIN || 'admin';
 const PASSWORD = process.env.MOODLE_ADMIN_PASSWORD || '';
@@ -103,8 +127,8 @@ test('a factor keeps the validity choice, and the menus work by keyboard and by 
 
 test('every strategy stays in the menu; lowestsub, fastest, classic one after another; a tab keeps the choice', async({page}) => {
     // #122: the walk the issue names, on an experiment with one run per strategy the installed engine plays.
-    const experiment = process.env.FILTERS_EXPERIMENTID || '';
-    needs(!experiment, 'FILTERS_EXPERIMENTID not set; run cli/seed_results.php --strategies=all --label=FILTERS first.');
+    const experiment = filtersExperiment();
+    needs(!experiment, 'No six-strategy experiment could be seeded (cli/seed_results.php --strategies=all --label=FILTERS).');
 
     await page.goto('/login/index.php', {waitUntil: 'networkidle'});
     await page.fill('#username', ADMIN);
@@ -136,7 +160,7 @@ test('every strategy stays in the menu; lowestsub, fastest, classic one after an
     const last = await page.locator('#catlabfilter_strategy').inputValue();
     // The results tabs (role navigation, render_tabs()) — not Moodle's administration tabs, and not the plugin's
     // process steps, whose "Results" step opens the experiment's results afresh by design.
-    const tabs = page.locator('ul.nav-tabs[role="navigation"] a.nav-link[href*="/local/catquizlab/results.php"]');
+    const tabs = page.locator('[data-region="catquizlab-results-tabs"] a.nav-link');
     const n = await tabs.count();
     expect(n).toBeGreaterThan(1);
     for (let i = 0; i < n; i++) {

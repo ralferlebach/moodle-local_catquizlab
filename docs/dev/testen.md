@@ -110,6 +110,15 @@ npm test          # node --test — reine Hilfsfunktionen
 node --check run_attempt.js
 ```
 
+Dazu `test/levels_parity.test.js` (#126): liest `amd/src/levels.js` ein und prüft
+jeden Fall aus `tests/fixtures/levels_parity.json` — dieselbe Datei prüft
+`sweep_levels_test::test_the_server_and_the_editor_agree` gegen
+`experiment_form::parse_levels`. Eine Regel, zwei Orte.
+
+Barrierefreiheit (#126, #128, #130, #131): `tests/playwright/a11y.spec.js` prüft
+mit axe-core (WCAG 2.1 A/AA) den Hauptbereich jeder Seite des Plugins; schwere
+und kritische Befunde lassen den Test scheitern, die übrigen stehen im Bericht.
+
 Abgedeckt: Argument-Parsing, URL-Bau, Frage-/Attempt-ID-Parsing, Login-
 Konvention, die Login-URL-Vorlage und die Options-Wahl (`chooseOptionIndex`:
 polytome Kategorie → Option, dichotom → korrekt/Distraktor).

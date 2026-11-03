@@ -1399,22 +1399,7 @@ async function main() {
     //
     // A failure here is fatal on purpose: a worker that cannot reach Moodle has
     // nothing to do, and one that stays up anyway holds a slot for nothing.
-    await callWs('local_catquizlab_worker_heartbeat', {
-        workerid: WORKER_ID,
-        attemptid: 0,
-        state: 'starting',
-    });
-
-    // Not all at once (#120): wait for this worker's own start time.
-    let begin = true;
-    if (START_DELAY_MS > 0) {
-        console.log(`Worker ${WORKER_ID} waits ${Math.round(START_DELAY_MS / 1000)} s for its staggered start.`);
-        begin = await waitForStart(
-            START_DELAY_MS,
-            () => callWs('local_catquizlab_worker_heartbeat', {workerid: WORKER_ID, attemptid: 0, state: 'waiting'}),
-            (ms) => new Promise((resolve) => setTimeout(resolve, ms))
-        );
-    }
+    const begin = await beginWork(callWs, WORKER_ID, START_DELAY_MS, (ms) => new Promise((resolve) => setTimeout(resolve, ms)));
 
     let played = 0;
 
@@ -1634,7 +1619,34 @@ function describeTransportError(wsfunction, url, error, elapsedms, status, who) 
     return {message: parts.join(' '), detail};
 }
 
+/**
+ * The handshake, then the staggered start (#120): "starting" at once, then "waiting" until this worker's turn.
+ *
+ * The handshake comes first, before any wait: Moodle's launcher waits for it to count a worker as started, and a
+ * worker that slept first would be counted as failed to start for as long as its delay. A failing handshake is
+ * thrown — a worker that cannot reach Moodle has nothing to do.
+ *
+ * @param {Function} ws The web service call (name, params) => Promise.
+ * @param {string} workerid This worker.
+ * @param {number} delayms Its start delay.
+ * @param {Function} sleep (ms) => Promise.
+ * @returns {Promise<boolean>} Whether to begin; false when asked to stop while waiting.
+ */
+async function beginWork(ws, workerid, delayms, sleep) {
+    await ws('local_catquizlab_worker_heartbeat', {workerid: workerid, attemptid: 0, state: 'starting'});
+    if (delayms <= 0) {
+        return true;
+    }
+    console.log(`Worker ${workerid} waits ${Math.round(delayms / 1000)} s for its staggered start.`);
+    return waitForStart(
+        delayms,
+        () => ws('local_catquizlab_worker_heartbeat', {workerid: workerid, attemptid: 0, state: 'waiting'}),
+        sleep
+    );
+}
+
 module.exports = {
+    beginWork,
     login,
     startAttempt,
     describeTransportError,

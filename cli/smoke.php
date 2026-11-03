@@ -529,23 +529,14 @@ if ($expectrecovered > 0) {
         'id, engineattemptid'
     );
     foreach ($sittings as $sitting) {
-        $usage = (int) $DB->get_field('adaptivequiz_attempt', 'uniqueid', ['id' => $sitting->engineattemptid]);
-        $answered = (int) $DB->get_field('adaptivequiz_attempt', 'questionsattempted', ['id' => $sitting->engineattemptid]);
-        $presented = $DB->get_records('question_attempts', ['questionusageid' => $usage], 'slot', 'id, questionid');
-        $distinct = count(array_unique(array_column($presented, 'questionid')));
-        $steps = [];
-        foreach ($presented as $qa) {
-            $steps[] = $DB->count_records_select(
-                'question_attempt_steps',
-                'questionattemptid = ? AND sequencenumber > 0',
-                [$qa->id]
-            );
-        }
-        $uniform = count(array_unique($steps)) <= 1;
-        step('sitting ' . $sitting->id . ': ' . $answered . ' answered, ' . count($presented) . ' presented, '
-            . $distinct . ' distinct questions, answer steps per question ' . implode('/', array_unique($steps)));
-        if ($distinct !== count($presented) || !$uniform || $answered !== count($presented)) {
-            cli_error('Sitting ' . $sitting->id . ': a question presented or answered twice, or an answer lost.');
+        // The same check the unit tests hold the recovery to (sitting_integrity, #133).
+        $check = \local_catquizlab\local\sitting_integrity::check((int) $sitting->engineattemptid);
+        step('sitting ' . $sitting->id . ': ' . $check['answered'] . ' answered, ' . $check['presented'] . ' presented, '
+            . $check['distinct'] . ' distinct questions, answer steps per question '
+            . implode('/', array_unique($check['steps'])));
+        if (!$check['ok']) {
+            cli_error('Sitting ' . $sitting->id . ': a question presented or answered twice, or an answer lost ('
+                . implode(', ', $check['problems']) . ').');
         }
     }
 }

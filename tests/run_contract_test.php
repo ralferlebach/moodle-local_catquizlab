@@ -35,9 +35,10 @@ final class run_contract_test extends \advanced_testcase {
      * @param string $strategy The strategy.
      * @param int $pool Items in the pool, alternately on subscale 11 and 12.
      * @param array[] $sittings Traces of collected sittings.
+     * @param array $budgets Budgets over the defaults (global 5–10, subscale 1–4).
      * @return int The run.
      */
-    protected function run_with(string $strategy, int $pool, array $sittings): int {
+    protected function run_with(string $strategy, int $pool, array $sittings, array $budgets = []): int {
         global $DB;
         run_contract::reset_caches();
 
@@ -45,6 +46,7 @@ final class run_contract_test extends \advanced_testcase {
         $definition['strategy'] = $strategy;
         $definition['budgets']['global'] = ['minitems' => 5, 'maxitems' => 10];
         $definition['budgets']['subscale'] = ['minitems' => 1, 'maxitems' => 4];
+        $definition['budgets'] = $budgets + $definition['budgets'];
         /** @var \local_catquizlab_generator $generator */
         $generator = $this->getDataGenerator()->get_plugin_generator('local_catquizlab');
         $run = $generator->create_run(['manifestjson' => json_encode(['config' => ['definition' => $definition]])]);
@@ -231,5 +233,72 @@ final class run_contract_test extends \advanced_testcase {
         $this->assertSame('ended_before_minimum', \local_catquizlab\local\reason_catalog::outcome('statusok', [
             'enginestatus' => 0, 'strategy' => 'allsubs', 'minitems' => 8, 'played' => 9, 'answered' => 6,
         ]));
+    }
+
+    /**
+     * A stop on the standard error above its target is a defect; at or under the target it is not (#123).
+     *
+     * Two configurations each: target 0.3 and target 0.5.
+     *
+     * @return void
+     */
+    public function test_a_standard_error_stop_above_its_target(): void {
+        $this->resetAfterTest();
+        $stop = function (float $se): array {
+            return ['finalse' => $se] + $this->trace(6, 'standarderror');
+        };
+        foreach ([[0.3, 0.42, 0.3], [0.5, 0.55, 0.49]] as [$target, $above, $within]) {
+            $runid = $this->run_with(
+                'allsubs',
+                30,
+                [$stop($above), $stop($within), ['finalse' => 0.9] + $this->trace(8)],
+                ['se' => ['min' => 0.1, 'max' => $target]]
+            );
+            $chain = run_contract::chain($runid);
+            $this->assertSame(['se_stop_above_target' => 1], $chain['violations'], 'target ' . $target);
+            $this->assertSame(run_contract::VIOLATED, array_column($chain['rows'], null, 'param')['se_max']['status']);
+            $this->assertSame('defect', run_contract::RULES['se_stop_above_target']);
+        }
+        // A stop on the maximum with a large SE breaks no SE rule: it did not stop for its SE.
+        $runid = $this->run_with('allsubs', 30, [['finalse' => 0.9] + $this->trace(8)], ['se' => ['min' => 0.1, 'max' => 0.3]]);
+        $this->assertSame([], run_contract::chain($runid)['violations']);
+    }
+
+    /**
+     * An active scale under its minimum at a criterion stop is a defect; a dropped one, or a stop on the pool or the
+     * maximum, is not (#123). Two configurations: minimum 3 and minimum 2.
+     *
+     * @return void
+     */
+    public function test_an_active_scale_under_its_minimum(): void {
+        $this->resetAfterTest();
+        // Items 1, 3, 5, 7, 9 on scale 11, item 2 on scale 12: five and one.
+        $items = [1, 3, 5, 7, 9, 2];
+        $sitting = function (array $active, string $stop = 'standarderror') use ($items): array {
+            return ['progress' => ['activescales' => $active], 'finalse' => 0.2] + $this->trace(6, $stop, $items);
+        };
+        foreach ([3, 2] as $minimum) {
+            $runid = $this->run_with('allsubs', 30, [
+                $sitting([11, 12]),
+                // Scale 12 was dropped by the engine: not held to its minimum.
+                $sitting([11]),
+                // The pool ran out: not a criterion of the test's own.
+                $sitting([11, 12], 'You ran out of questions'),
+            ], ['subscale' => ['minitems' => $minimum, 'maxitems' => 8], 'global' => ['minitems' => 5, 'maxitems' => 10]]);
+            $chain = run_contract::chain($runid);
+            $this->assertSame(['subscale_min_undercut' => 1], $chain['violations'], 'minimum ' . $minimum);
+            $this->assertSame(
+                run_contract::VIOLATED,
+                array_column($chain['rows'], null, 'param')['minquestionspersubscale']['status']
+            );
+        }
+        // Fastest has no per-subscale minimum: nothing to break.
+        $runid = $this->run_with(
+            'fastest',
+            30,
+            [$sitting([11, 12])],
+            ['subscale' => ['minitems' => 3, 'maxitems' => 8]]
+        );
+        $this->assertSame([], run_contract::chain($runid)['violations']);
     }
 }

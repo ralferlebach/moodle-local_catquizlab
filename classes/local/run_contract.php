@@ -62,7 +62,16 @@ class run_contract {
         'pool_exhausted_before_min' => 'design',
         'subscale_max_exceeded' => 'defect',
         'classic_not_all_items' => 'defect',
+        // Stopped on the standard error with a final SE above the target it stopped for (#123).
+        'se_stop_above_target' => 'defect',
+        // A scale the engine still held active at the end got fewer items than its minimum, though the test
+        // ended on a criterion of its own — not on the pool, not on the global maximum (#123). Scales the engine
+        // dropped or locked are not counted: leaving them below the minimum is what dropping means.
+        'subscale_min_undercut' => 'defect',
     ];
+
+    /** @var float Tolerance for comparing standard errors: rounding in the engine's report, not a violation. */
+    public const SE_TOLERANCE = 0.0005;
 
     /** @var string[] Engine stop codes that mean the pool had nothing left to give. */
     public const POOL_EXHAUSTED = ['noremainingquestions', 'noremainingquestionsbeforeminimum', 'no_eligible_item_before_minimum'];
@@ -147,7 +156,8 @@ class run_contract {
             (int) $options['minquestionspersubscale'],
             $provisioned['minquestionspersubscale'] ?? null,
             null,
-            !empty($na['subscale'])
+            !empty($na['subscale']),
+            $observed['violations']['subscale_min_undercut'] ?? 0
         );
         $rows[] = self::row(
             'se_min',
@@ -163,7 +173,8 @@ class run_contract {
             round((float) $options['se_max'], 4),
             $provisioned['se_max'] ?? null,
             $observed['semax'],
-            !empty($na['standarderror'])
+            !empty($na['standarderror']),
+            $observed['violations']['se_stop_above_target'] ?? 0
         );
         $rows[] = self::row(
             'includepilot',
@@ -376,6 +387,31 @@ class run_contract {
                 $rules[] = 'subscale_max_exceeded';
             }
         }
+        // Stopped for its standard error, with a standard error above the target.
+        if (
+            $code === 'standarderror' && ($limits['semax'] ?? 0) > 0
+            && isset($trace['finalse']) && is_numeric($trace['finalse'])
+            && (float) $trace['finalse'] > $limits['semax'] + self::SE_TOLERANCE
+        ) {
+            $rules[] = 'se_stop_above_target';
+        }
+        // An active scale under its minimum, where the test ended on a criterion of its own.
+        $criterionstop = $code !== '' && !in_array($code, self::POOL_EXHAUSTED, true)
+            && !($limits['maxquestions'] > 0 && $n >= $limits['maxquestions']);
+        if (($limits['minpersubscale'] ?? 0) > 0 && $criterionstop && isset($trace['progress']['activescales'])) {
+            $exposure = scale_exposure::reconstruct($trace, $runid, $map);
+            if ($exposure['source'] === scale_exposure::SOURCE_STEPS) {
+                foreach (array_map('intval', (array) $trace['progress']['activescales']) as $scaleid) {
+                    if (
+                        array_key_exists($scaleid, $exposure['direct'])
+                        && (int) $exposure['direct'][$scaleid] < $limits['minpersubscale']
+                    ) {
+                        $rules[] = 'subscale_min_undercut';
+                        break;
+                    }
+                }
+            }
+        }
 
         return $rules;
     }
@@ -425,7 +461,8 @@ class run_contract {
      * A run's effective limits, read once.
      *
      * @param int $runid The run.
-     * @return array|null usesglobal, minquestions, maxquestions, maxpersubscale, poolsize; null without a definition.
+     * @return array|null usesglobal, minquestions, maxquestions, maxpersubscale, minpersubscale, semax, poolsize;
+     *      null without a definition.
      */
     protected static function limits(int $runid): ?array {
         global $DB;
@@ -449,6 +486,11 @@ class run_contract {
             'minquestions' => (int) $options['minquestions'],
             'maxquestions' => (int) $options['maxquestions'],
             'maxpersubscale' => empty($options['na']['subscale']) ? (int) $options['maxquestionspersubscale'] : 0,
+            'minpersubscale' => empty($options['na']['subscale'])
+                && strategy_catalog::uses((string) $definition['strategy'], 'subscalemin')
+                ? (int) ($options['minquestionspersubscale'] ?? 0) : 0,
+            'semax' => empty($options['na']['standarderror']) && (float) ($options['se_max'] ?? 0) > 0
+                ? (float) $options['se_max'] : 0.0,
             'poolsize' => (int) $DB->count_records('local_catquizlab_item', ['runid' => $runid]),
         ];
     }

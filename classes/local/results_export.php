@@ -322,6 +322,8 @@ class results_export {
         // The engine's productive item count beside nitems (#123), and whether the engine gave a verdict at all
         // (#112) — each separately checkable. Appended: no column moves.
         'productiveitems', 'engineverdictavailable',
+        // The statistical rules alone, apart from the end of the test (#112). Appended: no column moves.
+        'statisticalvalid',
     ];
 
     /** @var array<int, array> Ability distribution and range by run, for this request. */
@@ -479,6 +481,7 @@ class results_export {
             $row['productiveitems'] = ($observation['productiveitems'] ?? null) === null ? ''
                 : (int) $observation['productiveitems'];
             $row['engineverdictavailable'] = $observation['enginevalid'] === null ? 0 : 1;
+            $row['statisticalvalid'] = !empty($observation['statisticalvalid']) ? 1 : 0;
             yield $row;
         }
     }
@@ -687,11 +690,10 @@ class results_export {
             'dispersion'    => $provenance['dispersion'],
             // How the intervals were computed and over which unit (#127).
             'uncertainty'   => [
-                'interval' => '95 % confidence interval of the mean, normal approximation (mean ± 1.96 · SE)',
-                'unit' => 'simulated person: a twin in a replication (results_query::unit_key)',
-                'se' => 'standard deviation of the person means / sqrt(number of people); a person with several '
-                    . 'sittings (paired across strategies, repeated measures) counts once',
-                'rmse' => 'no interval',
+                'interval' => get_string('dispersion:interval', 'local_catquizlab'),
+                'unit' => get_string('dispersion:unit', 'local_catquizlab'),
+                'se' => get_string('dispersion:se', 'local_catquizlab'),
+                'rmse' => get_string('dispersion:rmse', 'local_catquizlab'),
                 'description' => get_string('dispersion:ci95', 'local_catquizlab'),
             ],
             // Per run: the distribution of the true abilities, its parameters,

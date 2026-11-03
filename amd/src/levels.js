@@ -65,6 +65,30 @@ const toLine = (kind, level) => {
     return level.raw ? level.raw : `${level.a}/${level.b}`;
 };
 
+// A number as PHP's is_numeric() reads it, after a decimal comma became a point: the server's test, not
+// JavaScript's Number(), which also takes "0x10", "Infinity" and an empty string (worker/test/levels_parity).
+const numeric = (v) => /^[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?$/.test(String(v).trim().replace(',', '.'));
+const valueOf = (v) => Number(String(v).trim().replace(',', '.'));
+
+/**
+ * What is wrong with a disturbance strength, by the server's rules; '' when nothing.
+ *
+ * @param {object} level The fields: key, value.
+ * @returns {string}
+ */
+const strengthProblem = (level) => {
+    if (level.key !== '' && !STRENGTH_KEYS.includes(level.key)) {
+        return str('levels:unknownkeyshort', STRENGTH_KEYS.filter((k) => k !== '').join(', '));
+    }
+    if (!numeric(level.value)) {
+        return level.key === '' ? str('levels:shareshort') : str('levels:notanumbershort');
+    }
+    if (level.key === '' && (valueOf(level.value) <= 0 || valueOf(level.value) > 100)) {
+        return str('levels:shareshort');
+    }
+    return '';
+};
+
 /**
  * What is wrong with a level, by the rules the server applies; '' when nothing.
  *
@@ -73,32 +97,41 @@ const toLine = (kind, level) => {
  * @returns {string}
  */
 const problem = (kind, level) => {
-    const number = (v) => v !== '' && !isNaN(Number(String(v).replace(',', '.')));
     if (kind === 'strength') {
-        if (!number(level.value)) {
-            return str('levels:notanumbershort');
-        }
-        const value = Number(String(level.value).replace(',', '.'));
-        if (level.key === '' && (value <= 0 || value > 100)) {
-            return str('levels:shareshort');
-        }
-        return '';
+        return strengthProblem(level);
     }
-    if (level.raw || !number(level.a) || !number(level.b)) {
+    // Item budgets: whole numbers written as digits only, the server's ctype_digit().
+    const readable = kind === 'items'
+        ? (v) => /^\d+$/.test(String(v).trim())
+        : numeric;
+    if (level.raw || !readable(level.a) || !readable(level.b)) {
         return str(kind === 'items' ? 'levels:itempairshort' : 'levels:sepairshort');
     }
-    const a = Number(String(level.a).replace(',', '.'));
-    const b = Number(String(level.b).replace(',', '.'));
-    if (kind === 'items' && (!Number.isInteger(a) || !Number.isInteger(b) || a < 0)) {
-        return str('levels:itempairshort');
-    }
+    const a = valueOf(level.a);
+    const b = valueOf(level.b);
     if (a > b) {
         return str('levels:minmaxshort');
     }
     if (kind === 'se' && a <= 0) {
         return str('levels:sepositiveshort');
     }
-    return '';
+    return kind === 'items' && b < 1 ? str('levels:itemspositiveshort') : '';
+};
+
+/**
+ * What a level is, as the server compares levels for duplicates: its numbers, not its spelling.
+ *
+ * @param {string} kind items, se or strength.
+ * @param {object} level The fields.
+ * @returns {string}
+ */
+const identity = (kind, level) => {
+    const value = valueOf;
+    if (kind === 'strength') {
+        const number = value(level.value);
+        return level.key === '' ? 'fraction=' + (number > 1 ? number / 100 : number) : level.key + '=' + number;
+    }
+    return value(level.a) + '/' + value(level.b);
 };
 
 /**
@@ -158,11 +191,15 @@ const enhance = (area) => {
             message.className = 'small text-danger ml-1';
             message.setAttribute('role', 'status');
             const check = () => {
-                const why = problem(kind, level);
+                // The same level twice is refused by the server too.
+                const twice = !problem(kind, level) && levels.slice(0, index).some((other) =>
+                    !problem(kind, other) && identity(kind, other) === identity(kind, level));
+                const why = problem(kind, level) || (twice ? str('levels:duplicateshort') : '');
                 message.textContent = why;
                 row.querySelectorAll('input, select').forEach((el) => el.setAttribute('aria-invalid', why ? 'true' : 'false'));
             };
-            const label = (name) => `${str(name)} ${index + 1}`;
+            // The level's number goes into the string, so that each language places it itself.
+            const label = (name) => str(name, index + 1);
             if (kind === 'strength') {
                 const select = document.createElement('select');
                 select.className = 'custom-select custom-select-sm d-inline-block mr-1';
@@ -171,7 +208,7 @@ const enhance = (area) => {
                 STRENGTH_KEYS.forEach((key) => {
                     const option = document.createElement('option');
                     option.value = key;
-                    option.textContent = key === '' ? str('levels:sharepercent') : key;
+                    option.textContent = key === '' ? str('levels:sharepercent') : str('levels:key_' + key);
                     option.selected = key === level.key;
                     select.appendChild(option);
                 });
@@ -204,7 +241,7 @@ const enhance = (area) => {
             const remove = document.createElement('button');
             remove.type = 'button';
             remove.className = 'btn btn-sm btn-link';
-            remove.textContent = str('levels:remove');
+            remove.textContent = str('levels:removeshort');
             remove.setAttribute('aria-label', label('levels:remove'));
             remove.addEventListener('click', () => {
                 levels.splice(index, 1);

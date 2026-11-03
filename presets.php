@@ -139,7 +139,7 @@ if ($rows === []) {
         ];
     }
 
-    echo html_writer::table($table);
+    echo \local_catquizlab\output\accessible_table::render($table);
 }
 
 // Offer to lift a block out of any existing experiment.

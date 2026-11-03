@@ -499,7 +499,7 @@ class worker_registry {
             $DB->update_record('local_catquizlab_worker', (object) [
                 'id'           => $worker->id,
                 'status'       => self::STATUS_CRASHED,
-                'lasterror'    => 'worker stopped reporting',
+                'lasterror'    => get_string('history:workerstopped', 'local_catquizlab'),
                 'timemodified' => $now,
             ]);
 

@@ -214,7 +214,8 @@
                                              role="progressbar"
                                              data-region="catquizlab-run-{{runid}}-bar"
                                              style="width: {{percent}}%;"
-                                             aria-valuenow="{{percent}}" aria-valuemin="0" aria-valuemax="100"></div>
+                                             aria-valuenow="{{percent}}" aria-valuemin="0" aria-valuemax="100"
+                                             aria-label="{{#str}}progress:runbar, local_catquizlab, {{runid}}{{/str}}"></div>
                                     </div>
                                 </td>
                                 <td class="small text-right" style="width: 7rem;">
@@ -421,6 +422,12 @@
         {{! What may play, what does, and why less than configured (#124). }}
         {{#capacity}}
             <p class="mb-1" data-region="catquizlab-capacity" data-limit="{{limit}}" data-live="{{live}}" data-draining="{{draining}}">{{text.line}}</p>
+            {{#text.slots}}
+                <details class="small mb-1" data-region="catquizlab-capacity-slots">
+                    <summary>{{#str}}capacity:slotsheading, local_catquizlab{{/str}}</summary>
+                    <p class="mb-1">{{.}}</p>
+                </details>
+            {{/text.slots}}
             {{#text.why}}
                 <p class="small text-warning mb-2" data-region="catquizlab-capacity-why" role="status">{{.}}</p>
             {{/text.why}}
@@ -451,7 +458,7 @@
                     {{#log}}
                         <details class="ml-4">
                             <summary class="small">{{#str}}ops:workerlog, local_catquizlab{{/str}}</summary>
-                            <pre class="small mb-0">{{.}}</pre>
+                            <pre class="small mb-0" tabindex="0">{{.}}</pre>
                         </details>
                     {{/log}}
                 </div>

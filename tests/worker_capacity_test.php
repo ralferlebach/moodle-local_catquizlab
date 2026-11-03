@@ -19,6 +19,7 @@ namespace local_catquizlab;
 use local_catquizlab\external\job_claim;
 use local_catquizlab\external\worker_heartbeat;
 use local_catquizlab\local\attempt_history;
+use local_catquizlab\local\attempt_scheduler;
 use local_catquizlab\local\run_log;
 use local_catquizlab\local\worker_capacity;
 use local_catquizlab\local\worker_launcher;
@@ -95,6 +96,9 @@ final class worker_capacity_test extends \advanced_testcase {
         $this->assertSame([50, 60, 10, 10, 0], [$snapshot['limit'], $snapshot['live'], $snapshot['draining'],
             $snapshot['above'], $snapshot['free']]);
         $this->assertStringContainsString('10 draining', $snapshot['text']['line']);
+        // What a slot costs the web server, said beside the figures (#124).
+        $this->assertStringContainsString('MaxRequestWorkers', $snapshot['text']['slots']);
+        $this->assertStringContainsString('never raises', $snapshot['text']['slots']);
 
         // While they drain, nothing starts: 60 live against 50.
         $this->assertSame([], worker_launcher::slots_to_start(50, 50));
@@ -260,5 +264,87 @@ final class worker_capacity_test extends \advanced_testcase {
         $this->assertNotEmpty(preg_grep('/^installation capacity_changed .*"from":4,"to":2/', $texts));
         $draining = array_values(array_filter($lines, static fn(array $l): bool => str_contains($l['text'], 'workers_draining')));
         $this->assertSame(\local_catquizlab\local\log_view::WARNING, $draining[0]['severity']);
+    }
+
+    /**
+     * Draining loses no sitting and plays none twice; after a throttle the relaunch is staggered (#124, #120).
+     *
+     * Three workers each hold a sitting; the limit goes to 2. The worker above it keeps its lease and its sitting to
+     * the end — renewing works, the reaper leaves it, nobody else is handed it — and claims nothing new. While the
+     * load guard holds the limit down, no slot opens; once released, the workers that start again are planned one
+     * after another, after the one still waiting.
+     *
+     * @return void
+     */
+    public function test_draining_is_lease_safe_and_the_relaunch_is_staggered(): void {
+        global $DB;
+        $this->resetAfterTest();
+        $this->setAdminUser();
+
+        /** @var \local_catquizlab_generator $generator */
+        $generator = $this->getDataGenerator()->get_plugin_generator('local_catquizlab');
+        $run = $generator->create_run();
+        $DB->set_field('local_catquizlab_run', 'status', \local_catquizlab\local\registry::STATUS_READY, ['id' => $run->id]);
+        set_config('worker_concurrency', 3, 'local_catquizlab');
+        $this->live_workers(3);
+        $held = [];
+        for ($slot = 1; $slot <= 3; $slot++) {
+            $person = $generator->create_person(['runid' => $run->id]);
+            $held[$slot] = (int) $DB->insert_record('local_catquizlab_attempt', (object) ['runid' => $run->id,
+                'personid' => $person->id, 'status' => attempt_scheduler::STATUS_RUNNING, 'tries' => 1,
+                'leaseowner' => 'w-' . $slot, 'leaseexpires' => time() + 120,
+                'timecreated' => time(), 'timemodified' => time()]);
+        }
+        // One more sitting waits in the queue.
+        $waiting = (int) $DB->insert_record('local_catquizlab_attempt', (object) ['runid' => $run->id,
+            'personid' => $generator->create_person(['runid' => $run->id])->id, 'status' => attempt_scheduler::STATUS_QUEUED,
+            'tries' => 0, 'timecreated' => time(), 'timemodified' => time()]);
+
+        set_config('worker_concurrency', 2, 'local_catquizlab');
+        $this->assertSame(1, worker_capacity::note_change());
+
+        // The draining worker keeps its sitting: the lease renews, the reaper leaves it alone.
+        $this->assertTrue(attempt_scheduler::renew_lease('w-3', $held[3]));
+        $this->assertSame(0, attempt_scheduler::reclaim_stale(null, 600));
+        $this->assertSame('w-3', (string) $DB->get_field('local_catquizlab_attempt', 'leaseowner', ['id' => $held[3]]));
+        // It takes nothing new; the queued sitting goes to a worker below the limit, and only once.
+        $this->assertFalse(job_claim::execute('w-3')['hasjob']);
+        $claim = job_claim::execute('w-1');
+        $this->assertTrue($claim['hasjob']);
+        $this->assertSame($waiting, (int) $claim['attemptid']);
+        $this->assertFalse(job_claim::execute('w-2')['hasjob'], 'nothing is handed out twice');
+        // Every sitting has exactly one owner.
+        $owners = $DB->get_records_menu('local_catquizlab_attempt', ['runid' => $run->id], 'id', 'id, leaseowner');
+        $this->assertSame(
+            [$held[1] => 'w-1', $held[2] => 'w-2', $held[3] => 'w-3', $waiting => 'w-1'],
+            array_map('strval', $owners)
+        );
+
+        // It finishes and stops: its sitting stays its own result, no lease released into the queue.
+        worker_registry::record_stop('w-3', 'stop-requested');
+        $this->assertSame(attempt_scheduler::STATUS_RUNNING, (int) $DB->get_field(
+            'local_catquizlab_attempt',
+            'status',
+            ['id' => $held[3]]
+        ), 'a clean stop does not requeue a sitting it reported');
+        $this->assertCount(2, worker_registry::live());
+
+        // The load guard halves the limit: 2 → 1. Two live: no slot opens.
+        set_config('loadguard', json_encode(['checked' => time(), 'until' => time() + 300, 'failures' => 9,
+            'executions' => 10, 'share' => 0.5, 'causes' => []]), 'local_catquizlab');
+        $limit = worker_capacity::effective()['limit'];
+        $this->assertSame(1, $limit);
+        $this->assertSame([], worker_launcher::slots_to_start($limit, $limit));
+
+        // Released, and both stopped: the relaunch is planned after the one still waiting, the interval apart.
+        set_config('loadguard', json_encode(['checked' => time(), 'until' => 0]), 'local_catquizlab');
+        worker_registry::record_stop('w-1', 'queue-empty');
+        worker_registry::record_stop('w-2', 'queue-empty');
+        $this->assertSame([1, 2], worker_launcher::slots_to_start(2, 2));
+        worker_registry::acquire_slot(5, 'w-waiting');
+        worker_registry::plan_start('w-waiting', time() + 100);
+        $stagger = worker_launcher::start_stagger();
+        $starts = worker_launcher::plan_starts(2, $stagger, time(), worker_registry::last_planned_start());
+        $this->assertSame([time() + 100 + $stagger, time() + 100 + 2 * $stagger], $starts);
     }
 }

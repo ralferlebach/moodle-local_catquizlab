@@ -238,11 +238,13 @@ class results_page {
             );
         }
 
-        return \html_writer::tag('ul', $items, [
-            'class' => 'nav nav-tabs mb-3',
-            'role'  => 'navigation',
-            'aria-label' => get_string('results:tabs', 'local_catquizlab'),
-        ]);
+        // A list inside a navigation landmark: role="navigation" on the list itself took its list semantics away,
+        // and its items were list items of nothing (axe listitem).
+        return \html_writer::tag(
+            'nav',
+            \html_writer::tag('ul', $items, ['class' => 'nav nav-tabs mb-3']),
+            ['aria-label' => get_string('results:tabs', 'local_catquizlab'), 'data-region' => 'catquizlab-results-tabs']
+        );
     }
 
     /**
@@ -763,7 +765,7 @@ class results_page {
                 'percent' => $percent($funnel['valid'], $funnel['planned']),
             ]), ['class' => 'small', 'style' => 'cursor: pointer;'])
             . \html_writer::tag('p', get_string('population:heading', $component), ['class' => 'small text-muted mb-1 mt-2'])
-            . \html_writer::table($table),
+            . \local_catquizlab\output\accessible_table::render($table),
             ['class' => 'mb-2', 'data-region' => 'catquizlab-analysis-population', 'open' => 'open']
         )];
     }
@@ -945,7 +947,7 @@ class results_page {
             ];
         }
 
-        return \html_writer::table($table);
+        return \local_catquizlab\output\accessible_table::render($table);
     }
 
     /**
@@ -994,7 +996,7 @@ class results_page {
             ];
         }
 
-        return \html_writer::table($table);
+        return \local_catquizlab\output\accessible_table::render($table);
     }
 
     /**
@@ -1194,7 +1196,7 @@ class results_page {
             get_string('results:rawcount', $component, (object) ['shown' => count($slice), 'total' => $total]),
             'small text-muted mb-2'
         );
-        $out .= \html_writer::table($table);
+        $out .= \local_catquizlab\output\accessible_table::render($table);
 
         $baseurl = new \moodle_url('/local/catquizlab/results.php', $this->filter + [
             'tab' => 'rawdata', 'level' => $level,
@@ -1280,7 +1282,7 @@ class results_page {
                         ]), get_string('export:' . $format, $component), ['class' => 'btn btn-sm btn-outline-secondary mr-2']);
                     }
                     $links .= \html_writer::div(
-                        get_string('export:tiatnslow', $component, $minutes) . ' ' . $with,
+                        get_string('export:tiatnslow', $component, (object) ['minutes' => $minutes, 'links' => $with]),
                         'small text-muted mt-1',
                         ['data-region' => 'catquizlab-tiatn-cost']
                     );
@@ -1294,7 +1296,7 @@ class results_page {
                 $links,
             ];
         }
-        $out .= \html_writer::table($table);
+        $out .= \local_catquizlab\output\accessible_table::render($table);
 
         // What the file will say about itself, shown before it is written.
         $metadata = results_export::metadata($this->query, results_export::LEVEL_ATTEMPT);
@@ -1307,7 +1309,9 @@ class results_page {
                 array_diff_key($metadata, ['columns' => true]),
                 JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE
             )),
-            ['class' => 'bg-light p-3 small', 'style' => 'max-height:20em;overflow:auto']
+            // In the tab order and named: a scrolling box the keyboard cannot reach is a box half of it never sees.
+            ['class' => 'bg-light p-3 small', 'style' => 'max-height:20em;overflow:auto', 'tabindex' => '0',
+                'role' => 'region', 'aria-label' => get_string('export:metadata', $component)]
         );
 
         return $out;
@@ -1468,7 +1472,7 @@ class results_page {
             ]));
         }
 
-        return \html_writer::table($table)
+        return \local_catquizlab\output\accessible_table::render($table)
             . ($explain === '' ? '' : \html_writer::tag('ul', $explain, ['class' => 'small text-muted']));
     }
 
@@ -1637,7 +1641,7 @@ class results_page {
         $profiles = [];
         $available = \local_catquizlab\local\axis_profiles::all((int) ($this->filter['experimentid'] ?? 0));
         foreach (array_keys($available) as $profilename) {
-            $profiles[$profilename] = $profilename;
+            $profiles[$profilename] = \local_catquizlab\local\axis_profiles::label((string) $profilename);
         }
         $fields = \html_writer::start_div('d-flex flex-wrap align-items-end');
         $fields .= $control(get_string('axes:mode', $component), 'mode', \html_writer::select([
@@ -1853,7 +1857,7 @@ class results_page {
             $groupvalue = [
                 'twin' => (string) $observation['twinid'],
                 'strategy' => \local_catquizlab\local\strategy_catalog::display_label($strategy) . ' (' . $strategy . ')',
-                'run' => get_string('flow:runid', $component) . ' ' . (int) $observation['runid'],
+                'run' => get_string('flow:runidvalue', $component, (int) $observation['runid']),
                 'replication' => get_string('compare:replication', $component, (int) ($observation['replication'] ?? 0)),
             ][$group];
             $label = get_string('compare:tracelabel', $component, (object) [
@@ -2486,7 +2490,7 @@ class results_page {
 
         return \html_writer::tag('h3', get_string('spread:heading', $component), ['class' => 'h5 mt-4'])
             . \html_writer::tag('p', get_string('spread:explain', $component), ['class' => 'text-muted small'])
-            . \html_writer::table($table);
+            . \local_catquizlab\output\accessible_table::render($table);
     }
 
     /**
@@ -2606,7 +2610,7 @@ class results_page {
 
         return \html_writer::tag('h3', get_string('exposure:classheading', $component), ['class' => 'h5 mt-4'])
             . \html_writer::tag('p', get_string('exposure:classexplain', $component), ['class' => 'text-muted small'])
-            . \html_writer::table($table);
+            . \local_catquizlab\output\accessible_table::render($table);
     }
 
     /**
@@ -2713,7 +2717,7 @@ class results_page {
             ? \html_writer::tag('ul', $lines, ['class' => 'small mb-3', 'data-region' => 'catquizlab-flow-history'])
             : '';
 
-        return \html_writer::table($table) . $historylist;
+        return \local_catquizlab\output\accessible_table::render($table) . $historylist;
     }
 
     /**
@@ -2846,7 +2850,7 @@ class results_page {
             }
             $table->data[] = $row;
         }
-        $out .= \html_writer::table($table);
+        $out .= \local_catquizlab\output\accessible_table::render($table);
         $out .= \html_writer::div(
             $flow['final']['consistent'] ?? false
                 ? get_string('flow:tiexplained', $component)
@@ -2865,7 +2869,7 @@ class results_page {
                 [get_string('flow:lockedscales', $component), count((array) ($flow['scales']['locked'] ?? []))],
             ];
             $out .= \html_writer::tag('h3', get_string('flow:scalelifecycle', $component), ['class' => 'h5 mt-4']);
-            $out .= \html_writer::table($scales);
+            $out .= \local_catquizlab\output\accessible_table::render($scales);
         }
 
         // Every scale's state from step to step (#106) — or that it is not on record.
@@ -2885,7 +2889,7 @@ class results_page {
             }
             $out .= \html_writer::tag('h3', get_string('flow:scalecourse', $component), ['class' => 'h5 mt-4'])
                 . \html_writer::tag('p', get_string('flow:scalecourseexplain', $component), ['class' => 'text-muted small'])
-                . \html_writer::table($course);
+                . \local_catquizlab\output\accessible_table::render($course);
         } else if (!empty($flow['scales']['active']) || !empty($flow['scales']['dropped'])) {
             $out .= \html_writer::div(
                 get_string('flow:scalestatesnotrecorded', $component),
@@ -3043,7 +3047,7 @@ class results_page {
             return \html_writer::div(get_string('results:nodeltas', $component), 'alert alert-info');
         }
 
-        return \html_writer::table($table)
+        return \local_catquizlab\output\accessible_table::render($table)
             . \html_writer::tag('p', get_string('results:deltalegend', $component), ['class' => 'small text-muted']);
     }
 
@@ -3094,7 +3098,7 @@ class results_page {
             ];
         }
 
-        return $chart->render() . \html_writer::table($table);
+        return $chart->render() . \local_catquizlab\output\accessible_table::render($table);
     }
 
     /**
@@ -3456,7 +3460,10 @@ class results_page {
                         $basename,
                         get_string('mode:row_unpaired', $component),
                         $comparison['unpaired'],
-                        (string) $comparison['unpaired']['scales']
+                        $this->format_fraction(
+                            (int) $comparison['unpaired']['scales'],
+                            (int) ($comparison['unpaired']['withitems'] ?? 0)
+                        )
                     );
                     continue;
                 }
@@ -3467,7 +3474,7 @@ class results_page {
                     $basename,
                     $pairs,
                     $comparison['mode'],
-                    (string) $comparison['mode']['scales']
+                    $this->format_fraction((int) $comparison['mode']['scales'], (int) ($comparison['pairwithitems'] ?? 0))
                 );
                 $table->data[] = $line(
                     $name,
@@ -3475,12 +3482,15 @@ class results_page {
                     $basename,
                     $pairs,
                     $comparison['baseline'],
-                    (string) $comparison['baseline']['scales']
+                    $this->format_fraction(
+                        (int) $comparison['baseline']['scales'],
+                        (int) ($comparison['baseline']['withitems'] ?? 0)
+                    )
                 );
             }
         }
 
-        return \html_writer::table($table);
+        return \local_catquizlab\output\accessible_table::render($table);
     }
 
     /**
@@ -3494,6 +3504,8 @@ class results_page {
         $table = new \html_table();
         $table->attributes['class'] = 'generaltable table-sm';
         $table->attributes['data-region'] = 'catquizlab-mode-detail';
+        $table->caption = get_string('unit:scaleresults', $component);
+        $table->attributes['data-unit'] = 'scaleresult';
         $table->head = [
             '',
             get_string('mode:col_sittings', $component),
@@ -3515,7 +3527,9 @@ class results_page {
             $table->data[] = [
                 s($label),
                 $e['sittings'],
-                $e['scales'],
+                // The n of N beside every metric of the row (#114): the scale results it stands on.
+                isset($e['withitems']) && (int) $e['withitems'] > 0
+                    ? $this->format_fraction((int) $e['scales'], (int) $e['withitems']) : $e['scales'],
                 $this->format_number($e['bias']),
                 $this->format_number($e['rmse']),
                 $this->format_number($e['mae']),
@@ -3534,7 +3548,7 @@ class results_page {
             ];
         }
 
-        return \html_writer::table($table);
+        return \local_catquizlab\output\accessible_table::render($table);
     }
 
     /**
@@ -3604,6 +3618,10 @@ class results_page {
 
         $table = new \html_table();
         $table->attributes['class'] = 'generaltable table-sm';
+        // What one n is, and that the units are not independent (#115).
+        $table->caption = get_string('unit:scaleresults', $component);
+        $table->captionhide = false;
+        $table->attributes['data-unit'] = 'scaleresult';
         $table->head = [
             $level === 'category'
                 ? get_string('form:domains', $component)
@@ -3630,7 +3648,7 @@ class results_page {
             ];
         }
 
-        return \html_writer::table($table);
+        return \local_catquizlab\output\accessible_table::render($table);
     }
 
     /**
@@ -3775,7 +3793,7 @@ class results_page {
             ];
         }
 
-        return \html_writer::table($table);
+        return \local_catquizlab\output\accessible_table::render($table);
     }
 
     /**
@@ -3841,7 +3859,7 @@ class results_page {
             ];
         }
 
-        return \html_writer::table($table);
+        return \local_catquizlab\output\accessible_table::render($table);
     }
 
     /**
@@ -3898,7 +3916,7 @@ class results_page {
         $chart->set_points($points)
             ->set_description(get_string('chart:pointisitem', $component));
 
-        return \html_writer::table($table) . $chart->render();
+        return \local_catquizlab\output\accessible_table::render($table) . $chart->render();
     }
 
     /**

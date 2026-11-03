@@ -458,7 +458,9 @@ class status_report {
         $parts = [];
         foreach (['blocked', 'notdue', 'paused'] as $kind) {
             if ($breakdown[$kind] > 0) {
-                $parts[] = get_string('queue:' . $kind, $component) . ' ' . $breakdown[$kind];
+                $parts[] = get_string('queue:countline', $component, (object) [
+                    'label' => get_string('queue:' . $kind, $component), 'count' => $breakdown[$kind],
+                ]);
             }
         }
 

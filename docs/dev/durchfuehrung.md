@@ -123,9 +123,12 @@ run_exporter::export_to_files($runid, ['csv', 'json']);
 run_exporter::export_dataset('metrics', 'experiment', $experimentid, ['csv', 'xlsx']);
 ```
 
-Off-request über `\local_catquizlab\task\export_run::queue($runid, $formats)`.
+Off-request über `\local_catquizlab\task\export_run::queue($runid, $formats)` —
+oder in der Oberfläche: Fortschritt ▸ Lauf ▸ „Antwortmatrix als Dateien schreiben
+(CSV, JSON)“; die fertigen Dateien stehen dort als Links (seit 0.7.46).
 Die Dateien liegen im System-Kontext (Dateibereich `export`) und werden über
-`local_catquizlab_pluginfile` ausgeliefert (Fähigkeit `local/catquizlab:view`).
+`local_catquizlab_pluginfile` ausgeliefert (Fähigkeiten `local/catquizlab:view`
+**und** `local/catquizlab:export`, seit 0.7.45).
 
 ## 6. Optional: Hub-Modus (instanzübergreifend)
 

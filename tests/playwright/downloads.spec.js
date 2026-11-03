@@ -189,6 +189,25 @@ test('the logs and a run\'s debug artefacts download', async({page}) => {
     for (let i = 0; i < n; i++) {
         check(await download(page, zips.nth(i)));
     }
+
+    // The run's stored export files (#121): written in the background on request, then listed and downloadable.
+    await Promise.all([
+        page.waitForNavigation({waitUntil: 'networkidle'}),
+        page.locator('form:has(input[name="action"][value="queueexport"]) button[type="submit"]').click(),
+    ]);
+    // What cron does next, done now: the queued task, run where Moodle keeps its command-line scripts.
+    const {execFileSync} = require('child_process');
+    const path = require('path');
+    const adhoc = [path.resolve(__dirname, '../../../../admin/cli/adhoc_task.php'),
+        path.resolve(__dirname, '../../../../../admin/cli/adhoc_task.php')].find((f) => fs.existsSync(f));
+    expect(adhoc, 'admin/cli/adhoc_task.php found').toBeTruthy();
+    execFileSync('php', [adhoc, '--execute', '--classname=\\local_catquizlab\\task\\export_run'], {encoding: 'utf8'});
+    await page.goto('/local/catquizlab/runs.php?runid=' + RUN, {waitUntil: 'networkidle'});
+    const stored = page.locator('[data-region="catquizlab-runexport-files"] a');
+    await expect(stored).toHaveCount(2);
+    for (let i = 0; i < 2; i++) {
+        check(await download(page, stored.nth(i)), {minrows: 0});
+    }
 });
 
 test('downloads refuse cleanly: no session key, an unknown experiment, a user without rights', async({page, browser}) => {

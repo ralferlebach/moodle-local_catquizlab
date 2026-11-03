@@ -251,7 +251,7 @@ class scale_inventory {
         }
 
         run_log::record($runid, run_log::RESET, [
-            'reason' => 'scale duplicates cleaned',
+            'reason' => get_string('history:scaleduplicates', 'local_catquizlab'),
             'generations' => $removed['generations'],
         ]);
 

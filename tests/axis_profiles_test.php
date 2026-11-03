@@ -119,6 +119,11 @@ final class axis_profiles_test extends \advanced_testcase {
 
         $builtin = axis_profiles::builtin();
         $expected = ['Ability symmetric [-4, 4]', 'Error symmetric [-2, 2]', 'Integer test length', 'Shared comparison axes'];
+        // Shown in the reader's language; the stored names stay what addresses and preferences hold.
+        foreach ($expected as $name) {
+            $this->assertSame(get_string(axis_profiles::BUILTIN_LABELS[$name], 'local_catquizlab'), axis_profiles::label($name));
+        }
+        $this->assertSame('My own', axis_profiles::label('My own'));
         foreach ($expected as $name) {
             $this->assertArrayHasKey($name, $builtin);
         }

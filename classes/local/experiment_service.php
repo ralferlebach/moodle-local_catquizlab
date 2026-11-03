@@ -249,7 +249,7 @@ class experiment_service {
 
         $source = $DB->get_record('local_catquizlab_experiment', ['id' => $id], '*', MUST_EXIST);
         $definition = json_decode((string) $source->configjson, true) ?: [];
-        $definition['name'] = $name ?? ($source->name . ' ' . get_string('experiment:copysuffix', 'local_catquizlab'));
+        $definition['name'] = $name ?? get_string('experiment:copyname', 'local_catquizlab', $source->name);
 
         return (int) self::save($definition)['id'];
     }

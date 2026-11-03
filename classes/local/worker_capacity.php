@@ -337,12 +337,14 @@ class worker_capacity {
                 'failures' => $guard['failures'], 'executions' => $guard['executions'],
                 'share' => (int) round($guard['share'] * 100), 'causes' => implode(', ', array_keys($guard['causes'])),
                 'until' => userdate($guard['until'], get_string('strftimetime', 'langconfig')),
+                'minutes' => (int) round(self::guard_thresholds()['window'] / 60),
             ]);
         }
         if ($counts['above'] > 0) {
             $why = trim($why . ' ' . get_string('capacity:above', $component, $counts['above']));
         }
 
-        return ['line' => $line, 'why' => $why];
+        // What a slot costs the web server (#124): said beside the figures, every time, not only when it hurts.
+        return ['line' => $line, 'why' => $why, 'slots' => get_string('capacity:slotsexplain', $component)];
     }
 }
