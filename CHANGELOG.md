@@ -6,6 +6,21 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.7.51] — 2026-11-09 — The library test follows the background delete
+
+No database change, no change to the plugin's behaviour.
+
+- `tests/playwright/library.spec.js`, "create, find, open, compare, copy and delete": failed in CI on 0.7.49
+  (47 of 48 green). The test still expected the experiment to be gone straight after confirming, but since
+  0.7.49 deleting runs as an adhoc task. 0.7.50 already checked the "deleting" state; 0.7.51 completes the path:
+  after the confirmation the row shows "deleting" and offers no second delete, then the test runs the queued
+  `delete_experiment` task through `admin/cli/adhoc_task.php` (as `downloads.spec.js` does for the export task),
+  and afterwards the experiment is gone and its copy remains.
+- The test leaves the library page before running the task: the page reloads itself when its rows change
+  (`livestatus`), and that reload cut across the next navigation.
+
+---
+
 ## [0.7.50] — 2026-11-09 — Deleting that works and leaves nothing behind; chart labels; the open checks
 
 Database change (version 2026110902): two columns on `local_catquizlab_experiment`, `timedeleting` and

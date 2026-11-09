@@ -91,6 +91,22 @@ test('create, find, open, compare, copy and delete an experiment from the librar
     });
     await expect(gone).toHaveAttribute('data-phase', 'deleting');
     await expect(gone.locator('[data-region="catquizlab-library-delete"]')).toHaveCount(0);
+
+    // What cron does next, done now: the queued delete task. Then the experiment is gone and its copy stays.
+    // The library reloads itself when its rows change (livestatus); leave it first, so that reload does not
+    // cut across the navigation below.
+    await page.goto('about:blank');
+    const {execFileSync} = require('child_process');
+    const fs = require('fs');
+    const path = require('path');
+    const adhoc = [path.resolve(__dirname, '../../../../admin/cli/adhoc_task.php'),
+        path.resolve(__dirname, '../../../../../admin/cli/adhoc_task.php')].find((f) => fs.existsSync(f));
+    expect(adhoc, 'admin/cli/adhoc_task.php found').toBeTruthy();
+    execFileSync('php', [adhoc, '--execute', '--classname=\\local_catquizlab\\task\\delete_experiment'], {encoding: 'utf8'});
+    await page.goto(LIBRARY + '&q=' + encodeURIComponent(name), {waitUntil: 'networkidle'});
+    await expect(gone).toHaveCount(0);
+    const left = await page.locator('[data-region="catquizlab-library"] tbody tr th').allTextContents();
+    expect(left.length, 'the copy is still there').toBeGreaterThanOrEqual(1);
 });
 
 test('a wrong name keeps the confirmation page and says why (0.7.50)', async({page}) => {
