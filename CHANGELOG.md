@@ -6,6 +6,95 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.7.50] — 2026-11-09 — Deleting that works and leaves nothing behind; chart labels; the open checks
+
+Database change (version 2026110902): two columns on `local_catquizlab_experiment`, `timedeleting` and
+`deleteerror`.
+
+### Deleting: the typed name
+
+Reported the same day on the target system with 0.7.49: deleting a freshly created copy did nothing. The page
+said "The name did not match, so nothing was deleted", although the name had been typed as shown.
+
+- The check compared the typed text byte for byte with the shown name. A doubled or protected space in the
+  stored name is invisible on the page, and so is a filter that changes the shown name. Either one refused the
+  correct name.
+- New `purger::name_confirms()` compares as a person reads:
+  - whitespace of any kind and length counts as one space, and invisible characters do not count;
+  - tags and entities count as the text they show, and case does not count;
+  - both the stored and the shown name confirm.
+- A wrong name keeps the confirmation page open with the reason. It used to send the person back to the list.
+  The string `purge:namemismatch` was replaced by `purge:namemismatchretry`.
+
+### Deleting: a state of the experiment, not of the task queue
+
+- On confirmation the experiment gets `timedeleting`. The library reads "Being deleted" from that, and no
+  longer only from the presence of the background task. It also says since when, and that the task runs with
+  cron.
+- A failure in the delete task is stored in `deleteerror`, and Moodle retries the task. The list shows the
+  error ("The last attempt failed: … Moodle tries again automatically").
+- If the task is gone (given up after its retries, or removed by "kill tasks") while the experiment still
+  exists, the list says "Deleting failed" with the reason and offers **Delete again…**.
+- An experiment being deleted cannot go back into the execution queue (`being-deleted`).
+- `experiment_stop::stop()` rolls back its own transaction on an error, so a caller recording the failure does
+  not write into a transaction that is about to be discarded.
+
+### Deleting: nothing left pointing at a deleted run
+
+Deleting a run removed only five of the lab's tables. Left behind were:
+
+- the history of every sitting (`attemptlog`), the twin claims, the pool variants, the export records and the
+  transfer log of the run;
+- the run's stored export files;
+- the experiment's own pool definitions, export records and execution-queue entries.
+
+One list (`purger::RUN_TABLES`, `EXPERIMENT_TABLES`) now drives the preview and the delete, so the
+confirmation names these too. The diagnostic log (`local_catquizlab_debug`) is kept on purpose: it has its own
+retention period. The summary no longer says "1 run(s) … 1 run".
+
+### Setup: the scale cache is no longer thrown away per item
+
+0.7.48 reported that the engine reads its whole scale table for every item. That was the lab's doing:
+`cat_item_provisioner` purged the engine's scale cache after every item, and the next item's check for
+related scales (`get_all_catscales()`) read the table again. Per item it now purges only what an item changes:
+the item caches (`changesintestitems`) and the attempt store. The scale cache is still purged where it was
+purged before, once after the scales are made and once before the test.
+
+Measured locally with 160 items: materialisation went from 5,605 to 5,127 queries. The time saved grows with
+the size of the scale table, which on the target system holds the scales of every experiment.
+
+### Charts
+
+- In the comparison of a mode with its baseline, the label of the diagonal carried the whole reading aid. That
+  label was wider than the drawing, so it lost its beginning and looked like a heading centred and cut off on
+  the left. The diagonal now says `y = x`, and the reading aid is a note beneath the plot.
+- Generally, `scatter_chart::text()` keeps every label inside the drawing. A label that would leave it is moved
+  back. One wider than the drawing is shortened, with its full text as a tooltip.
+- The German `Y = x` / `Y = 0` became `y = x` / `y = 0`.
+
+### Worker: what became of a lost sitting
+
+- The heartbeat now answers `leasefate` alongside `leaselost`: `requeued`, `taken`, `closed` or `gone`.
+- The worker's log line says which one it was. It had always said "went back to the queue", which was wrong
+  after a stop.
+
+### Tests added for open review points
+
+- `provisioning_readback_test` (#123): nine configurations are set up through the orchestrator against the
+  installed CAT engine, and the engine's own settings are read back with `provisioning_check::compare()` and
+  `run_contract::chain()`. The configurations are three strategies, two global budgets, two subscale budgets
+  and two SE targets.
+- `mode_detection_test` (#144): the strength mode beside "all sub" and the classical test, and the relevant mode
+  against the classical test alone. Before, the fixture covered deficits only.
+- `experiment_stop_test`: the deleting state, the recorded failure, the vanished task, and that no row is left
+  pointing at a deleted experiment. `purger_test`: the name check. `axis_scale_test`: labels stay inside the
+  drawing. `run_recovery_test`: the lease fates.
+- Playwright:
+  - `library.spec.js` expects the background delete ("Being deleted", no second delete link) instead of the
+    row disappearing at once, which 0.7.49 had made wrong;
+  - a wrong name keeps the confirmation page;
+  - `experiment_form.spec.js`: the runs the preview announces are the runs created (#126).
+
 ## [0.7.49] — 2026-11-09 — Stop an experiment, completely and now
 
 No database change (version 2026110901).

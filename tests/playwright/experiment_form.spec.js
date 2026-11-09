@@ -177,3 +177,40 @@ test('the preview computes from the form without saving; saving and creating run
     await page.goto('/local/catquizlab/index.php', {waitUntil: 'networkidle'});
     await expect(page.locator('body')).not.toContainText(name);
 });
+
+test('the runs the preview announces are the runs that are created (#126, 0.7.50)', async({page}) => {
+    needs(!PASSWORD, 'MOODLE_ADMIN_PASSWORD not set.');
+
+    await page.goto('/login/index.php', {waitUntil: 'networkidle'});
+    await page.fill('#username', ADMIN);
+    await page.fill('#password', PASSWORD);
+    await page.click('#loginbtn');
+    await page.waitForLoadState('networkidle');
+    await page.goto('/local/catquizlab/experiment.php', {waitUntil: 'networkidle'});
+
+    // A 2-level sweep of the global budget, entered in the form.
+    const name = 'Preview equals runs ' + Date.now();
+    await page.fill('#id_name', name);
+    await page.locator('#id_sweepmore .ftoggler a, #id_sweepmore legend a').first().click();
+    const budgets = page.locator('[data-region="catquizlab-levels-sweepglobalbudgets"]');
+    for (const [min, max] of [['2', '4'], ['3', '6']]) {
+        await budgets.getByRole('button', {name: 'Add level'}).click();
+        await budgets.locator('li').last().locator('input').nth(0).fill(min);
+        await budgets.locator('li').last().locator('input').nth(1).fill(max);
+    }
+    await page.click('#id_previewbutton');
+    await page.waitForLoadState('networkidle');
+    const card = page.locator('.card', {hasText: 'Sweep preview'});
+    const announced = Number(await card.locator('li', {hasText: 'Resulting runs'}).locator('strong').innerText());
+    expect(announced).toBeGreaterThanOrEqual(2);
+
+    // Saved and created in one step, as the form offers it.
+    await page.click('#id_saveandsweep');
+    await page.waitForLoadState('networkidle');
+    await expect(page.locator('body')).toContainText(new RegExp(`${announced} run`));
+
+    // The library says the same of the stored experiment.
+    await page.goto('/local/catquizlab/index.php?tab=experiments&q=' + encodeURIComponent(name), {waitUntil: 'networkidle'});
+    const row = page.locator('[data-region="catquizlab-library"] tbody tr', {hasText: name});
+    await expect(row).toContainText(new RegExp(`${announced} run\\(s\\)`));
+});

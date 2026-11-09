@@ -150,6 +150,16 @@ let currentAttemptId = 0;
 // The sitting whose lease the server says this worker has lost (#133), or 0.
 let leaseLost = 0;
 
+// What became of a sitting whose lease was lost, as the heartbeat says (0.7.50). The log line said "went back to
+// the queue" for all of them; a sitting closed by a stop did not.
+let leaseFate = '';
+const LEASE_FATES = {
+    requeued: 'its lease expired and it went back to the queue',
+    taken: 'its lease expired and another worker holds it now',
+    closed: 'it was closed on the server (the experiment or run was stopped, or the sitting failed)',
+    gone: 'it was deleted on the server',
+};
+
 /**
  * Claim the next queued attempt, or null when the queue is empty.
  *
@@ -218,6 +228,7 @@ async function playAttempt(browser, job) {
     const reconciliations = [];
     currentAttemptId = job.attemptid;
     leaseLost = 0;
+    leaseFate = '';
 
     try {
         await login(page, job.userid, job.username, recorder);
@@ -234,9 +245,9 @@ async function playAttempt(browser, job) {
         let finishedOnServer = null;
         while (state === nav.STATE.QUESTION && guard++ < 1000) {
             if (leaseLost === job.attemptid) {
-                throw new Error(`[lease:lost] The server reports that the lease of sitting ${job.attemptid} has expired `
-                    + `and the sitting went back to the queue; stopped after ${answeredCount} answer(s) rather than `
-                    + 'answer into an attempt another execution may now hold.');
+                throw new Error(`[lease:lost] The server reports that sitting ${job.attemptid} is no longer this `
+                    + `worker's: ${LEASE_FATES[leaseFate] || LEASE_FATES.requeued}; stopped after ${answeredCount} `
+                    + 'answer(s) rather than answer into an attempt that is not this execution\'s any more.');
             }
             const {qubaid, slot} = await nav.withContextRetry(page, () => currentQuestionRef(page), 'read question', recorder);
             const decision = await callWs('local_catquizlab_oracle_answer', {
@@ -1243,6 +1254,7 @@ function startHeartbeat(attemptId, state) {
             // into one attempt; the answer loop stops before its next answer.
             if (reply && reply.leaselost && attemptId > 0 && attemptId === currentAttemptId) {
                 leaseLost = attemptId;
+                leaseFate = reply.leasefate || '';
             }
         } catch (error) {
             // A missed heartbeat is not worth abandoning an attempt that is

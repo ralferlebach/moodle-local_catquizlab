@@ -89,6 +89,43 @@ final class axis_scale_test extends \advanced_testcase {
     }
 
     /**
+     * No label runs out of the drawing (0.7.50): a long label of the diagonal had lost its beginning.
+     *
+     * @return void
+     */
+    public function test_labels_stay_inside_the_drawing(): void {
+        $long = str_repeat('auf der Linie irren beide Modi gleich ', 3);
+        $chart = new scatter_chart('t', 'x', 'y');
+        $chart->set_points([['x' => -1.2, 'y' => -0.9], ['x' => 2.1, 'y' => 2.6]])
+            ->add_identity_line('y = x — ' . $long)
+            ->add_horizontal_line(0.0, 'y = 0 ' . $long);
+        $svg = $chart->render();
+
+        $this->assertSame(1, preg_match('/viewBox="0 0 (\d+) \d+"/', $svg, $box));
+        $width = (float) $box[1];
+        preg_match_all(
+            '/<text x="([-\d.]+)"[^>]*text-anchor="(start|middle|end)"[^>]*>(.*?)<\/text>/u',
+            $svg,
+            $labels,
+            PREG_SET_ORDER
+        );
+        $this->assertNotEmpty($labels);
+        foreach ($labels as [, $x, $anchor, $inner]) {
+            $content = html_entity_decode(strip_tags(preg_replace('/<title>.*?<\/title>/u', '', $inner)));
+            $w = \core_text::strlen($content) * 0.6 * 11;
+            $left = ['start' => (float) $x, 'middle' => (float) $x - $w / 2, 'end' => (float) $x - $w][$anchor];
+            $this->assertGreaterThanOrEqual(0.0, $left, $content);
+            $this->assertLessThanOrEqual($width, $left + $w, $content);
+        }
+        // Shortened, not lost: the whole label is the tooltip.
+        $this->assertStringContainsString('<title>' . s('y = x — ' . $long) . '</title>', $svg);
+        // A short label stays where it was put: at the upper end of the diagonal, anchored at its end.
+        $short = (new scatter_chart('t', 'x', 'y'))->set_points([['x' => -1.2, 'y' => -0.9], ['x' => 2.1, 'y' => 2.6]])
+            ->add_identity_line('y = x')->render();
+        $this->assertMatchesRegularExpression('/text-anchor="end" font-size="11" fill="#c0392b">y = x<\/text>/', $short);
+    }
+
+    /**
      * A trajectory is joined, its band shaded, its points labelled, its basis named.
      *
      * @return void

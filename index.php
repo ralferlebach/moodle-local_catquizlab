@@ -106,14 +106,29 @@ usort($listed, static function (array $a, array $b) use ($sort, $library, $phase
     return $b['timemodified'] <=> $a['timemodified'];
 });
 $experimentrows = [];
-// Being deleted in the background (0.7.49): said as such, and not offered for deleting again.
-$deleting = array_flip(\local_catquizlab\task\delete_experiment::pending());
+// Being deleted in the background (0.7.49): said as such, and not offered for deleting again. The experiment
+// keeps that state itself (0.7.50); a delete whose task failed says why, one whose task is gone offers it again.
+$deleting = \local_catquizlab\task\delete_experiment::states();
 foreach ($listed as $row) {
     $editurl = new moodle_url('/local/catquizlab/experiment.php', ['id' => $row['id']]);
     $state = $library[$row['id']];
-    if (isset($deleting[$row['id']])) {
-        $state = ['phase' => 'deleting', 'label' => get_string('status:phasedeleting', $component), 'tone' => 'warn',
-            'total' => 0] + $state;
+    $statedetail = '';
+    $deletestate = $deleting[$row['id']] ?? null;
+    if ($deletestate !== null) {
+        $since = $deletestate['since'] > 0 ? userdate($deletestate['since'], get_string('strftimetime', 'langconfig')) : '';
+        if ($deletestate['pending']) {
+            $state = ['phase' => 'deleting', 'label' => get_string('status:phasedeleting', $component), 'tone' => 'warn',
+                'total' => 0] + $state;
+            $statedetail = $deletestate['error'] !== ''
+                ? get_string('delete:retrying', $component, $deletestate['error'])
+                : ($since !== '' ? get_string('delete:since', $component, $since) : '');
+        } else {
+            $state = ['phase' => 'deletefailed', 'label' => get_string('status:phasedeletefailed', $component),
+                'tone' => 'problem', 'total' => 0] + $state;
+            $statedetail = $deletestate['error'] !== ''
+                ? get_string('delete:failed', $component, $deletestate['error'])
+                : get_string('delete:lost', $component);
+        }
     }
 
     // The one main action, by where the experiment stands.
@@ -163,7 +178,9 @@ foreach ($listed as $row) {
         'more'         => $more,
         // Deleting outright, apart from everything that keeps the experiment; a
         // page that shows what goes and asks for the name, then a POST (#129).
-        'candelete'    => $canpurge && !isset($deleting[$row['id']]),
+        'candelete'    => $canpurge && empty($deletestate['pending']),
+        'deletelabel'  => $deletestate !== null ? get_string('delete:again', $component) : '',
+        'statedetail'  => $statedetail,
         'deleteurl'    => (new moodle_url('/local/catquizlab/experiment.php', [
             'id' => $row['id'], 'action' => 'delete', 'sesskey' => sesskey(),
         ]))->out(false),

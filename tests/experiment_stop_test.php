@@ -241,6 +241,7 @@ final class experiment_stop_test extends \advanced_testcase {
         // and it is asked to stop (it exits after reporting).
         $reply = \local_catquizlab\external\worker_heartbeat::execute('w2', $sitting, 'working');
         $this->assertTrue($reply['leaselost']);
+        $this->assertSame('closed', $reply['leasefate'], 'its log says the sitting was closed, not requeued');
         $this->assertTrue($reply['stop']);
 
         // What it reports afterwards is recorded as late and not applied: the sitting stays closed.
@@ -445,5 +446,115 @@ final class experiment_stop_test extends \advanced_testcase {
         $this->assertFalse($DB->record_exists('local_catquizlab_experiment', ['id' => $e]));
         $this->assertFalse($DB->record_exists('local_catquizlab_run', ['id' => $runid]));
         $this->assertSame([], \local_catquizlab\task\delete_experiment::pending());
+    }
+
+    /**
+     * The experiment says it is being deleted, and a delete whose task failed or vanished says so (0.7.50).
+     *
+     * @return void
+     */
+    public function test_the_experiment_keeps_its_deleting_state(): void {
+        global $DB;
+        $this->resetAfterTest();
+        $this->setAdminUser();
+
+        $e = $this->experiment();
+        $this->run_with($e, registry::STATUS_READY, [attempt_scheduler::STATUS_QUEUED]);
+        \local_catquizlab\task\delete_experiment::queue($e, false);
+
+        $states = \local_catquizlab\task\delete_experiment::states();
+        $this->assertTrue($states[$e]['pending']);
+        $this->assertGreaterThan(0, $states[$e]['since']);
+        $this->assertSame('', $states[$e]['error']);
+        $this->assertSame('being-deleted', execution_queue::enqueue($e)['reason'], 'not started again meanwhile');
+
+        // A failure is kept where the list shows it, and the task fails so Moodle retries it.
+        $task = new class extends \local_catquizlab\task\delete_experiment {
+            /**
+             * Record a failure as execute() does.
+             *
+             * @param int $id The experiment.
+             * @param string $message The error.
+             * @return void
+             */
+            public function fail(int $id, string $message): void {
+                self::record_error($id, $message);
+            }
+        };
+        $task->fail($e, 'Lock wait timeout exceeded');
+        $this->assertSame('Lock wait timeout exceeded', \local_catquizlab\task\delete_experiment::states()[$e]['error']);
+
+        // The task gone (given up after its retries, or removed by hand): no longer "being deleted" but "failed",
+        // and offered for deleting again.
+        $DB->delete_records('task_adhoc', ['classname' => '\\local_catquizlab\\task\\delete_experiment']);
+        $this->assertFalse(\local_catquizlab\task\delete_experiment::states()[$e]['pending']);
+
+        // Queued again: the old error is cleared.
+        \local_catquizlab\task\delete_experiment::queue($e, false);
+        $this->assertSame('', \local_catquizlab\task\delete_experiment::states()[$e]['error']);
+        $this->assertTrue(\local_catquizlab\task\delete_experiment::states()[$e]['pending']);
+    }
+
+    /**
+     * Deleting leaves no row behind that points at the deleted run or experiment (0.7.50).
+     *
+     * @return void
+     */
+    public function test_deleting_leaves_nothing_pointing_at_the_experiment(): void {
+        global $DB;
+        $this->resetAfterTest();
+        $this->setAdminUser();
+
+        $e = $this->experiment();
+        $runid = $this->run_with($e, registry::STATUS_FINISHED, [attempt_scheduler::STATUS_COLLECTED]);
+        $attemptid = (int) $DB->get_field('local_catquizlab_attempt', 'id', ['runid' => $runid]);
+        \local_catquizlab\local\attempt_history::record($attemptid, \local_catquizlab\local\attempt_history::STARTED);
+        $DB->insert_record('local_catquizlab_twinclaim', (object) ['runid' => $runid, 'twinid' => 't1', 'personid' => 2,
+            'timecreated' => time()]);
+        $DB->insert_record('local_catquizlab_pool', (object) ['experimentid' => $e, 'runid' => $runid,
+            'variant' => 'ideal', 'timecreated' => time()]);
+        $DB->insert_record('local_catquizlab_pool', (object) ['experimentid' => $e, 'runid' => null,
+            'variant' => 'ideal', 'timecreated' => time()]);
+        $DB->insert_record('local_catquizlab_exportlog', (object) ['runid' => $runid, 'experimentid' => $e,
+            'format' => 'csv', 'dataset' => 'answermatrix', 'timecreated' => time()]);
+        $DB->insert_record('local_catquizlab_transfer', (object) ['runid' => $runid, 'direction' => 'submit',
+            'remotehost' => 'https://hub.example', 'payloadhash' => str_repeat('a', 64), 'timecreated' => time()]);
+        $this->queue_entry($e, execution_queue::FINISHED);
+        $context = \context_system::instance();
+        $fs = get_file_storage();
+        foreach (['run-' . $runid . '-answermatrix.csv', 'run-' . ($runid + 1000) . '-answermatrix.csv'] as $name) {
+            $fs->create_file_from_string(['contextid' => $context->id, 'component' => 'local_catquizlab',
+                'filearea' => 'export', 'itemid' => 0, 'filepath' => '/', 'filename' => $name], 'x');
+        }
+
+        $preview = purger::preview_experiment($e);
+        $this->assertSame(1, $preview['counts']['twinclaims'] ?? 0, 'the preview names what goes');
+        $this->assertGreaterThanOrEqual(1, $preview['counts']['history'] ?? 0);
+
+        $result = purger::delete_experiment($e, false, true);
+
+        $this->assertTrue($result['ok']);
+        foreach (['attemptlog', 'twinclaim', 'pool', 'exportlog', 'transfer', 'result', 'scalemap'] as $table) {
+            $this->assertSame(0, $DB->count_records('local_catquizlab_' . $table, ['runid' => $runid]), $table);
+        }
+        foreach (['pool', 'exportlog', 'execqueue'] as $table) {
+            $this->assertSame(0, $DB->count_records('local_catquizlab_' . $table, ['experimentid' => $e]), $table);
+        }
+        $this->assertFalse($fs->file_exists(
+            $context->id,
+            'local_catquizlab',
+            'export',
+            0,
+            '/',
+            'run-' . $runid . '-answermatrix.csv'
+        ), 'its export file goes');
+        $this->assertTrue($fs->file_exists(
+            $context->id,
+            'local_catquizlab',
+            'export',
+            0,
+            '/',
+            'run-' . ($runid + 1000) . '-answermatrix.csv'
+        ), 'another run\'s stays');
     }
 }

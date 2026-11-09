@@ -155,6 +155,13 @@ class experiment_stop {
             $queue = execution_queue::forget($experimentid, self::REASON);
 
             $transaction->allow_commit();
+        } catch (\Throwable $e) {
+            // Rolled back here, not left open for whoever catches it: a caller that records the failure would
+            // otherwise write into the transaction that is about to be thrown away.
+            if (isset($transaction)) {
+                $transaction->rollback($e);
+            }
+            throw $e;
         } finally {
             if ($lock) {
                 $lock->release();

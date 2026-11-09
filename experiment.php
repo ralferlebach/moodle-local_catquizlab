@@ -75,17 +75,18 @@ if ($action === 'delete' && $id > 0) {
     $typed = optional_param('confirmname', '', PARAM_TEXT);
 
     // Typing the name is the confirmation. A button that only needs a click is
-    // a button that gets clicked, and this one destroys measurements.
-    if ($typed !== '' && trim($typed) !== trim($preview['name'])) {
-        redirect(
-            $manageurl,
-            get_string('purge:namemismatch', $component),
-            null,
-            \core\output\notification::NOTIFY_WARNING
-        );
-    }
+    // a button that gets clicked, and this one destroys measurements. Compared
+    // as a person reads it (0.7.50): a double or protected space in the stored
+    // name, or a filter changing the shown one, had refused the name typed
+    // exactly as shown — and sent the person back to the list.
+    $confirmed = $typed !== '' && \local_catquizlab\local\purger::name_confirms(
+        $typed,
+        $preview['rawname'] ?? '',
+        $preview['name']
+    );
+    $mismatch = $typed !== '' && !$confirmed;
 
-    if (trim($typed) !== trim($preview['name'])) {
+    if (!$confirmed) {
         $lines = [];
         $lines[] = \local_catquizlab\local\purger::counts_line($preview['counts']);
 
@@ -106,6 +107,12 @@ if ($action === 'delete' && $id > 0) {
         echo $OUTPUT->header();
         echo \local_catquizlab\output\shell::render('plan', $id);
         echo $OUTPUT->notification($message, \core\output\notification::NOTIFY_WARNING);
+        if ($mismatch) {
+            echo $OUTPUT->notification(
+                get_string('purge:namemismatchretry', $component),
+                \core\output\notification::NOTIFY_ERROR
+            );
+        }
 
         echo html_writer::start_tag('form', [
             'method' => 'post',

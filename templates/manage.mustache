@@ -46,7 +46,7 @@
     * experiments object - hasany, none, nomatch, library (q, hassearch, sorts, actionurl, reseturl, total, shown),
       rows of id, name, editurl, state, statebadge, phase, progress, hasprogress, percent, tierlabel,
       modellabel, strategylabel, cells, runs, modified, main (label, url), more (label, url, link|post, id, action,
-      sesskey), candelete, deleteurl (#129)
+      sesskey), candelete, deleteurl (#129), deletelabel, statedetail (0.7.50)
     * runs object - has hasany bool, hassummary bool, summary string, rows array
 
     Example context (json):
@@ -199,6 +199,9 @@
                                 {{#hasprogress}}
                                     <div class="small text-muted">{{progress}}</div>
                                 {{/hasprogress}}
+                                {{#statedetail}}
+                                    <div class="small text-muted" data-region="catquizlab-library-statedetail">{{statedetail}}</div>
+                                {{/statedetail}}
                             </td>
                             <td class="small">
                                 {{strategylabel}} · {{modellabel}} · {{tierlabel}}
@@ -230,7 +233,7 @@
                                 {{#candelete}}
                                     <a href="{{deleteurl}}" class="btn btn-sm btn-outline-danger" data-region="catquizlab-library-delete"
                                        aria-label="{{#str}}manage:deletenamed, local_catquizlab, {{name}}{{/str}}">
-                                        {{#str}}manage:delete, local_catquizlab{{/str}}
+                                        {{#deletelabel}}{{deletelabel}}{{/deletelabel}}{{^deletelabel}}{{#str}}manage:delete, local_catquizlab{{/str}}{{/deletelabel}}
                                     </a>
                                 {{/candelete}}
                             </td>

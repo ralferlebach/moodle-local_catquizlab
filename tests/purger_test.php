@@ -415,4 +415,29 @@ final class purger_test extends \advanced_testcase {
         $this->assertTrue(worker_registry::stop_requested('playing'));
         $this->assertFalse($DB->record_exists('local_catquizlab_experiment', ['id' => $experimentid]));
     }
+
+    /**
+     * The typed name confirms as a person reads it (0.7.50): the name typed exactly as shown had been refused when
+     * the stored one held a double or protected space.
+     *
+     * @return void
+     */
+    public function test_the_typed_name_confirms_as_read(): void {
+        $stored = "Experiment 1 (10 scales x 10 subscales x 20 Items @ 200 persons)  (Kopie)";
+        $shown = format_string($stored);
+        $typed = 'Experiment 1 (10 scales x 10 subscales x 20 Items @ 200 persons) (Kopie)';
+
+        $this->assertTrue(purger::name_confirms($typed, $stored, $shown), 'a doubled space');
+        $this->assertTrue(purger::name_confirms($typed, "Experiment 1 (10 scales x 10 subscales x 20 Items @ 200\u{00A0}persons)"
+            . " (Kopie)", ''), 'a protected space');
+        $this->assertTrue(purger::name_confirms($typed, "Experiment 1 (10 scales x 10 subscales x 20 Items @ 200 per\u{200B}sons)"
+            . " (Kopie)", ''), 'a zero-width space');
+        $this->assertTrue(purger::name_confirms('  ' . strtoupper($typed) . ' ', $stored, ''), 'case and edges');
+        $this->assertTrue(purger::name_confirms('Gruppe A & B', 'x', 'Gruppe A &amp; B'), 'the shown name, as text');
+        $this->assertTrue(purger::name_confirms('Gruppe A & B', 'Gruppe A & B', '<span class="multilang">Gruppe A &amp; B</span>'));
+
+        $this->assertFalse(purger::name_confirms($typed . ' x', $stored, $shown), 'another name');
+        $this->assertFalse(purger::name_confirms('Experiment 1', $stored, $shown), 'a part of it');
+        $this->assertFalse(purger::name_confirms('   ', '', ''), 'nothing');
+    }
 }

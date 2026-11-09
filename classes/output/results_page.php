@@ -3602,7 +3602,10 @@ class results_page {
             ]),
         ], $comparison['points']))
             ->set_description(get_string('mode:plotpoint', $component))
-            ->add_identity_line(get_string('chart:identity', $component) . ' — ' . get_string('mode:plotbelow', $component))
+            // The reading aid is a note beneath the plot, not the label of the diagonal: as a label it was wider
+            // than the drawing and lost its beginning (0.7.50).
+            ->add_identity_line(get_string('chart:identity', $component))
+            ->add_note(get_string('mode:plotbelow', $component))
             ->add_note(get_string('mode:plotn', $component, (object) [
                 'n' => count($comparison['points']), 'pairs' => $comparison['pairs'],
             ]))

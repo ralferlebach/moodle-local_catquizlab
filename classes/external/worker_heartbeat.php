@@ -111,8 +111,12 @@ class worker_heartbeat extends external_api {
         // (#133). A worker told it has lost it stops playing: the sitting has
         // gone back to the queue, and two browsers in one attempt is #134.
         $leaselost = false;
+        $leasefate = '';
         if ((int) $params['attemptid'] > 0) {
             $leaselost = !attempt_scheduler::renew_lease((string) $params['workerid'], (int) $params['attemptid']);
+            if ($leaselost) {
+                $leasefate = self::lease_fate((int) $params['attemptid']);
+            }
         }
 
         $stopping = in_array((string) $params['state'], ['stopping', 'stopped'], true);
@@ -147,7 +151,33 @@ class worker_heartbeat extends external_api {
             'stop'  => !$known || worker_registry::stop_requested($params['workerid']),
             'known' => $known,
             'leaselost' => $leaselost,
+            'leasefate' => $leasefate,
         ];
+    }
+
+    /**
+     * What became of a sitting whose lease a worker lost (0.7.50).
+     *
+     * The worker's log said "went back to the queue" for every lost lease; after a stop the sitting is closed,
+     * and the line was wrong.
+     *
+     * @param int $attemptid The sitting.
+     * @return string requeued (waiting again), taken (another worker holds it), closed (stopped, failed or
+     *     done) or gone (deleted).
+     */
+    protected static function lease_fate(int $attemptid): string {
+        global $DB;
+
+        $sitting = $DB->get_record('local_catquizlab_attempt', ['id' => $attemptid], 'id, status');
+        if (!$sitting) {
+            return 'gone';
+        }
+
+        return match ((int) $sitting->status) {
+            attempt_scheduler::STATUS_QUEUED => 'requeued',
+            attempt_scheduler::STATUS_RUNNING => 'taken',
+            default => 'closed',
+        };
     }
 
     /**
@@ -159,6 +189,8 @@ class worker_heartbeat extends external_api {
         return new external_single_structure([
             'stop'  => new external_value(PARAM_BOOL, 'Whether the worker should finish up and exit.'),
             'leaselost' => new external_value(PARAM_BOOL, 'The sitting it named is no longer its own (#133).'),
+            'leasefate' => new external_value(PARAM_ALPHA, 'What became of that sitting: requeued, taken, closed or gone; '
+                . 'empty while the lease holds (0.7.50).', VALUE_DEFAULT, ''),
             'known' => new external_value(PARAM_BOOL, 'Whether the registry still knows this worker.'),
         ]);
     }

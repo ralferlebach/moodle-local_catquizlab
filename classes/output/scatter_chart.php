@@ -59,6 +59,12 @@ class scatter_chart {
     /** @var int Right margin. */
     protected const MARGIN_RIGHT = 18;
 
+    /** @var float Estimated width of a character, in em, for keeping labels inside the drawing. */
+    protected const LABEL_EM = 0.6;
+
+    /** @var int Space kept free at the left and right edge of the drawing, for labels. */
+    protected const LABEL_PAD = 4;
+
     /** @var array{x: float, y: float}[] The points. */
     protected array $points = [];
 
@@ -1065,8 +1071,30 @@ class scatter_chart {
      * @return string
      */
     protected function text(float $x, float $y, string $content, string $anchor, string $colour = '#333'): string {
+        // A label never runs out of the drawing (0.7.50): an SVG clips whatever lies outside its viewBox, so a long
+        // label anchored at its end near the middle lost its beginning — it read as a centred heading cut off on the
+        // left. The width is estimated (no font metrics on the server, about 0.6 em a character); a label that would
+        // leave the drawing is moved back inside, one wider than the drawing is shortened, its full text kept as a
+        // tooltip.
+        $chars = \core_text::strlen($content);
+        $width = $chars * self::LABEL_EM * 11;
+        $room = self::WIDTH - 2 * self::LABEL_PAD;
+        $tooltip = '';
+        if ($width > $room) {
+            $keep = max(1, (int) floor($room / (self::LABEL_EM * 11)) - 1);
+            $tooltip = '<title>' . s($content) . '</title>';
+            $content = rtrim(\core_text::substr($content, 0, $keep)) . '…';
+            $width = (\core_text::strlen($content)) * self::LABEL_EM * 11;
+        }
+        $left = ['start' => $x, 'middle' => $x - $width / 2, 'end' => $x - $width][$anchor] ?? $x;
+        if ($left < self::LABEL_PAD) {
+            $x += self::LABEL_PAD - $left;
+        } else if ($left + $width > self::WIDTH - self::LABEL_PAD) {
+            $x -= $left + $width - (self::WIDTH - self::LABEL_PAD);
+        }
+
         return '<text x="' . round($x, 2) . '" y="' . round($y, 2) . '" text-anchor="' . $anchor
-            . '" font-size="11" fill="' . $colour . '">' . s($content) . '</text>';
+            . '" font-size="11" fill="' . $colour . '">' . $tooltip . s($content) . '</text>';
     }
 
     /**

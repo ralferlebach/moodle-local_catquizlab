@@ -67,7 +67,14 @@ class delete_experiment extends \core\task\adhoc_task {
         }
 
         $started = microtime(true);
-        $result = purger::delete_experiment($experimentid, !empty($data->deep), true);
+        try {
+            $result = purger::delete_experiment($experimentid, !empty($data->deep), true);
+        } catch (\Throwable $e) {
+            // Said where the experiment is listed (0.7.50): a delete that failed had left the experiment looking
+            // untouched, the reason only in the task log. Moodle retries the task; the list says so meanwhile.
+            self::record_error($experimentid, $e->getMessage());
+            throw $e;
+        }
         if (!$result['ok']) {
             // Gone already (a second task, or a delete from the console): nothing left to do.
             mtrace("local_catquizlab: experiment {$experimentid} not deleted: {$result['reason']}.");
@@ -85,7 +92,13 @@ class delete_experiment extends \core\task\adhoc_task {
      * @return void
      */
     public static function queue(int $experimentid, bool $deep): void {
-        global $USER;
+        global $DB, $USER;
+
+        // The experiment itself says it is being deleted (0.7.50), from the click on: the list read this off the
+        // task queue before, and an experiment whose task had failed or gone looked as if nothing had happened.
+        $DB->update_record('local_catquizlab_experiment', (object) [
+            'id' => $experimentid, 'timedeleting' => time(), 'deleteerror' => null,
+        ]);
 
         $task = new self();
         $task->set_custom_data([
@@ -98,6 +111,64 @@ class delete_experiment extends \core\task\adhoc_task {
             $task->set_userid((int) $USER->id);
         }
         \core\task\manager::queue_adhoc_task($task, true);
+    }
+
+    /**
+     * Keep why deleting an experiment failed, where the list can show it.
+     *
+     * @param int $experimentid The experiment.
+     * @param string $message The error.
+     * @return void
+     */
+    protected static function record_error(int $experimentid, string $message): void {
+        global $DB;
+
+        try {
+            // Written inside a transaction the failure left open, it goes when the task runner rolls that back; the
+            // stop rolls its own back (0.7.50), the deleting itself works outside one.
+            if ($DB->record_exists('local_catquizlab_experiment', ['id' => $experimentid])) {
+                $DB->set_field('local_catquizlab_experiment', 'deleteerror', \core_text::substr($message, 0, 1000), [
+                    'id' => $experimentid,
+                ]);
+            }
+        } catch (\Throwable $ignored) {
+            // The database is what failed; the task log keeps the error.
+            unset($ignored);
+        }
+    }
+
+    /**
+     * Where the experiments being deleted stand.
+     *
+     * An experiment is being deleted from the confirmation on (its timedeleting), or while a task for it waits —
+     * the latter also for one queued by 0.7.49, before the experiment kept the state itself.
+     *
+     * @return array<int, array{since: int, error: string, pending: bool}> By experiment id.
+     */
+    public static function states(): array {
+        global $DB;
+
+        $states = [];
+        $pending = array_flip(self::pending());
+        $rows = $DB->get_records_select(
+            'local_catquizlab_experiment',
+            'timedeleting > 0',
+            null,
+            '',
+            'id, timedeleting, deleteerror'
+        );
+        foreach ($rows as $row) {
+            $states[(int) $row->id] = [
+                'since' => (int) $row->timedeleting,
+                'error' => (string) ($row->deleteerror ?? ''),
+                'pending' => isset($pending[(int) $row->id]),
+            ];
+        }
+        foreach (array_keys($pending) as $id) {
+            $states[$id] ??= ['since' => 0, 'error' => '', 'pending' => true];
+        }
+
+        return $states;
     }
 
     /**

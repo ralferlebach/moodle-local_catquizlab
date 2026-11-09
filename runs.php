@@ -186,7 +186,7 @@ if ($action === 'startexperiment') {
         $back,
         $queued['ok']
             ? get_string('runner:queuedat', $component, $queued['position'])
-            : get_string('runner:notready', $component),
+            : get_string($queued['reason'] === 'being-deleted' ? 'runner:beingdeleted' : 'runner:notready', $component),
         null,
         $queued['ok']
             ? \core\output\notification::NOTIFY_SUCCESS

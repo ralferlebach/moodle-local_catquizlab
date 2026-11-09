@@ -42,6 +42,34 @@ namespace local_catquizlab\local;
  */
 class purger {
     /**
+     * The lab's own tables that hold rows of a run, with the name each count goes by.
+     *
+     * One list for the preview and the delete (0.7.50): the delete had five tables and left the history of every
+     * sitting, the twin claims, the pool variants, the export records and the transfer log of a deleted run behind,
+     * rows pointing at a run that no longer existed.
+     */
+    protected const RUN_TABLES = [
+        'local_catquizlab_attempt'    => 'attempts',
+        'local_catquizlab_attemptlog' => 'history',
+        'local_catquizlab_person'     => 'people',
+        'local_catquizlab_twinclaim'  => 'twinclaims',
+        'local_catquizlab_item'       => 'items',
+        'local_catquizlab_scalemap'   => 'scales',
+        'local_catquizlab_pool'       => 'pools',
+        'local_catquizlab_result'     => 'results',
+        'local_catquizlab_exportlog'  => 'exports',
+        'local_catquizlab_transfer'   => 'transfers',
+    ];
+
+    /**
+     * The lab's own tables that hold rows of an experiment as a whole.
+     */
+    protected const EXPERIMENT_TABLES = [
+        'local_catquizlab_pool'      => 'pools',
+        'local_catquizlab_exportlog' => 'exports',
+        'local_catquizlab_execqueue' => 'queue',
+    ];
+    /**
      * What deleting an experiment would remove, before it is removed.
      *
      * An irreversible action needs to be able to say what it will do, and in
@@ -50,7 +78,7 @@ class purger {
      *
      * @param int $experimentid The experiment.
      * @param bool $deep Whether the engine-side objects are included.
-     * @return array{ok: bool, name: string, counts: array, blockers: string[], stopping: string[]}
+     * @return array{ok: bool, name: string, rawname?: string, counts: array, blockers: string[], stopping: string[]}
      */
     public static function preview_experiment(int $experimentid, bool $deep = true): array {
         global $DB;
@@ -67,23 +95,15 @@ class purger {
         $blockers = [];
 
         if ($runids === []) {
-            return ['ok' => true, 'name' => format_string($experiment->name), 'counts' => $counts, 'blockers' => [],
-                'stopping' => []];
+            return ['ok' => true, 'name' => format_string($experiment->name), 'rawname' => (string) $experiment->name,
+                'counts' => $counts, 'blockers' => [], 'stopping' => []];
         }
 
         [$insql, $params] = $DB->get_in_or_equal($runids, SQL_PARAMS_NAMED, 'r');
 
-        $tables = [
-            'local_catquizlab_attempt'  => 'attempts',
-            'local_catquizlab_person'   => 'people',
-            'local_catquizlab_item'     => 'items',
-            'local_catquizlab_scalemap' => 'scales',
-            'local_catquizlab_result'   => 'results',
-        ];
-
-        foreach ($tables as $table => $label) {
+        foreach (self::RUN_TABLES as $table => $label) {
             if ($DB->get_manager()->table_exists($table)) {
-                $counts[$label] = $DB->count_records_select($table, 'runid ' . $insql, $params);
+                $counts[$label] = ($counts[$label] ?? 0) + $DB->count_records_select($table, 'runid ' . $insql, $params);
             }
         }
 
@@ -121,10 +141,43 @@ class purger {
         return [
             'ok'       => $blockers === [],
             'name'     => format_string($experiment->name),
+            'rawname'  => (string) $experiment->name,
             'counts'   => array_filter($counts),
             'blockers' => $blockers,
             'stopping' => $stopping,
         ];
+    }
+
+    /**
+     * Whether a typed name confirms deleting an experiment (0.7.50).
+     *
+     * As a person reads a name, not byte for byte: whitespace of any kind and length counts as one space, tags
+     * and entities as the text they show, case does not count. Either the stored name or the shown one confirms.
+     *
+     * @param string $typed What was typed.
+     * @param string $stored The name as stored.
+     * @param string $shown The name as shown (through format_string()).
+     * @return bool
+     */
+    public static function name_confirms(string $typed, string $stored, string $shown): bool {
+        $normal = static function (string $name): string {
+            $name = html_entity_decode(strip_tags($name), ENT_QUOTES | ENT_HTML5, 'UTF-8');
+            if (class_exists('\\Normalizer')) {
+                $name = \Normalizer::normalize($name, \Normalizer::FORM_KC) ?: $name;
+            }
+            // Invisible characters (zero-width spaces, soft hyphens) go, every kind of space becomes one.
+            $name = preg_replace('/[\x{00AD}\x{200B}-\x{200D}\x{2060}\x{FEFF}]/u', '', $name) ?? $name;
+            $name = preg_replace('/[\s\x{00A0}\x{1680}\x{2000}-\x{200A}\x{202F}\x{205F}\x{3000}]+/u', ' ', $name) ?? $name;
+
+            return \core_text::strtolower(trim($name));
+        };
+
+        $typed = $normal($typed);
+        if ($typed === '') {
+            return false;
+        }
+
+        return $typed === $normal($stored) || $typed === $normal($shown);
     }
 
     /**
@@ -240,10 +293,25 @@ class purger {
                 // delete is harder to reason about than none.
                 return ['ok' => false, 'removed' => $totals, 'reason' => $result['reason']];
             }
+            // Each run's own "1 run" is counted once, as runs: the line said "1 run(s) … 1 run" before (0.7.50).
+            unset($result['removed']['run']);
             foreach ($result['removed'] as $key => $count) {
                 $totals[$key] = ($totals[$key] ?? 0) + $count;
             }
             $totals['runs']++;
+        }
+
+        // What belongs to the experiment as a whole (0.7.50): its pool definitions, its export records and its
+        // entries in the execution queue, which outlived it before.
+        foreach (self::EXPERIMENT_TABLES as $table => $label) {
+            if (!$DB->get_manager()->table_exists($table)) {
+                continue;
+            }
+            $count = $DB->count_records($table, ['experimentid' => $experimentid]);
+            if ($count > 0) {
+                $DB->delete_records($table, ['experimentid' => $experimentid]);
+                $totals[$label] = ($totals[$label] ?? 0) + $count;
+            }
         }
 
         $DB->delete_records('local_catquizlab_experiment', ['id' => $experimentid]);
@@ -362,15 +430,7 @@ class purger {
         global $DB;
 
         $removed = [];
-        foreach (
-            [
-            'local_catquizlab_attempt'  => 'attempts',
-            'local_catquizlab_person'   => 'people',
-            'local_catquizlab_item'     => 'items',
-            'local_catquizlab_scalemap' => 'scales',
-            'local_catquizlab_result'   => 'results',
-            ] as $table => $label
-        ) {
+        foreach (self::RUN_TABLES as $table => $label) {
             if (!$DB->get_manager()->table_exists($table)) {
                 continue;
             }
@@ -378,6 +438,16 @@ class purger {
             if ($count > 0) {
                 $DB->delete_records($table, ['runid' => $runid]);
                 $removed[$label] = $count;
+            }
+        }
+
+        // The files a background export wrote for the run (#121) go with their records.
+        $fs = get_file_storage();
+        $context = \context_system::instance();
+        foreach ($fs->get_area_files($context->id, 'local_catquizlab', 'export', 0, 'id', false) as $file) {
+            if (strpos($file->get_filename(), 'run-' . $runid . '-') === 0) {
+                $file->delete();
+                $removed['exportfiles'] = ($removed['exportfiles'] ?? 0) + 1;
             }
         }
 

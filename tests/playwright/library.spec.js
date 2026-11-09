@@ -83,10 +83,34 @@ test('create, find, open, compare, copy and delete an experiment from the librar
     await page.fill('#catquizlab-confirmname', name);
     await page.locator('form input[type="submit"].btn-danger').click();
     await page.waitForLoadState('networkidle');
+    // Deleted in the background (0.7.49): until cron has run, the row says so and offers no second delete.
+    await expect(page.locator('body')).toContainText(/Deleting it runs in the background/);
     await page.goto(LIBRARY + '&q=' + encodeURIComponent(name), {waitUntil: 'networkidle'});
-    // Only the copy is left (its name starts with the original's or carries it).
-    const left = await page.locator('[data-region="catquizlab-library"] tbody tr th').allTextContents();
-    expect(left.filter((t) => t.trim() === name)).toEqual([]);
+    const gone = page.locator('[data-region="catquizlab-library"] tbody tr').filter({
+        has: page.locator('th', {hasText: new RegExp('^\\s*' + name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\s*$')}),
+    });
+    await expect(gone).toHaveAttribute('data-phase', 'deleting');
+    await expect(gone.locator('[data-region="catquizlab-library-delete"]')).toHaveCount(0);
+});
+
+test('a wrong name keeps the confirmation page and says why (0.7.50)', async({page}) => {
+    await login(page);
+    await page.goto(LIBRARY, {waitUntil: 'networkidle'});
+    const first = page.locator('[data-region="catquizlab-library"] tbody tr').filter({
+        has: page.locator('[data-region="catquizlab-library-delete"]'),
+    }).first();
+    const name = (await first.locator('th').innerText()).trim();
+    await first.locator('[data-region="catquizlab-library-delete"]').click();
+    await page.waitForLoadState('networkidle');
+
+    // Wrong: the confirmation page stays, with the reason.
+    await page.fill('#catquizlab-confirmname', name + ' x');
+    await page.locator('form input[type="submit"].btn-danger').click();
+    await page.waitForLoadState('networkidle');
+    await expect(page.locator('body')).toContainText('The name you typed does not match');
+    await expect(page.locator('#catquizlab-confirmname')).toBeVisible();
+    // What does confirm — other spaces, other capitals — is tested in PHPUnit (purger_test), without deleting an
+    // experiment other specs still need.
 });
 
 test('no match is said with a way back; sorting by name; usable on a phone and by keyboard', async({page}) => {

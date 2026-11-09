@@ -358,6 +358,83 @@ final class mode_detection_test extends \advanced_testcase {
     }
 
     /**
+     * The strength mode on its own, beside both baselines (#144, 0.7.50): the fixture had covered deficits only.
+     *
+     * @return void
+     */
+    public function test_the_strength_mode_is_evaluated_beside_both_baselines(): void {
+        $this->resetAfterTest();
+        $this->setAdminUser();
+        $experimentid = $this->experiment(['highestsub', 'allsubs', 'classic']);
+        $filter = ['experimentid' => $experimentid];
+
+        $analysis = mode_detection::analyse(mode_detection::sittings(new results_query($filter)));
+        $this->assertSame(['strength'], array_keys($analysis['targets']), 'only the mode that was driven');
+
+        $strength = $analysis['targets']['strength'];
+        // Six valid sittings, two scale results each (subscales 2 and 4); one true strength each (subscale 2).
+        $this->assertSame([6, 6, 12, 12], [$strength['own']['counts']['valid'], $strength['own']['counts']['sittings'],
+            $strength['own']['counts']['included'], $strength['own']['counts']['withitems']]);
+        $this->assertSame(6, $strength['own']['truetargets']);
+        $this->assertSame([1.0, 1.0, 1.0], [$strength['own']['recall'], $strength['own']['precision'],
+            $strength['own']['f1']]);
+        // Estimated +0.8 against a true +0.9 on the target scale.
+        $this->assertEqualsWithDelta(0.1, $strength['own']['targetrmse'], 1e-6);
+
+        // Against "all sub": five pairs (its sixth sitting answered everything right and has no ability), and
+        // all sub sees the strength too (+0.7 ≥ +0.5).
+        $allsubs = $strength['baselines']['allsubs'];
+        $this->assertSame([true, 5, 6], [$allsubs['paired'], $allsubs['pairs'], $allsubs['pairable']]);
+        $this->assertSame(1.0, $allsubs['baseline']['recall']);
+        $this->assertSame(10, $allsubs['commonscales'], 'subscales 2 and 4 of five pairs');
+        $this->assertCount(10, $allsubs['points']);
+        // Against the classical test: all six pairs, and the full form is exact.
+        $classic = $strength['baselines']['classic'];
+        $this->assertSame([6, 6], [$classic['pairs'], $classic['pairable']]);
+        $this->assertSame(1.0, $classic['baseline']['recall']);
+        $this->assertEqualsWithDelta(0.0, $classic['common']['baseline']['rmse'], 1e-9);
+        $this->assertGreaterThan(0.0, $classic['meandifference'], 'the mode is further from the truth than the full form');
+
+        // The page shows the strength mode and says that the others were not run.
+        $html = (new results_page(new results_query($filter), 'deficits', $filter))->render_tab();
+        $this->assertStringContainsString('data-region="catquizlab-mode-strength"', $html);
+        $this->assertStringContainsString('data-region="catquizlab-mode-missing-deficit"', $html);
+        $this->assertStringContainsString('data-region="catquizlab-mode-missing-relevant"', $html);
+        $this->assertStringContainsString('Δs,true ≥ +0.50 logits', $html);
+        $this->assertStringNotContainsString('Deficit detection', $html);
+    }
+
+    /**
+     * The relevant mode beside the classical test alone, without "all sub" (#144, 0.7.50).
+     *
+     * @return void
+     */
+    public function test_the_relevant_mode_against_the_classical_test_alone(): void {
+        $this->resetAfterTest();
+        $this->setAdminUser();
+        $experimentid = $this->experiment(['relsubs', 'classic']);
+        $filter = ['experimentid' => $experimentid];
+
+        $analysis = mode_detection::analyse(mode_detection::sittings(new results_query($filter)));
+        $this->assertSame(['relevant'], array_keys($analysis['targets']));
+        $relevant = $analysis['targets']['relevant'];
+        $this->assertSame(
+            [null, null],
+            [$relevant['own']['truetargets'], $relevant['own']['recall']],
+            'no true targets are defined for relevant scales'
+        );
+        $this->assertSame(12, $relevant['own']['scales']);
+        $this->assertSame([6, 6], [$relevant['baselines']['classic']['pairs'], $relevant['baselines']['classic']['pairable']]);
+        // Subscales 1 and 2 in common with the full form, for each of six pairs.
+        $this->assertSame(12, $relevant['baselines']['classic']['commonscales']);
+        $this->assertFalse($relevant['baselines']['allsubs']['available'] ?? false, 'all sub was not run');
+
+        $html = (new results_page(new results_query($filter), 'deficits', $filter))->render_tab();
+        $this->assertStringContainsString('data-region="catquizlab-mode-relevant"', $html);
+        $this->assertStringContainsString('All sub baseline: not available in the selected experiment/filter.', $html);
+    }
+
+    /**
      * The exports: every scale result with mode, twin, baseline, validity and items — and the summary as shown.
      *
      * @return void

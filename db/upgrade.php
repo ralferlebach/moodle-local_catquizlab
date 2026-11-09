@@ -637,6 +637,22 @@ function xmldb_local_catquizlab_upgrade($oldversion): bool {
         upgrade_plugin_savepoint(true, 2026101303, 'local', 'catquizlab');
     }
 
+    if ($oldversion < 2026110902) {
+        // Deleting is a state of the experiment (0.7.50), not something read off the task queue: a delete whose
+        // task failed or vanished had left the experiment looking untouched.
+        $table = new xmldb_table('local_catquizlab_experiment');
+        $fields = [
+            new xmldb_field('timedeleting', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, '0', 'timemodified'),
+            new xmldb_field('deleteerror', XMLDB_TYPE_TEXT, null, null, null, null, null, 'timedeleting'),
+        ];
+        foreach ($fields as $field) {
+            if (!$dbman->field_exists($table, $field)) {
+                $dbman->add_field($table, $field);
+            }
+        }
+        upgrade_plugin_savepoint(true, 2026110902, 'local', 'catquizlab');
+    }
+
     return true;
 }
 

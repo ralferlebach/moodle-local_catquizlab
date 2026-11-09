@@ -80,6 +80,22 @@ cd /tmp && sudo -u www-data php /var/www/moodle/admin/cli/adhoc_task.php --class
 
 Bis 0.7.48 lehnte das Löschen ab, solange Worker spielten, während der Tick neue startete; dazu lief es vollständig im Web-Request.
 
+**Die Namensbestätigung (0.7.50).** Der eingetippte Name wird so verglichen, wie man ihn liest: Leerzeichen jeder Art und Anzahl zählen als eines, Groß- und Kleinschreibung zählt nicht, gespeicherter und angezeigter Name gelten beide. Bis 0.7.49 scheiterte ein korrekt abgetippter Name an einem doppelten oder geschützten Leerzeichen im gespeicherten Namen („Der Name stimmte nicht, deshalb wurde nichts gelöscht.“).
+
+**Wenn das Löschen hängt (ab 0.7.50).** Das Experiment trägt den Zustand selbst (`timedeleting`, `deleteerror`):
+
+| Liste zeigt | Bedeutung | Tun |
+|---|---|---|
+| „Wird gelöscht – seit …“ | Aufgabe steht an, Cron hat sie noch nicht ausgeführt | warten oder die Aufgabe wie oben von Hand starten |
+| „Wird gelöscht – Der letzte Versuch ist gescheitert: …“ | Aufgabe ist gescheitert, Moodle wiederholt sie | Fehlertext lesen; `mdl_task_log` zeigt die volle Ausgabe |
+| „Löschen fehlgeschlagen“ + „Erneut löschen …“ | Aufgabe ist weg (aufgegeben oder per „Aufgaben entfernen“ gelöscht), Experiment noch da | „Erneut löschen …“ |
+
+Ohne Oberfläche, für ein Experiment mit der ID NN:
+
+```bash
+cd /tmp && sudo -u www-data php -r 'define("CLI_SCRIPT", 1); require "/var/www/moodle/config.php"; \local_catquizlab\local\experiment_stop::stop(NN); \local_catquizlab\task\delete_experiment::queue(NN, true); echo "queued\n";'
+```
+
 ## 5. Wenn der Tick von Hand abbricht
 
 ```

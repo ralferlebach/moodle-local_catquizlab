@@ -59,6 +59,10 @@ class execution_queue {
         // Only an experiment that is actually ready: queueing one that has not
         // been prepared means it reaches the front of the line and fails there,
         // having held up everything behind it.
+        // An experiment being deleted (0.7.50) does not go back into the line.
+        if ((int) $DB->get_field('local_catquizlab_experiment', 'timedeleting', ['id' => $experimentid]) > 0) {
+            return ['ok' => false, 'position' => 0, 'reason' => 'being-deleted'];
+        }
         $state = experiment_runner::state($experimentid);
         if (!$state['canstart']) {
             return ['ok' => false, 'position' => 0, 'reason' => 'not-ready'];

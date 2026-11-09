@@ -177,8 +177,11 @@ final class run_recovery_test extends \advanced_testcase {
         $this->assertFalse($reply['leaselost']);
         // The sitting went back to the queue: the worker learns it with its next heartbeat.
         $DB->set_field('local_catquizlab_attempt', 'status', attempt_scheduler::STATUS_QUEUED, ['id' => $attemptid]);
-        $this->assertTrue(worker_heartbeat::execute('w1', $attemptid, 'working')['leaselost']);
+        $lost = worker_heartbeat::execute('w1', $attemptid, 'working');
+        $this->assertTrue($lost['leaselost']);
+        $this->assertSame('requeued', $lost['leasefate']);
         $this->assertFalse(worker_heartbeat::execute('w1', 0, 'waiting')['leaselost']);
+        $this->assertSame('', worker_heartbeat::execute('w1', 0, 'waiting')['leasefate']);
     }
 
     /**
