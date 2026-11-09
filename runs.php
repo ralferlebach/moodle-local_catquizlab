@@ -107,6 +107,37 @@ if ($action === 'prepareexperiment') {
         : \core\output\notification::NOTIFY_WARNING);
 }
 
+// Runs created and never started (incident 2026-11-09): started in the background, each by its own setup
+// task, exactly as "Start runs" on the experiment page does.
+if ($action === 'startruns') {
+    require_sesskey();
+    require_capability('local/catquizlab:execute', $context);
+
+    $target = required_param('experimentid', PARAM_INT);
+    $started = \local_catquizlab\local\run_lifecycle::start_drafts($target, [], $context);
+    \local_catquizlab\local\debug_trace::record('ui', 'startruns', ['experimentid' => $target] + $started);
+
+    $back = new moodle_url('/local/catquizlab/runs.php', ['experimentid' => $target]);
+    if ($started['started'] === 0) {
+        redirect(
+            $back,
+            get_string(
+                'run:startblocked',
+                $component,
+                \local_catquizlab\local\reason_catalog::text((string) $started['reason'])
+            ),
+            null,
+            \core\output\notification::NOTIFY_WARNING
+        );
+    }
+    redirect(
+        $back,
+        get_string('runner:runsstarted', $component, $started['started']),
+        null,
+        \core\output\notification::NOTIFY_SUCCESS
+    );
+}
+
 if ($action === 'startexperiment') {
     require_sesskey();
     require_capability('local/catquizlab:execute', $context);
@@ -776,7 +807,8 @@ if ($runid > 0) {
         'queued'     => ['runid = :runid AND status = :queued', []],
         'noengine'   => ['runid = :runid AND status IN (:collected, :failed)'
             . ' AND (engineattemptid IS NULL OR engineattemptid = 0)', []],
-        'notrace'    => ['runid = :runid AND status = :collected AND tracejson IS NULL', []],
+        // Finished without a trace (#138): waiting for it now, or stored as collected by an earlier version.
+        'notrace'    => ['runid = :runid AND ((status = :collected AND tracejson IS NULL) OR status = :tracepending)', []],
     ];
     if (!isset($filters[$show])) {
         $show = 'problems';
@@ -787,6 +819,7 @@ if ($runid > 0) {
         'queued'    => $scheduler::STATUS_QUEUED,
         'running'   => $scheduler::STATUS_RUNNING,
         'collected' => $scheduler::STATUS_COLLECTED,
+        'tracepending' => $scheduler::STATUS_TRACEPENDING,
         'now'       => time(),
         'logrunid'    => $runid,
         'logfailed'   => \local_catquizlab\local\attempt_history::FAILED,

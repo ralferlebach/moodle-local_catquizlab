@@ -446,9 +446,10 @@ class mode_detection {
      * @param float $threshold The threshold in logits.
      * @return array paired (bool), pairs, pairable (the mode's sittings that could have a twin), ambiguous,
      *      commonscales, pairwithitems, mode and baseline (evaluate() of each side on the pairs), common (each side on the scales
-     *      valid in both: mode, baseline), points (x baseline, y mode: mean absolute local error per person on
-     *      the common scales), meandifference (mode − baseline of those), unpaired (the baseline's own figures,
-     *      where nothing pairs).
+     *      valid in both: mode, baseline), points (one per twin and common subscale: x the baseline's signed local
+     *      error Δ̂ − Δ, y the mode's; #144), personpoints (x baseline, y mode: mean absolute local error per person
+     *      on the common scales), meandifference (mode − baseline of the personpoints), unpaired (the baseline's own
+     *      figures, where nothing pairs).
      */
     public static function compare(array $own, array $baseline, string $target, float $threshold): array {
         // The baseline's sittings by person. A second sitting of the same
@@ -470,6 +471,7 @@ class mode_detection {
         $baseside = [];
         $common = [];
         $points = [];
+        $scalepoints = [];
         $pairable = 0;
         $seen = [];
         foreach ($own as $sitting) {
@@ -501,7 +503,20 @@ class mode_detection {
                 foreach ($shared as $scale) {
                     $own1 += abs($ownscales[$scale][1] - $ownscales[$scale][0]);
                     $base1 += abs($twinscales[$scale][1] - $twinscales[$scale][0]);
+                    // The plot (#144): one point per twin and common subscale, the signed errors as they are —
+                    // a baseline 0.4 too low and a mode 0.4 too high is (−0.4; +0.4), not (0.4; 0.4).
+                    $scalepoints[] = [
+                        'x' => $twinscales[$scale][1] - $twinscales[$scale][0],
+                        'y' => $ownscales[$scale][1] - $ownscales[$scale][0],
+                        'scale' => (string) $scale,
+                        'truedelta' => $ownscales[$scale][0],
+                        'estbaseline' => $twinscales[$scale][1],
+                        'estmode' => $ownscales[$scale][1],
+                        'truebaseline' => $twinscales[$scale][0],
+                        'attemptid' => $sitting['attemptid'], 'twin' => $twin['attemptid'],
+                    ];
                 }
+                // Per person, the mean absolute error: what the table's mean difference is computed from, as before.
                 $points[] = ['x' => $base1 / count($shared), 'y' => $own1 / count($shared), 'n' => count($shared),
                     'attemptid' => $sitting['attemptid'], 'twin' => $twin['attemptid']];
             }
@@ -511,7 +526,7 @@ class mode_detection {
         if ($pairs === 0) {
             return [
                 'paired' => false, 'pairs' => 0, 'pairable' => $pairable, 'ambiguous' => $ambiguous, 'commonscales' => 0,
-                'points' => [], 'meandifference' => null,
+                'points' => [], 'personpoints' => [], 'meandifference' => null,
                 // Nothing pairs: the baseline's own sittings, which are other people — and said to be.
                 'unpaired' => self::evaluate($baseline, $target, $threshold),
             ];
@@ -532,7 +547,10 @@ class mode_detection {
                 'mode' => self::evaluate($modeside, $target, $threshold, $common),
                 'baseline' => self::evaluate($baseside, $target, $threshold, $common),
             ],
-            'points' => $points,
+            // One per twin and common subscale, signed (#144); n_plot = commonscales.
+            'points' => $scalepoints,
+            // One per person, mean absolute: the basis of the mean difference in the tables, unchanged.
+            'personpoints' => $points,
             'meandifference' => $differences === [] ? null : round(array_sum($differences) / count($differences), 6),
             'differences' => results_query::describe_values($differences),
         ];
@@ -655,6 +673,38 @@ class mode_detection {
         })();
 
         return ['columns' => $columns, 'rows' => $rows];
+    }
+
+    /** @var string[] The columns of the paired subscale points (#144). */
+    public const POINT_COLUMNS = ['mode', 'baseline', 'attemptid', 'twinattemptid', 'scale', 'truedelta',
+        'truedeltabaseline', 'estdeltabaseline', 'estdeltamode', 'errorbaseline', 'errormode'];
+
+    /**
+     * The points of every paired comparison as rows: exactly what the plots draw, one per twin and common subscale.
+     *
+     * @param array $analysis From analyse().
+     * @return array{columns: string[], rows: array[]}
+     */
+    public static function point_rows(array $analysis): array {
+        $rows = [];
+        foreach ($analysis['targets'] as $target => $entry) {
+            foreach ($entry['baselines'] as $baseline => $comparison) {
+                if (empty($comparison['available']) || empty($comparison['paired'])) {
+                    continue;
+                }
+                foreach ($comparison['points'] as $point) {
+                    $rows[] = [
+                        'mode' => $target, 'baseline' => $baseline, 'attemptid' => $point['attemptid'],
+                        'twinattemptid' => $point['twin'], 'scale' => $point['scale'],
+                        'truedelta' => $point['truedelta'], 'truedeltabaseline' => $point['truebaseline'],
+                        'estdeltabaseline' => $point['estbaseline'], 'estdeltamode' => $point['estmode'],
+                        'errorbaseline' => round($point['x'], 6), 'errormode' => round($point['y'], 6),
+                    ];
+                }
+            }
+        }
+
+        return ['columns' => self::POINT_COLUMNS, 'rows' => $rows];
     }
 
     /**

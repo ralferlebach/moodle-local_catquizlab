@@ -43,6 +43,18 @@ class attempt_scheduler {
     /** @var int Attempt status: trace collected from the engine. */
     public const STATUS_COLLECTED = 20;
 
+    /**
+     * @var int Finished in the engine, its trace not (yet) collected (#138): neither collected nor valid nor
+     *      finished in any figure; collected again later, given up as a technical non-result after TRACE_RETRIES.
+     */
+    public const STATUS_TRACEPENDING = 25;
+
+    /** @var int How many times a missing trace is looked for before the sitting is given up (#138). */
+    public const TRACE_RETRIES = 5;
+
+    /** @var int Seconds between two looks for a missing trace. */
+    public const TRACE_RETRY_DELAY = 60;
+
     /** @var int Attempt status: collected trace validated. */
     public const STATUS_VALIDATED = 30;
 
@@ -87,6 +99,7 @@ class attempt_scheduler {
             self::STATUS_QUEUED    => 'attemptstatus:queued',
             self::STATUS_RUNNING   => 'attemptstatus:running',
             self::STATUS_COLLECTED => 'attemptstatus:collected',
+            self::STATUS_TRACEPENDING => 'attemptstatus:tracepending',
             self::STATUS_VALIDATED => 'attemptstatus:validated',
             self::STATUS_FAILED    => 'attemptstatus:failed',
         ];
@@ -147,6 +160,8 @@ class attempt_scheduler {
             'running'   => $count(self::STATUS_RUNNING),
             'collected' => $count(self::STATUS_COLLECTED),
             'failed'    => $count(self::STATUS_FAILED),
+            // Finished, waiting for its trace (#138): neither collected nor failed.
+            'tracepending' => $count(self::STATUS_TRACEPENDING),
             'pausecauses' => [],
         ];
 
@@ -310,17 +325,23 @@ class attempt_scheduler {
             // collected, not played again.
             $state = \local_catquizlab\external\sitting_state::state((int) $attempt->id);
             if ($state['found'] && $state['state'] === 'complete') {
+                // The engine attempt is recorded, the status is the collector's to set: collected only with a
+                // trace (#138), otherwise waiting for it.
                 $DB->update_record('local_catquizlab_attempt', (object) [
-                    'id' => $attempt->id, 'status' => self::STATUS_COLLECTED,
-                    'engineattemptid' => (int) $state['engineattemptid'], 'timemodified' => $now,
+                    'id' => $attempt->id, 'engineattemptid' => (int) $state['engineattemptid'], 'timemodified' => $now,
                 ]);
-                attempt_history::record((int) $attempt->id, attempt_history::COLLECTED, [
+                $collected = self::collect_or_hold((int) $attempt->id, (string) ($attempt->leaseowner ?? ''));
+                attempt_history::record((int) $attempt->id, $collected ? attempt_history::COLLECTED
+                    : attempt_history::TRACE_PENDING, [
                     'tryno' => (int) $attempt->tries,
                     'workerid' => (string) ($attempt->leaseowner ?? ''),
                     'engineattemptid' => (int) $state['engineattemptid'],
-                    'detail' => get_string('history:leasecollected', 'local_catquizlab', (int) $state['questionsattempted']),
+                    'detail' => get_string(
+                        $collected ? 'history:leasecollected' : 'history:leasetracepending',
+                        'local_catquizlab',
+                        (int) $state['questionsattempted']
+                    ),
                 ]);
-                attempt_collector::collect((int) $attempt->id);
                 run_lifecycle::attempt_finished((int) $attempt->runid);
                 continue;
             }
@@ -553,12 +574,20 @@ class attempt_scheduler {
             'id ASC'
         );
 
-        $created = 0;
+        // One read of the sittings that exist and one batched write of the missing ones: two queries per person
+        // made 4000 of a 2000-person run's setup (incident 2026-11-09).
+        $existing = array_flip(array_map('intval', $DB->get_fieldset_select(
+            'local_catquizlab_attempt',
+            'personid',
+            'runid = :runid',
+            ['runid' => $runid]
+        )));
+        $rows = [];
         foreach ($persons as $person) {
-            if ($DB->record_exists('local_catquizlab_attempt', ['runid' => $runid, 'personid' => $person->id])) {
+            if (isset($existing[(int) $person->id])) {
                 continue;
             }
-            $DB->insert_record('local_catquizlab_attempt', (object) [
+            $rows[] = (object) [
                 'runid'           => $runid,
                 'personid'        => $person->id,
                 'engineattemptid' => null,
@@ -567,9 +596,10 @@ class attempt_scheduler {
                 'runtimems'       => null,
                 'timecreated'     => $now,
                 'timemodified'    => $now,
-            ]);
-            $created++;
+            ];
         }
+        $DB->insert_records('local_catquizlab_attempt', $rows);
+        $created = count($rows);
 
         if ($created > 0) {
             run_lifecycle::set_status($runid, registry::STATUS_SCHEDULED, 'sittings_scheduled');
@@ -589,5 +619,96 @@ class attempt_scheduler {
         $task = new \local_catquizlab\task\schedule_attempts();
         $task->set_custom_data(['runid' => $runid]);
         \core\task\manager::queue_adhoc_task($task, true);
+    }
+
+    /**
+     * Collect a finished sitting's trace — or hold it as waiting for its trace (#138).
+     *
+     * "Collected" means: a trace is stored with it. Where the engine has nothing yet (its attempt was finished but
+     * its data is not there, or not readable), the sitting is not collected, not valid, not finished: it waits,
+     * lease released, for the next look (retry_pending_traces()). It is not played again: its engine attempt
+     * exists, and a second sitting of the same person would be the double sitting of #134.
+     *
+     * @param int $attemptid The sitting.
+     * @param string $workerid Who reported it, for the record.
+     * @return bool Whether it is collected now.
+     */
+    public static function collect_or_hold(int $attemptid, string $workerid = ''): bool {
+        global $DB;
+
+        if (attempt_collector::collect($attemptid) !== null) {
+            return true;
+        }
+        $engine = (int) $DB->get_field('local_catquizlab_attempt', 'engineattemptid', ['id' => $attemptid]);
+        $DB->update_record('local_catquizlab_attempt', (object) [
+            'id' => $attemptid,
+            'status' => self::STATUS_TRACEPENDING,
+            'leaseowner' => null,
+            'leaseexpires' => 0,
+            'nextruntime' => time() + self::TRACE_RETRY_DELAY,
+            'lasterror' => 'trace_missing: ' . engine_validity::unmeasured_reason($engine),
+            'timemodified' => time(),
+        ]);
+
+        return false;
+    }
+
+    /**
+     * Look again for the traces that were missing; give up those that stay missing (#138).
+     *
+     * Called by the pipeline tick. A trace that arrives late is collected then; one that is still missing after
+     * TRACE_RETRIES looks is a technical non-result: failed, with the cause, never counted as collected or valid.
+     *
+     * @param int|null $now The clock.
+     * @param callable|null $collect The collection, attempt id => trace or null; the collector's by default (tests).
+     * @return array{collected: int, waiting: int, givenup: int}
+     */
+    public static function retry_pending_traces(?int $now = null, ?callable $collect = null): array {
+        global $DB;
+
+        $now = $now ?? time();
+        $collect = $collect ?? static fn(int $id): ?array => attempt_collector::collect($id);
+        $out = ['collected' => 0, 'waiting' => 0, 'givenup' => 0];
+        $pending = $DB->get_records_select(
+            'local_catquizlab_attempt',
+            'status = :status AND nextruntime <= :now',
+            ['status' => self::STATUS_TRACEPENDING, 'now' => $now],
+            'id ASC',
+            'id, runid, tries',
+            0,
+            200
+        );
+        foreach ($pending as $attempt) {
+            $looks = $DB->count_records('local_catquizlab_attemptlog', ['attemptid' => $attempt->id,
+                'outcome' => attempt_history::TRACE_PENDING]);
+            if ($collect((int) $attempt->id) !== null) {
+                attempt_history::record((int) $attempt->id, attempt_history::COLLECTED, [
+                    'tryno' => (int) $attempt->tries,
+                    'detail' => get_string('history:tracearrived', 'local_catquizlab', $looks),
+                ]);
+                $out['collected']++;
+            } else if ($looks >= self::TRACE_RETRIES) {
+                $DB->update_record('local_catquizlab_attempt', (object) ['id' => $attempt->id,
+                    'status' => self::STATUS_FAILED, 'timemodified' => $now]);
+                attempt_history::record((int) $attempt->id, attempt_history::ABANDONED, [
+                    'tryno' => (int) $attempt->tries,
+                    'detail' => get_string('history:tracegivenup', 'local_catquizlab', $looks),
+                ]);
+                $out['givenup']++;
+            } else {
+                $DB->update_record('local_catquizlab_attempt', (object) ['id' => $attempt->id,
+                    'nextruntime' => $now + self::TRACE_RETRY_DELAY, 'timemodified' => $now]);
+                attempt_history::record((int) $attempt->id, attempt_history::TRACE_PENDING, [
+                    'tryno' => (int) $attempt->tries,
+                    'detail' => get_string('history:tracestillmissing', 'local_catquizlab', (object) [
+                        'look' => $looks + 1, 'of' => self::TRACE_RETRIES,
+                    ]),
+                ]);
+                $out['waiting']++;
+            }
+            run_lifecycle::attempt_finished((int) $attempt->runid);
+        }
+
+        return $out;
     }
 }

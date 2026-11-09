@@ -283,6 +283,10 @@ Feature: Defining and running CAT experiments from the web interface
     And I press "Create sweep"
     Then I should not see "Executed"
     And I should see "Runs created, not started"
+    # Incident 2026-11-09: runs created and not started offered no way on.
+    And I follow "View progress"
+    And I should see "Runs created, not started"
+    And "Start runs" "button" should exist
 
   Scenario: Draft runs can be started from the web interface
     Given the following "local_catquizlab > experiment" exists:

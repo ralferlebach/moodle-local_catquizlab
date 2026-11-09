@@ -119,6 +119,29 @@ Barrierefreiheit (#126, #128, #130, #131): `tests/playwright/a11y.spec.js` prüf
 mit axe-core (WCAG 2.1 A/AA) den Hauptbereich jeder Seite des Plugins; schwere
 und kritische Befunde lassen den Test scheitern, die übrigen stehen im Bericht.
 
+Selbst säende Browser-Tests (0.7.47) — sie rufen die Seed-Skripte selbst auf und
+werden übersprungen, wo `php` nicht läuft:
+
+- `trace_progress.spec.js` (#138, #141, #142): `cli/seed_vanished_trace.php` meldet
+  über `job_complete` (die Funktion des Workers) eine beendete Sitzung, deren
+  Engine-Trace fehlt. Sie steht als „beendet, Trace fehlt“ im Filter `notrace` und
+  wird nie als eingesammelt gezählt; mit `--giveup` nach allen Nachschauen als
+  technisches Nicht-Ergebnis aufgegeben. `cli/seed_question_progress.php` spielt
+  eine CLASSIC-Sitzung mit 625 Fragen: Fragenbalken 100/625 → 624/625 ohne Neuladen,
+  Prognose „vorläufig“ aus dem Tempo der laufenden Sitzung.
+- `plot_semantics.spec.js` (#143, #144): `cli/seed_results.php --length=625
+  --identical` — ein Dichtemarker genau bei 625, Achse 624/625/626, Anzahl im
+  Tooltip; `cli/seed_modes.php` — Moduswerte als signierte Punkte je Zwilling und
+  gemeinsamer Subskala, z. B. (+0,6; +0,2) fünfmal.
+
+PHPUnit dazu: `trace_integrity_test`, `question_progress_test` (Fake-Clock
+0/1/100/624/625, Mischung 20/625, Retry, früher CAT-Stopp, unbestimmter Nenner,
+Query-Budget), `density_marker_test` (n = 1/2/10/100/625), `mode_detection_test`
+(Gegenbeispiel −0,4/+0,4), `preview_runs_test` (2×2×2-Sweep: Vorschau = angelegte
+Runs; Save/Edit/Copy verlustfrei), `unit_consistency_test` (Plot = Tabelle = Export
+für n = 1, n > 1, gepaart, Replikationen), `filter_export_snapshot_test` (alle sechs
+Faktorfilter, CSV und JSON).
+
 Abgedeckt: Argument-Parsing, URL-Bau, Frage-/Attempt-ID-Parsing, Login-
 Konvention, die Login-URL-Vorlage und die Options-Wahl (`chooseOptionIndex`:
 polytome Kategorie → Option, dichotom → korrekt/Distraktor).

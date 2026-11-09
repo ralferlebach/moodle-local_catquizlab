@@ -696,12 +696,25 @@ class log_view {
             return [];
         }
 
+        $reason = (string) ($last['reason'] ?? '');
+        $why = worker_launcher::idle_text((array) ($last['why'] ?? []));
         $text = get_string('logline:tick', 'local_catquizlab', (object) [
             'launched' => (int) $last['launched'], 'claimable' => (int) $last['claimable'],
-        ]) . ((string) $last['reason'] !== '' ? ', reason=' . $last['reason'] : '');
+        ]) . ($reason !== '' ? ', reason=' . $reason : '') . ($why !== '' ? ' — ' . $why : '');
+
+        // Nothing to do is a state, not a failure: it was an error line, the one line on an idle installation,
+        // and it read as the reason nothing ran (incident 2026-11-09). What needs a person is a warning — runs
+        // never started, a held queue — and only a start that went wrong is an error.
+        $codes = array_column((array) ($last['why'] ?? []), 'code');
+        if ($reason === '' || in_array($reason, worker_launcher::IDLE_REASONS, true)) {
+            $severity = array_intersect($codes, ['runsnotstarted', 'queueheld']) !== [] ? self::WARNING : self::INFO;
+        } else {
+            $severity = self::ERROR;
+        }
 
         return [self::line((int) $last['time'], PHP_INT_MAX, 'task', $text, [
-            'failed' => (int) $last['launched'] === 0 && (string) $last['reason'] !== '',
+            'failed' => $severity === self::ERROR,
+            'severity' => $severity,
         ])];
     }
 

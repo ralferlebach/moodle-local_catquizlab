@@ -81,11 +81,27 @@ final class attempt_recovery_test extends \advanced_testcase {
 
         [$runid, $ids] = $this->run_of_three();
 
+        // The engine attempts reported here do not exist, so a finished sitting waits for its trace (#138);
+        // the trace then arrives through the retry the pipeline makes, with the engine's data stood in for.
+        $arrive = static function () use ($DB): void {
+            attempt_scheduler::retry_pending_traces(
+                time() + attempt_scheduler::TRACE_RETRY_DELAY + 1,
+                static function (int $id) use ($DB): array {
+                    $trace = ['items' => [101], 'responses' => [101 => 1.0], 'nitems' => 1];
+                    $DB->update_record('local_catquizlab_attempt', (object) ['id' => $id,
+                        'status' => attempt_scheduler::STATUS_COLLECTED, 'tracejson' => json_encode($trace)]);
+
+                    return $trace;
+                }
+            );
+        };
+
         // Two sittings play through; the third fails on its last try.
         foreach ([0, 1] as $index) {
             $claim = job_claim::execute('worker-a');
             job_complete::execute((int) $claim['attemptid'], 'finished', 5000, 900 + $index);
         }
+        $arrive();
         $claim = job_claim::execute('worker-b');
         $failing = (int) $claim['attemptid'];
         $DB->set_field('local_catquizlab_attempt', 'tries', attempt_scheduler::MAX_TRIES, ['id' => $failing]);
@@ -131,6 +147,7 @@ final class attempt_recovery_test extends \advanced_testcase {
         $claim = job_claim::execute('worker-c');
         $this->assertSame($failing, (int) $claim['attemptid']);
         job_complete::execute($failing, 'finished', 5000, 999);
+        $arrive();
 
         $this->assertTrue(run_lifecycle::is_complete($runid), 'every planned sitting collected, yet not complete');
 

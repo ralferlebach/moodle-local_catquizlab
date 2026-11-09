@@ -83,7 +83,7 @@ class scatter_chart {
     /** @var string How the y axis is scaled. */
     protected string $ymode = axis_scale::LINEAR;
 
-    /** @var array Axis options: xatleast, yatleast, xfromzero, yfromzero, jitter. */
+    /** @var array Axis options: xatleast, yatleast, xfromzero, yfromzero, xlocal, ylocal. */
     protected array $axisoptions = [];
 
     /** @var array[] Several traces in one plot: label, group, points (#109). */
@@ -188,6 +188,47 @@ class scatter_chart {
 
     /** @var int Points outside the displayed range in the last drawing. */
     protected int $hidden = 0;
+
+    /** @var float Radius of the marker of a single point, in SVG units. */
+    public const BASE_RADIUS = 2.5;
+
+    /** @var string The documented size function of a marker standing for n identical points (#143). */
+    public const SIZE_FUNCTION = 'r = 2.5 * sqrt(1 + ln(n)); area proportional to 1 + ln(n)';
+
+    /**
+     * The radius of a marker for n points on the same coordinates: its area grows with 1 + ln n.
+     *
+     * One point keeps the radius it always had; 625 identical points are a marker 2.8 times as wide, not 25 —
+     * readable as "many" without covering the plot.
+     *
+     * @param int $n Points the marker stands for.
+     * @return float
+     */
+    public static function marker_radius(int $n): float {
+        return round(self::BASE_RADIUS * sqrt(1 + log(max(1, $n))), 2);
+    }
+
+    /**
+     * Points grouped by their exact coordinates, in the order they first occur.
+     *
+     * Exact means the values, not the pixels: two sittings 0.001 apart in their standard error remain two markers.
+     *
+     * @param array[] $points Points with x, y and label.
+     * @return array[] Each with x, y, n and label (the first point's).
+     */
+    public static function clusters(array $points): array {
+        $out = [];
+        foreach ($points as $point) {
+            $key = sprintf('%.9F|%.9F', (float) $point['x'], (float) $point['y']);
+            if (!isset($out[$key])) {
+                $out[$key] = ['x' => (float) $point['x'], 'y' => (float) $point['y'], 'n' => 0,
+                    'label' => (string) ($point['label'] ?? '')];
+            }
+            $out[$key]['n']++;
+        }
+
+        return array_values($out);
+    }
 
     /**
      * A robust y range: the 1st to the 99th percentile, so that a few outliers
@@ -373,8 +414,9 @@ class scatter_chart {
      * @param string $x Mode of the x axis.
      * @param string $y Mode of the y axis.
      * @param array $options xatleast / yatleast: a half-range a symmetric axis
-     *     covers at least; xfromzero / yfromzero: include 0; jitter: a spread
-     *     for points on an integer x axis, in units of that axis.
+     *     covers at least; xfromzero / yfromzero: include 0; xlocal / ylocal:
+     *     centre an integer axis on values that lie close together (#143).
+     *     Points are never moved: identical ones share a density marker.
      * @return self
      */
     public function set_axes(string $x, string $y, array $options = []): self {
@@ -524,6 +566,22 @@ class scatter_chart {
         }
 
         $bounds = $this->bounds();
+        $this->hidden = 0;
+        $visible = [];
+        foreach ($this->points as $point) {
+            // Outside the displayed range — a robust or a hand-set one — a
+            // point is not drawn at the edge, where it would read as a value
+            // there, but counted and named beneath the plot.
+            if (
+                $point['y'] < $bounds['ymin'] - 1e-9 || $point['y'] > $bounds['ymax'] + 1e-9
+                || $point['x'] < $bounds['xmin'] - 1e-9 || $point['x'] > $bounds['xmax'] + 1e-9
+            ) {
+                $this->hidden++;
+                continue;
+            }
+            $visible[] = $point;
+        }
+        $clusters = self::clusters($visible);
         $plotwidth = self::WIDTH - self::MARGIN_LEFT - self::MARGIN_RIGHT;
         $plotheight = self::HEIGHT - self::MARGIN_TOP - self::MARGIN_BOTTOM;
         // With an identity line the plotting area is square: the same range on
@@ -562,6 +620,14 @@ class scatter_chart {
                 'manual' => $this->fixed ?: null,
                 'robust' => $this->robust,
                 'profile' => $this->profile,
+            ],
+            // What the markers stand for, so the figure can be checked against its data (#143).
+            'markers'     => [
+                'points'  => count($visible),
+                'markers' => count($clusters),
+                'largest' => $clusters === [] ? 0 : max(array_column($clusters, 'n')),
+                'hidden'  => $this->hidden,
+                'size'    => self::SIZE_FUNCTION,
             ],
             'exported' => date('c'),
         ];
@@ -677,26 +743,23 @@ class scatter_chart {
                 . ' stroke-opacity="0.8" data-region="trajectory"/>';
         }
 
-        $jitter = (float) ($this->axisoptions['jitter'] ?? 0.0);
-        $this->hidden = 0;
-        foreach ($this->points as $index => $point) {
-            // Outside the displayed range — a robust or a hand-set one — a
-            // point is not drawn at the edge, where it would read as a value
-            // there, but counted and named beneath the plot.
-            if (
-                $point['y'] < $bounds['ymin'] - 1e-9 || $point['y'] > $bounds['ymax'] + 1e-9
-                || $point['x'] < $bounds['xmin'] - 1e-9 || $point['x'] > $bounds['xmax'] + 1e-9
-            ) {
-                $this->hidden++;
-                continue;
+        // Points are drawn where they are (#143): no sideways spread. Points on exactly the same coordinates
+        // become one marker whose area grows with the logarithm of their number, labelled with that number, so a
+        // test length of 625 stays 625 and two hundred equal sittings do not read as one.
+        foreach ($clusters as $cluster) {
+            $n = (int) $cluster['n'];
+            $label = $cluster['label'];
+            if ($n > 1) {
+                $label = get_string('chart:clusterlabel', 'local_catquizlab', (object) [
+                    'n' => $n, 'x' => self::format($cluster['x']), 'y' => self::format($cluster['y']),
+                    'label' => $cluster['label'],
+                ]);
             }
-            // A small, reproducible spread on an integer axis, so that tests
-            // of equal length do not hide behind each other; the value itself
-            // is unchanged.
-            $dx = $jitter > 0 ? ((crc32((string) $index) % 1000) / 999 - 0.5) * 2 * $jitter : 0.0;
-            $title = $point['label'] !== '' ? '<title>' . s($point['label']) . '</title>' : '';
-            $svg .= '<circle cx="' . round($sx($point['x'] + $dx), 2) . '" cy="' . round($sy($point['y']), 2)
-                . '" r="3" fill="#2c3e50" fill-opacity="0.45">' . $title . '</circle>';
+            $title = $label !== '' ? '<title>' . s($label) . '</title>' : '';
+            $svg .= '<circle cx="' . round($sx($cluster['x']), 2) . '" cy="' . round($sy($cluster['y']), 2)
+                . '" r="' . self::marker_radius($n) . '" fill="#2c3e50" fill-opacity="' . ($n > 1 ? '0.6' : '0.45') . '"'
+                . ' data-x="' . s((string) $cluster['x']) . '" data-y="' . s((string) $cluster['y']) . '"'
+                . ' data-count="' . $n . '" data-region="point">' . $title . '</circle>';
         }
 
         // Axis labels.
@@ -949,6 +1012,15 @@ class scatter_chart {
             case axis_scale::SYMMETRIC:
                 return axis_scale::symmetric($values, (float) ($this->axisoptions[$which . 'atleast'] ?? 0));
             case axis_scale::INTEGER:
+                // A count all of whose values lie close together (every sitting 625 questions): centred on them,
+                // 624 625 626, not 0 to 700 with everything squeezed against the right edge (#143). Only where
+                // the plot asks for it, and only where no hand-set range applies.
+                if (!empty($this->axisoptions[$which . 'local']) && $values !== []) {
+                    $local = axis_scale::local_integer($values);
+                    if ($local !== null) {
+                        return $local;
+                    }
+                }
                 return axis_scale::integer($values, $fromzero);
             default:
                 return axis_scale::linear($values, $fromzero);

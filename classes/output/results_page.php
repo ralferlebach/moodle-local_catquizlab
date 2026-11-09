@@ -599,7 +599,7 @@ class results_page {
             $experimentid = (int) ($this->filter['experimentid'] ?? 0);
             $status = $experimentid > 0 ? \local_catquizlab\local\experiment_status::snapshot($experimentid) : null;
 
-            return $status !== null && in_array($status['phase'], ['planned', 'preparing', 'ready', 'queued'], true)
+            return $status !== null && in_array($status['phase'], ['planned', 'created', 'preparing', 'ready', 'queued'], true)
                 ? 'notstarted' : 'nocollected';
         }
         if ($this->query->provenance()['attempts'] > 0) {
@@ -681,6 +681,9 @@ class results_page {
             [get_string('population:started', $component), $funnel['started']],
             [get_string('population:failed', $component), $funnel['failed']],
             [get_string('population:collected', $component), $funnel['collected']],
+            // Finished without a trace: not a result, and not hidden (#138).
+            [get_string('population:withouttrace', $component), (int) ($funnel['tracepending'] ?? 0)
+                + (int) ($funnel['withouttrace'] ?? 0)],
             [get_string('population:valid', $component), $funnel['valid'] . ' — '
                 . $share('population:validofstarted', $funnel['valid'], $funnel['started']) . '; '
                 . $share('population:validoffinished', $funnel['valid'], $funnel['collected'])],
@@ -828,7 +831,7 @@ class results_page {
             get_string('axis:testlength', $component),
             get_string('axis:finalse', $component)
         );
-        $chart->set_axes(axis_scale::INTEGER, axis_scale::LINEAR, ['yfromzero' => true, 'jitter' => 0.15]);
+        $chart->set_axes(axis_scale::INTEGER, axis_scale::LINEAR, ['yfromzero' => true, 'xlocal' => true]);
         $chart->set_basis($this->plot_basis());
         $this->configure_chart($chart, 'lengthprecision');
         // What the plot leaves out (#118): a short test that ended before the
@@ -847,7 +850,8 @@ class results_page {
             ]));
         }
         $chart->set_points($overview['points'])
-            ->set_description(get_string('chart:pointisattempt', $component));
+            ->set_description(get_string('chart:pointisattempt', $component))
+            ->add_note(get_string('chart:densitymarkers', $component));
         $semin = $this->target_se();
         if ($semin !== null) {
             $chart->add_horizontal_line($semin, get_string('chart:setarget', $component, format_float($semin, 2)));
@@ -2527,7 +2531,7 @@ class results_page {
             get_string('axis:itemsonscale', $component),
             get_string('axis:localerror', $component)
         );
-        $error->set_axes(axis_scale::INTEGER, axis_scale::SYMMETRIC, ['xfromzero' => true, 'jitter' => 0.15]);
+        $error->set_axes(axis_scale::INTEGER, axis_scale::SYMMETRIC, ['xfromzero' => true, 'xlocal' => true]);
         $error->set_basis($this->plot_basis());
         $this->configure_chart($error, 'localerroritems');
         $error->set_points(array_map(
@@ -2536,7 +2540,7 @@ class results_page {
         ))->set_description(get_string('chart:pointissubscale', $component))
             ->add_horizontal_line(0.0, get_string('chart:zeroline', $component))
             ->add_note($selection)
-            ->add_note(get_string('chart:itemsjitter', $component));
+            ->add_note(get_string('chart:densitymarkers', $component));
         if ($unknown > 0) {
             $error->add_note(get_string('chart:itemsunknown', $component, $unknown));
         }
@@ -2551,7 +2555,7 @@ class results_page {
             get_string('axis:itemsonscale', $component),
             get_string('axis:localse', $component)
         );
-        $se->set_axes(axis_scale::INTEGER, axis_scale::LINEAR, ['xfromzero' => true, 'yfromzero' => true, 'jitter' => 0.15]);
+        $se->set_axes(axis_scale::INTEGER, axis_scale::LINEAR, ['xfromzero' => true, 'yfromzero' => true, 'xlocal' => true]);
         $se->set_basis($this->plot_basis());
         $this->configure_chart($se, 'localseitems');
         $se->set_points(array_map(
@@ -2559,7 +2563,7 @@ class results_page {
             $withse
         ))->set_description(get_string('chart:pointissubscale', $component))
             ->add_note($selection)
-            ->add_note(get_string('chart:itemsjitter', $component));
+            ->add_note(get_string('chart:densitymarkers', $component));
         if ($unknown > 0) {
             $se->add_note(get_string('chart:itemsunknown', $component, $unknown));
         }
@@ -3585,23 +3589,29 @@ class results_page {
             get_string('mode:plotx', $component, $names->baseline),
             get_string('mode:plotx', $component, $names->mode)
         );
-        $chart->set_axes(axis_scale::LINEAR, axis_scale::LINEAR, ['xfromzero' => true, 'yfromzero' => true]);
+        // Signed errors, one point per twin and common subscale (#144): both axes symmetric around 0, the same
+        // range on each, the identity the diagonal. Equal points share a density marker (#143).
+        $chart->set_axes(axis_scale::SYMMETRIC, axis_scale::SYMMETRIC);
         $chart->set_basis($this->plot_basis());
         $this->configure_chart($chart, 'mode' . $target . $baseline);
         $chart->set_points(array_map(static fn(array $point): array => [
             'x' => $point['x'], 'y' => $point['y'],
             'label' => get_string('mode:plotlabel', $component, (object) [
-                'attempt' => $point['attemptid'], 'twin' => $point['twin'], 'n' => $point['n'],
+                'attempt' => $point['attemptid'], 'twin' => $point['twin'], 'scale' => $point['scale'],
                 'x' => format_float($point['x'], 3), 'y' => format_float($point['y'], 3),
             ]),
         ], $comparison['points']))
             ->set_description(get_string('mode:plotpoint', $component))
             ->add_identity_line(get_string('chart:identity', $component) . ' — ' . get_string('mode:plotbelow', $component))
+            ->add_note(get_string('mode:plotn', $component, (object) [
+                'n' => count($comparison['points']), 'pairs' => $comparison['pairs'],
+            ]))
             ->add_note(get_string('mode:meandifference', $component, (object) [
                 'mean' => format_float((float) $comparison['meandifference'], 4),
-                'n' => count($comparison['points']),
+                'n' => count($comparison['personpoints'] ?? []),
                 'scales' => $comparison['commonscales'],
-            ]));
+            ]))
+            ->add_note(get_string('chart:densitymarkers', $component));
 
         return $out . \html_writer::div($chart->render(), '', ['data-region' => 'catquizlab-mode-plot']);
     }

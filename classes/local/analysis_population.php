@@ -99,6 +99,9 @@ class analysis_population {
                 // What the design says; where a run keeps no definition, what was scheduled.
                 'planned' => $definition !== [] ? person_generator::planned_count($definition) : null,
                 'scheduled' => 0, 'started' => 0, 'failed' => 0, 'collected' => 0,
+                // Finished without a trace (#138): waiting for it, or — from versions before 0.7.47 — stored as
+                // collected without one. Neither is a result; both are said.
+                'tracepending' => 0, 'withouttrace' => 0,
                 'valid' => (int) ($counts['byrun'][$runid]['valid'] ?? 0),
                 'evaluated' => (int) ($counts['byrun'][$runid]['total'] ?? 0),
             ];
@@ -133,12 +136,18 @@ class analysis_population {
                     && (int) $row->traced === 1
                 ) {
                     $perrun[$runid]['collected'] += $n;
+                } else if (in_array($status, [attempt_scheduler::STATUS_COLLECTED, attempt_scheduler::STATUS_VALIDATED], true)) {
+                    $perrun[$runid]['withouttrace'] += $n;
+                }
+                if ($status === attempt_scheduler::STATUS_TRACEPENDING) {
+                    $perrun[$runid]['tracepending'] += $n;
                 }
             }
             $rows->close();
         }
 
-        $total = ['planned' => 0, 'scheduled' => 0, 'started' => 0, 'failed' => 0, 'collected' => 0, 'valid' => 0];
+        $total = ['planned' => 0, 'scheduled' => 0, 'started' => 0, 'failed' => 0, 'collected' => 0, 'valid' => 0,
+            'tracepending' => 0, 'withouttrace' => 0];
         $strategies = [];
         foreach ($perrun as $runid => $run) {
             $planned = $run['planned'] ?? $run['scheduled'];
@@ -248,7 +257,7 @@ class analysis_population {
         $funnel = self::funnel($query);
         $out = [
             'attempts' => array_intersect_key($funnel, array_flip(['planned', 'scheduled', 'started', 'failed',
-                'collected', 'evaluated', 'valid', 'invalid', 'unknown'])),
+                'collected', 'evaluated', 'valid', 'invalid', 'unknown', 'tracepending', 'withouttrace'])),
             'invalidreasons' => $funnel['invalidreasons'],
             // Not judgeable is not invalid (#112 AK 7); an export of 250 unknown sittings says so (#115).
             'engineverdicts' => $funnel['engine'] + ['unknownreasons' => $funnel['unknownreasons']],

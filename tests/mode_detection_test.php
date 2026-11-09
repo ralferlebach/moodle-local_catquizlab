@@ -214,6 +214,8 @@ final class mode_detection_test extends \advanced_testcase {
         $this->assertSame(0.0, $comparison['baseline']['recall']);
         $this->assertSame(1.0, $comparison['mode']['recall']);
 
+        $this->assertSame('1:1', $comparison['points'][0]['scale']);
+
         // Nobody in common: unpaired, and said to be — the baseline's own figures beside.
         $unpaired = mode_detection::compare($own, [$sitting('z', ['1:1' => [-1.0, -1.0]])], 'deficit', 0.5);
         $this->assertFalse($unpaired['paired']);
@@ -221,6 +223,51 @@ final class mode_detection_test extends \advanced_testcase {
         $this->assertSame(1.0, $unpaired['unpaired']['recall']);
         // A sitting without a twin id cannot be paired at all.
         $this->assertSame('', mode_detection::pair_key(['twinid' => '', 'experimentid' => 1]));
+    }
+
+    /**
+     * The plot's points are signed, one per twin and common subscale (#144); the table's figures do not change.
+     *
+     * @return void
+     */
+    public function test_points_are_signed_and_per_subscale(): void {
+        $sitting = static fn(string $key, array $scales): array => [
+            'role' => 'x', 'strategy' => 'x', 'pairkey' => $key, 'valid' => true, 'attemptid' => crc32($key),
+            'withitems' => count($scales), 'included' => count($scales),
+            'truth' => ['deficit' => 1, 'strength' => 1, 'relevant' => 2],
+            'scales' => mode_detection::pack_scales($scales),
+        ];
+        // The issue's counterexample: baseline 0.4 too low, mode 0.4 too high. One common scale: one point.
+        $one = mode_detection::compare(
+            [$sitting('p', ['1:1' => [0.0, 0.4]])],
+            [$sitting('p', ['1:1' => [0.0, -0.4]])],
+            'deficit',
+            0.5
+        );
+        $this->assertCount(1, $one['points']);
+        $this->assertEqualsWithDelta(-0.4, $one['points'][0]['x'], 1e-6);
+        $this->assertEqualsWithDelta(0.4, $one['points'][0]['y'], 1e-6);
+        $this->assertEqualsWithDelta(0.0, $one['meandifference'], 1e-6, 'equal absolute errors: no mean difference');
+
+        // Four common scales, errors of opposite sign within one person: four separate points, nothing averaged.
+        $mode = ['1:1' => [0.0, 0.3], '1:2' => [0.0, -0.3], '1:3' => [1.0, 1.1], '1:4' => [-1.0, -1.5], '1:5' => [0.0, 0.0]];
+        $base = ['1:1' => [0.0, -0.2], '1:2' => [0.0, 0.2], '1:3' => [1.0, 0.5], '1:4' => [-1.0, -1.0]];
+        $four = mode_detection::compare([$sitting('q', $mode)], [$sitting('q', $base)], 'deficit', 0.5);
+        $this->assertCount(4, $four['points']);
+        $this->assertSame($four['commonscales'], count($four['points']), 'n_plot = the common subscales');
+        $signed = array_map(static fn(array $p): array => [$p['scale'], round($p['x'], 6), round($p['y'], 6)], $four['points']);
+        $this->assertSame([['1:1', -0.2, 0.3], ['1:2', 0.2, -0.3], ['1:3', -0.5, 0.1], ['1:4', 0.0, -0.5]], $signed);
+        // The table's mean difference is the per-person mean absolute error, as before: (0.3+0.3+0.1+0.5)/4 − (0.2+0.2+0.5+0)/4.
+        $this->assertEqualsWithDelta(0.075, $four['meandifference'], 1e-6);
+        $this->assertCount(1, $four['personpoints']);
+
+        // The export carries exactly the plotted points.
+        $rows = mode_detection::point_rows(['targets' => ['deficit' => ['baselines' => ['allsubs' => ['available' => true]
+            + $four]]]]);
+        $this->assertSame(mode_detection::POINT_COLUMNS, $rows['columns']);
+        $this->assertCount(4, $rows['rows']);
+        $this->assertSame([-0.2, 0.3], [$rows['rows'][0]['errorbaseline'], $rows['rows'][0]['errormode']]);
+        $this->assertEqualsWithDelta(-0.2, $rows['rows'][0]['estdeltabaseline'] - $rows['rows'][0]['truedelta'], 1e-6);
     }
 
     /**
@@ -253,7 +300,9 @@ final class mode_detection_test extends \advanced_testcase {
         $this->assertSame(1.0, $allsubs['mode']['recall']);
         // Common scales: subscales 1 and 3, of five pairs.
         $this->assertSame(10, $allsubs['commonscales']);
-        $this->assertCount(5, $allsubs['points']);
+        // One point per paired person and common subscale (#144); one mean per person for the table.
+        $this->assertCount(10, $allsubs['points']);
+        $this->assertCount(5, $allsubs['personpoints']);
         // Against the classical test: all six, and the classical test is exact.
         $classic = $deficit['baselines']['classic'];
         $this->assertSame([6, 6], [$classic['pairs'], $classic['pairable']]);
@@ -431,8 +480,11 @@ final class mode_detection_test extends \advanced_testcase {
         // The export says the same about itself, machine-readable — counted by the pass that wrote the rows.
         $json = json_decode(results_export::to_json(new results_query($filter), results_export::LEVEL_SUBSCALE), true);
         $population = $json['metadata']['population'];
-        $this->assertEquals(['planned' => 30, 'scheduled' => 30, 'started' => 30, 'failed' => 6, 'collected' => 24,
-            'valid' => 23, 'evaluated' => 24, 'invalid' => 1, 'unknown' => 0], $population['attempts']);
+        $this->assertEquals(
+            ['planned' => 30, 'scheduled' => 30, 'started' => 30, 'failed' => 6, 'collected' => 24,
+            'valid' => 23, 'evaluated' => 24, 'invalid' => 1, 'unknown' => 0, 'tracepending' => 0, 'withouttrace' => 0],
+            $population['attempts']
+        );
         // The engine's own three counts, beside the rule's, add up to what was evaluated (#112).
         $this->assertSame(24, $population['engineverdicts']['valid'] + $population['engineverdicts']['invalid']
             + $population['engineverdicts']['unknown']);

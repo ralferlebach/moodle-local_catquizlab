@@ -6,6 +6,168 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.7.48] — 2026-11-09 — Incident 2026-11-09: workers did not start, and nothing said why
+
+No database change (version 2026110900).
+
+On clara, experiment 16 played nothing. Node 22.23.4, Puppeteer 24.43.1 and Chrome 148 were fine; the worker
+self-test passed as `www-data`. The cause was in the plugin:
+
+- the six runs had been created and never started;
+- the progress page called that "being prepared" and offered no button;
+- the execution queue had been held for 48 days by experiment 6, which had no runs left;
+- the only log line, "no-claimable-work", was filed as an error, without a word of what was missing.
+
+The runs were started from the console and the 25 workers came up on the next tick. This release removes all
+three causes.
+
+### Runs created and never started are no dead end
+
+- New experiment state `created` and phase `created`: "Runs created, not started". The label "being prepared"
+  now means only what it says: setup tasks are running.
+- The status bar's next step and the progress page's experiment card offer **Start runs**. This is the new
+  action `startruns` on runs.php, which runs `run_lifecycle::start_drafts()`. Each run is prepared in the
+  background by its own setup task, the same as "Start runs" on the experiment page.
+- `experiment_runner::state()` counts runs that are `draft` and runs that are `provisioning`, and reports
+  `canstartruns`.
+
+### The execution queue cannot be held by an entry that runs nothing
+
+`execution_queue::advance()` closes entries that can never run:
+
+- a running entry whose experiment was deleted, has no runs, or whose runs were never started;
+- a waiting entry whose experiment is gone or has no runs.
+
+Each is closed as `cancelled` with its reason (`orphaned: …`). The result names who holds the queue and since
+when (`holder`, `since`), and which entries were closed. Deleting an experiment now also takes it out of the
+queue (`execution_queue::forget()`).
+
+### Logs that say why
+
+- Every tick records why nothing started, as codes and counts in `lastdispatch.why`
+  (`worker_launcher::idle_reasons()`):
+  - runs never started, and of which experiment;
+  - runs being prepared;
+  - sittings not due, blocked, paused or in play;
+  - the execution queue held by an experiment.
+- The tick writes this to cron's output and `mdl_task_log` in words. It also writes the queue's state:
+  entries it closed, who holds it and since when, setup incomplete, skipped entries.
+- Severity of the tick line in the log view:
+  - nothing to do, or no free slot: info;
+  - waiting for a person (runs never started, queue held): warning;
+  - only a start that failed: error.
+- "Start workers" with nothing to play names runs that were never started or are being prepared.
+- New read-only `cli/diagnose.php --experimentid=N [--json]` gathers in one command what took a dozen queries
+  in the incident.
+- New `docs/dev/stillstand-diagnose.md`, the diagnosis procedure in German.
+
+### Fewer queries in setup
+
+- `attempt_scheduler::schedule()` reads the existing sittings once and inserts the missing ones in one batch.
+  It used to make two queries per person; a 2000-person run now saves about 4000 queries.
+- `person_generator` reads a run's twin claims once and writes person and claim in one step, without the
+  placeholder claim it corrected afterwards. That saves two queries per person.
+- Measured locally: 300 people dropped from 9805 to 8653 queries; the sitting stage dropped from 608 to 10.
+- Not changed: most of the remaining cost is in Moodle core and the engine.
+  - Per person, user creation, enrolment and role assignment, about 25 queries.
+  - Per item, the question bank and the engine's item registration, about 34 queries. The engine reads the
+    whole `local_catquiz_catscales` table once per item.
+  - For the incident's 2500-item pool that is about 86 000 queries per run.
+
+### Tests
+
+New `tests/stalled_start_test.php` (10 tests):
+- the created state, phase, next step and library;
+- the button in the progress template;
+- the orphaned running entry from the incident, with the next entry starting;
+- entries that can never run;
+- a busy queue naming its holder;
+- deleting an experiment taking it out of the queue;
+- the idle reasons and their text;
+- the severity of the tick line;
+- the tick itself reporting closed entries and reasons;
+- scheduling batched and idempotent.
+
+The Behat scenario "A created sweep is not presented as an executed experiment" now also expects the
+**Start runs** button.
+
+---
+
+## [0.7.47] — 2026-11-03 — Re-audit 2026-11-03: trace integrity, question progress, plot semantics
+
+No database change (version 2026110300).
+
+### #138 (P0): no sitting is "collected" without a trace
+
+- `job_complete` and the lease reclaim no longer set COLLECTED when `collect()` returns nothing. The sitting
+  goes to the new status **TRACEPENDING** ("finished, trace missing"); the lease is released, nothing is
+  replayed.
+- `pipeline_tick` looks again (`attempt_scheduler::retry_pending_traces`): up to 5 looks, 60 s apart.
+  - A trace that arrives late is collected once.
+  - After the last look the sitting is FAILED with history ABANDONED, a technical non-result that is never
+    counted as collected or valid.
+- `attempt_collector::collect()` writes nothing for a trace without items or responses.
+- A second completion of the same sitting changes nothing.
+- Population and funnel name "trace pending" and "collected without trace" separately. The runs page filter
+  `notrace` lists both.
+- Tests:
+  - PHPUnit `trace_integrity_test`;
+  - Playwright `trace_progress.spec.js` with `cli/seed_vanished_trace.php`, which reports through
+    `job_complete` with the real collector behind it;
+  - `external_test` and `attempt_recovery_test` now expect the corrected behaviour.
+
+### #141 / #142: progress and forecast in questions
+
+- New `question_progress`: the questions the engine has stored as answered, counted in two places:
+  - collected sittings;
+  - sittings in flight, using the newest engine attempt of the person, so a retry is not counted twice.
+- The expected total has a kind:
+  - **exact**: a fixed form plays the whole pool;
+  - **estimate**: the mean of at least 3 collected sittings;
+  - **bound**: the global maximum, or the pool if that is smaller;
+  - **unknown**: shown as "not determinable", never as a number.
+- Query cost is fixed, whatever the number of runs.
+- A second bar on the progress card, per run as well, updated live by `livestatus.js`.
+- The ETA counts work in questions. A sitting 600 of 625 questions in is 1/25 of a sitting from its end, no
+  longer half of one.
+- Before 3 sittings have finished, the pace of the sittings in flight (seconds per question) gives a
+  provisional forecast. On a fake clock it equals the actual remaining time.
+- Tests: PHPUnit at 0/1/100/624/625, a 20/625 mix, retry, early CAT stop, an unknown denominator, and a query
+  budget for 2 vs 12 runs; Playwright 100 → 624 of 625 without a reload.
+
+### #143: no jitter; density markers; local axis
+
+- Test-length plots no longer move points sideways. Points with identical coordinates become one marker:
+  - area grows with 1 + ln n (`r = 2.5·√(1 + ln n)`);
+  - `data-count` and a tooltip with the count;
+  - the size function is in the plot settings JSON (`markers`).
+- Integer axes that ask for it (`xlocal`) centre on values within 4 units of each other: 624/625/626.
+- CSV, SVG, PNG and PDF keep every point.
+- Tests: PHPUnit for n = 1/2/10/100/625, determinism, axis and export counts; Playwright with 80 sittings of
+  exactly 625 questions.
+
+### #144: mode comparison with signed points per subscale
+
+- One point per paired twin and common subscale:
+  - x = Δ̂ baseline − Δ, y = Δ̂ mode − Δ;
+  - symmetric axes with the identity line;
+  - n_plot = the number of common subscales.
+- The table figures, including the mean difference, are unchanged: they come from `personpoints`.
+- New export level `detectionpoints`: exactly the plotted points.
+- Tests: PHPUnit with the counterexample (−0.4; +0.4), four scales giving four points, and opposite errors
+  within one person; Playwright with `cli/seed_modes.php`.
+
+### #126 / #127 / filter export
+
+- `preview_runs_test`: for a 2×2×2 sweep, the preview cells are exactly the runs created, and every
+  effective parameter agrees with the manifest and the engine options. Save, edit and copy lose nothing.
+- `unit_consistency_test`: plot, table and export count the same sittings, people and means for n = 1, n > 1,
+  paired, and replicated.
+- `filter_export_snapshot_test`: for each of the six factor filters, run and sitting level, CSV and JSON
+  contain the selection only, and the metadata names the filter.
+
+---
+
 ## [0.7.46] — 2026-11-02 — CI fix, the follow-ups from 0.7.45, language strings
 
 No database change (version 2026110201).

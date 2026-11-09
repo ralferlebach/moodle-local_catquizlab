@@ -104,9 +104,12 @@ final class orphaned_engine_attempt_test extends \advanced_testcase {
         $this->assertSame($engine, (int) $row->engineattemptid);
         $this->assertSame(1, (int) $row->tries, 'no further try spent');
         $this->assertSame(0, (int) $row->leaseexpires);
-        $this->assertContains(attempt_history::COLLECTED, $this->events($attemptid));
+        // The stand-in engine attempt carries no data: not collected without a trace (#138), waiting for it.
+        $this->assertSame(attempt_scheduler::STATUS_TRACEPENDING, (int) $row->status);
+        $this->assertContains(attempt_history::TRACE_PENDING, $this->events($attemptid));
+        $this->assertNotContains(attempt_history::COLLECTED, $this->events($attemptid));
         $detail = implode(' ', array_column(attempt_history::of_attempt($attemptid), 'detail'));
-        $this->assertStringContainsString('collected, not replayed', $detail);
+        $this->assertStringContainsString('not collected, not replayed', $detail);
     }
 
     /**

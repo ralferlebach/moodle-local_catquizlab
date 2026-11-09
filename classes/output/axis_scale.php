@@ -133,6 +133,30 @@ class axis_scale {
         return ['min' => $min, 'max' => $max, 'ticks' => self::ticks($min, $max, $step)];
     }
 
+    /** @var int Values spread over at most this many units get a local integer axis (#143). */
+    public const LOCAL_SPAN = 4;
+
+    /**
+     * An integer axis centred on values lying close together, one tick per unit: 624 625 626 for 625.
+     *
+     * @param float[] $values The values.
+     * @return array{min: float, max: float, ticks: float[]}|null Null where they spread further than LOCAL_SPAN.
+     */
+    public static function local_integer(array $values): ?array {
+        if ($values === []) {
+            return null;
+        }
+        $min = floor(min($values));
+        $max = ceil(max($values));
+        if ($max - $min > self::LOCAL_SPAN) {
+            return null;
+        }
+        $min -= 1;
+        $max += 1;
+
+        return ['min' => $min, 'max' => $max, 'ticks' => self::ticks($min, $max, 1.0)];
+    }
+
     /**
      * A plain range with round ticks.
      *

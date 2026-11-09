@@ -109,11 +109,13 @@ final class external_test extends \advanced_testcase {
 
         // Completing records the outcome. The engine attempt id is part of the
         // report: a finished attempt has an engine attempt behind it, and
-        // without one there is nothing to collect a trace from.
+        // without one there is nothing to collect a trace from. Engine attempt
+        // 4711 does not exist here, so there is no trace: the sitting waits
+        // for one instead of counting as collected (#138).
         $complete = job_complete::execute($first, 'finished', 1234, 4711);
         $this->assertTrue($complete['acknowledged']);
         $this->assertSame(
-            \local_catquizlab\local\attempt_scheduler::STATUS_COLLECTED,
+            \local_catquizlab\local\attempt_scheduler::STATUS_TRACEPENDING,
             (int) $DB->get_field('local_catquizlab_attempt', 'status', ['id' => $first])
         );
         $this->assertSame(1234, (int) $DB->get_field('local_catquizlab_attempt', 'runtimems', ['id' => $first]));

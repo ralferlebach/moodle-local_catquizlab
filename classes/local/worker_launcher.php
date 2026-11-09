@@ -706,6 +706,78 @@ class worker_launcher {
         ]));
     }
 
+    /** @var string[] Launch outcomes that are a normal state, not a failure: nothing to do, or no room. */
+    public const IDLE_REASONS = ['no-claimable-work', 'all-slots-busy', 'no-slot-acquired'];
+
+    /**
+     * Why nothing is claimable, as codes and counts a log line can be built from (incident 2026-11-09).
+     *
+     * "no-claimable-work" was the whole of it, every five minutes for hours, while six runs waited to be
+     * started and the execution queue had been held for 48 days by an experiment without runs. What the
+     * tick knows is said: runs never started (and of which experiments), runs being set up, sittings not
+     * due, held or paused, sittings in play, and who holds the execution queue.
+     *
+     * @param array $breakdown attempt_scheduler::queue_breakdown().
+     * @param array $queue execution_queue::advance()'s result.
+     * @return array[] Each with code, n and, where it helps, experiments (ids) or since (time).
+     */
+    public static function idle_reasons(array $breakdown, array $queue = []): array {
+        global $DB;
+
+        $why = [];
+        $drafts = $DB->get_records_sql_menu(
+            'SELECT experimentid, COUNT(1) FROM {local_catquizlab_run} WHERE status = :draft GROUP BY experimentid',
+            ['draft' => registry::STATUS_DRAFT]
+        );
+        if ($drafts !== []) {
+            $why[] = ['code' => 'runsnotstarted', 'n' => (int) array_sum($drafts),
+                'experiments' => array_map('intval', array_keys($drafts))];
+        }
+        $setup = $DB->count_records('local_catquizlab_run', ['status' => registry::STATUS_SCHEDULED]);
+        if ($setup > 0) {
+            $why[] = ['code' => 'runspreparing', 'n' => $setup];
+        }
+        foreach (['notdue', 'blocked', 'paused', 'running'] as $kind) {
+            if ((int) ($breakdown[$kind] ?? 0) > 0) {
+                $why[] = ['code' => $kind, 'n' => (int) $breakdown[$kind]];
+            }
+        }
+        if (($queue['reason'] ?? '') === 'busy' && !empty($queue['holder'])) {
+            $why[] = ['code' => 'queueheld', 'n' => 1, 'experiments' => [(int) $queue['holder']],
+                'since' => (int) ($queue['since'] ?? 0)];
+        }
+        if ($why === []) {
+            $why[] = ['code' => 'nothing', 'n' => 0];
+        }
+
+        return $why;
+    }
+
+    /**
+     * idle_reasons() in words.
+     *
+     * @param array[] $why From idle_reasons().
+     * @return string One sentence, parts separated by semicolons.
+     */
+    public static function idle_text(array $why): string {
+        $parts = [];
+        foreach ($why as $item) {
+            $code = (string) ($item['code'] ?? '');
+            $key = 'tick:why_' . $code;
+            if ($code === '' || !get_string_manager()->string_exists($key, 'local_catquizlab')) {
+                continue;
+            }
+            $parts[] = get_string($key, 'local_catquizlab', (object) [
+                'n' => (int) ($item['n'] ?? 0),
+                'experiments' => implode(', ', array_map('intval', (array) ($item['experiments'] ?? []))),
+                'since' => !empty($item['since']) ? userdate((int) $item['since'], get_string('strftimedatetimeshort'))
+                    : '–',
+            ]);
+        }
+
+        return implode('; ', $parts);
+    }
+
     /**
      * What a press of "Start workers" did, in a sentence — and when it goes on by itself.
      *
@@ -783,6 +855,15 @@ class worker_launcher {
                 : get_string('workers:nothingclaimable', $component, implode('; ', $parts));
             if ($breakdown['notdue'] > 0 || $breakdown['blocked'] > 0) {
                 $message .= ' ' . $when;
+            }
+            // What a person has to do first, where there is something: runs never started (incident
+            // 2026-11-09 — the button was pressed with six runs in draft and said only "nothing queued").
+            $todo = array_values(array_filter(
+                self::idle_reasons($breakdown),
+                static fn(array $item): bool => in_array($item['code'], ['runsnotstarted', 'runspreparing'], true)
+            ));
+            if ($todo !== []) {
+                $message .= ' ' . ucfirst(self::idle_text($todo)) . '.';
             }
             return ['type' => \core\output\notification::NOTIFY_INFO, 'message' => $message];
         }

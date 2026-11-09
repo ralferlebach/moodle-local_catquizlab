@@ -128,7 +128,9 @@ class execution_queue {
      * Called from the pipeline tick. Does nothing at all while something runs,
      * which is what "one at a time" means in practice.
      *
-     * @return array{started: int, reason: string}
+     * @return array{started: int, reason: string, holder?: int, since?: int, closed?: array[]} What it decided:
+     *      started (the experiment started, or 0), reason (busy, empty, setup-incomplete, skipped-not-ready),
+     *      holder (the experiment holding the line or at its front), closed (entries it took out, and why).
      */
     public static function advance(): array {
         global $DB;
@@ -138,28 +140,51 @@ class execution_queue {
         }
 
         // Close out whatever finished since the last tick, so the line moves.
+        $closed = [];
         foreach ($DB->get_records('local_catquizlab_execqueue', ['state' => self::RUNNING]) as $entry) {
-            $state = experiment_runner::state((int) $entry->experimentid);
-
-            $done = [experiment_runner::STATE_FINISHED, experiment_runner::STATE_BLOCKED];
-
-            if (in_array($state['state'], $done, true)) {
-                $DB->update_record('local_catquizlab_execqueue', (object) [
-                    'id'           => $entry->id,
-                    'state'        => self::FINISHED,
-                    'reason'       => $state['state'] === experiment_runner::STATE_BLOCKED ? 'blocked' : '',
-                    'timefinished' => time(),
-                ]);
+            $experimentid = (int) $entry->experimentid;
+            $orphan = self::orphaned($experimentid);
+            if ($orphan !== '') {
+                // An entry whose experiment has no runs any more, or whose runs were never started, is not
+                // running anything — and held the whole line for 48 days on an installation (incident
+                // 2026-11-09), every tick answering "busy" and nothing saying so.
+                self::close($entry, self::CANCELLED, $orphan);
+                $closed[] = ['experimentid' => $experimentid, 'reason' => $orphan];
                 continue;
             }
 
-            // Still going: nothing else starts.
-            return ['started' => 0, 'reason' => 'busy'];
+            $state = experiment_runner::state($experimentid);
+            $done = [experiment_runner::STATE_FINISHED, experiment_runner::STATE_BLOCKED];
+            if (in_array($state['state'], $done, true)) {
+                self::close(
+                    $entry,
+                    self::FINISHED,
+                    $state['state'] === experiment_runner::STATE_BLOCKED ? 'blocked' : ''
+                );
+                $closed[] = ['experimentid' => $experimentid, 'reason' => $state['state']];
+                continue;
+            }
+
+            // Still going: nothing else starts, and which one holds the line is said.
+            return ['started' => 0, 'reason' => 'busy', 'holder' => $experimentid,
+                'since' => (int) $entry->timestarted, 'closed' => $closed];
+        }
+
+        // Waiting entries whose experiment is gone or has no runs left: taken out of the line now, not when
+        // they reach its front, so the line shows what will really run.
+        foreach ($DB->get_records('local_catquizlab_execqueue', ['state' => self::WAITING]) as $entry) {
+            if (!$DB->record_exists('local_catquizlab_experiment', ['id' => $entry->experimentid])) {
+                self::close($entry, self::CANCELLED, 'orphaned: experiment deleted');
+                $closed[] = ['experimentid' => (int) $entry->experimentid, 'reason' => 'orphaned: experiment deleted'];
+            } else if (!$DB->record_exists('local_catquizlab_run', ['experimentid' => $entry->experimentid])) {
+                self::close($entry, self::CANCELLED, 'orphaned: experiment has no runs');
+                $closed[] = ['experimentid' => (int) $entry->experimentid, 'reason' => 'orphaned: experiment has no runs'];
+            }
         }
 
         $next = $DB->get_records('local_catquizlab_execqueue', ['state' => self::WAITING], 'position ASC', '*', 0, 1);
         if ($next === []) {
-            return ['started' => 0, 'reason' => 'empty'];
+            return ['started' => 0, 'reason' => 'empty', 'closed' => $closed];
         }
 
         $entry = reset($next);
@@ -169,7 +194,7 @@ class execution_queue {
         // the runtime was set up waits here — it is not skipped, because the
         // thing missing is on the installation, not on the experiment.
         if (empty(setup_wizard::state()['ready'])) {
-            return ['started' => 0, 'reason' => 'setup-incomplete'];
+            return ['started' => 0, 'reason' => 'setup-incomplete', 'holder' => $experimentid, 'closed' => $closed];
         }
 
         // Ready when it reaches the front, not merely when it was queued: an
@@ -183,7 +208,8 @@ class execution_queue {
                 'timefinished' => time(),
             ]);
 
-            return ['started' => 0, 'reason' => 'skipped-not-ready'];
+            return ['started' => 0, 'reason' => 'skipped-not-ready', 'holder' => $experimentid,
+                'closed' => $closed];
         }
 
         $DB->update_record('local_catquizlab_execqueue', (object) [
@@ -192,7 +218,74 @@ class execution_queue {
             'timestarted' => time(),
         ]);
 
-        return ['started' => $experimentid, 'reason' => ''];
+        return ['started' => $experimentid, 'reason' => '', 'closed' => $closed];
+    }
+
+    /**
+     * Why a running entry is not running anything, if it is not.
+     *
+     * @param int $experimentid The experiment of the entry.
+     * @return string The reason, or '' where the entry is genuine.
+     */
+    public static function orphaned(int $experimentid): string {
+        global $DB;
+
+        if (!$DB->record_exists('local_catquizlab_experiment', ['id' => $experimentid])) {
+            return 'orphaned: experiment deleted';
+        }
+        if (!$DB->record_exists('local_catquizlab_run', ['experimentid' => $experimentid])) {
+            return 'orphaned: experiment has no runs';
+        }
+        $state = experiment_runner::state($experimentid)['state'];
+        if (in_array($state, [experiment_runner::STATE_DRAFT, experiment_runner::STATE_CREATED], true)) {
+            return 'orphaned: runs were never started';
+        }
+
+        return '';
+    }
+
+    /**
+     * Take every entry of an experiment out of the line: it was deleted, or its runs were.
+     *
+     * @param int $experimentid The experiment.
+     * @param string $reason Why.
+     * @return int Entries taken out.
+     */
+    public static function forget(int $experimentid, string $reason): int {
+        global $DB;
+
+        if (!$DB->get_manager()->table_exists('local_catquizlab_execqueue')) {
+            return 0;
+        }
+        $entries = $DB->get_records_select(
+            'local_catquizlab_execqueue',
+            'experimentid = :experimentid AND state IN (:waiting, :running)',
+            ['experimentid' => $experimentid, 'waiting' => self::WAITING, 'running' => self::RUNNING]
+        );
+        foreach ($entries as $entry) {
+            self::close($entry, self::CANCELLED, $reason);
+        }
+
+        return count($entries);
+    }
+
+    /**
+     * End an entry.
+     *
+     * @param \stdClass $entry The entry.
+     * @param string $state FINISHED or CANCELLED.
+     * @param string $reason Why.
+     * @return void
+     */
+    protected static function close(\stdClass $entry, string $state, string $reason): void {
+        global $DB;
+
+        $DB->update_record('local_catquizlab_execqueue', (object) [
+            'id'           => $entry->id,
+            'state'        => $state,
+            'reason'       => $reason,
+            'timefinished' => time(),
+        ]);
     }
 
     /**

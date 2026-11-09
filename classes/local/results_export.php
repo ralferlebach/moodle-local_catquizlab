@@ -101,6 +101,9 @@ class results_export {
     /** @var string Export level: mode-specific detection, the summary per mode and baseline (#114). */
     public const LEVEL_DETECTIONSUMMARY = 'detectionsummary';
 
+    /** @var string Export level: mode-specific detection, the plotted points — one per twin and common subscale (#144). */
+    public const LEVEL_DETECTIONPOINTS = 'detectionpoints';
+
     /** @var string Export level: one row per execution of a sitting, failed ones included, with its cause (#134). */
     public const LEVEL_EXECUTION = 'execution';
 
@@ -132,6 +135,7 @@ class results_export {
             self::LEVEL_STEP     => 'export:levelstep',
             self::LEVEL_DETECTION => 'export:leveldetection',
             self::LEVEL_DETECTIONSUMMARY => 'export:leveldetectionsummary',
+            self::LEVEL_DETECTIONPOINTS => 'export:leveldetectionpoints',
             self::LEVEL_EXECUTION => 'export:levelexecution',
         ];
     }
@@ -193,6 +197,7 @@ class results_export {
 
             case self::LEVEL_DETECTION:
             case self::LEVEL_DETECTIONSUMMARY:
+            case self::LEVEL_DETECTIONPOINTS:
                 // Known once it is computed: every sitting of every validity is read for it.
                 return -1;
 
@@ -511,6 +516,8 @@ class results_export {
                 return ['columns' => $detection['columns'], 'rows' => iterator_to_array($detection['rows'], false)];
             case self::LEVEL_DETECTIONSUMMARY:
                 return mode_detection::summary_rows(mode_detection::analyse(mode_detection::sittings($query)));
+            case self::LEVEL_DETECTIONPOINTS:
+                return mode_detection::point_rows(mode_detection::analyse(mode_detection::sittings($query)));
             case self::LEVEL_EXECUTION:
                 return ['columns' => self::EXECUTION_COLUMNS, 'rows' => iterator_to_array(self::execution_rows($query), false)];
             default:

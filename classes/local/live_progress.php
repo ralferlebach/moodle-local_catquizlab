@@ -111,6 +111,19 @@ class live_progress {
             ];
         }
 
+        // Questions, not only sittings: a sitting of 625 questions moves the bar while it is played (#141).
+        $sittings = [];
+        foreach ($rows as $row) {
+            $left = max(0, $row['total'] - $row['done'] - $row['failed']);
+            $sittings[$row['runid']] = ['inflight' => min($left, $row['inflight']),
+                'queued' => max(0, $left - $row['inflight'])];
+        }
+        $questions = question_progress::for_runs($sittings);
+        foreach ($rows as $i => $row) {
+            $rows[$i]['questions'] = self::question_text($questions[$row['runid']]);
+        }
+        $questiontotal = self::question_text(question_progress::total($questions));
+
         $workers = worker_registry::summary();
         $state = self::derive($runs, $totals, $workers, $experimentid);
 
@@ -122,6 +135,7 @@ class live_progress {
             'done'         => $totals['done'],
             'total'        => $totals['total'],
             'percent'      => self::percent($totals['done'], $totals['total']),
+            'questions'    => $questiontotal,
             'runs'         => $rows,
             // What is happening this second, which is the part somebody watches
             // rather than reads.
@@ -226,6 +240,25 @@ class live_progress {
     }
 
     /**
+     * Question figures with the words a page shows for them.
+     *
+     * @param array $q From question_progress.
+     * @return array The figures, plus text (done of expected, and what the denominator is) and hasexpected.
+     */
+    protected static function question_text(array $q): array {
+        $component = 'local_catquizlab';
+        $a = (object) ['done' => $q['done'], 'expected' => $q['expected'] ?? '–', 'percent' => $q['percent'] ?? '–'];
+        $q['text'] = $q['expected'] === null
+            ? get_string('questions:doneunknown', $component, $a)
+            : get_string('questions:done' . $q['kind'], $component, $a);
+        $q['kindlabel'] = get_string('questions:kind' . $q['kind'], $component);
+        $q['hasexpected'] = $q['expected'] !== null;
+        $q['percent'] = $q['percent'] ?? 0;
+
+        return $q;
+    }
+
+    /**
      * How many of a run's attempts a worker is holding right now.
      *
      * @param int $runid The run.
@@ -275,6 +308,7 @@ class live_progress {
             'done'         => 0,
             'total'        => 0,
             'percent'      => 0,
+            'questions'    => self::question_text(question_progress::total([])),
             'runs'         => [],
             'now'          => [
                 'workers'   => 0,

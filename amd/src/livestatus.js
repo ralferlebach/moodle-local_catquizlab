@@ -59,6 +59,28 @@ let timer = null;
  * @param {string} region The data-region name.
  * @param {string|number} value What to show.
  */
+/**
+ * The question bar (#141): text, kind and width as the server computed them.
+ *
+ * @param {Object|undefined} questions The snapshot's question figures.
+ */
+const setQuestions = (questions) => {
+    if (!questions) {
+        return;
+    }
+    setRegion('catquizlab-questions-text', questions.text);
+    setRegion('catquizlab-questions-kind', questions.kindlabel);
+    const bar = document.querySelector('[data-region="catquizlab-questions-bar"]');
+    if (bar) {
+        bar.style.width = `${questions.percent}%`;
+        bar.setAttribute('aria-valuenow', String(questions.percent));
+    }
+    const box = document.querySelector('[data-region="catquizlab-questions"]');
+    if (box) {
+        box.setAttribute('data-kind', questions.kind);
+    }
+};
+
 const setRegion = (region, value) => {
     const node = document.querySelector(`[data-region="${region}"]`);
     if (!node) {
@@ -165,6 +187,9 @@ const poll = async() => {
                 overall.setAttribute('aria-valuenow', String(status.progress.percent));
             }
 
+            // Questions (#141): the denominator and its kind come from the server.
+            setQuestions(status.progress.questions);
+
             // The times (#125): text from the server, nothing computed here.
             const time = status.progress.time;
             if (time) {
@@ -190,6 +215,9 @@ const poll = async() => {
 
             (status.progress.runs || []).forEach((run) => {
                 setRegion(`catquizlab-run-${run.runid}-progress`, `${run.done} / ${run.total}`);
+                if (run.questions) {
+                    setRegion(`catquizlab-run-${run.runid}-questions`, run.questions.text);
+                }
 
                 const bar = document.querySelector(`[data-region="catquizlab-run-${run.runid}-bar"]`);
                 if (bar) {

@@ -172,6 +172,8 @@ class job_complete extends external_api {
             );
         }
 
+        // Collected means: with a trace (#138). Set where the collector has one.
+        $collected = false;
         if ($finished) {
             $update = (object) [
                 'id'           => $attemptid,
@@ -192,10 +194,9 @@ class job_complete extends external_api {
                 // reader in between saw a collected sitting with no trace — the
                 // smoke test read 0 answered questions for a CLASSIC sitting of 120
                 // (#136, local run against the engine heads, 18.10.2026).
-                if (attempt_collector::collect($attemptid) === null) {
-                    // No trace to collect: collected all the same, as before.
-                    $DB->set_field('local_catquizlab_attempt', 'status', attempt_scheduler::STATUS_COLLECTED, ['id' => $attemptid]);
-                }
+                // Collected only with a trace (#138). Without one the sitting waits for it — not collected,
+                // not valid, not finished — and is looked at again by the pipeline tick.
+                $collected = attempt_scheduler::collect_or_hold($attemptid, $reporter);
 
                 // The sitting is in this plugin's tables now. The engine's
                 // person parameters for this simulated person go, so the next
@@ -236,7 +237,8 @@ class job_complete extends external_api {
         $logid = \local_catquizlab\local\attempt_history::record(
             $attemptid,
             $finished
-                ? \local_catquizlab\local\attempt_history::COLLECTED
+                ? ($collected ? \local_catquizlab\local\attempt_history::COLLECTED
+                    : \local_catquizlab\local\attempt_history::TRACE_PENDING)
                 : \local_catquizlab\local\attempt_history::FAILED,
             [
                 // The worker is not a parameter of this call; it holds the

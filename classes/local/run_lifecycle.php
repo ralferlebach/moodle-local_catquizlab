@@ -1030,9 +1030,11 @@ class run_lifecycle {
     public static function has_open_attempts(int $runid): bool {
         global $DB;
 
+        // A sitting waiting for its trace is open: the run is not done while it may still be collected (#138).
         [$insql, $params] = $DB->get_in_or_equal([
             attempt_scheduler::STATUS_QUEUED,
             attempt_scheduler::STATUS_RUNNING,
+            attempt_scheduler::STATUS_TRACEPENDING,
         ], SQL_PARAMS_NAMED, 'st');
         $params['runid'] = $runid;
 
@@ -1067,6 +1069,7 @@ class run_lifecycle {
             switch ((int) $row->status) {
                 case attempt_scheduler::STATUS_QUEUED:
                 case attempt_scheduler::STATUS_RUNNING:
+                case attempt_scheduler::STATUS_TRACEPENDING:
                     $counts['open'] += $n;
                     break;
                 case attempt_scheduler::STATUS_COLLECTED:

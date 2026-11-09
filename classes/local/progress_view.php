@@ -168,6 +168,8 @@ class progress_view {
                     // above; here only preparing again, for a blocked experiment.
                     'canstart'   => false,
                     'canprepare' => $status['phase'] === 'blocked' && !empty($status['runner']['canprepare']),
+                    // Runs created and never started: the one way on, here too (incident 2026-11-09).
+                    'canstartruns' => !empty($status['runner']['canstartruns']),
                 ] + $status['runner'] + [
                     'experimentid' => $experimentid,
                     'queued'       => execution_queue::state_of($experimentid),

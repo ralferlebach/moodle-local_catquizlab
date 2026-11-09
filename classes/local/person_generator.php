@@ -235,6 +235,7 @@ class person_generator {
         $now = time();
         $count = 0;
         $transaction = $DB->start_delegated_transaction();
+        $claims = null;
         foreach ($persons as $person) {
             $twinid = (string) ($person['twinid'] ?? '');
             $record = (object) [
@@ -260,7 +261,11 @@ class person_generator {
             // Each twin once in a run (#116). Claimed first: the claim table's
             // unique index refuses a second claim of the same twin, whichever
             // process makes it, so not even two setups at once can store it twice.
-            $claim = $DB->get_record('local_catquizlab_twinclaim', ['runid' => $runid, 'twinid' => $twinid]);
+            // The run's claims are read once, not once per twin (incident 2026-11-09: 2000 extra queries a run).
+            if ($claims === null) {
+                $claims = $DB->get_records_menu('local_catquizlab_twinclaim', ['runid' => $runid], '', 'twinid, personid');
+            }
+            $claim = isset($claims[$twinid]) ? (object) ['personid' => (int) $claims[$twinid]] : null;
             if ($claim) {
                 // Provisioned before: the same person is used again — if it is
                 // the same person. Ground truth is never changed silently.
@@ -273,11 +278,14 @@ class person_generator {
                 $count++;
                 continue;
             }
-            $claimid = $DB->insert_record('local_catquizlab_twinclaim', (object) [
-                'runid' => $runid, 'twinid' => $twinid, 'personid' => 0, 'timecreated' => $now,
-            ]);
+            // Person and claim in the same transaction: should another process have claimed the twin meanwhile,
+            // the claim's unique index refuses this one and the person goes with it. One write fewer than
+            // claiming first with a placeholder and correcting it afterwards.
             $personid = $DB->insert_record('local_catquizlab_person', $record);
-            $DB->set_field('local_catquizlab_twinclaim', 'personid', $personid, ['id' => $claimid]);
+            $DB->insert_record('local_catquizlab_twinclaim', (object) [
+                'runid' => $runid, 'twinid' => $twinid, 'personid' => $personid, 'timecreated' => $now,
+            ]);
+            $claims[$twinid] = $personid;
             $count++;
         }
         $transaction->allow_commit();

@@ -44,7 +44,7 @@ namespace local_catquizlab\local;
  */
 class experiment_status {
     /** @var string[] The phases, in the order of an experiment's life. */
-    public const PHASES = ['planned', 'preparing', 'ready', 'queued', 'starting', 'collecting', 'waiting', 'paused',
+    public const PHASES = ['planned', 'created', 'preparing', 'ready', 'queued', 'starting', 'collecting', 'waiting', 'paused',
         'blocked', 'aggregating', 'complete', 'completefailures'];
 
     /** @var array<int, array> This request's snapshots. */
@@ -133,10 +133,13 @@ class experiment_status {
         $runs = $DB->get_records_sql(
             "SELECT experimentid, COUNT(1) AS n,
                     SUM(CASE WHEN status IN (:running, :aggregating) THEN 1 ELSE 0 END) AS active,
-                    SUM(CASE WHEN status = :ready THEN 1 ELSE 0 END) AS ready
+                    SUM(CASE WHEN status = :ready THEN 1 ELSE 0 END) AS ready,
+                    SUM(CASE WHEN status = :draft THEN 1 ELSE 0 END) AS draft,
+                    SUM(CASE WHEN status = :scheduled THEN 1 ELSE 0 END) AS scheduled
                FROM {local_catquizlab_run} WHERE experimentid {$insql} GROUP BY experimentid",
             $params + ['running' => registry::STATUS_RUNNING, 'aggregating' => registry::STATUS_AGGREGATING,
-                'ready' => registry::STATUS_READY]
+                'ready' => registry::STATUS_READY, 'draft' => registry::STATUS_DRAFT,
+                'scheduled' => registry::STATUS_SCHEDULED]
         );
         [$heldsql, $heldparams] = circuit_breaker::held_sql();
         $held = $DB->get_records_sql_menu(
@@ -180,6 +183,8 @@ class experiment_status {
                 $phase = $count['done'] + $count['inflight'] > 0 ? 'collecting' : 'starting';
             } else if ((int) $run->ready === (int) $run->n && $count['done'] === 0) {
                 $phase = 'ready';
+            } else if ((int) $run->draft > 0 && (int) $run->scheduled === 0) {
+                $phase = 'created';
             } else {
                 $phase = 'preparing';
             }
@@ -234,6 +239,9 @@ class experiment_status {
         if ($untouched && $queued !== null) {
             return 'queued';
         }
+        if ($runner['state'] === experiment_runner::STATE_CREATED) {
+            return 'created';
+        }
         if ($runner['state'] === experiment_runner::STATE_PREPARING) {
             return 'preparing';
         }
@@ -275,6 +283,9 @@ class experiment_status {
                 ? $make('create', new \moodle_url('/local/catquizlab/runs.php'), 'progress', 'prepareexperiment')
                 : $make('plan', new \moodle_url('/local/catquizlab/index.php', ['tab' => 'experiments',
                     'experimentid' => $experimentid]), 'plan');
+        }
+        if ($phase === 'created' && !empty($runner['canstartruns'])) {
+            return $make('startruns', new \moodle_url('/local/catquizlab/runs.php'), 'progress', 'startruns');
         }
         if ($phase === 'ready' && !empty($runner['canstart'])) {
             return $make('start', new \moodle_url('/local/catquizlab/runs.php'), 'progress', 'startexperiment');

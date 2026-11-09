@@ -159,6 +159,24 @@
                      aria-label="{{#str}}progress:overall, local_catquizlab{{/str}}"></div>
             </div>
 
+            {{! Questions, not only sittings (#141): moves while a long sitting is played. }}
+            {{#questions}}
+                <div class="mb-3" data-region="catquizlab-questions" data-kind="{{kind}}">
+                    <div class="d-flex justify-content-between align-items-baseline small">
+                        <span>{{#str}}questions:heading, local_catquizlab{{/str}}</span>
+                        <span data-region="catquizlab-questions-text">{{text}}</span>
+                    </div>
+                    <div class="progress" style="height: 0.4rem;">
+                        <div class="progress-bar bg-info" role="progressbar"
+                             data-region="catquizlab-questions-bar"
+                             style="width: {{percent}}%;"
+                             aria-valuenow="{{percent}}" aria-valuemin="0" aria-valuemax="100"
+                             aria-label="{{#str}}questions:bar, local_catquizlab{{/str}}"></div>
+                    </div>
+                    <span class="small text-muted" data-region="catquizlab-questions-kind">{{kindlabel}}</span>
+                </div>
+            {{/questions}}
+
             {{! Started, elapsed, finish, remaining (#125). Recomputed on the server with every poll. }}
             {{#time}}
             <div class="mb-3" data-region="catquizlab-eta" data-reliability="{{reliability}}">
@@ -220,6 +238,7 @@
                                 </td>
                                 <td class="small text-right" style="width: 7rem;">
                                     <span data-region="catquizlab-run-{{runid}}-progress">{{done}} / {{total}}</span>
+                                    <br><span class="text-muted" data-region="catquizlab-run-{{runid}}-questions">{{questions.text}}</span>
                                 </td>
                                 <td class="small" data-region="catquizlab-run-{{runid}}-started">{{time.started}}</td>
                                 <td class="small" data-region="catquizlab-run-{{runid}}-elapsed">{{time.elapsed}}</td>
@@ -276,6 +295,16 @@
                         </button>
                     </form>
                 {{/canprepare}}
+                {{#canstartruns}}
+                    <form method="post" action="{{formurl}}" class="d-inline">
+                        <input type="hidden" name="sesskey" value="{{sesskey}}">
+                        <input type="hidden" name="action" value="startruns">
+                        <input type="hidden" name="experimentid" value="{{experimentid}}">
+                        <button type="submit" class="btn btn-primary" data-action="catquizlab-startruns">
+                            {{#str}}runner:startruns, local_catquizlab{{/str}}
+                        </button>
+                    </form>
+                {{/canstartruns}}
                 {{#canstart}}
                     <form method="post" action="{{formurl}}" class="d-inline">
                         <input type="hidden" name="sesskey" value="{{sesskey}}">

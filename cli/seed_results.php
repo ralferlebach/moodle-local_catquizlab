@@ -24,7 +24,8 @@
  * Options: --persons=20 (sittings per run), --label=PLOTS (prints <label>_EXPERIMENTID):
  * --persons=2000 --label=LARGE is the large experiment of the export test (#121); --invalid --label=INVALID
  * one whose sittings are collected and none valid (#130); --strategies=all --label=FILTERS one run per strategy the
- * installed engine can play (#122).
+ * installed engine can play (#122); --length=625 --identical --label=DENSITY sittings of 625 questions on the same
+ * coordinates (#143).
  *
  * @package    local_catquizlab
  * @copyright  2026 Ralf Erlebach
@@ -45,7 +46,12 @@ use local_catquizlab\local\test_flow;
 
 \core\session\manager::set_user(get_admin());
 
-[$options] = cli_get_params(['persons' => 20, 'label' => 'PLOTS', 'invalid' => false, 'strategies' => 'fastest,allsubs']);
+[$options] = cli_get_params(['persons' => 20, 'label' => 'PLOTS', 'invalid' => false, 'strategies' => 'fastest,allsubs',
+    'length' => 6, 'identical' => false]);
+// Option --length: questions a sitting (#143: 625, every one alike); --identical: every person of a run the same
+// ability and path, so that their sittings are the same point — a density marker, not a pile.
+$length = max(6, (int) $options['length']);
+$identical = !empty($options['identical']);
 // Option --invalid: collected, but without a final ability — none of them valid (#130).
 $invalid = !empty($options['invalid']);
 $persons = max(1, (int) $options['persons']);
@@ -73,18 +79,26 @@ if (count($playable) < 2) {
 }
 $definition['sweep']['factors']['strategy'] = $playable;
 // Six questions a sitting: within the budgets, so that the sittings are valid ones.
-$definition['budgets']['global'] = ['minitems' => 3, 'maxitems' => 30];
-$definition['budgets']['subscale'] = ['minitems' => 1, 'maxitems' => 10];
+$definition['budgets']['global'] = ['minitems' => 3, 'maxitems' => max(30, $length)];
+$definition['budgets']['subscale'] = ['minitems' => 1, 'maxitems' => max(10, $length)];
 $definition['persons']['count'] = $persons;
 $definition['pool']['scales'] = ['categories' => 1, 'subcategories' => 1, 'itemspersubscale' => 6];
 $experimentid = (int) experiment_service::save($definition)['id'];
 experiment_service::create_sweep($experimentid);
 
 mt_srand(105);
-$items = [[1.2, -0.5], [0.8, 0.3], [1.5, 1.1], [1.0, -1.2], [0.9, 0.6], [1.3, -0.1]];
+$base = [[1.2, -0.5], [0.8, 0.3], [1.5, 1.1], [1.0, -1.2], [0.9, 0.6], [1.3, -0.1]];
+$items = [];
+for ($k = 0; $k < $length; $k++) {
+    $items[] = $base[$k % 6];
+}
+$responsepattern = [1.0, 0.0, 1.0, 1.0, 0.0, 1.0];
 foreach ($DB->get_records('local_catquizlab_run', ['experimentid' => $experimentid], 'id ASC') as $run) {
     \local_catquizlab\local\run_lifecycle::set_status((int) $run->id, registry::STATUS_FINISHED, 'seeded');
     for ($i = 1; $i <= $persons; $i++) {
+        if ($identical) {
+            mt_srand(105);
+        }
         $truth = round((mt_rand() / mt_getrandmax() - 0.5) * 5, 3);
         $played = [];
         $path = [];
@@ -118,7 +132,10 @@ foreach ($DB->get_records('local_catquizlab_run', ['experimentid' => $experiment
                 'stopreason' => 'Reached maximum number of questions', 'scaleabilities' => [],
                 'abilitypath' => $path,
                 // Answered, some right and some wrong: a sitting whose validity can be judged (#112).
-                'responses' => array_combine(array_map('intval', array_keys($played)), [1.0, 0.0, 1.0, 1.0, 0.0, 1.0]),
+                'responses' => array_combine(
+                    array_map('intval', array_keys($played)),
+                    array_map(static fn(int $k): float => $responsepattern[$k % 6], array_keys(array_values($played)))
+                ),
                 'progress' => ['playedquestions' => $played, 'responses' => [], 'activescales' => [5],
                     'droppedscales' => [], 'lockedscales' => []],
             ] + $finaltheta),

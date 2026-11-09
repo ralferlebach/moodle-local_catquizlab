@@ -335,6 +335,21 @@ class live_status extends external_api {
                 'done'         => new external_value(PARAM_INT, 'Sittings collected.'),
                 'total'        => new external_value(PARAM_INT, 'Sittings planned.'),
                 'percent'      => new external_value(PARAM_INT, 'How far along.'),
+                'questions'    => new external_single_structure([
+                    'done'        => new external_value(PARAM_INT, 'Questions answered, confirmed by the engine.'),
+                    'expected'    => new external_value(
+                        PARAM_INT,
+                        'Questions expected; null where not determinable.',
+                        VALUE_DEFAULT,
+                        null,
+                        NULL_ALLOWED
+                    ),
+                    'kind'        => new external_value(PARAM_ALPHA, 'exact, estimate, bound or unknown.'),
+                    'kindlabel'   => new external_value(PARAM_TEXT, 'That, in words.'),
+                    'percent'     => new external_value(PARAM_INT, 'How far along, in questions.'),
+                    'hasexpected' => new external_value(PARAM_BOOL, 'Whether there is a denominator.'),
+                    'text'        => new external_value(PARAM_TEXT, 'Done of expected, in words.'),
+                ], 'Progress in questions (#141).', VALUE_OPTIONAL),
                 'runs'         => new \core_external\external_multiple_structure(
                     new external_single_structure([
                         'runid'    => new external_value(PARAM_INT, 'The run.'),
@@ -346,6 +361,21 @@ class live_status extends external_api {
                         'failed'   => new external_value(PARAM_INT, 'Failed for good.'),
                         'complete' => new external_value(PARAM_BOOL, 'Whether it is done.'),
                         'held'     => new external_value(PARAM_BOOL, 'Whether it was stopped.'),
+                        'questions' => new external_single_structure([
+                        'done'        => new external_value(PARAM_INT, 'Questions answered, confirmed by the engine.'),
+                        'expected'    => new external_value(
+                            PARAM_INT,
+                            'Questions expected; null where not determinable.',
+                            VALUE_DEFAULT,
+                            null,
+                            NULL_ALLOWED
+                        ),
+                        'kind'        => new external_value(PARAM_ALPHA, 'exact, estimate, bound or unknown.'),
+                        'kindlabel'   => new external_value(PARAM_TEXT, 'That, in words.'),
+                        'percent'     => new external_value(PARAM_INT, 'How far along, in questions.'),
+                        'hasexpected' => new external_value(PARAM_BOOL, 'Whether there is a denominator.'),
+                        'text'        => new external_value(PARAM_TEXT, 'Done of expected, in words.'),
+                        ], 'Progress in questions (#141).', VALUE_OPTIONAL),
                     ]),
                     'Per run.'
                 ),

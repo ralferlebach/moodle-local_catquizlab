@@ -50,14 +50,20 @@ final class attempt_collector_test extends \advanced_testcase {
         $run = $generator->create_run();
         $person = $generator->create_person(['runid' => $run->id]);
         $now = time();
-        foreach ([111, 222] as $engineid) {
+        // Finished sittings are candidates: collected ones (read again) and those waiting for their trace (#138).
+        foreach ([111 => attempt_scheduler::STATUS_TRACEPENDING, 222 => attempt_scheduler::STATUS_COLLECTED] as $engineid => $st) {
             $DB->insert_record('local_catquizlab_attempt', (object) [
                 'runid' => $run->id, 'personid' => $person->id,
                 'engineattemptid' => $engineid,
-                'status' => attempt_scheduler::STATUS_RUNNING,
+                'status' => $st,
                 'timecreated' => $now, 'timemodified' => $now,
             ]);
         }
+        // One still being played is not: collecting it would turn it into "collected" behind the scheduler's back.
+        $DB->insert_record('local_catquizlab_attempt', (object) [
+            'runid' => $run->id, 'personid' => $person->id, 'engineattemptid' => 333,
+            'status' => attempt_scheduler::STATUS_RUNNING, 'timecreated' => $now, 'timemodified' => $now,
+        ]);
         // An attempt without an engine id is not a candidate.
         $DB->insert_record('local_catquizlab_attempt', (object) [
             'runid' => $run->id, 'personid' => $person->id,

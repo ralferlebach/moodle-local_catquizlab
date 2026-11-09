@@ -24,7 +24,6 @@
 
 namespace local_catquizlab\local;
 
-
 /**
  * Computes a run's evaluation results from its collected attempts and stores them.
  *

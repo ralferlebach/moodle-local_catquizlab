@@ -65,10 +65,14 @@ class attempt_collector {
         $started = microtime(true);
         $readsbefore = $DB->perf_get_reads();
         $writesbefore = $DB->perf_get_writes();
+        // Only sittings that finished: collecting a queued, running or failed one would turn it into "collected"
+        // behind the scheduler's back (#138).
+        [$insql, $params] = $DB->get_in_or_equal([attempt_scheduler::STATUS_COLLECTED, attempt_scheduler::STATUS_VALIDATED,
+            attempt_scheduler::STATUS_TRACEPENDING], SQL_PARAMS_NAMED, 'st');
         $attempts = $DB->get_records_select(
             'local_catquizlab_attempt',
-            'runid = :runid AND engineattemptid IS NOT NULL AND engineattemptid > 0',
-            ['runid' => $runid],
+            'runid = :runid AND engineattemptid IS NOT NULL AND engineattemptid > 0 AND status ' . $insql,
+            ['runid' => $runid] + $params,
             'id ASC',
             'id'
         );
@@ -87,6 +91,16 @@ class attempt_collector {
             'dbreads'    => $DB->perf_get_reads() - $readsbefore,
             'dbwrites'   => $DB->perf_get_writes() - $writesbefore,
         ];
+    }
+
+    /**
+     * Whether a trace holds what a sitting administered: items or responses (#138).
+     *
+     * @param array $trace A built trace.
+     * @return bool
+     */
+    public static function usable(array $trace): bool {
+        return (array) ($trace['items'] ?? []) !== [] || (array) ($trace['responses'] ?? []) !== [];
     }
 
     /**
@@ -202,6 +216,13 @@ class attempt_collector {
         $trace['summarysteps'] = max(count($summary), count($progresspath));
 
         $trace['steps'] = self::step_series($trace, $debug);
+
+        // A trace is one that holds what was administered (#138): an engine attempt that answers with no item and
+        // no response has not been read, whatever else it says. Nothing is written; the caller holds the sitting
+        // as waiting for its trace.
+        if (!self::usable($trace)) {
+            return null;
+        }
 
         $DB->update_record('local_catquizlab_attempt', (object) [
             'id'           => $attemptid,

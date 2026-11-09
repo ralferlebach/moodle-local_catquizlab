@@ -69,6 +69,9 @@ class eta {
     /** @var int Finished executions needed before there is an estimate. */
     public const MIN_SAMPLE = 3;
 
+    /** @var int Questions answered in the sittings being played before their pace is an estimate (#142). */
+    public const MIN_QUESTIONS = 5;
+
     /** @var int The capacity window, in seconds. */
     public const WINDOW = 600;
 
@@ -137,6 +140,10 @@ class eta {
             $samples['all'] = self::pooled($samples['all'], $n, $s, $ss);
         }
         $out['sample'] = (int) $samples['all']['n'];
+        // The pace of the sittings being played, in seconds per question: the first estimate a long sitting gives,
+        // long before it finishes (#142).
+        $pace = self::pace($insql, $params, $rows, $now);
+        $out['pace'] = $pace;
 
         // The work left per run, in queue order.
         $pending = 0;
@@ -146,9 +153,22 @@ class eta {
             $left = max(0, (int) $row['total'] - (int) $row['done'] - (int) $row['failed']);
             $pending += $left;
             $inflight = min($left, (int) ($row['inflight'] ?? 0));
-            $units = $left - $inflight + 0.5 * $inflight;
+            // In questions where they are known: a sitting 600 of 625 questions in is 1/25 of a sitting from its
+            // end, not half of one. In sittings, the half, where they are not.
+            $questions = $row['questions'] ?? null;
+            $byquestions = $questions !== null && $questions['remaining'] !== null && (float) $questions['persitting'] > 0;
+            $units = $byquestions
+                ? min((float) $left, (int) $questions['remaining'] / (float) $questions['persitting'])
+                : $left - $inflight + 0.5 * $inflight;
             [$mean, $se, $basis] = self::duration_of($samples, $runid, $strategies[$runid] ?? '');
+            if ($basis === 'none' && $pace !== null && $byquestions) {
+                // Nothing finished yet: the pace of what is being played, times the questions a sitting has.
+                $mean = $pace['seconds'] * (float) $questions['persitting'];
+                $se = $mean * 0.25;
+                $basis = 'questions';
+            }
             $work[$runid] = ['left' => $left, 'units' => $units, 'mean' => $mean, 'se' => $se, 'basis' => $basis,
+                'unit' => $byquestions ? 'questions' : 'sittings',
                 'started' => isset($starts[$runid]) ? (int) $starts[$runid] : null,
                 'lastend' => isset($finished[$runid]) ? (int) $finished[$runid]->lastend : null];
         }
@@ -207,11 +227,17 @@ class eta {
             }
             $cumulative += $w['units'] * $w['mean'];
             $variance += ($w['units'] * $w['se']) ** 2;
-            $provisional = $provisional || $w['basis'] === 'experiment';
+            $provisional = $provisional || in_array($w['basis'], ['experiment', 'questions', 'none'], true);
+            if ($w['mean'] <= 0) {
+                // A run with neither a duration nor a pace: no figure for it, rather than zero.
+                $out['runs'][$runid] = self::run_times($w, self::CALCULATING, $now, null, null);
+                $provisional = true;
+                continue;
+            }
             $remaining = (int) ceil($cumulative / $capacity);
             $out['runs'][$runid] = self::run_times(
                 $w,
-                $w['basis'] === 'experiment' ? self::PROVISIONAL : self::ESTIMATE,
+                in_array($w['basis'], ['experiment', 'questions'], true) ? self::PROVISIONAL : self::ESTIMATE,
                 $now,
                 $remaining,
                 $now + $remaining
@@ -248,7 +274,7 @@ class eta {
         if ($out['started'] === null) {
             return [self::CALCULATING, 'eta:whynotstarted'];
         }
-        if ($out['sample'] < self::MIN_SAMPLE) {
+        if ($out['sample'] < self::MIN_SAMPLE && ($out['pace'] ?? null) === null) {
             return [self::CALCULATING, 'eta:whysample'];
         }
         if ($out['capacity']['slots'] <= 0) {
@@ -258,6 +284,45 @@ class eta {
         }
 
         return null;
+    }
+
+    /**
+     * How fast the sittings being played answer questions: elapsed seconds since each started, over the questions
+     * they have answered — per sitting, so it is the pace of one slot.
+     *
+     * @param string $insql The run IN clause.
+     * @param array $params Its parameters.
+     * @param array $rows The progress rows, with their question figures.
+     * @param int $now The clock.
+     * @return array{seconds: float, questions: int, elapsed: int}|null Null below MIN_QUESTIONS.
+     */
+    protected static function pace(string $insql, array $params, array $rows, int $now): ?array {
+        global $DB;
+
+        $answered = 0;
+        foreach ($rows as $row) {
+            $answered += (int) ($row['questions']['inflight'] ?? 0);
+        }
+        if ($answered < self::MIN_QUESTIONS) {
+            return null;
+        }
+        $row = $DB->get_record_sql(
+            "SELECT COUNT(1) AS n, SUM(s.started) AS sumstart
+               FROM {local_catquizlab_attempt} a
+               JOIN (SELECT attemptid, MAX(timecreated) AS started
+                       FROM {local_catquizlab_attemptlog}
+                      WHERE runid {$insql} AND outcome = :started
+                   GROUP BY attemptid) s ON s.attemptid = a.id
+              WHERE a.status = :running",
+            $params + ['started' => attempt_history::STARTED, 'running' => attempt_scheduler::STATUS_RUNNING]
+        );
+        $n = (int) ($row->n ?? 0);
+        $elapsed = $n * $now - (int) ($row->sumstart ?? 0);
+        if ($n === 0 || $elapsed <= 0) {
+            return null;
+        }
+
+        return ['seconds' => round($elapsed / $answered, 3), 'questions' => $answered, 'elapsed' => $elapsed];
     }
 
     /**
@@ -400,6 +465,7 @@ class eta {
             'margin'      => null,
             'range'       => null,
             'sample'      => 0,
+            'pace'        => null,
             'capacity'    => ['slots' => 0.0, 'window' => 0, 'executions' => 0, 'basis' => 'window'],
             'computed'    => $now,
             'runs'        => [],
@@ -431,6 +497,12 @@ class eta {
             ]),
             'computed'  => userdate($out['computed'], get_string('strftimetime', 'langconfig')),
         ];
+        if (($out['pace'] ?? null) !== null && $out['reliability'] !== self::FINAL) {
+            $out['text']['method'] .= ' ' . get_string('eta:methodpace', $component, (object) [
+                'seconds' => format_float($out['pace']['seconds'], 1),
+                'questions' => $out['pace']['questions'],
+            ]);
+        }
         // The method where there is something it produced; the record where it is history.
         if ($out['reliability'] === self::FINAL) {
             $out['text']['method'] = get_string('eta:methodfinal', $component);

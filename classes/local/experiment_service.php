@@ -280,6 +280,9 @@ class experiment_service {
         if (self::run_count($id) > 0) {
             throw new \moodle_exception('experiment:hasruns', 'local_catquizlab', '', (string) $id);
         }
+        // Out of the execution queue too: an entry for an experiment that no longer exists held the line for
+        // everything queued after it (incident 2026-11-09).
+        execution_queue::forget($id, 'orphaned: experiment deleted');
         $DB->delete_records('local_catquizlab_experiment', ['id' => $id]);
     }
 

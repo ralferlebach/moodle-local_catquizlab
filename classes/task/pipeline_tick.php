@@ -93,6 +93,24 @@ class pipeline_tick extends \core\task\scheduled_task {
         if ($advanced['started'] > 0) {
             mtrace('local_catquizlab: started queued experiment ' . $advanced['started'] . '.');
         }
+        // What the line did and why it stands, said every time it matters (incident 2026-11-09: held 48 days
+        // by an experiment without runs, and no line anywhere said so).
+        foreach ((array) ($advanced['closed'] ?? []) as $closed) {
+            $text = get_string('tick:queueclosed', 'local_catquizlab', (object) $closed);
+            mtrace('local_catquizlab: ' . $text . '.');
+            \local_catquizlab\local\debug_trace::record('task', 'queue_closed', $closed);
+        }
+        if (in_array((string) $advanced['reason'], ['busy', 'setup-incomplete', 'skipped-not-ready'], true)) {
+            mtrace('local_catquizlab: ' . get_string(
+                'tick:queue_' . str_replace('-', '', (string) $advanced['reason']),
+                'local_catquizlab',
+                (object) [
+                    'experimentid' => (int) ($advanced['holder'] ?? 0),
+                    'since' => !empty($advanced['since'])
+                        ? userdate((int) $advanced['since'], get_string('strftimedatetimeshort')) : '–',
+                ]
+            ) . '.');
+        }
 
         // Dead workers first, then their claims, then the timeout fallback.
         // The order matters: reaping a worker hands its attempts back with a
@@ -102,6 +120,14 @@ class pipeline_tick extends \core\task\scheduled_task {
         if ($reaped['workers'] > 0) {
             mtrace("local_catquizlab: reaped {$reaped['workers']} worker(s), "
                 . "released {$reaped['attempts']} attempt(s).");
+        }
+
+        // Traces that were missing when their sitting finished (#138): looked for again, collected when they
+        // arrive, given up as a technical non-result when they do not.
+        $traces = \local_catquizlab\local\attempt_scheduler::retry_pending_traces();
+        if ($traces['collected'] + $traces['givenup'] > 0) {
+            mtrace("local_catquizlab: missing traces — {$traces['collected']} collected late, "
+                . "{$traces['givenup']} given up, {$traces['waiting']} still waiting.");
         }
 
         // Engine attempts that never got a first question. Every retry of a
@@ -126,6 +152,9 @@ class pipeline_tick extends \core\task\scheduled_task {
         }
 
         $result = worker_launcher::launch_pool(worker_launcher::config_from_settings());
+        $breakdown = \local_catquizlab\local\attempt_scheduler::queue_breakdown();
+        $why = ($result !== null && (int) ($result['launched'] ?? 0) === 0)
+            ? worker_launcher::idle_reasons($breakdown, $advanced) : [];
 
         // Kept where the interface can read it. The tick's output goes to
         // cron's own log, which the person looking at a page that says nothing
@@ -135,7 +164,10 @@ class pipeline_tick extends \core\task\scheduled_task {
             'time'     => time(),
             'launched' => (int) ($result['launched'] ?? 0),
             'reason'   => (string) ($result['reason'] ?? ''),
-            'claimable' => (int) \local_catquizlab\local\attempt_scheduler::queue_breakdown()['claimable'],
+            'claimable' => (int) $breakdown['claimable'],
+            // Why nothing was started, as codes and counts (incident 2026-11-09).
+            'why'      => $why,
+            'queue'    => ['reason' => (string) ($advanced['reason'] ?? ''), 'holder' => (int) ($advanced['holder'] ?? 0)],
         ]), 'local_catquizlab');
 
         if ($result === null) {
@@ -143,7 +175,8 @@ class pipeline_tick extends \core\task\scheduled_task {
         } else if ((int) $result['launched'] > 0) {
             mtrace("local_catquizlab: dispatched worker pool ({$result['launched']}).");
         } else if ((string) $result['reason'] !== '') {
-            mtrace("local_catquizlab: no worker started: {$result['reason']}.");
+            $text = worker_launcher::idle_text($why);
+            mtrace("local_catquizlab: no worker started: {$result['reason']}" . ($text !== '' ? " — {$text}" : '') . '.');
         }
     }
 }

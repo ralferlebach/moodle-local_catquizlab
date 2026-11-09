@@ -44,6 +44,9 @@ class attempt_history {
     /** @var string It finished and was read back. */
     public const COLLECTED = 'collected';
 
+    /** @var string Finished in the engine, its trace not (yet) there: waiting, not collected (#138). */
+    public const TRACE_PENDING = 'tracepending';
+
     /** @var string It ended without a result. */
     public const FAILED = 'failed';
 

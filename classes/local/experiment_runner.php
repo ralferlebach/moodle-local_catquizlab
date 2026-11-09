@@ -44,6 +44,12 @@ class experiment_runner {
     /** @var string Nothing has been built from the definition yet. */
     public const STATE_DRAFT = 'draft';
 
+    /**
+     * @var string Runs exist and none of them has been started yet: the next step is starting them. Without this
+     *      state such an experiment read "being prepared" and offered no action at all (incident 2026-11-09).
+     */
+    public const STATE_CREATED = 'created';
+
     /** @var string Preparation is under way. */
     public const STATE_PREPARING = 'preparing';
 
@@ -209,7 +215,8 @@ class experiment_runner {
         $component = 'local_catquizlab';
 
         $runs = $DB->get_records('local_catquizlab_run', ['experimentid' => $experimentid]);
-        $counts = ['total' => count($runs), 'ready' => 0, 'running' => 0, 'finished' => 0, 'failed' => 0];
+        $counts = ['total' => count($runs), 'draft' => 0, 'provisioning' => 0, 'ready' => 0, 'running' => 0,
+            'finished' => 0, 'failed' => 0];
 
         foreach ($runs as $run) {
             $status = (int) $run->status;
@@ -225,6 +232,10 @@ class experiment_runner {
                 $counts['running']++;
             } else if ($status === registry::STATUS_READY) {
                 $counts['ready']++;
+            } else if ($status === registry::STATUS_DRAFT) {
+                $counts['draft']++;
+            } else if ($status === registry::STATUS_SCHEDULED) {
+                $counts['provisioning']++;
             }
         }
 
@@ -251,6 +262,10 @@ class experiment_runner {
             // rather than as a table of statuses.
             'canprepare' => in_array($state, [self::STATE_DRAFT, self::STATE_BLOCKED], true),
             'canstart'   => $state === self::STATE_READY,
+            // Runs that exist and were never started: started in the background, run by run, by the pipeline —
+            // what "Start runs" on the experiment page does, offered wherever the experiment is shown.
+            'canstartruns' => $counts['draft'] > 0 && $counts['running'] === 0
+                && in_array($state, [self::STATE_CREATED, self::STATE_PREPARING], true),
         ];
     }
 
@@ -283,6 +298,11 @@ class experiment_runner {
 
         if ($counts['ready'] + $counts['finished'] === $counts['total']) {
             return self::STATE_READY;
+        }
+
+        // Runs that nobody started and nothing is building: waiting for a person, not for the pipeline.
+        if (($counts['draft'] ?? 0) > 0 && ($counts['provisioning'] ?? 0) === 0) {
+            return self::STATE_CREATED;
         }
 
         return self::STATE_PREPARING;
