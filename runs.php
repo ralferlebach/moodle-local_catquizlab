@@ -107,6 +107,41 @@ if ($action === 'prepareexperiment') {
         : \core\output\notification::NOTIFY_WARNING);
 }
 
+// Stop an experiment, completely and now (0.7.49). Before this there was no such thing: deleting refused
+// while workers played, and every tick started new ones. Confirmed first, with what it will do in numbers.
+if ($action === 'stopexperiment') {
+    require_sesskey();
+    require_capability('local/catquizlab:execute', $context);
+
+    $target = required_param('experimentid', PARAM_INT);
+    $back = new moodle_url('/local/catquizlab/runs.php', ['experimentid' => $target]);
+    $preview = \local_catquizlab\local\experiment_stop::preview($target);
+    if (!$preview['any']) {
+        redirect($back, get_string('stop:nothing', $component), null, \core\output\notification::NOTIFY_INFO);
+    }
+
+    if (!optional_param('confirm', 0, PARAM_BOOL) || !data_submitted()) {
+        $message = get_string('stop:confirm', $component, (object) $preview);
+        if ($preview['aggregating'] > 0) {
+            $message .= ' ' . get_string('stop:keepsaggregating', $component, $preview['aggregating']);
+        }
+        echo $OUTPUT->header();
+        echo $OUTPUT->confirm(
+            $message,
+            new moodle_url('/local/catquizlab/runs.php', [
+                'action' => 'stopexperiment', 'experimentid' => $target, 'sesskey' => sesskey(), 'confirm' => 1,
+            ]),
+            $back
+        );
+        echo $OUTPUT->footer();
+        exit;
+    }
+
+    $stopped = \local_catquizlab\local\experiment_stop::stop($target);
+    \local_catquizlab\local\debug_trace::record('ui', 'stopexperiment', ['experimentid' => $target] + $stopped);
+    redirect($back, get_string('stop:done', $component, (object) $stopped), null, \core\output\notification::NOTIFY_SUCCESS);
+}
+
 // Runs created and never started (incident 2026-11-09): started in the background, each by its own setup
 // task, exactly as "Start runs" on the experiment page does.
 if ($action === 'startruns') {

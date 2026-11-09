@@ -140,6 +140,14 @@ class run_lifecycle {
      * @return void
      */
     public static function provisioned(int $runid, bool $ok, string $reason = ''): void {
+        // Stopped while its setup ran (0.7.49): the stop decided this run's state. Setting it ready here put a
+        // cancelled run back into play a minute after somebody stopped it.
+        if (experiment_stop::is_stopped($runid)) {
+            experiment_stop::close_sittings([$runid]);
+
+            return;
+        }
+
         run_log::record(
             $runid,
             $ok ? run_log::PROVISIONING_READY : run_log::RUN_FAILED,

@@ -72,6 +72,9 @@ class run_orchestrator {
     /** @var string Another process has set this run up already: nothing was done (#116). */
     public const REASON_ALREADY_SET_UP = 'already_set_up';
 
+    /** @var string The run was stopped while, or before, it was being set up: nothing more is built for it. */
+    public const REASON_STOPPED = experiment_stop::REASON;
+
     /** @var string Queue the simulated attempts. */
     /**
      * Stage: can this configuration actually select a first question?
@@ -150,6 +153,13 @@ class run_orchestrator {
             // Asked again under the lock: the other one may just have finished it.
             $status = (int) $DB->get_field('local_catquizlab_run', 'status', ['id' => $runid]);
             $done = [registry::STATUS_READY, registry::STATUS_RUNNING, registry::STATUS_AGGREGATING, registry::STATUS_FINISHED];
+            if ($status === registry::STATUS_CANCELLED) {
+                // Stopped before its setup came round (0.7.49): building it now would undo the stop.
+                run_log::record($runid, run_log::SETUP_SKIPPED, [
+                    'why' => get_string('reasontext:stopped_by_operator', 'local_catquizlab'), 'status' => $status,
+                ]);
+                return ['ok' => false, 'reason' => self::REASON_STOPPED, 'stages' => [], 'concurrent' => true];
+            }
             if (in_array($status, $done, true)) {
                 run_log::record($runid, run_log::SETUP_SKIPPED, [
                     'why' => get_string('reasontext:already_set_up', 'local_catquizlab'), 'status' => $status,
@@ -161,6 +171,26 @@ class run_orchestrator {
         } finally {
             $lock->release();
         }
+    }
+
+    /**
+     * End a setup whose run was stopped while it ran.
+     *
+     * Reported as concurrent: the stop decided this run's state, and the task that ran the setup must not decide
+     * it again. Sittings the last stage planned before it noticed are closed.
+     *
+     * @param int $runid The run.
+     * @param array $stages The stages done so far.
+     * @return array{ok: bool, reason: string, stages: array, concurrent: bool}
+     */
+    protected static function stopped_during_setup(int $runid, array $stages): array {
+        experiment_stop::close_sittings([$runid]);
+        run_log::record($runid, run_log::SETUP_SKIPPED, [
+            'why' => get_string('reasontext:stopped_by_operator', 'local_catquizlab'),
+            'stages' => array_keys($stages),
+        ]);
+
+        return ['ok' => false, 'reason' => self::REASON_STOPPED, 'stages' => $stages, 'concurrent' => true];
     }
 
     /**
@@ -207,6 +237,11 @@ class run_orchestrator {
         $stages = [];
         $failedstage = null;
         foreach (self::plan_stages() as $stage) {
+            // Stopped while being set up (0.7.49): the next stage is not built, and the run keeps the status the stop
+            // gave it — "failed" would call a decision a defect.
+            if (experiment_stop::is_stopped($runid)) {
+                return self::stopped_during_setup($runid, $stages);
+            }
             $stages[$stage] = self::run_stage($stage, $context);
 
             if (self::stage_failed($stage, $stages[$stage])) {
@@ -228,6 +263,10 @@ class run_orchestrator {
                     break;
                 }
             }
+        }
+
+        if (experiment_stop::is_stopped($runid)) {
+            return self::stopped_during_setup($runid, $stages);
         }
 
         if ($failedstage !== null) {

@@ -66,6 +66,12 @@ class experiment_runner {
     public const STATE_BLOCKED = 'blocked';
 
     /**
+     * @var string Stopped by a person: every run that had not finished was cancelled (0.7.49). Said as such
+     *      rather than as "blocked", which would call a decision a defect.
+     */
+    public const STATE_STOPPED = 'stopped';
+
+    /**
      * Prepare every run of an experiment, from definition to queued sittings.
      *
      * Idempotent by construction: each stage underneath already checks whether
@@ -216,10 +222,16 @@ class experiment_runner {
 
         $runs = $DB->get_records('local_catquizlab_run', ['experimentid' => $experimentid]);
         $counts = ['total' => count($runs), 'draft' => 0, 'provisioning' => 0, 'ready' => 0, 'running' => 0,
-            'finished' => 0, 'failed' => 0];
+            'finished' => 0, 'failed' => 0, 'cancelled' => 0, 'stoppable' => 0];
 
         foreach ($runs as $run) {
             $status = (int) $run->status;
+            if (in_array($status, experiment_stop::STOPPABLE, true)) {
+                $counts['stoppable']++;
+            }
+            if ($status === registry::STATUS_CANCELLED) {
+                $counts['cancelled']++;
+            }
             if ($status === registry::STATUS_FINISHED) {
                 $counts['finished']++;
             } else if (
@@ -266,6 +278,9 @@ class experiment_runner {
             // what "Start runs" on the experiment page does, offered wherever the experiment is shown.
             'canstartruns' => $counts['draft'] > 0 && $counts['running'] === 0
                 && in_array($state, [self::STATE_CREATED, self::STATE_PREPARING], true),
+            // Something that can still build or hand out work (0.7.49): offered as "Stop experiment".
+            // Created runs alone are not that: nothing runs, and deleting or starting them is the question.
+            'canstop' => $counts['stoppable'] > $counts['draft'] || execution_queue::state_of($experimentid) !== null,
         ];
     }
 
@@ -287,6 +302,12 @@ class experiment_runner {
 
         if ($counts['running'] > 0) {
             return self::STATE_RUNNING;
+        }
+
+        // Stopped: every run that had not finished was cancelled, nothing failed (0.7.49).
+        $failed = $counts['failed'] - ($counts['cancelled'] ?? 0);
+        if (($counts['cancelled'] ?? 0) > 0 && $failed === 0 && $counts['cancelled'] + $counts['finished'] === $counts['total']) {
+            return self::STATE_STOPPED;
         }
 
         // A failure anywhere blocks the experiment: an experiment whose runs

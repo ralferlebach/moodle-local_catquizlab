@@ -245,11 +245,11 @@ final class purger_test extends \advanced_testcase {
     }
 
     /**
-     * A run being played is named before the button, not after.
+     * A run being played is named before the button, not after — as stopped first, no longer as a blocker (0.7.49).
      *
      * @return void
      */
-    public function test_the_preview_names_what_blocks_it(): void {
+    public function test_the_preview_names_what_is_stopped_first(): void {
         global $DB;
         $this->resetAfterTest();
         $this->setAdminUser();
@@ -259,9 +259,10 @@ final class purger_test extends \advanced_testcase {
 
         $preview = purger::preview_experiment($experimentid);
 
-        $this->assertFalse($preview['ok']);
-        $this->assertNotEmpty($preview['blockers']);
-        $this->assertStringContainsString((string) $runid, $preview['blockers'][0]);
+        $this->assertTrue($preview['ok']);
+        $this->assertSame([], $preview['blockers']);
+        $this->assertNotEmpty($preview['stopping']);
+        $this->assertStringContainsString((string) $runid, $preview['stopping'][0]);
     }
 
     /**
@@ -385,11 +386,15 @@ final class purger_test extends \advanced_testcase {
     }
 
     /**
-     * A worker mid-attempt is asked to stop, not overruled.
+     * A worker mid-attempt no longer blocks deleting (0.7.49): the experiment is stopped, then deleted.
+     *
+     * Refusing used to leave an experiment that could be neither stopped nor deleted: every tick started new
+     * workers for its waiting sittings. The stop closes the sitting the worker holds, so no claim is stranded,
+     * and the worker hears so at its next heartbeat.
      *
      * @return void
      */
-    public function test_a_playing_worker_is_asked_to_stop(): void {
+    public function test_a_playing_worker_is_stopped_not_waited_for(): void {
         global $DB;
         $this->resetAfterTest();
         $this->setAdminUser();
@@ -406,11 +411,8 @@ final class purger_test extends \advanced_testcase {
 
         $result = purger::delete_experiment($experimentid, true, false);
 
-        // Forcing past it strands the claim and leaves a browser playing a quiz
-        // whose questions are being deleted underneath it.
-        $this->assertFalse($result['ok']);
-        $this->assertSame('workers-stopping', $result['reason']);
+        $this->assertTrue($result['ok']);
         $this->assertTrue(worker_registry::stop_requested('playing'));
-        $this->assertTrue($DB->record_exists('local_catquizlab_experiment', ['id' => $experimentid]));
+        $this->assertFalse($DB->record_exists('local_catquizlab_experiment', ['id' => $experimentid]));
     }
 }

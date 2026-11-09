@@ -288,6 +288,41 @@ Feature: Defining and running CAT experiments from the web interface
     And I should see "Runs created, not started"
     And "Start runs" "button" should exist
 
+  Scenario: A running experiment is stopped at once and says so
+    # Reported 2026-11-09: deleting did not stop an experiment, and there was no other way.
+    Given the following "local_catquizlab > experiment" exists:
+      | name | Stoppable |
+    And the experiment "Stoppable" has been expanded into runs
+    And the runs of "Stoppable" are being played
+    And I log in as "admin"
+    And I navigate to "Reports > CAT experiment suite" in site administration
+    And I follow "View progress"
+    When I press "Stop experiment"
+    Then I should see "Stop this experiment now?"
+    And I press "Continue"
+    And I should see "Experiment stopped:"
+    And I should see "Stopped"
+    And "Stop experiment" "button" should not exist
+
+  Scenario: Deleting a running experiment stops it at once and deletes it in the background
+    Given the following "local_catquizlab > experiment" exists:
+      | name | Deletable |
+    And the experiment "Deletable" has been expanded into runs
+    And the runs of "Deletable" are being played
+    And I log in as "admin"
+    And I navigate to "Reports > CAT experiment suite" in site administration
+    When I follow "Delete…"
+    Then I should see "Deleting stops the experiment first"
+    And I set the field "Type the experiment name to confirm" to "Deletable"
+    And I press "Delete experiment"
+    And I should see "Experiment stopped"
+    And I should see "Deleting it runs in the background"
+    And I should see "Being deleted"
+    And "Delete…" "link" should not exist
+    And I run all adhoc tasks
+    And I navigate to "Reports > CAT experiment suite" in site administration
+    And I should not see "Deletable"
+
   Scenario: Draft runs can be started from the web interface
     Given the following "local_catquizlab > experiment" exists:
       | name | Startable |

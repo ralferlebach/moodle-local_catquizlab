@@ -30,7 +30,7 @@ Ausgabe im Cron bzw. in `mdl_task_log.output`:
 - `execution queue: entry of experiment 6 closed (orphaned: experiment has no runs)`
 - `execution queue held by experiment 12 since …`
 
-Auf der Log-Seite (Schritt 5) steht dieselbe Tick-Zeile mit einem Schweregrad:
+Auf der Log-Seite steht dieselbe Tick-Zeile mit einem Schweregrad:
 
 | Schweregrad | Wann |
 |---|---|
@@ -48,7 +48,39 @@ Auf der Log-Seite (Schritt 5) steht dieselbe Tick-Zeile mit einem Schweregrad:
 | „sitting(s) in paused runs“ | Ein Lauf ist pausiert, von Hand oder durch den Schutzschalter. | Auf der Fortschrittsseite unter „Diagnose und Wiederherstellung“ fortsetzen. |
 | „Worker settings missing“ | Eine Einstellung fehlt. | Einstellungen ergänzen, Einrichtung Schritt 1. |
 
-## 4. Wenn der Tick von Hand abbricht
+## 4. Ein Experiment sofort stoppen
+
+Seit 0.7.49 gibt es auf der Fortschrittsseite **Experiment stoppen**, nach einer Bestätigung mit Zahlen. Für die Konsole:
+
+```bash
+cd /tmp && sudo -u www-data php /var/www/moodle/local/catquizlab/cli/stop_experiment.php --experimentid=16        # zeigt nur, was passieren würde
+cd /tmp && sudo -u www-data php /var/www/moodle/local/catquizlab/cli/stop_experiment.php --experimentid=16 --yes  # stoppt
+```
+
+Was der Stopp tut:
+
+- Läufe in „angelegt“, „Einrichtung“, „bereit“ und „läuft“ werden abgebrochen (Status 50). Kein Worker kann dort noch eine Sitzung abholen, und der Tick startet keine Worker mehr dafür.
+- Wartende und laufende Sitzungen werden mit dem Grund „Experiment von Hand gestoppt“ geschlossen.
+- Ein Worker mitten in einer Sitzung erfährt beim nächsten Herzschlag (alle 20 s), dass sie ihm nicht mehr gehört, und hört vor seiner nächsten Antwort auf. Seine spätere Rückmeldung wird verworfen.
+- Die Worker, die Sitzungen hielten, werden zum Beenden aufgefordert.
+- Einrichtungs- und Planungsaufgaben der Läufe werden entfernt, das Experiment verlässt die Ausführungswarteschlange.
+- Eine Einrichtung, die gerade läuft, baut nach dem Stopp keine Stufe mehr und setzt den Lauf nicht wieder auf „bereit“.
+
+Erhalten bleiben gesammelte Sitzungen, Ergebnisse, Spuren fertiger Sitzungen und Läufe, die gerade ihre Ergebnisse berechnen. Ein gestoppter Lauf lässt sich auf der Läufe-Seite zurücksetzen und erneut ausführen.
+
+**Löschen stoppt zuerst und löscht im Hintergrund.** Nach der Bestätigung wird das Experiment sofort gestoppt. Das eigentliche Löschen übernimmt eine Hintergrundaufgabe (`\local_catquizlab\task\delete_experiment`); bis sie gelaufen ist, steht das Experiment in der Liste als „Wird gelöscht“.
+
+Schnell geht das nicht: Moodle braucht für jedes simulierte Konto etwa 125 Abfragen (`delete_user()`), für jede generierte Frage etwa 32. Bei 6 Läufen mit 2000 Personen und 2500 Items sind das einige Minuten.
+
+Wer nicht warten will, startet die Aufgabe von Hand:
+
+```bash
+cd /tmp && sudo -u www-data php /var/www/moodle/admin/cli/adhoc_task.php --classname='\local_catquizlab\task\delete_experiment'
+```
+
+Bis 0.7.48 lehnte das Löschen ab, solange Worker spielten, während der Tick neue startete; dazu lief es vollständig im Web-Request.
+
+## 5. Wenn der Tick von Hand abbricht
 
 ```
 /tmp/requestdir/… can not be created, check permissions
@@ -64,7 +96,7 @@ cd /tmp && sudo -u www-data php /var/www/moodle/admin/cli/scheduled_task.php --e
 
 `chown` ist nur nötig, wenn das Verzeichnis jemand anderem gehört.
 
-## 5. SQL für Adminer (Präfix `mdl_`)
+## 6. SQL für Adminer (Präfix `mdl_`)
 
 ```sql
 -- Läufe eines Experiments
@@ -88,7 +120,7 @@ SELECT id, experimentid, state, position, reason, timecreated, timestarted, time
 FROM mdl_local_catquizlab_execqueue ORDER BY id;
 ```
 
-## 6. Worker-Laufzeit prüfen (Node, Puppeteer, Chrome)
+## 7. Worker-Laufzeit prüfen (Node, Puppeteer, Chrome)
 
 ```bash
 cd /var/www/moodledata/local_catquizlab/worker-runtime && sudo -u www-data env \

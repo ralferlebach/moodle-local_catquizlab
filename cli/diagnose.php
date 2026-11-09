@@ -120,7 +120,8 @@ if ($options['json']) {
 cli_heading('CatQuizLab diagnosis — ' . $report['time']);
 if ($report['experiment'] !== null) {
     cli_writeln("Experiment {$experimentid}: {$report['experiment']['label']} ({$report['experiment']['state']})"
-        . ($report['experiment']['canstartruns'] ? ' — runs can be started on the progress page' : ''));
+        . ($report['experiment']['canstartruns'] ? ' — runs can be started on the progress page' : '')
+        . ($report['experiment']['canstop'] ? ' — stop it now: cli/stop_experiment.php --experimentid=' . $experimentid : ''));
     foreach ($runs as $run) {
         cli_writeln(sprintf(
             '  run %-6d %-26s status %-3d twins %-6d queued %-6d running %-4d failed %-4d %s',

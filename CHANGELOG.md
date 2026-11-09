@@ -6,6 +6,97 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.7.49] — 2026-11-09 — Stop an experiment, completely and now
+
+No database change (version 2026110901).
+
+Reported the same day: deleting an experiment did not stop it, and there was no other way to. Deleting asked
+the workers playing the experiment to finish their sitting and refused until they had. Meanwhile every tick
+started new workers for the sittings still waiting, so the next try found the same situation. Cancelling worked
+only per run and left the run's sittings queued. A setup that was running when a run was cancelled set it back to
+"ready" a minute later.
+
+### Stop experiment
+
+- New `local\experiment_stop` with `preview()` and `stop()`, under the claim lock and in one transaction:
+  - runs in created, scheduled, ready or running are cancelled;
+  - their waiting and running sittings are closed as failed, with the reason "experiment stopped by an operator";
+  - running sittings get an `abandoned` line in their history, naming the worker;
+  - workers holding a sitting are asked to exit;
+  - `orchestrate_run`, `schedule_attempts` and `dispatch_worker` tasks of the runs are removed;
+  - the experiment leaves the execution queue.
+- A worker in the middle of a sitting is told at its next heartbeat (every 20 s) that the lease is lost and
+  that it should stop. It stops before its next answer. Its completion report is recorded as late and not
+  applied, and the sitting is not requeued.
+- Kept: collected sittings, results, trace collection, aggregation and export tasks, and runs that are
+  aggregating. A stopped run can be reset and run again.
+- Progress page: **Stop experiment** (capability `local/catquizlab:execute`), with a confirmation that states
+  the numbers. It is shown only while there is something to stop; runs that were only created are not that.
+- CLI: `cli/stop_experiment.php --experimentid=N [--yes]`. Without `--yes` it only reports.
+- `cli/diagnose.php` points to it when the experiment can be stopped.
+
+### A stopped run stays stopped
+
+- `run_orchestrator::setup()` skips a cancelled run, and `setup_locked()` checks before each stage and after the
+  last one. A stopped run is reported as `stopped_by_operator`, without setting it to failed or ready. Sittings
+  planned before the stop was noticed are closed.
+- `run_lifecycle::provisioned()` leaves a cancelled run cancelled and closes its sittings. Before, it set every
+  successfully set-up run to ready.
+
+### Deleting stops first
+
+- `purger::delete_experiment()` stops the experiment and then deletes it, instead of refusing with
+  `workers-stopping`. The confirmation page says which runs are being played and that they are stopped first.
+- The string `purge:workerstopping` was removed.
+
+### Deleting runs in the background
+
+Also reported the same day: deleting an experiment took forever. Measured with a deep delete:
+
+| What | Queries | Where |
+|---|---|---|
+| Per simulated person | about 125 | almost all in core `delete_user()` |
+| Per generated question | about 32 | core `question_delete_question()` |
+
+The lab's own loop around them was a small N+1. For each person it fetched the enrolment instances, checked the
+enrolment, read the account, and unenrolled before `delete_user()`, which unenrols anyway. Removing that saved
+about 3 queries per person (80 people: 10,168 → 9,931).
+
+Six runs of 2000 people and 2500 items come to roughly 1.5 million queries, minutes of work inside a web request.
+
+- `purger::delete_simulated_people()` now reads accounts and enrolments in chunks of 500 and fetches the
+  enrolment instances once. `delete_user()` alone removes the enrolments of the lab's own accounts.
+- New ad-hoc task `task\delete_experiment`. After the confirmation, the experiment is stopped at once and the
+  deletion is queued. The library shows "Being deleted" („Wird gelöscht“) without a delete link until the task has
+  run. The task is safe to run again: what is already gone is skipped. A second click queues no second task.
+- New strings: `purge:queued`, `status:phasedeleting`, `task:deleteexperiment`.
+
+Not changed: core's per-account and per-question deletion. Bypassing `delete_user()` would skip the
+`user_deleted` observers of other plugins and leave their rows behind.
+
+### Said as such
+
+- New experiment state `stopped` and phase `stopped` ("Stopped" / „Gestoppt“), shown when every run that had not
+  finished was cancelled and none failed.
+- Before, a stopped experiment read "Needs attention" on the progress page and "Complete, with sittings failed
+  for good" in the library.
+- Next step: results when a run finished, otherwise progress.
+
+### Tests
+
+- `tests/experiment_stop_test.php`, 6 tests on the stop:
+  - what is stopped and what is kept, other experiments untouched, idempotent;
+  - real `worker_heartbeat` and `job_complete` calls after the stop;
+  - a setup finishing after the stop;
+  - state and phase in snapshot and library;
+  - the button, with and without the capability;
+  - deleting a played experiment.
+- `purger_test`: the refusal test now checks stop-then-delete.
+- `tests/experiment_stop_test.php`: background deletion (queued once, runs, safe to run again).
+- Behat:
+  - "A running experiment is stopped at once and says so";
+  - "Deleting a running experiment stops it at once and deletes it in the background".
+
 ## [0.7.48] — 2026-11-09 — Incident 2026-11-09: workers did not start, and nothing said why
 
 No database change (version 2026110900).

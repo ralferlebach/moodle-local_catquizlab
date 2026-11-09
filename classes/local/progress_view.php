@@ -170,6 +170,9 @@ class progress_view {
                     'canprepare' => $status['phase'] === 'blocked' && !empty($status['runner']['canprepare']),
                     // Runs created and never started: the one way on, here too (incident 2026-11-09).
                     'canstartruns' => !empty($status['runner']['canstartruns']),
+                    // Stopping takes work away from running workers: the same authority as starting it (0.7.49).
+                    'canstop' => !empty($status['runner']['canstop'])
+                        && has_capability('local/catquizlab:execute', \context_system::instance()),
                 ] + $status['runner'] + [
                     'experimentid' => $experimentid,
                     'queued'       => execution_queue::state_of($experimentid),

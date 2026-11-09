@@ -63,6 +63,7 @@ class task_overview {
         '\local_catquizlab\task\collect_attempts',
         '\local_catquizlab\task\schedule_attempts',
         '\local_catquizlab\task\export_run',
+        '\local_catquizlab\task\delete_experiment',
     ];
 
     /**

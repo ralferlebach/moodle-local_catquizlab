@@ -26,7 +26,7 @@ namespace local_catquizlab\local;
  *
  * - **phase**: where the experiment is in its scientific life — planned,
  *   preparing, ready, queued, starting, collecting, waiting, paused, blocked,
- *   aggregating, complete, complete with failures — with a label in words;
+ *   stopped, aggregating, complete, complete with failures — with a label in words;
  * - **sittings**: done of planned, percent, and the problems (sittings failed
  *   for good, runs held);
  * - **next**: the one action the phase calls for, and only one that is allowed
@@ -45,7 +45,7 @@ namespace local_catquizlab\local;
 class experiment_status {
     /** @var string[] The phases, in the order of an experiment's life. */
     public const PHASES = ['planned', 'created', 'preparing', 'ready', 'queued', 'starting', 'collecting', 'waiting', 'paused',
-        'blocked', 'aggregating', 'complete', 'completefailures'];
+        'blocked', 'stopped', 'aggregating', 'complete', 'completefailures'];
 
     /** @var array<int, array> This request's snapshots. */
     protected static array $memo = [];
@@ -135,11 +135,14 @@ class experiment_status {
                     SUM(CASE WHEN status IN (:running, :aggregating) THEN 1 ELSE 0 END) AS active,
                     SUM(CASE WHEN status = :ready THEN 1 ELSE 0 END) AS ready,
                     SUM(CASE WHEN status = :draft THEN 1 ELSE 0 END) AS draft,
-                    SUM(CASE WHEN status = :scheduled THEN 1 ELSE 0 END) AS scheduled
+                    SUM(CASE WHEN status = :scheduled THEN 1 ELSE 0 END) AS scheduled,
+                    SUM(CASE WHEN status = :cancelled THEN 1 ELSE 0 END) AS cancelled,
+                    SUM(CASE WHEN status = :finished THEN 1 ELSE 0 END) AS finished
                FROM {local_catquizlab_run} WHERE experimentid {$insql} GROUP BY experimentid",
             $params + ['running' => registry::STATUS_RUNNING, 'aggregating' => registry::STATUS_AGGREGATING,
                 'ready' => registry::STATUS_READY, 'draft' => registry::STATUS_DRAFT,
-                'scheduled' => registry::STATUS_SCHEDULED]
+                'scheduled' => registry::STATUS_SCHEDULED, 'cancelled' => registry::STATUS_CANCELLED,
+                'finished' => registry::STATUS_FINISHED]
         );
         [$heldsql, $heldparams] = circuit_breaker::held_sql();
         $held = $DB->get_records_sql_menu(
@@ -177,6 +180,9 @@ class experiment_status {
                 $phase = 'planned';
             } else if (!empty($held[$id])) {
                 $phase = 'blocked';
+            } else if ((int) $run->cancelled > 0 && (int) $run->cancelled + (int) $run->finished === (int) $run->n) {
+                // Stopped (0.7.49): not "complete with failures" — the sittings it closed did not fail.
+                $phase = 'stopped';
             } else if ($count['total'] > 0 && $count['done'] + $count['failed'] >= $count['total']) {
                 $phase = $count['failed'] > 0 ? 'completefailures' : 'complete';
             } else if ($count['inflight'] > 0 || (int) $run->active > 0) {
@@ -224,6 +230,9 @@ class experiment_status {
         $state = (string) $progress['state'];
         if ((int) ($runner['runs']['total'] ?? 0) === 0) {
             return 'planned';
+        }
+        if ($runner['state'] === experiment_runner::STATE_STOPPED) {
+            return 'stopped';
         }
         if ($state === live_progress::BLOCKED || $held > 0 || $runner['state'] === experiment_runner::STATE_BLOCKED) {
             return 'blocked';
@@ -297,7 +306,8 @@ class experiment_status {
                 'catquizlab-recovery'
             ), 'progress');
         }
-        if (in_array($phase, ['complete', 'completefailures'], true)) {
+        $stoppedwithresults = $phase === 'stopped' && (int) ($runner['runs']['finished'] ?? 0) > 0;
+        if (in_array($phase, ['complete', 'completefailures'], true) || $stoppedwithresults) {
             return $make(
                 'results',
                 new \moodle_url('/local/catquizlab/results.php', ['experimentid' => $experimentid]),
@@ -318,7 +328,7 @@ class experiment_status {
         if ($phase === 'blocked') {
             return 'problem';
         }
-        if (in_array($phase, ['completefailures', 'paused', 'waiting'], true)) {
+        if (in_array($phase, ['completefailures', 'paused', 'waiting', 'stopped'], true)) {
             return 'warn';
         }
 

@@ -101,6 +101,39 @@ class behat_local_catquizlab extends behat_base {
     }
 
     /**
+     * Put every run of an experiment into play: two sittings waiting, one being played by a worker.
+     *
+     * A scenario cannot start a browser worker; stopping (0.7.49) needs something to stop.
+     *
+     * @Given /^the runs of "(?P<name_string>(?:[^"]|\\")*)" are being played$/
+     * @param string $name The experiment name.
+     * @return void
+     * @throws \coding_exception If no experiment of that name exists.
+     */
+    public function the_runs_are_being_played(string $name): void {
+        global $DB;
+
+        $id = $DB->get_field('local_catquizlab_experiment', 'id', ['name' => $name]);
+        if (!$id) {
+            throw new \coding_exception('No experiment named "' . $name . '".');
+        }
+
+        $slot = 0;
+        foreach ($DB->get_records('local_catquizlab_run', ['experimentid' => $id]) as $run) {
+            $DB->set_field('local_catquizlab_run', 'status', \local_catquizlab\local\registry::STATUS_RUNNING, ['id' => $run->id]);
+            $workerid = 'behat-worker-' . $run->id;
+            \local_catquizlab\local\worker_registry::acquire_slot(++$slot, $workerid);
+            foreach ([0, 0, 10] as $status) {
+                $DB->insert_record('local_catquizlab_attempt', (object) [
+                    'runid' => $run->id, 'personid' => 0, 'status' => $status, 'tries' => $status > 0 ? 1 : 0,
+                    'leaseowner' => $status > 0 ? $workerid : null, 'leaseexpires' => $status > 0 ? time() + 3600 : 0,
+                    'nextruntime' => 0, 'timecreated' => time(), 'timemodified' => time(),
+                ]);
+            }
+        }
+    }
+
+    /**
      * Open the results of one experiment.
      *
      * @Given /^I open the results of "(?P<name_string>(?:[^"]|\\")*)"$/

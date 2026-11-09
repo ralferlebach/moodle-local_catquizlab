@@ -315,6 +315,16 @@
                         </button>
                     </form>
                 {{/canstart}}
+                {{#canstop}}
+                    <form method="post" action="{{formurl}}" class="d-inline">
+                        <input type="hidden" name="sesskey" value="{{sesskey}}">
+                        <input type="hidden" name="action" value="stopexperiment">
+                        <input type="hidden" name="experimentid" value="{{experimentid}}">
+                        <button type="submit" class="btn btn-outline-danger" data-action="catquizlab-stopexperiment">
+                            {{#str}}runner:stop, local_catquizlab{{/str}}
+                        </button>
+                    </form>
+                {{/canstop}}
                 {{#queued}}
                     <span class="badge badge-info">{{#str}}runner:queued, local_catquizlab{{/str}}</span>
                 {{/queued}}

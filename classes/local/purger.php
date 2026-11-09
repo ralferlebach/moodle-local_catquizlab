@@ -50,14 +50,14 @@ class purger {
      *
      * @param int $experimentid The experiment.
      * @param bool $deep Whether the engine-side objects are included.
-     * @return array{ok: bool, name: string, counts: array, blockers: string[]}
+     * @return array{ok: bool, name: string, counts: array, blockers: string[], stopping: string[]}
      */
     public static function preview_experiment(int $experimentid, bool $deep = true): array {
         global $DB;
 
         $experiment = $DB->get_record('local_catquizlab_experiment', ['id' => $experimentid]);
         if (!$experiment) {
-            return ['ok' => false, 'name' => '', 'counts' => [], 'blockers' => ['experiment-not-found']];
+            return ['ok' => false, 'name' => '', 'counts' => [], 'blockers' => ['experiment-not-found'], 'stopping' => []];
         }
 
         $runids = $DB->get_fieldset_select('local_catquizlab_run', 'id', 'experimentid = ?', [$experimentid]);
@@ -67,7 +67,8 @@ class purger {
         $blockers = [];
 
         if ($runids === []) {
-            return ['ok' => true, 'name' => format_string($experiment->name), 'counts' => $counts, 'blockers' => []];
+            return ['ok' => true, 'name' => format_string($experiment->name), 'counts' => $counts, 'blockers' => [],
+                'stopping' => []];
         }
 
         [$insql, $params] = $DB->get_in_or_equal($runids, SQL_PARAMS_NAMED, 'r');
@@ -86,13 +87,14 @@ class purger {
             }
         }
 
-        // A run being played cannot be deleted from under its worker, and
-        // saying so before the button is pressed beats saying so after.
+        // Runs being played are stopped first (0.7.49); saying so before the
+        // button is pressed beats saying so after.
+        $stopping = [];
         foreach ($runids as $runid) {
             $status = (int) $DB->get_field('local_catquizlab_run', 'status', ['id' => $runid]);
             $playing = $status === registry::STATUS_RUNNING && run_lifecycle::has_open_attempts($runid);
             if ($playing) {
-                $blockers[] = get_string('purge:runbeingplayed', 'local_catquizlab', $runid);
+                $stopping[] = get_string('purge:runbeingplayed', 'local_catquizlab', $runid);
             }
         }
 
@@ -121,6 +123,7 @@ class purger {
             'name'     => format_string($experiment->name),
             'counts'   => array_filter($counts),
             'blockers' => $blockers,
+            'stopping' => $stopping,
         ];
     }
 
@@ -208,12 +211,12 @@ class purger {
     }
 
     /**
-     * Delete an experiment with all of its runs.
+     * Delete an experiment with all of its runs, stopping it first.
      *
      * @param int $experimentid The experiment.
      * @param bool $deep Also remove the engine-side objects.
-     * @param bool $force Delete even while attempts are being played.
-     * @return array{ok: bool, removed: array, reason: string}
+     * @param bool $force Kept for callers; an experiment is always stopped before it is deleted now.
+     * @return array{ok: bool, removed: array, reason: string, stopped?: array}
      */
     public static function delete_experiment(int $experimentid, bool $deep = false, bool $force = false): array {
         global $DB;
@@ -222,22 +225,16 @@ class purger {
             return ['ok' => false, 'removed' => [], 'reason' => 'experiment-not-found'];
         }
 
-        // A worker mid-attempt is asked to finish and stop, not overruled.
-        // Forcing past it strands the claim it holds and leaves a browser
-        // playing a quiz whose questions are being deleted underneath it.
-        $stopping = self::ask_workers_to_stop($experimentid);
-        if ($stopping > 0 && !$force) {
-            return [
-                'ok'       => false,
-                'removed'  => [],
-                'reason'   => 'workers-stopping',
-                'stopping' => $stopping,
-            ];
-        }
+        // Stopped first, then deleted (0.7.49). Deleting used to ask the workers playing the experiment to
+        // finish and refuse until they had — while every tick started new workers for the sittings still
+        // waiting, so the next try found the same situation: an experiment that could be neither stopped nor
+        // deleted. The stop takes the work away instead: no run hands out a sitting any more, the ones being
+        // played are closed, and their workers stop before their next answer. No claim is left to strand.
+        $stopped = experiment_stop::stop($experimentid);
 
         $totals = ['runs' => 0];
         foreach ($DB->get_records('local_catquizlab_run', ['experimentid' => $experimentid], 'id ASC', 'id') as $run) {
-            $result = self::delete_run((int) $run->id, $deep, $force);
+            $result = self::delete_run((int) $run->id, $deep, true);
             if (!$result['ok']) {
                 // Stopping rather than leaving half an experiment: a partial
                 // delete is harder to reason about than none.
@@ -252,41 +249,7 @@ class purger {
         $DB->delete_records('local_catquizlab_experiment', ['id' => $experimentid]);
         $totals['experiment'] = 1;
 
-        return ['ok' => true, 'removed' => array_filter($totals), 'reason' => ''];
-    }
-
-    /**
-     * Ask any worker playing this experiment to finish and stop.
-     *
-     * @param int $experimentid The experiment.
-     * @return int How many workers were asked.
-     */
-    protected static function ask_workers_to_stop(int $experimentid): int {
-        global $DB;
-
-        $owners = $DB->get_fieldset_sql(
-            'SELECT DISTINCT a.leaseowner
-               FROM {local_catquizlab_attempt} a
-               JOIN {local_catquizlab_run} r ON r.id = a.runid
-              WHERE r.experimentid = :experimentid
-                AND a.status = :running
-                AND a.leaseexpires > :now
-                AND a.leaseowner IS NOT NULL',
-            [
-                'experimentid' => $experimentid,
-                'running'      => attempt_scheduler::STATUS_RUNNING,
-                'now'          => time(),
-            ]
-        );
-
-        $asked = 0;
-        foreach (array_filter($owners) as $workerid) {
-            if (worker_registry::request_stop((string) $workerid)) {
-                $asked++;
-            }
-        }
-
-        return $asked;
+        return ['ok' => true, 'removed' => array_filter($totals), 'reason' => '', 'stopped' => $stopped];
     }
 
     /**
@@ -436,46 +399,61 @@ class purger {
         require_once($CFG->dirroot . '/user/lib.php');
         require_once($CFG->libdir . '/enrollib.php');
 
-        $people = $DB->get_records('local_catquizlab_person', ['runid' => $runid]);
-        if ($people === []) {
+        $userids = array_values(array_unique(array_map('intval', $DB->get_fieldset_select(
+            'local_catquizlab_person',
+            'moodleuserid',
+            'runid = ? AND moodleuserid > 0',
+            [$runid]
+        ))));
+        if ($userids === []) {
             return [];
         }
 
-        $run = $DB->get_record('local_catquizlab_run', ['id' => $runid]);
-        $courseid = $run ? (int) $run->courseid : 0;
-
+        $courseid = (int) $DB->get_field('local_catquizlab_run', 'courseid', ['id' => $runid]);
         $removed = ['enrolments' => 0, 'users' => 0];
-        foreach ($people as $person) {
-            $userid = (int) $person->moodleuserid;
-            if ($userid === 0) {
-                continue;
-            }
 
-            if ($courseid > 0) {
-                $coursecontext = \context_course::instance($courseid);
-                $enrolled = is_enrolled($coursecontext, (object) ['id' => $userid], '', false);
+        // Read once per chunk, not once per person (0.7.49): the course's enrolment instances, the enrolments and the
+        // accounts were each fetched per person, and every person was unenrolled one by one before delete_user(),
+        // which unenrols anyway. That saved little — measured, about 3 of some 125 queries a person costs; the rest
+        // is delete_user() itself, which is why deleting runs in the background now (task\delete_experiment).
+        $instances = $courseid > 0 ? enrol_get_instances($courseid, true) : [];
+        foreach (array_chunk($userids, 500) as $chunk) {
+            [$insql, $params] = $DB->get_in_or_equal($chunk, SQL_PARAMS_NAMED, 'u');
+            $enrolled = $courseid > 0 ? $DB->get_records_sql_menu(
+                "SELECT ue.userid, COUNT(1)
+                   FROM {user_enrolments} ue
+                   JOIN {enrol} e ON e.id = ue.enrolid
+                  WHERE e.courseid = :courseid AND ue.userid {$insql}
+               GROUP BY ue.userid",
+                $params + ['courseid' => $courseid]
+            ) : [];
+            $users = $DB->get_records_select('user', "id {$insql} AND deleted = 0", $params);
 
-                foreach (enrol_get_instances($courseid, true) as $instance) {
-                    $plugin = enrol_get_plugin($instance->enrol);
-                    if ($plugin && $enrolled) {
-                        $plugin->unenrol_user($instance, $userid);
-                        $removed['enrolments']++;
+            foreach ($users as $user) {
+                // The run number in the username is what this plugin stamps on the
+                // accounts it creates, and it names the run being deleted. An
+                // account without it belongs to somebody else, and deleting a real
+                // user because they happened to be enrolled in an experiment course
+                // would be unforgivable.
+                $ours = str_contains((string) $user->username, '_r' . $runid . '_');
+                $removed['enrolments'] += (int) ($enrolled[$user->id] ?? 0);
+
+                if ($ours) {
+                    // Takes the enrolments, role assignments and group memberships with it.
+                    delete_user($user);
+                    $removed['users']++;
+                    continue;
+                }
+
+                // Somebody else's account: only out of the experiment course.
+                if (!empty($enrolled[$user->id])) {
+                    foreach ($instances as $instance) {
+                        $plugin = enrol_get_plugin($instance->enrol);
+                        if ($plugin) {
+                            $plugin->unenrol_user($instance, (int) $user->id);
+                        }
                     }
                 }
-            }
-
-            $user = $DB->get_record('user', ['id' => $userid, 'deleted' => 0]);
-
-            // The run number in the username is what this plugin stamps on the
-            // accounts it creates, and it names the run being deleted. An
-            // account without it belongs to somebody else, and deleting a real
-            // user because they happened to be enrolled in an experiment course
-            // would be unforgivable.
-            $ours = $user && str_contains((string) $user->username, '_r' . $runid . '_');
-
-            if ($ours) {
-                delete_user($user);
-                $removed['users']++;
             }
         }
 

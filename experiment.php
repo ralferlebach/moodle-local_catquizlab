@@ -97,6 +97,11 @@ if ($action === 'delete' && $id > 0) {
         foreach ($preview['blockers'] as $blocker) {
             $message .= html_writer::tag('p', $blocker, ['class' => 'text-danger']);
         }
+        // Being played is no longer a reason to refuse (0.7.49): the experiment is stopped first.
+        if ($preview['stopping'] !== []) {
+            $message .= html_writer::tag('p', implode(' ', $preview['stopping']) . ' '
+                . get_string('purge:stopsfirst', $component));
+        }
 
         echo $OUTPUT->header();
         echo \local_catquizlab\output\shell::render('plan', $id);
@@ -133,27 +138,16 @@ if ($action === 'delete' && $id > 0) {
         redirect($manageurl, get_string('purge:postonly', $component), null, \core\output\notification::NOTIFY_WARNING);
     }
 
-    $result = \local_catquizlab\local\purger::delete_experiment(
-        $id,
-        (bool) $deep,
-        (bool) optional_param('force', 0, PARAM_BOOL)
-    );
+    // Stopped now, deleted in the background (0.7.49). Deleting deeply runs every simulated account through
+    // delete_user() and every question through question_delete_question(): minutes for a large experiment,
+    // which the request did not survive. Nothing runs from the moment of the click.
+    $stopped = \local_catquizlab\local\experiment_stop::stop($id);
+    \local_catquizlab\task\delete_experiment::queue($id, (bool) $deep);
 
-    if (!$result['ok']) {
-        redirect(
-            $manageurl,
-            $result['reason'] === 'workers-stopping'
-                ? get_string('purge:workerstopping', $component)
-                : get_string('purge:refused', $component, reason_catalog::text((string) $result['reason'])),
-            null,
-            \core\output\notification::NOTIFY_WARNING
-        );
-    }
-
-    $parts = [];
-    $parts[] = \local_catquizlab\local\purger::counts_line($result['removed']);
-
-    redirect($manageurl, get_string('purge:done', $component, implode(', ', $parts) ?: '-'));
+    redirect($manageurl, get_string('purge:queued', $component, (object) [
+        'counts' => \local_catquizlab\local\purger::counts_line($preview['counts']) ?: '-',
+        'runs' => $stopped['runs'],
+    ]));
 }
 
 // Reading the editor needs only view rights; every state change below asks for
