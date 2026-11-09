@@ -6,6 +6,57 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.7.52] — 2026-11-09 — Re-audit: exact clustering, a trace contract, one writer per sitting, a quadratic summary
+
+No database change. A new class (`local\sitting_lock`); the upgrade rebuilds Moodle's class cache.
+
+### Charts: grouping is exact and does not depend on the row order (#143)
+- `scatter_chart::clusters()` grouped by a key rounded to nine decimals: 625.0 and 625.0000000004 became one
+  marker, and its coordinate and label changed with the order of the rows (the re-audit's reproduction). Grouping
+  is now by the stored values bit for bit (−0 and +0 are one value), markers are sorted by x then y, a marker's
+  label is the first of its members' labels in byte order, and every member's label is kept (`labels`).
+- A marker with several labels says so: "4 points at (625; 0.3) — a and 2 other(s)".
+- `data-x`/`data-y` of a marker and the plot's CSV write the shortest text that reads back as the same float
+  (`scatter_chart::exact()`); PHP's string conversion rounded to 14 digits.
+- Points with NaN or ±INF are not drawn at an edge: they are said beneath the plot and kept in the CSV.
+
+### Sittings: what a trace must hold to count (#138)
+- `attempt_collector::defects()`: the host attempt is complete; the engine has its own record of it (without it
+  the final ability read as 0.0 — invented); at least one answered question; items, responses and nitems name the
+  same questions; fractions between 0 and 1; a finite final ability; a reason for the end. A sitting short of any
+  waits for its trace and is given up after `TRACE_RETRIES` looks; the codes are in `lasterror`
+  (`trace_missing: [noengineresult] …`).
+- The host's count of answered questions and the answers read are kept with every trace (`consistency`), not yet
+  enforced: the SQL to measure their agreement on a real installation is in `docs/dev/trace-vertrag.md`.
+- The responses are read in one query instead of one per question.
+
+### Sittings: one writer at a time (#138, #134)
+- `job_complete`, a repeated report, `reclaim_stale`, `retry_pending_traces` and `collect_run` take the lock
+  `local_catquizlab_sitting/attempt<id>` and read the sitting again under it. Two of them at the same moment could
+  both pass their check and both collect, record and count the sitting.
+- Status, trace, engine attempt id and runtime are written in one update; no reader sees "collected" without a
+  trace or "running" with an engine attempt.
+- A report that finds the sitting held for more than 15 s is not applied (`job:busy`); its lease runs out and the
+  recovery collects it from the engine.
+
+### Results: the streaming summary was quadratic
+- `stream_summary::add()` built its value buffers with `$a = ($a ?? '') . $b`, which copies the whole buffer on
+  every sitting. The overview took 0.7 s for 9,000 sittings and 18 s for 50,000 (factor 26, linear 5.6); the
+  global tab 19.5 s. Appended in place now: overview 6.8 s, global tab 4.5 s for 50,000 sittings. This was the
+  failure of `results_scale_test` in the full suite, which 0.7.50 put down to parallel load — wrongly: it failed
+  without load too.
+
+### Tests added
+- `density_marker_test`: exact grouping and order invariance (25 permutations), near values in SVG and CSV,
+  labels of mixed markers, non-finite values.
+- `trace_integrity_test`: the contract clause by clause; the real collector without and then with the engine's
+  record; an attempt still being written; a sitting held by another request (report, recovery, trace look);
+  a sitting collected meanwhile.
+- `stream_summary_test`: 200,000 sittings within three times their linear share of 20,000 (fails on the old code:
+  134 s against 0.2 s).
+
+---
+
 ## [0.7.51] — 2026-11-09 — The library test follows the background delete
 
 No database change, no change to the plugin's behaviour.

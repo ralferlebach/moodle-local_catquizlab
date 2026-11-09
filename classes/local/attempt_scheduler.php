@@ -316,47 +316,87 @@ class attempt_scheduler {
         }
 
         $stale = $DB->get_records_select('local_catquizlab_attempt', $where, $params, '', 'id, tries, leaseowner, runid');
+        $reclaimed = 0;
         foreach ($stale as $attempt) {
-            $DB->set_field('local_catquizlab_attempt', 'leaseowner', null, ['id' => $attempt->id]);
-            $DB->set_field('local_catquizlab_attempt', 'leaseexpires', 0, ['id' => $attempt->id]);
-
-            // Not handed blindly to the next execution (#133): the server says
-            // first what became of it. An attempt the engine has completed is
-            // collected, not played again.
-            $state = \local_catquizlab\external\sitting_state::state((int) $attempt->id);
-            if ($state['found'] && $state['state'] === 'complete') {
-                // The engine attempt is recorded, the status is the collector's to set: collected only with a
-                // trace (#138), otherwise waiting for it.
-                $DB->update_record('local_catquizlab_attempt', (object) [
-                    'id' => $attempt->id, 'engineattemptid' => (int) $state['engineattemptid'], 'timemodified' => $now,
-                ]);
-                $collected = self::collect_or_hold((int) $attempt->id, (string) ($attempt->leaseowner ?? ''));
-                attempt_history::record((int) $attempt->id, $collected ? attempt_history::COLLECTED
-                    : attempt_history::TRACE_PENDING, [
-                    'tryno' => (int) $attempt->tries,
-                    'workerid' => (string) ($attempt->leaseowner ?? ''),
-                    'engineattemptid' => (int) $state['engineattemptid'],
-                    'detail' => get_string(
-                        $collected ? 'history:leasecollected' : 'history:leasetracepending',
-                        'local_catquizlab',
-                        (int) $state['questionsattempted']
-                    ),
-                ]);
-                run_lifecycle::attempt_finished((int) $attempt->runid);
-                continue;
+            // Under the sitting's lock, and only if its lease is still lapsed (#138): a completion report that came in
+            // meanwhile has ended it, and a heartbeat has renewed it. A sitting another process holds now is left for
+            // the next tick.
+            [$had, $done] = sitting_lock::run((int) $attempt->id, 0, static function () use (
+                $DB,
+                $attempt,
+                $where,
+                $params,
+                $now
+            ): bool {
+                $still = $DB->get_record_select(
+                    'local_catquizlab_attempt',
+                    'id = :attemptid AND ' . $where,
+                    ['attemptid' => $attempt->id] + $params,
+                    'id, tries, leaseowner, runid'
+                );
+                if (!$still) {
+                    return false;
+                }
+                self::reclaim_one($still, $now);
+                return true;
+            });
+            if ($had && $done) {
+                $reclaimed++;
             }
-            // The code first, for whoever counts causes; what the engine knew in words.
-            $why = 'lease_expired ' . ($state['found']
-                ? get_string('history:leaseengine', 'local_catquizlab', (object) [
-                    'worker' => (string) ($attempt->leaseowner ?? '?'), 'state' => $state['state'],
-                    'answered' => (int) $state['questionsattempted'], 'presented' => (int) $state['slots'],
-                ])
-                : get_string('history:leasenoengine', 'local_catquizlab', (object) [
-                    'worker' => (string) ($attempt->leaseowner ?? '?'), 'reason' => $state['reason'],
-                ]));
-            self::apply_retry((int) $attempt->id, (int) $attempt->tries, $now, $why);
         }
-        return count($stale);
+        return $reclaimed;
+    }
+
+    /**
+     * Hand back one sitting whose lease has lapsed, with its lock held: collected if the engine finished it,
+     * otherwise retried or failed.
+     *
+     * @param \stdClass $attempt The sitting (id, tries, leaseowner, runid).
+     * @param int $now The clock.
+     * @return void
+     */
+    protected static function reclaim_one(\stdClass $attempt, int $now): void {
+        global $DB;
+
+        $DB->set_field('local_catquizlab_attempt', 'leaseowner', null, ['id' => $attempt->id]);
+        $DB->set_field('local_catquizlab_attempt', 'leaseexpires', 0, ['id' => $attempt->id]);
+
+        // Not handed blindly to the next execution (#133): the server says
+        // first what became of it. An attempt the engine has completed is
+        // collected, not played again.
+        $state = \local_catquizlab\external\sitting_state::state((int) $attempt->id);
+        if ($state['found'] && $state['state'] === 'complete') {
+            // The engine attempt is written with the status the collector sets, in one update: collected only
+            // with a trace (#138), otherwise waiting for it.
+            $collected = self::collect_or_hold(
+                (int) $attempt->id,
+                (string) ($attempt->leaseowner ?? ''),
+                (int) $state['engineattemptid']
+            );
+            attempt_history::record((int) $attempt->id, $collected ? attempt_history::COLLECTED
+                : attempt_history::TRACE_PENDING, [
+                'tryno' => (int) $attempt->tries,
+                'workerid' => (string) ($attempt->leaseowner ?? ''),
+                'engineattemptid' => (int) $state['engineattemptid'],
+                'detail' => get_string(
+                    $collected ? 'history:leasecollected' : 'history:leasetracepending',
+                    'local_catquizlab',
+                    (int) $state['questionsattempted']
+                ),
+            ]);
+            run_lifecycle::attempt_finished((int) $attempt->runid);
+            return;
+        }
+        // The code first, for whoever counts causes; what the engine knew in words.
+        $why = 'lease_expired ' . ($state['found']
+            ? get_string('history:leaseengine', 'local_catquizlab', (object) [
+                'worker' => (string) ($attempt->leaseowner ?? '?'), 'state' => $state['state'],
+                'answered' => (int) $state['questionsattempted'], 'presented' => (int) $state['slots'],
+            ])
+            : get_string('history:leasenoengine', 'local_catquizlab', (object) [
+                'worker' => (string) ($attempt->leaseowner ?? '?'), 'reason' => $state['reason'],
+            ]));
+        self::apply_retry((int) $attempt->id, (int) $attempt->tries, $now, $why);
     }
 
     /**
@@ -629,26 +669,40 @@ class attempt_scheduler {
      * lease released, for the next look (retry_pending_traces()). It is not played again: its engine attempt
      * exists, and a second sitting of the same person would be the double sitting of #134.
      *
+     * Called with the sitting's lock held (sitting_lock). Either way one update writes the new status together with
+     * the engine attempt and the caller's fields ($set): collected with its trace, or waiting for it.
+     *
      * @param int $attemptid The sitting.
      * @param string $workerid Who reported it, for the record.
+     * @param int $engineattemptid The engine attempt, when the caller has just learnt it; 0 for the stored one.
+     * @param array $set Further fields of the sitting to write with the new status (such as the runtime).
      * @return bool Whether it is collected now.
      */
-    public static function collect_or_hold(int $attemptid, string $workerid = ''): bool {
+    public static function collect_or_hold(
+        int $attemptid,
+        string $workerid = '',
+        int $engineattemptid = 0,
+        array $set = []
+    ): bool {
         global $DB;
 
-        if (attempt_collector::collect($attemptid) !== null) {
+        if (attempt_collector::collect($attemptid, $engineattemptid, $set) !== null) {
             return true;
         }
-        $engine = (int) $DB->get_field('local_catquizlab_attempt', 'engineattemptid', ['id' => $attemptid]);
-        $DB->update_record('local_catquizlab_attempt', (object) [
+        $engine = $engineattemptid > 0 ? $engineattemptid
+            : (int) $DB->get_field('local_catquizlab_attempt', 'engineattemptid', ['id' => $attemptid]);
+        // What the trace lacked, by the contract's codes, then what the engine says about it (#138).
+        $defects = attempt_collector::last_defects();
+        $DB->update_record('local_catquizlab_attempt', (object) ([
             'id' => $attemptid,
             'status' => self::STATUS_TRACEPENDING,
             'leaseowner' => null,
             'leaseexpires' => 0,
             'nextruntime' => time() + self::TRACE_RETRY_DELAY,
-            'lasterror' => 'trace_missing: ' . engine_validity::unmeasured_reason($engine),
+            'lasterror' => \core_text::substr('trace_missing: ' . ($defects !== [] ? '[' . implode(',', $defects) . '] ' : '')
+                . engine_validity::unmeasured_reason($engine), 0, 1000),
             'timemodified' => time(),
-        ]);
+        ] + ($engine > 0 ? ['engineattemptid' => $engine] : []) + $set));
 
         return false;
     }
@@ -679,36 +733,71 @@ class attempt_scheduler {
             200
         );
         foreach ($pending as $attempt) {
-            $looks = $DB->count_records('local_catquizlab_attemptlog', ['attemptid' => $attempt->id,
-                'outcome' => attempt_history::TRACE_PENDING]);
-            if ($collect((int) $attempt->id) !== null) {
-                attempt_history::record((int) $attempt->id, attempt_history::COLLECTED, [
-                    'tryno' => (int) $attempt->tries,
-                    'detail' => get_string('history:tracearrived', 'local_catquizlab', $looks),
-                ]);
-                $out['collected']++;
-            } else if ($looks >= self::TRACE_RETRIES) {
-                $DB->update_record('local_catquizlab_attempt', (object) ['id' => $attempt->id,
-                    'status' => self::STATUS_FAILED, 'timemodified' => $now]);
-                attempt_history::record((int) $attempt->id, attempt_history::ABANDONED, [
-                    'tryno' => (int) $attempt->tries,
-                    'detail' => get_string('history:tracegivenup', 'local_catquizlab', $looks),
-                ]);
-                $out['givenup']++;
-            } else {
-                $DB->update_record('local_catquizlab_attempt', (object) ['id' => $attempt->id,
-                    'nextruntime' => $now + self::TRACE_RETRY_DELAY, 'timemodified' => $now]);
-                attempt_history::record((int) $attempt->id, attempt_history::TRACE_PENDING, [
-                    'tryno' => (int) $attempt->tries,
-                    'detail' => get_string('history:tracestillmissing', 'local_catquizlab', (object) [
-                        'look' => $looks + 1, 'of' => self::TRACE_RETRIES,
-                    ]),
-                ]);
-                $out['waiting']++;
+            // Under the sitting's lock, and only if it still waits (#138): a worker report, the lease recovery or a
+            // run's re-collection may have collected it since the list was read. A sitting another process holds
+            // now is left for the next tick, not counted as a look.
+            [$had, $result] = sitting_lock::run((int) $attempt->id, 0, static function () use (
+                $DB,
+                $attempt,
+                $collect,
+                $now
+            ): ?string {
+                $status = $DB->get_field('local_catquizlab_attempt', 'status', ['id' => $attempt->id]);
+                if ((int) $status !== self::STATUS_TRACEPENDING) {
+                    return null;
+                }
+                return self::look_for_trace($attempt, $collect, $now);
+            });
+            if ($had && $result !== null) {
+                $out[$result]++;
+                run_lifecycle::attempt_finished((int) $attempt->runid);
             }
-            run_lifecycle::attempt_finished((int) $attempt->runid);
         }
 
         return $out;
+    }
+
+    /**
+     * One look for a sitting's missing trace, with its lock held: collected, still waiting, or given up.
+     *
+     * @param \stdClass $attempt The sitting (id, runid, tries).
+     * @param callable $collect The collection, attempt id => trace or null.
+     * @param int $now The clock.
+     * @return string 'collected', 'waiting' or 'givenup'.
+     */
+    protected static function look_for_trace(\stdClass $attempt, callable $collect, int $now): string {
+        global $DB;
+
+        $looks = $DB->count_records('local_catquizlab_attemptlog', ['attemptid' => $attempt->id,
+            'outcome' => attempt_history::TRACE_PENDING]);
+        attempt_collector::clear_defects();
+        if ($collect((int) $attempt->id) !== null) {
+            attempt_history::record((int) $attempt->id, attempt_history::COLLECTED, [
+                'tryno' => (int) $attempt->tries,
+                'detail' => get_string('history:tracearrived', 'local_catquizlab', $looks),
+            ]);
+            return 'collected';
+        }
+        // What the trace still lacks, by the contract's codes (#138); without codes the reason stays as it was.
+        $defects = attempt_collector::last_defects();
+        $lasterror = $defects !== [] ? ['lasterror' => 'trace_missing: [' . implode(',', $defects) . ']'] : [];
+        if ($looks >= self::TRACE_RETRIES) {
+            $DB->update_record('local_catquizlab_attempt', (object) (['id' => $attempt->id,
+                'status' => self::STATUS_FAILED, 'timemodified' => $now] + $lasterror));
+            attempt_history::record((int) $attempt->id, attempt_history::ABANDONED, [
+                'tryno' => (int) $attempt->tries,
+                'detail' => get_string('history:tracegivenup', 'local_catquizlab', $looks),
+            ]);
+            return 'givenup';
+        }
+        $DB->update_record('local_catquizlab_attempt', (object) (['id' => $attempt->id,
+            'nextruntime' => $now + self::TRACE_RETRY_DELAY, 'timemodified' => $now] + $lasterror));
+        attempt_history::record((int) $attempt->id, attempt_history::TRACE_PENDING, [
+            'tryno' => (int) $attempt->tries,
+            'detail' => get_string('history:tracestillmissing', 'local_catquizlab', (object) [
+                'look' => $looks + 1, 'of' => self::TRACE_RETRIES,
+            ]),
+        ]);
+        return 'waiting';
     }
 }

@@ -78,8 +78,20 @@ class attempt_collector {
         );
 
         $collected = 0;
+        $statuses = [attempt_scheduler::STATUS_COLLECTED, attempt_scheduler::STATUS_VALIDATED,
+            attempt_scheduler::STATUS_TRACEPENDING];
         foreach ($attempts as $attempt) {
-            if (self::collect((int) $attempt->id) !== null) {
+            // Under the sitting's lock, on its status as it is now (#138): a worker report or the trace look may have
+            // changed it since the list was read.
+            [, $trace] = sitting_lock::run((int) $attempt->id, sitting_lock::COLLECT_WAIT, static function () use (
+                $DB,
+                $attempt,
+                $statuses
+            ): ?array {
+                $status = $DB->get_field('local_catquizlab_attempt', 'status', ['id' => $attempt->id]);
+                return in_array((int) $status, $statuses, true) ? self::collect((int) $attempt->id) : null;
+            });
+            if ($trace !== null) {
                 $collected++;
             }
         }
@@ -93,36 +105,139 @@ class attempt_collector {
         ];
     }
 
+    /** @var string[] Why the last collect() stored nothing: the trace's defects (#138). */
+    protected static array $lastdefects = [];
+
     /**
-     * Whether a trace holds what a sitting administered: items or responses (#138).
+     * Whether a trace holds what a sitting administered (#138): at least one answered question, and items and
+     * responses that describe the same questions.
      *
      * @param array $trace A built trace.
      * @return bool
      */
     public static function usable(array $trace): bool {
-        return (array) ($trace['items'] ?? []) !== [] || (array) ($trace['responses'] ?? []) !== [];
+        return array_intersect(self::defects($trace), ['noanswers', 'itemsmismatch', 'badresponse']) === [];
+    }
+
+    /**
+     * What a trace lacks to be stored as the record of a finished sitting (#138, re-audit 2026-11-09).
+     *
+     * The contract, each clause a code:
+     * - noattempt: the host's attempt was not found;
+     * - notcomplete: the host's attempt is not complete yet, so its answers may still be written;
+     * - noengineresult: the engine's own record of the attempt is missing, so the final ability would be invented
+     *   (it used to read as 0.0);
+     * - noanswers: not one question with an answer (a null fraction is a question shown and not answered);
+     * - itemsmismatch: items, responses and nitems do not name the same questions in the same order;
+     * - badresponse: an answer that is not a fraction between 0 and 1;
+     * - badtheta: a final ability that is not a finite number;
+     * - nostop: nothing says why the sitting ended — no stop criterion, no host stop code, no engine status.
+     *
+     * The engine part ($engine, from read_engine_attempt()) is optional, so a trace on its own can be checked too.
+     * A sitting with defects is not collected: it waits for its trace and, if the defects stay, is given up as a
+     * technical non-result; it never reaches a result, a figure or an export.
+     *
+     * @param array $trace A built trace.
+     * @param array|null $engine What was read from the engine, when it was read.
+     * @return string[] The codes, empty when the trace may be stored.
+     */
+    public static function defects(array $trace, ?array $engine = null): array {
+        $defects = [];
+        if ($engine !== null) {
+            if (empty($engine['found'])) {
+                return ['noattempt'];
+            }
+            if (($engine['attemptstate'] ?? '') !== 'complete') {
+                $defects[] = 'notcomplete';
+            }
+            if (empty($engine['catquizrow'])) {
+                $defects[] = 'noengineresult';
+            }
+        }
+        $responses = (array) ($trace['responses'] ?? []);
+        $items = array_values((array) ($trace['items'] ?? []));
+        $answered = array_filter($responses, static fn($fraction): bool => $fraction !== null);
+        if ($answered === []) {
+            $defects[] = 'noanswers';
+        }
+        if (
+            $items !== array_keys($responses)
+            || (isset($trace['nitems']) && (int) $trace['nitems'] !== count($items))
+        ) {
+            $defects[] = 'itemsmismatch';
+        }
+        foreach ($answered as $fraction) {
+            if (!is_numeric($fraction) || !is_finite((float) $fraction) || $fraction < 0 || $fraction > 1) {
+                $defects[] = 'badresponse';
+                break;
+            }
+        }
+        if (array_key_exists('finaltheta', $trace) && !is_finite((float) $trace['finaltheta'])) {
+            $defects[] = 'badtheta';
+        }
+        if ($engine !== null) {
+            $stop = trim((string) ($trace['stopreason'] ?? '')) !== '' || ($trace['hoststopcode'] ?? null) !== null
+                || ($trace['enginestatus'] ?? null) !== null;
+            if (!$stop) {
+                $defects[] = 'nostop';
+            }
+        }
+
+        return $defects;
+    }
+
+    /**
+     * Why the last collect() stored nothing.
+     *
+     * @return string[] Defect codes; empty after a collection that stored a trace.
+     */
+    public static function last_defects(): array {
+        return self::$lastdefects;
+    }
+
+    /**
+     * Forget the last collection's defects, before a collection that may not be this class's own (tests).
+     *
+     * @return void
+     */
+    public static function clear_defects(): void {
+        self::$lastdefects = [];
     }
 
     /**
      * Collect one attempt's trace from the engine and store it.
      *
+     * Called only with the sitting's lock held (sitting_lock): the caller has read the sitting's status under it.
+     * The status "collected", the trace, the engine attempt id and the caller's own fields ($set, such as the
+     * runtime) are written in one update, so no reader sees a sitting collected without its trace or a trace
+     * without its engine attempt (#138).
+     *
      * @param int $attemptid The lab attempt id (local_catquizlab_attempt).
-     * @return array|null The stored trace, or null when the engine data is unavailable.
+     * @param int $engineattemptid The engine attempt, when the caller has just learnt it; 0 for the stored one.
+     * @param array $set Further fields of the sitting to write with the trace.
+     * @return array|null The stored trace, or null when the engine data is unavailable or does not satisfy the
+     *     contract (see last_defects()).
      */
-    public static function collect(int $attemptid): ?array {
+    public static function collect(int $attemptid, int $engineattemptid = 0, array $set = []): ?array {
         global $DB;
 
+        self::$lastdefects = [];
         $attempt = $DB->get_record('local_catquizlab_attempt', ['id' => $attemptid], '*', MUST_EXIST);
+        if ($engineattemptid > 0) {
+            $attempt->engineattemptid = $engineattemptid;
+        }
         if (
             empty($attempt->engineattemptid)
             || !environment::engine_available()
             || !environment::adaptivequiz_available()
         ) {
+            self::$lastdefects = ['noengine'];
             return null;
         }
 
         $engine = self::read_engine_attempt((int) $attempt->engineattemptid);
         if ($engine === null) {
+            self::$lastdefects = ['noattempt'];
             return null;
         }
 
@@ -220,16 +335,26 @@ class attempt_collector {
         // A trace is one that holds what was administered (#138): an engine attempt that answers with no item and
         // no response has not been read, whatever else it says. Nothing is written; the caller holds the sitting
         // as waiting for its trace.
-        if (!self::usable($trace)) {
+        // The whole contract (#138, re-audit 2026-11-09): complete in the host, recorded by the engine, answers
+        // that are fractions of the questions named, a final ability, and a reason for the end.
+        $trace['consistency'] = [
+            // What the host counts beside what was read, kept so the agreement can be measured on real runs.
+            'hostattempted' => $engine['questionsattempted'],
+            'answered' => count(array_filter((array) $trace['responses'], static fn($f): bool => $f !== null)),
+            'presented' => count((array) $trace['responses']),
+        ];
+        self::$lastdefects = self::defects($trace, $engine);
+        if (self::$lastdefects !== []) {
             return null;
         }
 
-        $DB->update_record('local_catquizlab_attempt', (object) [
-            'id'           => $attemptid,
-            'status'       => attempt_scheduler::STATUS_COLLECTED,
-            'tracejson'    => json_encode($trace, JSON_UNESCAPED_SLASHES),
-            'timemodified' => time(),
-        ]);
+        $DB->update_record('local_catquizlab_attempt', (object) ([
+            'id'              => $attemptid,
+            'status'          => attempt_scheduler::STATUS_COLLECTED,
+            'tracejson'       => json_encode($trace, JSON_UNESCAPED_SLASHES),
+            'engineattemptid' => (int) $attempt->engineattemptid,
+            'timemodified'    => time(),
+        ] + $set));
 
         // The engine's person parameters for this person have done their work:
         // the numbers are in this plugin's tables now. They go, so the next
@@ -327,6 +452,11 @@ class attempt_collector {
         $finalse = self::final_standarderror($catquiz);
 
         return [
+            // For the contract (defects()): found, complete, recorded by the engine, and what the host counts.
+            'found'      => true,
+            'attemptstate' => (string) ($aq->attemptstate ?? ''),
+            'catquizrow' => (bool) $catquiz,
+            'questionsattempted' => (int) ($aq->questionsattempted ?? 0),
             'finaltheta' => $finaltheta,
             'finalse'    => $finalse,
             'responses'  => self::read_responses((int) $aq->uniqueid),
@@ -785,20 +915,28 @@ class attempt_collector {
     protected static function read_responses(int $questionusageid): array {
         global $DB;
 
-        $attempts = $DB->get_records('question_attempts', ['questionusageid' => $questionusageid], 'slot ASC');
-        $responses = [];
-        foreach ($attempts as $attempt) {
-            $steps = $DB->get_records(
-                'question_attempt_steps',
-                ['questionattemptid' => $attempt->id],
-                'sequencenumber DESC, id DESC',
-                'id, fraction',
-                0,
-                1
-            );
-            $step = reset($steps);
-            $responses[(int) $attempt->questionid] = ($step && $step->fraction !== null) ? (float) $step->fraction : null;
+        if ($questionusageid <= 0) {
+            return [];
         }
+        // One query for the whole sitting: each question's last step (sequencenumber is unique per question
+        // attempt). It used to be one query per question — 625 for a long classical sitting.
+        $rows = $DB->get_recordset_sql(
+            'SELECT qa.slot, qa.questionid, qas.fraction
+               FROM {question_attempts} qa
+          LEFT JOIN {question_attempt_steps} qas
+                 ON qas.questionattemptid = qa.id
+                AND qas.sequencenumber = (SELECT MAX(s2.sequencenumber)
+                                            FROM {question_attempt_steps} s2
+                                           WHERE s2.questionattemptid = qa.id)
+              WHERE qa.questionusageid = :usage
+           ORDER BY qa.slot ASC',
+            ['usage' => $questionusageid]
+        );
+        $responses = [];
+        foreach ($rows as $row) {
+            $responses[(int) $row->questionid] = $row->fraction !== null ? (float) $row->fraction : null;
+        }
+        $rows->close();
         return $responses;
     }
 }

@@ -207,4 +207,129 @@ final class density_marker_test extends \advanced_testcase {
         $lines = array_filter(explode("\n", base64_decode($csv[1])));
         $this->assertCount(101, $lines, 'the CSV keeps every sitting: a header and 100 rows');
     }
+
+    /**
+     * Grouping is exact and does not depend on the order of the rows (#143, re-audit 2026-11-09).
+     *
+     * The audit's reproduction: 625.0 and 625.0000000004 used to share a key rounded to nine decimals, became one
+     * marker, and its coordinate and label changed with the input order.
+     *
+     * @return void
+     */
+    public function test_grouping_is_exact_and_independent_of_order(): void {
+        $points = [
+            ['x' => 625.0, 'y' => 0.5, 'label' => 'P1'],
+            ['x' => 625.0000000004, 'y' => 0.5, 'label' => 'P2'],
+            ['x' => -0.0, 'y' => 1.0, 'label' => 'neg zero'],
+            ['x' => 0.0, 'y' => 1.0, 'label' => 'zero'],
+            ['x' => -1e-12, 'y' => 1.0, 'label' => 'just below'],
+            ['x' => 1e-12, 'y' => 1.0, 'label' => 'just above'],
+            ['x' => 1e15, 'y' => -3.0, 'label' => 'big'],
+            ['x' => 1e15 + 0.125, 'y' => -3.0, 'label' => 'big + 1/8'],
+            ['x' => 2.0, 'y' => 0.1 + 0.2, 'label' => 'b'],
+            ['x' => 2.0, 'y' => 0.3, 'label' => 'c'],
+            ['x' => 2.0, 'y' => 0.1 + 0.2, 'label' => 'a'],
+        ];
+        $clusters = scatter_chart::clusters($points);
+
+        $this->assertCount(9, $clusters, 'only -0/+0 and the two equal (2, 0.1+0.2) rows coincide');
+        $this->assertSame(count($points), array_sum(array_column($clusters, 'n')));
+        $byx = [];
+        foreach ($clusters as $cluster) {
+            $byx[scatter_chart::exact($cluster['x']) . '|' . scatter_chart::exact($cluster['y'])] = $cluster;
+        }
+        $this->assertSame(['P1'], $byx['625|0.5']['labels']);
+        $this->assertSame(['P2'], $byx['625.0000000004|0.5']['labels']);
+        $this->assertSame(['neg zero', 'zero'], $byx['0|1']['labels']);
+        $this->assertSame('neg zero', $byx['0|1']['label']);
+        $this->assertArrayHasKey('-1.0E-12|1', $byx);
+        $this->assertArrayHasKey('1.0E-12|1', $byx);
+        $this->assertNotSame(scatter_chart::exact(1e15), scatter_chart::exact(1e15 + 0.125));
+        $this->assertArrayHasKey(scatter_chart::exact(1e15) . '|-3', $byx);
+        $this->assertArrayHasKey(scatter_chart::exact(1e15 + 0.125) . '|-3', $byx);
+        $this->assertSame(['a', 'b'], $byx['2|0.30000000000000004']['labels']);
+        $this->assertSame('a', $byx['2|0.30000000000000004']['label']);
+        $this->assertSame(['c'], $byx['2|0.3']['labels']);
+
+        // Sorted by x, then y.
+        $keys = array_map(static fn(array $c): array => [$c['x'], $c['y']], $clusters);
+        $sorted = $keys;
+        usort($sorted, static fn(array $a, array $b): int => $a <=> $b);
+        $this->assertSame($sorted, $keys);
+
+        // Any order of the same rows: the same markers, coordinates and labels.
+        mt_srand(143);
+        for ($i = 0; $i < 25; $i++) {
+            $shuffled = $points;
+            shuffle($shuffled);
+            $this->assertSame($clusters, scatter_chart::clusters($shuffled), 'permutation ' . $i);
+        }
+        $this->assertSame($clusters, scatter_chart::clusters(array_reverse($points)));
+    }
+
+    /**
+     * The drawing and its CSV carry the values as stored, and do not change with the row order (#143).
+     *
+     * @return void
+     */
+    public function test_near_values_are_two_markers_in_the_drawing_and_the_csv(): void {
+        $this->resetAfterTest();
+        $points = [['x' => 625.0, 'y' => 0.5, 'label' => 'P1'], ['x' => 625.0000000004, 'y' => 0.5, 'label' => 'P2'],
+            ['x' => 600.0, 'y' => 0.1 + 0.2, 'label' => 'P3']];
+        $forward = $this->length_chart($points)->set_export('length', 'exp1', []);
+        $backward = $this->length_chart(array_reverse($points));
+        $svg = $forward->render();
+
+        $markers = $this->markers($svg);
+        $this->assertCount(3, $markers);
+        $this->assertSame([1, 1, 1], array_column($markers, 'count'));
+        $this->assertStringContainsString('data-x="625.0000000004"', $svg);
+        $this->assertStringContainsString('data-x="625"', $svg);
+        $this->assertStringContainsString('data-y="0.30000000000000004"', $svg);
+        $this->assertSame($markers, $this->markers($backward->render()), 'the same markers in either order');
+
+        preg_match('~data:text/csv;charset=utf-8;base64,([^"]+)"~', $svg, $csv);
+        $text = base64_decode($csv[1]);
+        $this->assertStringContainsString(',625.0000000004,0.5,P2', $text);
+        $this->assertStringContainsString(',625,0.5,P1', $text);
+        $this->assertStringContainsString(',600,0.30000000000000004,P3', $text);
+    }
+
+    /**
+     * Several labels on one marker are not hidden behind the first one (#143).
+     *
+     * @return void
+     */
+    public function test_a_marker_with_several_labels_says_how_many_others(): void {
+        $this->resetAfterTest();
+        $same = $this->markers($this->length_chart(array_fill(0, 3, ['x' => 625, 'y' => 0.3, 'label' => 'CLASSIC']))
+            ->render());
+        $this->assertSame('3 points at (625; 0.3) — CLASSIC', $same[0]['title']);
+
+        $mixed = $this->markers($this->length_chart([['x' => 625, 'y' => 0.3, 'label' => 'b'],
+            ['x' => 625, 'y' => 0.3, 'label' => 'a'], ['x' => 625, 'y' => 0.3, 'label' => 'c'],
+            ['x' => 625, 'y' => 0.3, 'label' => 'a']])->render());
+        $this->assertSame('4 points at (625; 0.3) — a and 2 other(s)', $mixed[0]['title']);
+    }
+
+    /**
+     * Not-a-number and infinite values are said beneath the plot and kept in the CSV, never drawn at an edge.
+     *
+     * @return void
+     */
+    public function test_non_finite_values_are_said_and_exported_not_drawn(): void {
+        $this->resetAfterTest();
+        $chart = $this->length_chart([['x' => 625, 'y' => 0.3, 'label' => 'ok'], ['x' => 625, 'y' => NAN, 'label' => 'nan'],
+            ['x' => INF, 'y' => 0.3, 'label' => 'inf']])->set_export('length', 'exp1', []);
+        $html = $chart->render();
+
+        $this->assertCount(1, $this->markers($html));
+        $this->assertStringContainsString('data-region="catquizlab-nonfinite-points"', $html);
+        $this->assertStringContainsString('2 point(s) without a finite value', $html);
+        $this->assertStringNotContainsString('NAN"', $html);
+
+        preg_match('~data:text/csv;charset=utf-8;base64,([^"]+)"~', $html, $csv);
+        $lines = array_values(array_filter(explode("\n", base64_decode($csv[1]))));
+        $this->assertCount(4, $lines, 'a header and all three points');
+    }
 }

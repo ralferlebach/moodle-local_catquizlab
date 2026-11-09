@@ -195,6 +195,9 @@ class scatter_chart {
     /** @var int Points outside the displayed range in the last drawing. */
     protected int $hidden = 0;
 
+    /** @var array[] Points given with a value that is not a finite number (NaN, ±INF): said and exported, not drawn. */
+    protected array $nonfinite = [];
+
     /** @var float Radius of the marker of a single point, in SVG units. */
     public const BASE_RADIUS = 2.5;
 
@@ -215,25 +218,62 @@ class scatter_chart {
     }
 
     /**
-     * Points grouped by their exact coordinates, in the order they first occur.
+     * Points grouped by their exact coordinates.
      *
-     * Exact means the values, not the pixels: two sittings 0.001 apart in their standard error remain two markers.
+     * Exact means the stored values, bit for bit, not a rounding of them and not the pixels (#143): 625.0 and
+     * 625.0000000004 are two markers, and two sittings 0.001 apart in their standard error remain two markers. The
+     * only identification is −0 with +0, which are the same number. Tolerance binning is deliberately not offered
+     * here; a plot that wanted it would need its own, separately labelled option.
+     *
+     * The result does not depend on the order of the input: markers are sorted by x, then y, and a marker's label
+     * is the first of its members' labels in byte order, with every member's label kept in 'labels' (sorted), so
+     * the provenance of a marker is complete and the same however the rows arrived.
      *
      * @param array[] $points Points with x, y and label.
-     * @return array[] Each with x, y, n and label (the first point's).
+     * @return array[] Each with x, y, n, label and labels.
      */
     public static function clusters(array $points): array {
         $out = [];
         foreach ($points as $point) {
-            $key = sprintf('%.9F|%.9F', (float) $point['x'], (float) $point['y']);
+            // Adding +0.0 turns −0.0 into +0.0 (IEEE 754); every other value is unchanged.
+            $x = (float) $point['x'] + 0.0;
+            $y = (float) $point['y'] + 0.0;
+            $key = pack('E', $x) . pack('E', $y);
             if (!isset($out[$key])) {
-                $out[$key] = ['x' => (float) $point['x'], 'y' => (float) $point['y'], 'n' => 0,
-                    'label' => (string) ($point['label'] ?? '')];
+                $out[$key] = ['x' => $x, 'y' => $y, 'n' => 0, 'label' => '', 'labels' => []];
             }
             $out[$key]['n']++;
+            $out[$key]['labels'][] = (string) ($point['label'] ?? '');
+        }
+        foreach ($out as &$cluster) {
+            sort($cluster['labels'], SORT_STRING);
+            $cluster['label'] = $cluster['labels'][0];
+        }
+        unset($cluster);
+        $out = array_values($out);
+        usort($out, static fn(array $a, array $b): int => [$a['x'], $a['y']] <=> [$b['x'], $b['y']]);
+
+        return $out;
+    }
+
+    /**
+     * A number as it is stored: the shortest text that reads back as the same float.
+     *
+     * PHP's string conversion rounds to 14 significant digits, so 625.0000000004 would be written as 625 — the
+     * marker's data attributes would then claim a value it does not have (#143).
+     *
+     * @param float $value The value.
+     * @return string
+     */
+    public static function exact(float $value): string {
+        for ($digits = 15; $digits < 17; $digits++) {
+            $text = sprintf('%.' . $digits . 'G', $value);
+            if ((float) $text === $value) {
+                return $text;
+            }
         }
 
-        return array_values($out);
+        return sprintf('%.17G', $value);
     }
 
     /**
@@ -454,8 +494,15 @@ class scatter_chart {
      */
     public function set_points(array $points): self {
         $this->points = [];
+        $this->nonfinite = [];
         foreach ($points as $point) {
             if (isset($point['x'], $point['y']) && is_numeric($point['x']) && is_numeric($point['y'])) {
+                // Not a number or infinite: nowhere to draw it, so it is counted and said, not drawn at an edge.
+                if (!is_finite((float) $point['x']) || !is_finite((float) $point['y'])) {
+                    $this->nonfinite[] = ['x' => (float) $point['x'], 'y' => (float) $point['y'],
+                        'label' => (string) ($point['label'] ?? '')];
+                    continue;
+                }
                 $this->points[] = [
                     'x' => (float) $point['x'],
                     'y' => (float) $point['y'],
@@ -523,6 +570,13 @@ class scatter_chart {
                 'why' => get_string($this->robust ? 'chart:robustrange' : 'chart:manualrange', 'local_catquizlab'),
             ]), 'small text-muted mt-1', ['data-region' => 'catquizlab-hidden-points']);
         }
+        if ($this->nonfinite !== []) {
+            $svg .= \html_writer::div(
+                get_string('chart:nonfinitepoints', 'local_catquizlab', count($this->nonfinite)),
+                'small text-muted mt-1',
+                ['data-region' => 'catquizlab-nonfinite-points']
+            );
+        }
         if ($this->notes !== []) {
             foreach ($this->notes as $note) {
                 $svg .= \html_writer::div(s($note), 'small text-muted mt-1', ['data-region' => 'catquizlab-plot-note']);
@@ -536,7 +590,7 @@ class scatter_chart {
             $rows = $this->exportrows;
             if ($rows === []) {
                 // Without rows of its own, a plot exports what it draws.
-                foreach ($this->points as $point) {
+                foreach (array_merge($this->points, $this->nonfinite) as $point) {
                     $rows[] = ['series' => '', 'x' => $point['x'], 'y' => $point['y'], 'label' => $point['label'] ?? ''];
                 }
                 foreach ($this->series as $trace) {
@@ -756,15 +810,17 @@ class scatter_chart {
             $n = (int) $cluster['n'];
             $label = $cluster['label'];
             if ($n > 1) {
-                $label = get_string('chart:clusterlabel', 'local_catquizlab', (object) [
+                // One label when all members share it; otherwise the first in order and how many others (#143).
+                $others = count(array_unique($cluster['labels'])) - 1;
+                $label = get_string($others > 0 ? 'chart:clusterlabelmixed' : 'chart:clusterlabel', 'local_catquizlab', (object) [
                     'n' => $n, 'x' => self::format($cluster['x']), 'y' => self::format($cluster['y']),
-                    'label' => $cluster['label'],
+                    'label' => $cluster['label'], 'others' => $others,
                 ]);
             }
             $title = $label !== '' ? '<title>' . s($label) . '</title>' : '';
             $svg .= '<circle cx="' . round($sx($cluster['x']), 2) . '" cy="' . round($sy($cluster['y']), 2)
                 . '" r="' . self::marker_radius($n) . '" fill="#2c3e50" fill-opacity="' . ($n > 1 ? '0.6' : '0.45') . '"'
-                . ' data-x="' . s((string) $cluster['x']) . '" data-y="' . s((string) $cluster['y']) . '"'
+                . ' data-x="' . self::exact($cluster['x']) . '" data-y="' . self::exact($cluster['y']) . '"'
                 . ' data-count="' . $n . '" data-region="point">' . $title . '</circle>';
         }
 
@@ -803,7 +859,9 @@ class scatter_chart {
             $handle = fopen('php://temp', 'r+');
             fputcsv($handle, array_keys(reset($rows)), ',', '"', '');
             foreach ($rows as $row) {
-                fputcsv($handle, array_values($row), ',', '"', '');
+                // Numbers as stored, not rounded to 14 digits: the CSV and the markers' data-x/data-y agree (#143).
+                $cells = array_map(static fn($cell) => is_float($cell) ? self::exact($cell) : $cell, array_values($row));
+                fputcsv($handle, $cells, ',', '"', '');
             }
             rewind($handle);
             $csv = (string) stream_get_contents($handle);

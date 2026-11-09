@@ -84,8 +84,12 @@ class stream_summary {
         $unit = $this->unitindex[$key] ??= count($this->unitindex);
         foreach (self::FIELDS as $field) {
             if (isset($row[$field]) && is_numeric($row[$field])) {
-                $this->values[$field] = ($this->values[$field] ?? '') . pack('e', (float) $row[$field]);
-                $this->units[$field] = ($this->units[$field] ?? '') . pack('V', $unit);
+                // Appended in place. "$a = ($a ?? '') . $b" built a new string and copied the whole buffer on every
+                // sitting — quadratic: 0.7 s for 9,000 sittings, 18 s for 50,000 (re-audit 2026-11-09).
+                $this->values[$field] ??= '';
+                $this->values[$field] .= pack('e', (float) $row[$field]);
+                $this->units[$field] ??= '';
+                $this->units[$field] .= pack('V', $unit);
             }
         }
 

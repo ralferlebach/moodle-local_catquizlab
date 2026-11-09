@@ -97,8 +97,6 @@ class job_complete extends external_api {
         string $diagnostics = '',
         string $workerid = ''
     ): array {
-        global $DB;
-
         $params = self::validate_parameters(self::execute_parameters(), [
             'attemptid'       => $attemptid,
             'status'          => $status,
@@ -112,6 +110,38 @@ class job_complete extends external_api {
         $context = \context_system::instance();
         self::validate_context($context);
         require_capability('local/catquizlab:worker', $context);
+
+        // One end of a sitting at a time (#138): the same report sent twice (#134), the lease recovery and the look for
+        // a missing trace take the same lock, and each reads the sitting again under it. A sitting held for longer
+        // than the wait is not changed here; its lease runs out and the recovery collects it from the engine.
+        [$had, $answer] = \local_catquizlab\local\sitting_lock::run(
+            (int) $params['attemptid'],
+            \local_catquizlab\local\sitting_lock::REPORT_WAIT,
+            static fn(): array => self::apply($params)
+        );
+        if (!$had) {
+            return [
+                'acknowledged' => false,
+                'message'      => get_string('job:busy', 'local_catquizlab'),
+            ];
+        }
+
+        return $answer;
+    }
+
+    /**
+     * Apply a report, with the sitting's lock held.
+     *
+     * @param array $params The validated parameters of execute().
+     * @return array The acknowledgement.
+     */
+    protected static function apply(array $params): array {
+        global $DB;
+
+        $attemptid = (int) $params['attemptid'];
+        $status = (string) $params['status'];
+        $runtimems = (int) $params['runtimems'];
+        $engineattemptid = (int) $params['engineattemptid'];
 
         $attempt = $DB->get_record('local_catquizlab_attempt', ['id' => $attemptid]);
         if (!$attempt) {
@@ -175,17 +205,9 @@ class job_complete extends external_api {
         // Collected means: with a trace (#138). Set where the collector has one.
         $collected = false;
         if ($finished) {
-            $update = (object) [
-                'id'           => $attemptid,
-                'timemodified' => time(),
-            ];
-            if ($runtimems > 0) {
-                $update->runtimems = $runtimems;
-            }
-            if ($engineattemptid > 0) {
-                $update->engineattemptid = $engineattemptid;
-            }
-            $DB->update_record('local_catquizlab_attempt', $update);
+            // The runtime and the engine attempt are written with the new status, in one update (#138): no reader
+            // sees a sitting with its engine attempt and still "running", or "collected" without its trace.
+            $set = $runtimems > 0 ? ['runtimems' => $runtimems] : [];
 
             // Pull the engine trace into the attempt when possible (no-op without the engine).
             if ($engineattemptid > 0) {
@@ -196,7 +218,7 @@ class job_complete extends external_api {
                 // (#136, local run against the engine heads, 18.10.2026).
                 // Collected only with a trace (#138). Without one the sitting waits for it — not collected,
                 // not valid, not finished — and is looked at again by the pipeline tick.
-                $collected = attempt_scheduler::collect_or_hold($attemptid, $reporter);
+                $collected = attempt_scheduler::collect_or_hold($attemptid, $reporter, $engineattemptid, $set);
 
                 // The sitting is in this plugin's tables now. The engine's
                 // person parameters for this simulated person go, so the next

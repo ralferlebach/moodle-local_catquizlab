@@ -26,6 +26,7 @@ use local_catquizlab\local\result_validity;
 use local_catquizlab\local\results_export;
 use local_catquizlab\local\results_query;
 use local_catquizlab\local\run_lifecycle;
+use local_catquizlab\local\sitting_lock;
 
 /**
  * "Collected" only with a trace (#138).
@@ -253,7 +254,263 @@ final class trace_integrity_test extends \advanced_testcase {
             $this->assertSame($status, (int) $DB->get_field('local_catquizlab_attempt', 'status', ['id' => $attemptid]));
         }
         $this->assertFalse(attempt_collector::usable(['items' => [], 'responses' => [], 'finaltheta' => 0.3]));
-        $this->assertTrue(attempt_collector::usable(['items' => [5]]));
-        $this->assertTrue(attempt_collector::usable(['responses' => [5 => 1.0]]));
+        // Items without answers are not a record of what was answered (re-audit 2026-11-09).
+        $this->assertFalse(attempt_collector::usable(['items' => [5]]));
+        $this->assertFalse(attempt_collector::usable(['items' => [5], 'responses' => [5 => null]]));
+        $this->assertTrue(attempt_collector::usable(['items' => [5], 'responses' => [5 => 1.0]]));
+    }
+
+    /**
+     * The trace contract, clause by clause (#138, re-audit 2026-11-09).
+     *
+     * @return void
+     */
+    public function test_the_trace_contract(): void {
+        $good = ['finaltheta' => 0.4, 'items' => [11, 12, 13], 'responses' => [11 => 1.0, 12 => 0.0, 13 => null],
+            'nitems' => 3, 'stopreason' => 'Standard error reached', 'hoststopcode' => null, 'enginestatus' => null];
+        $engine = ['found' => true, 'attemptstate' => 'complete', 'catquizrow' => true];
+        $this->assertSame([], attempt_collector::defects($good, $engine));
+        $this->assertSame([], attempt_collector::defects($good), 'a trace alone: the engine clauses are not asked');
+
+        $cases = [
+            'host attempt missing' => [$good, ['found' => false], ['noattempt']],
+            'not complete yet' => [$good, ['attemptstate' => 'inprogress'] + $engine, ['notcomplete']],
+            'no engine record' => [$good, ['catquizrow' => false] + $engine, ['noengineresult']],
+            'only unanswered' => [['responses' => [11 => null, 12 => null, 13 => null]] + $good, $engine, ['noanswers']],
+            'nothing at all' => [['items' => [], 'responses' => [], 'nitems' => 0] + $good, $engine, ['noanswers']],
+            'items and responses differ' => [['items' => [11, 13, 12]] + $good, $engine, ['itemsmismatch']],
+            'nitems wrong' => [['nitems' => 4] + $good, $engine, ['itemsmismatch']],
+            'fraction above 1' => [['responses' => [11 => 1.5, 12 => 0.0, 13 => null]] + $good, $engine, ['badresponse']],
+            'fraction below 0' => [['responses' => [11 => -0.5, 12 => 0.0, 13 => null]] + $good, $engine, ['badresponse']],
+            'fraction NaN' => [['responses' => [11 => NAN, 12 => 0.0, 13 => null]] + $good, $engine, ['badresponse']],
+            'theta infinite' => [['finaltheta' => INF] + $good, $engine, ['badtheta']],
+            'no reason for the end' => [['stopreason' => ' '] + $good, $engine, ['nostop']],
+            'host stop code is a reason' => [['stopreason' => '', 'hoststopcode' => '7'] + $good, $engine, []],
+            'engine status is a reason' => [['stopreason' => '', 'enginestatus' => 2] + $good, $engine, []],
+            'several at once' => [['responses' => [11 => null, 12 => null, 13 => null], 'stopreason' => ''] + $good,
+                ['catquizrow' => false] + $engine, ['noengineresult', 'noanswers', 'nostop']],
+        ];
+        foreach ($cases as $name => [$trace, $eng, $expected]) {
+            $this->assertSame($expected, attempt_collector::defects($trace, $eng), $name);
+        }
+    }
+
+    /**
+     * Give a host attempt answered questions: a question usage, one question attempt per fraction, its steps.
+     *
+     * @param int $engine The adaptivequiz attempt.
+     * @param array $fractions Question id => fraction, null for shown and not answered.
+     * @return void
+     */
+    protected function answered(int $engine, array $fractions): void {
+        global $DB;
+
+        $usage = (int) $DB->insert_record('question_usages', (object) ['contextid' => 1,
+            'component' => 'mod_adaptivequiz', 'preferredbehaviour' => 'deferredfeedback']);
+        $DB->set_field('adaptivequiz_attempt', 'uniqueid', $usage, ['id' => $engine]);
+        $slot = 0;
+        foreach ($fractions as $questionid => $fraction) {
+            $slot++;
+            $qa = (int) $DB->insert_record('question_attempts', (object) ['questionusageid' => $usage, 'slot' => $slot,
+                'behaviour' => 'deferredfeedback', 'questionid' => $questionid, 'variant' => 1, 'maxmark' => 1,
+                'minfraction' => 0, 'maxfraction' => 1, 'flagged' => 0, 'timemodified' => time()]);
+            $DB->insert_record('question_attempt_steps', (object) ['questionattemptid' => $qa, 'sequencenumber' => 0,
+                'state' => 'todo', 'timecreated' => time(), 'userid' => 2]);
+            if ($fraction !== null) {
+                $DB->insert_record('question_attempt_steps', (object) ['questionattemptid' => $qa, 'sequencenumber' => 1,
+                    'state' => $fraction > 0 ? 'gradedright' : 'gradedwrong', 'fraction' => $fraction,
+                    'timecreated' => time(), 'userid' => 2]);
+            }
+        }
+        $DB->set_field('adaptivequiz_attempt', 'questionsattempted', count(array_filter(
+            $fractions,
+            static fn($f): bool => $f !== null
+        )), ['id' => $engine]);
+        $DB->set_field('adaptivequiz_attempt', 'attemptstopcriteria', 'Maximum number of questions reached', ['id' => $engine]);
+    }
+
+    /**
+     * The engine's own record of a host attempt.
+     *
+     * @param int $engine The adaptivequiz attempt.
+     * @return void
+     */
+    protected function recorded_by_engine(int $engine): void {
+        global $DB;
+
+        $userid = (int) $DB->get_field('adaptivequiz_attempt', 'userid', ['id' => $engine]);
+        $DB->insert_record('local_catquiz_attempts', (object) ['userid' => $userid, 'attemptid' => $engine,
+            'component' => 'mod_adaptivequiz', 'instanceid' => 4713, 'contextid' => 0, 'status' => 1,
+            'personability_after_attempt' => 0.75, 'timecreated' => time(), 'timemodified' => time()]);
+    }
+
+    /**
+     * Answers in the host but no record of the engine: not collected with an invented ability of 0, but held with
+     * the reason; collected once the engine's record is there, engine attempt and trace in the same row.
+     *
+     * @return void
+     */
+    public function test_a_sitting_the_engine_has_not_recorded_waits_with_the_reason(): void {
+        global $DB;
+        $this->resetAfterTest();
+        $this->setAdminUser();
+        if (!\local_catquizlab\local\environment::engine_available()) {
+            $this->markTestSkipped('Needs local_catquiz.');
+        }
+        [$attemptid, $engine, $runid] = $this->finished_without_data();
+        $this->answered($engine, [9101 => 1.0, 9102 => 0.0, 9103 => 1.0]);
+
+        job_complete::execute($attemptid, 'finished', 2500, $engine, '', '{}', 'w-1');
+        $row = $DB->get_record('local_catquizlab_attempt', ['id' => $attemptid]);
+        $this->assertSame(attempt_scheduler::STATUS_TRACEPENDING, (int) $row->status);
+        $this->assertNull($row->tracejson);
+        $this->assertStringStartsWith('trace_missing: [noengineresult]', (string) $row->lasterror);
+        // Written with the status: the engine attempt and the runtime.
+        $this->assertSame($engine, (int) $row->engineattemptid);
+        $this->assertSame(2500, (int) $row->runtimems);
+
+        $this->recorded_by_engine($engine);
+        $later = time() + attempt_scheduler::TRACE_RETRY_DELAY + 1;
+        $this->assertSame(['collected' => 1, 'waiting' => 0, 'givenup' => 0], attempt_scheduler::retry_pending_traces($later));
+        $row = $DB->get_record('local_catquizlab_attempt', ['id' => $attemptid]);
+        $this->assertSame(attempt_scheduler::STATUS_COLLECTED, (int) $row->status);
+        $trace = json_decode($row->tracejson, true);
+        $this->assertSame([9101, 9102, 9103], $trace['items']);
+        $this->assertSame(0.75, (float) $trace['finaltheta']);
+        $this->assertSame(['hostattempted' => 3, 'answered' => 3, 'presented' => 3], $trace['consistency']);
+        $this->assertSame([], attempt_collector::last_defects());
+        $this->assertFalse(run_lifecycle::has_open_attempts($runid));
+    }
+
+    /**
+     * A host attempt not marked complete yet: its last answers may still be written, so nothing is collected.
+     *
+     * @return void
+     */
+    public function test_an_attempt_still_being_written_is_not_collected(): void {
+        global $DB;
+        $this->resetAfterTest();
+        $this->setAdminUser();
+        if (!\local_catquizlab\local\environment::engine_available()) {
+            $this->markTestSkipped('Needs local_catquiz.');
+        }
+        [$attemptid, $engine] = $this->finished_without_data();
+        $this->answered($engine, [9101 => 1.0, 9102 => null]);
+        $this->recorded_by_engine($engine);
+        $DB->set_field('adaptivequiz_attempt', 'attemptstate', 'inprogress', ['id' => $engine]);
+
+        $this->assertNull(attempt_collector::collect($attemptid, $engine));
+        $this->assertSame(['notcomplete'], attempt_collector::last_defects());
+        $this->assertSame(attempt_scheduler::STATUS_RUNNING, (int) $DB->get_field(
+            'local_catquizlab_attempt',
+            'status',
+            ['id' => $attemptid]
+        ), 'the collector alone writes nothing when it refuses');
+
+        // Complete now: collected, and the question shown but not answered stays in the trace as such.
+        $DB->set_field('adaptivequiz_attempt', 'attemptstate', 'complete', ['id' => $engine]);
+        $trace = attempt_collector::collect($attemptid, $engine);
+        $this->assertNotNull($trace);
+        $this->assertSame([9101 => 1.0, 9102 => null], $trace['responses']);
+        $this->assertSame(['hostattempted' => 1, 'answered' => 1, 'presented' => 2], $trace['consistency']);
+    }
+
+    /**
+     * While another request holds the sitting, a report, the lease recovery and the trace look change nothing,
+     * and nothing is counted (#138: concurrent ends of one sitting).
+     *
+     * @return void
+     */
+    public function test_a_sitting_held_by_another_request_is_left_alone(): void {
+        global $CFG, $DB;
+        $this->resetAfterTest();
+        $this->setAdminUser();
+        // A lock factory that keeps two holders apart within one process too (database advisory locks are
+        // re-entrant per connection, and a test has only one).
+        $CFG->lock_factory = '\core\lock\file_lock_factory';
+        sitting_lock::$maxwait = 0;
+        try {
+            [$attemptid, $engine, $runid] = $this->finished_without_data();
+            $held = sitting_lock::acquire($attemptid, 0);
+            $this->assertNotNull($held);
+
+            // The report: not applied, said so, nothing written or recorded.
+            $answer = job_complete::execute($attemptid, 'finished', 3000, $engine, '', '{}', 'w-1');
+            $this->assertFalse($answer['acknowledged']);
+            $this->assertSame(get_string('job:busy', 'local_catquizlab'), $answer['message']);
+            $row = $DB->get_record('local_catquizlab_attempt', ['id' => $attemptid]);
+            $this->assertSame(attempt_scheduler::STATUS_RUNNING, (int) $row->status);
+            $this->assertSame('w-1', $row->leaseowner);
+            $this->assertSame([], $this->outcomes($attemptid));
+
+            // The lease recovery: the lease has lapsed, but the sitting is held — left for the next tick.
+            $DB->set_field('local_catquizlab_attempt', 'leaseexpires', time() - 10, ['id' => $attemptid]);
+            $this->assertSame(0, attempt_scheduler::reclaim_stale($runid, 600));
+            $this->assertSame('w-1', $DB->get_field('local_catquizlab_attempt', 'leaseowner', ['id' => $attemptid]));
+
+            // The trace look: waiting and held — not a look, not given up.
+            $DB->update_record('local_catquizlab_attempt', (object) ['id' => $attemptid,
+                'status' => attempt_scheduler::STATUS_TRACEPENDING, 'nextruntime' => 0]);
+            $none = static fn(int $id): ?array => null;
+            for ($i = 0; $i < attempt_scheduler::TRACE_RETRIES + 2; $i++) {
+                $this->assertSame(
+                    ['collected' => 0, 'waiting' => 0, 'givenup' => 0],
+                    attempt_scheduler::retry_pending_traces(time() + 3600 * ($i + 1), $none)
+                );
+            }
+            $this->assertSame(attempt_scheduler::STATUS_TRACEPENDING, (int) $DB->get_field(
+                'local_catquizlab_attempt',
+                'status',
+                ['id' => $attemptid]
+            ));
+            $this->assertSame([], $this->outcomes($attemptid));
+
+            // Released: the next look counts.
+            $held->release();
+            $this->assertSame(
+                ['collected' => 0, 'waiting' => 1, 'givenup' => 0],
+                attempt_scheduler::retry_pending_traces(time() + 3600, $none)
+            );
+        } finally {
+            sitting_lock::$maxwait = null;
+        }
+    }
+
+    /**
+     * A sitting collected by another process after the list of waiting sittings was read is not looked at again:
+     * not counted, not given up, no history (#138: the status is read again under the lock).
+     *
+     * @return void
+     */
+    public function test_a_sitting_collected_meanwhile_is_not_looked_at_again(): void {
+        global $DB;
+        $this->resetAfterTest();
+        $this->setAdminUser();
+        [$first] = $this->finished_without_data();
+        [$second] = $this->finished_without_data();
+        foreach ([$first, $second] as $id) {
+            $DB->update_record('local_catquizlab_attempt', (object) ['id' => $id,
+                'status' => attempt_scheduler::STATUS_TRACEPENDING, 'nextruntime' => 0]);
+        }
+        // While the first is looked at, "another process" collects the second.
+        $collect = static function (int $id) use ($DB, $first, $second): ?array {
+            if ($id === $first) {
+                $DB->update_record('local_catquizlab_attempt', (object) ['id' => $second,
+                    'status' => attempt_scheduler::STATUS_COLLECTED, 'tracejson' => '{"items":[1]}']);
+            }
+            return null;
+        };
+
+        $this->assertSame(
+            ['collected' => 0, 'waiting' => 1, 'givenup' => 0],
+            attempt_scheduler::retry_pending_traces(time() + 60, $collect)
+        );
+        $this->assertSame([attempt_history::TRACE_PENDING], $this->outcomes($first));
+        $this->assertSame([], $this->outcomes($second), 'the second is left as the other process wrote it');
+        $this->assertSame(attempt_scheduler::STATUS_COLLECTED, (int) $DB->get_field(
+            'local_catquizlab_attempt',
+            'status',
+            ['id' => $second]
+        ));
     }
 }
