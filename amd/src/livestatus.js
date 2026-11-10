@@ -99,6 +99,200 @@ const setRegion = (region, value) => {
 };
 
 /**
+ * The run rows: the server renders the card and the page swaps it in.
+ *
+ * Two hidden spans used to be updated beside a visible card that never changed. There is deliberately no status
+ * logic here to disagree with the server's.
+ *
+ * @param {Array} runs The runs of the snapshot.
+ */
+const applyRunCards = (runs) => {
+    (runs || []).forEach((run) => {
+        const cell = document.querySelector(`[data-region="catquizlab-run-${run.runid}-card"]`);
+        if (cell && run.cardhtml && cell.innerHTML.trim() !== run.cardhtml.trim()) {
+            cell.innerHTML = run.cardhtml;
+        }
+
+        const bar = document.querySelector(`[data-region="catquizlab-run-${run.runid}-bar"]`);
+        if (bar) {
+            bar.style.width = `${run.percent}%`;
+            bar.setAttribute('aria-valuenow', String(run.percent));
+        }
+    });
+};
+
+/**
+ * The experiment's status bar (#128): the same snapshot as everything below.
+ *
+ * @param {Object} state The status of the snapshot.
+ * @returns {boolean} Whether the page must be reloaded: a different next step means a different button.
+ */
+const applyStatusBar = (state) => {
+    const bar = document.querySelector('[data-region="catquizlab-status"]');
+    if (bar) {
+        if (bar.getAttribute('data-next') && bar.getAttribute('data-next') !== state.next) {
+            return true;
+        }
+        bar.setAttribute('data-phase', state.phase);
+    }
+    setRegion('catquizlab-status-label', state.label);
+    setRegion('catquizlab-status-sittings', state.sittings);
+    setRegion('catquizlab-status-problems', state.problemtext);
+    setRegion('catquizlab-status-reason', state.reason);
+    setRegion('catquizlab-status-asof', state.computedtext);
+    setRegion('catquizlab-status-technical', state.technical);
+    return false;
+};
+
+/**
+ * The times (#125): text from the server, nothing computed here.
+ *
+ * @param {Object} time The times of the snapshot.
+ */
+const applyTimes = (time) => {
+    setRegion('catquizlab-eta-started', time.text.started);
+    setRegion('catquizlab-eta-elapsed', time.text.elapsed);
+    setRegion('catquizlab-eta-finish', time.text.finish);
+    setRegion('catquizlab-eta-remaining', time.text.remaining);
+    setRegion('catquizlab-eta-status', time.text.status);
+    setRegion('catquizlab-eta-reason', time.text.reason);
+    setRegion('catquizlab-eta-method', time.text.method);
+    setRegion('catquizlab-eta-asof', M.util.get_string('eta:asof', 'local_catquizlab', time.text.computed));
+    const box = document.querySelector('[data-region="catquizlab-eta"]');
+    if (box) {
+        box.setAttribute('data-reliability', time.reliability);
+    }
+    (time.runs || []).forEach((run) => {
+        setRegion(`catquizlab-run-${run.runid}-started`, run.text.started);
+        setRegion(`catquizlab-run-${run.runid}-elapsed`, run.text.elapsed);
+        setRegion(`catquizlab-run-${run.runid}-remaining`, run.text.remaining);
+    });
+};
+
+/**
+ * The progress snapshot: the same numbers the page was rendered with, recomputed server-side.
+ *
+ * There is no arithmetic on this side, so the header and the rows cannot drift apart.
+ *
+ * @param {Object} progress The progress of the snapshot.
+ */
+const applyProgress = (progress) => {
+    setRegion('catquizlab-progress-label', progress.label);
+    setRegion('catquizlab-progress-count', `${progress.done} / ${progress.total}`);
+    setRegion('catquizlab-progress-reason', progress.reason || '');
+
+    const overall = document.querySelector('[data-region="catquizlab-progress-bar"]');
+    if (overall) {
+        overall.style.width = `${progress.percent}%`;
+        overall.setAttribute('aria-valuenow', String(progress.percent));
+    }
+
+    // Questions (#141): the denominator and its kind come from the server.
+    setQuestions(progress.questions);
+
+    if (progress.time) {
+        applyTimes(progress.time);
+    }
+    setRegion('catquizlab-eta-stale', '');
+
+    (progress.runs || []).forEach((run) => {
+        setRegion(`catquizlab-run-${run.runid}-progress`, `${run.done} / ${run.total}`);
+        if (run.questions) {
+            setRegion(`catquizlab-run-${run.runid}-questions`, run.questions.text);
+        }
+
+        const bar = document.querySelector(`[data-region="catquizlab-run-${run.runid}-bar"]`);
+        if (bar) {
+            bar.style.width = `${run.percent}%`;
+            bar.setAttribute('aria-valuenow', String(run.percent));
+            bar.classList.toggle('bg-danger', Boolean(run.held));
+        }
+    });
+};
+
+/**
+ * A failed poll: said, not swallowed.
+ *
+ * Stopping silently left somebody watching a page that had quietly stopped being live, which is worse than a
+ * transient network error: they read stale numbers as current ones.
+ */
+const pollFailed = () => {
+    failures++;
+
+    // The figures on the page are now older than they look (#125).
+    setRegion('catquizlab-eta-stale', M.util.get_string('eta:stale', 'local_catquizlab'));
+
+    if (failures < 3) {
+        return;
+    }
+    setRegion('catquizlab-liveerror', M.util.get_string('live:interrupted', 'local_catquizlab'));
+    stop();
+
+    // A way back that is not a full reload. The message said updating
+    // had stopped and offered nothing but F5.
+    const box = document.querySelector('[data-region="catquizlab-liveerror"]');
+    if (box && !box.querySelector('button')) {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'btn btn-sm btn-outline-secondary ml-2';
+        button.textContent = M.util.get_string('live:reconnect', 'local_catquizlab');
+        button.addEventListener('click', () => {
+            failures = 0;
+            setRegion('catquizlab-liveerror', '');
+            start();
+        });
+        box.appendChild(button);
+    }
+};
+
+/**
+ * Update the page from one snapshot of the server.
+ *
+ * @param {Object} status The snapshot.
+ */
+const applySnapshot = (status) => {
+    failures = 0;
+    setRegion('catquizlab-liveerror', '');
+
+    setRegion('catquizlab-liveworkers', status.liveworkers);
+    setRegion('catquizlab-queued', status.queued);
+    setRegion('catquizlab-running', status.running);
+    setRegion('catquizlab-collected', status.collected);
+    setRegion('catquizlab-failed', status.failed);
+
+    (status.regions || []).forEach((region) => {
+        setRegion(region.name, region.text);
+    });
+
+    applyRunCards(status.runs);
+
+    if (status.status && applyStatusBar(status.status)) {
+        window.location.reload();
+        return;
+    }
+
+    if (status.progress) {
+        applyProgress(status.progress);
+    }
+
+    if (status.experiment) {
+        setRegion('catquizlab-experiment-state', status.experiment.label);
+        setRegion(
+            'catquizlab-experiment-progress',
+            `${status.experiment.done} / ${status.experiment.total}`
+        );
+    }
+
+    if (renderedShape === null) {
+        renderedShape = status.shape;
+    } else if (renderedShape !== status.shape) {
+        // The page has more or fewer rows than it was rendered with. That
+        // is the one change patching cannot make honestly.
+        window.location.reload();
+    }
+};
+
+/**
  * Ask the server and update the page.
  *
  * @returns {Promise<void>}
@@ -123,155 +317,9 @@ const poll = async() => {
             // construction.
             args: {experimentid: experimentId},
         }])[0];
-
-        failures = 0;
-        setRegion('catquizlab-liveerror', '');
-
-        setRegion('catquizlab-liveworkers', status.liveworkers);
-        setRegion('catquizlab-queued', status.queued);
-        setRegion('catquizlab-running', status.running);
-        setRegion('catquizlab-collected', status.collected);
-        setRegion('catquizlab-failed', status.failed);
-
-        (status.regions || []).forEach((region) => {
-            setRegion(region.name, region.text);
-        });
-
-        // The run rows: the server renders the card and the page swaps it in.
-        // Two hidden spans used to be updated beside a visible card that never
-        // changed. There is deliberately no status logic here to disagree with
-        // the server's.
-        (status.runs || []).forEach((run) => {
-            const cell = document.querySelector(`[data-region="catquizlab-run-${run.runid}-card"]`);
-            if (cell && run.cardhtml && cell.innerHTML.trim() !== run.cardhtml.trim()) {
-                cell.innerHTML = run.cardhtml;
-            }
-
-            const bar = document.querySelector(`[data-region="catquizlab-run-${run.runid}-bar"]`);
-            if (bar) {
-                bar.style.width = `${run.percent}%`;
-                bar.setAttribute('aria-valuenow', String(run.percent));
-            }
-        });
-
-        // The progress snapshot: the same numbers the page was rendered with,
-        // recomputed server-side. There is no arithmetic on this side, so the
-        // header and the rows cannot drift apart.
-        // The experiment's status bar (#128): the same snapshot as everything
-        // below. A different next step means a different button: reloaded.
-        if (status.status) {
-            const bar = document.querySelector('[data-region="catquizlab-status"]');
-            if (bar) {
-                if (bar.getAttribute('data-next') && bar.getAttribute('data-next') !== status.status.next) {
-                    window.location.reload();
-                    return;
-                }
-                bar.setAttribute('data-phase', status.status.phase);
-            }
-            setRegion('catquizlab-status-label', status.status.label);
-            setRegion('catquizlab-status-sittings', status.status.sittings);
-            setRegion('catquizlab-status-problems', status.status.problemtext);
-            setRegion('catquizlab-status-reason', status.status.reason);
-            setRegion('catquizlab-status-asof', status.status.computedtext);
-            setRegion('catquizlab-status-technical', status.status.technical);
-        }
-
-        if (status.progress) {
-            setRegion('catquizlab-progress-label', status.progress.label);
-            setRegion('catquizlab-progress-count', `${status.progress.done} / ${status.progress.total}`);
-            setRegion('catquizlab-progress-reason', status.progress.reason || '');
-
-            const overall = document.querySelector('[data-region="catquizlab-progress-bar"]');
-            if (overall) {
-                overall.style.width = `${status.progress.percent}%`;
-                overall.setAttribute('aria-valuenow', String(status.progress.percent));
-            }
-
-            // Questions (#141): the denominator and its kind come from the server.
-            setQuestions(status.progress.questions);
-
-            // The times (#125): text from the server, nothing computed here.
-            const time = status.progress.time;
-            if (time) {
-                setRegion('catquizlab-eta-started', time.text.started);
-                setRegion('catquizlab-eta-elapsed', time.text.elapsed);
-                setRegion('catquizlab-eta-finish', time.text.finish);
-                setRegion('catquizlab-eta-remaining', time.text.remaining);
-                setRegion('catquizlab-eta-status', time.text.status);
-                setRegion('catquizlab-eta-reason', time.text.reason);
-                setRegion('catquizlab-eta-method', time.text.method);
-                setRegion('catquizlab-eta-asof', M.util.get_string('eta:asof', 'local_catquizlab', time.text.computed));
-                const box = document.querySelector('[data-region="catquizlab-eta"]');
-                if (box) {
-                    box.setAttribute('data-reliability', time.reliability);
-                }
-                (time.runs || []).forEach((run) => {
-                    setRegion(`catquizlab-run-${run.runid}-started`, run.text.started);
-                    setRegion(`catquizlab-run-${run.runid}-elapsed`, run.text.elapsed);
-                    setRegion(`catquizlab-run-${run.runid}-remaining`, run.text.remaining);
-                });
-            }
-            setRegion('catquizlab-eta-stale', '');
-
-            (status.progress.runs || []).forEach((run) => {
-                setRegion(`catquizlab-run-${run.runid}-progress`, `${run.done} / ${run.total}`);
-                if (run.questions) {
-                    setRegion(`catquizlab-run-${run.runid}-questions`, run.questions.text);
-                }
-
-                const bar = document.querySelector(`[data-region="catquizlab-run-${run.runid}-bar"]`);
-                if (bar) {
-                    bar.style.width = `${run.percent}%`;
-                    bar.setAttribute('aria-valuenow', String(run.percent));
-                    bar.classList.toggle('bg-danger', Boolean(run.held));
-                }
-            });
-        }
-
-        if (status.experiment) {
-            setRegion('catquizlab-experiment-state', status.experiment.label);
-            setRegion(
-                'catquizlab-experiment-progress',
-                `${status.experiment.done} / ${status.experiment.total}`
-            );
-        }
-
-        if (renderedShape === null) {
-            renderedShape = status.shape;
-        } else if (renderedShape !== status.shape) {
-            // The page has more or fewer rows than it was rendered with. That
-            // is the one change patching cannot make honestly.
-            window.location.reload();
-        }
+        applySnapshot(status);
     } catch (error) {
-        // Said, not swallowed. Stopping silently left somebody watching a page
-        // that had quietly stopped being live, which is worse than a transient
-        // network error: they read stale numbers as current ones.
-        failures++;
-
-        // The figures on the page are now older than they look (#125).
-        setRegion('catquizlab-eta-stale', M.util.get_string('eta:stale', 'local_catquizlab'));
-
-        if (failures >= 3) {
-            setRegion('catquizlab-liveerror', M.util.get_string('live:interrupted', 'local_catquizlab'));
-            stop();
-
-            // A way back that is not a full reload. The message said updating
-            // had stopped and offered nothing but F5.
-            const box = document.querySelector('[data-region="catquizlab-liveerror"]');
-            if (box && !box.querySelector('button')) {
-                const button = document.createElement('button');
-                button.type = 'button';
-                button.className = 'btn btn-sm btn-outline-secondary ml-2';
-                button.textContent = M.util.get_string('live:reconnect', 'local_catquizlab');
-                button.addEventListener('click', () => {
-                    failures = 0;
-                    setRegion('catquizlab-liveerror', '');
-                    start();
-                });
-                box.appendChild(button);
-            }
-        }
+        pollFailed();
     }
 };
 

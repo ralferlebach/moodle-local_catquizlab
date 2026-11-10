@@ -115,7 +115,7 @@ final class trace_reader {
     /**
      * Split sittings into consecutive groups of at most a budget of bytes each, one oversized sitting alone.
      *
-     * @param array<int, int|string> $sizes Sitting id => bytes, in id order.
+     * @param array $sizes Sitting id => bytes, in id order.
      * @param int $budget Bytes a group may hold.
      * @return int[][] Groups of ids.
      */

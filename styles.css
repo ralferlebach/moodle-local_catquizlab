@@ -21,13 +21,17 @@
 /* Warnings set as text: the theme's amber on white reached 1.94 (WCAG AA asks 4.5). A dark amber says the same. */
 .path-local-catquizlab #region-main .text-warning,
 .path-admin-local-catquizlab #region-main .text-warning {
+    /* Bootstrap sets .text-warning with !important; only the same can replace its colour. */
+    /* stylelint-disable-next-line declaration-no-important */
     color: #8a5300 !important;
 }
 
 /* Links inside running or muted text are underlined, not told apart by colour alone (WCAG 1.4.1). Buttons, tabs,
    menu entries and pagination keep their own look. */
-.path-local-catquizlab #region-main :is(p, span, small, .small, .text-muted, td, li, dd, div) > a:not(.btn):not(.nav-link):not(.dropdown-item):not(.page-link),
-.path-admin-local-catquizlab #region-main :is(p, span, small, .small, .text-muted, td, li, dd, div) > a:not(.btn):not(.nav-link):not(.dropdown-item):not(.page-link) {
+.path-local-catquizlab #region-main :is(p, span, small, .small) > a:not(.btn, .nav-link, .dropdown-item, .page-link),
+.path-local-catquizlab #region-main :is(.text-muted, td, li, dd, div) > a:not(.btn, .nav-link, .dropdown-item, .page-link),
+.path-admin-local-catquizlab #region-main :is(p, span, small, .small) > a:not(.btn, .nav-link, .dropdown-item, .page-link),
+.path-admin-local-catquizlab #region-main :is(.text-muted, td, li, dd, div) > a:not(.btn, .nav-link, .dropdown-item, .page-link) {
     text-decoration: underline;
 }
 

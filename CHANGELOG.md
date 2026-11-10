@@ -6,6 +6,22 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.7.54] — 2026-11-10 — CI: PHPDoc check, and every CI lint gate run before delivery
+
+No database change.
+
+- `trace_reader::chunks()`: `@param array<int, int|string>` is not understood by the PHPDoc checker of the CI
+  (moodle-local_moodlecheck 1.3.2): "incomplete parameters list" failed the lint job of 0.7.53. Now `@param array`.
+- The full set of CI lint gates now runs locally with the same tools and versions as the CI (moodle-plugin-ci
+  4.5.11, moodlecheck 1.3.2), each with zero warnings allowed: phplint, phpcs, phpdoc, validate, savepoints,
+  mustache (with the HTML validator), grunt (ESLint, AMD build up to date, stylelint, gherkin lint), the worker's
+  syntax check. Two of them found what the CI had not reached:
+  - `amd/src/livestatus.js`: the poll function had a complexity of 23 (ESLint allows 20). Split into
+    `applySnapshot`, `applyRunCards`, `applyStatusBar`, `applyProgress`, `applyTimes`, `pollFailed`; same behaviour,
+    AMD build regenerated.
+  - `styles.css`: lines over 132 characters (selectors rewritten with `:not(a, b)`), and the one `!important`,
+    which replaces Bootstrap's own `!important` on `.text-warning`, is marked as intended.
+
 ## [0.7.53] — 2026-11-10 — Results on MariaDB with long sittings (#147), plots below the navigation bar (#146), CI (#145)
 
 Database upgrade 2026111001: a column `local_catquizlab_attempt.tracebytes`, filled for every stored trace during
