@@ -515,6 +515,23 @@ Feature: Defining and running CAT experiments from the web interface
     And I navigate to "Reports > CAT experiment suite" in site administration
     And "[data-region='catquizlab-library-delete']" "css_element" should exist
 
+  Scenario: An experiment being deleted says so and offers no second delete until the task has run (#145)
+    # Without cron the task waits: the state between the confirmation and the task, which the browser test can only
+    # catch where no cron runs in the background.
+    Given the following "local_catquizlab > experiment" exists:
+      | name | Behat doomed |
+    And I navigate to "Reports > CAT experiment suite" in site administration
+    And I click on "[data-experiment] [data-region='catquizlab-library-delete']" "css_element"
+    And I set the field "Type the experiment name to confirm" to "Behat doomed"
+    When I press "Delete experiment"
+    Then I should see "Deleting it runs in the background"
+    And I should see "Being deleted" in the "tr[data-phase='deleting']" "css_element"
+    And I should see "Behat doomed" in the "tr[data-phase='deleting']" "css_element"
+    And "tr[data-phase='deleting'] [data-region='catquizlab-library-delete']" "css_element" should not exist
+    When I run all adhoc tasks
+    And I navigate to "Reports > CAT experiment suite" in site administration
+    Then I should not see "Behat doomed"
+
   @javascript
   Scenario: The simulated abilities are set explicitly, and an unbounded distribution is warned about
     Given I navigate to "Reports > CAT experiment suite" in site administration

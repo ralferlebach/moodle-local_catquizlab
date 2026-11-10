@@ -348,10 +348,13 @@ class attempt_collector {
             return null;
         }
 
+        $json = json_encode($trace, JSON_UNESCAPED_SLASHES);
         $DB->update_record('local_catquizlab_attempt', (object) ([
             'id'              => $attemptid,
             'status'          => attempt_scheduler::STATUS_COLLECTED,
-            'tracejson'       => json_encode($trace, JSON_UNESCAPED_SLASHES),
+            'tracejson'       => $json,
+            // Its size beside it, for reading traces in batches bounded by bytes (#147).
+            'tracebytes'      => strlen((string) $json),
             'engineattemptid' => (int) $attempt->engineattemptid,
             'timemodified'    => time(),
         ] + $set));

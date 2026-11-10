@@ -6,6 +6,55 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.7.53] — 2026-11-10 — Results on MariaDB with long sittings (#147), plots below the navigation bar (#146), CI (#145)
+
+Database upgrade 2026111001: a column `local_catquizlab_attempt.tracebytes`, filled for every stored trace during
+the upgrade (a thousand sittings per statement, with a progress bar). A cache definition (`plotdrawings`).
+
+### Results: no longer out of memory before the analysis basis (#147, #110)
+- Cause, reproduced on MariaDB 10.11 with 512 MB: the results page read traces 500 sittings at a time, whatever
+  their size. A trace is the copy of a sitting's engine record — 40 KB for 20 questions, about a megabyte for
+  600 questions with many subscales. On MySQL/MariaDB Moodle's driver additionally holds a whole result in PHP's
+  memory before the first row is read (`MYSQLI_STORE_RESULT`); PostgreSQL buffers outside PHP's limit, which is why
+  the development site never showed it. 600 sittings of 0.9 MB (561 MB of traces) ended in "This analysis ran out
+  of memory (limit -1)", exactly as on the production server; with 0.7.53 the same page renders in 12 s.
+- `local\trace_reader`: traces are read in batches of at most 500 sittings **and** 16 MB of trace; a larger trace is
+  read alone; each batch is a range of ids under the same condition. On fifty thousand short sittings the
+  analysis basis takes 2.1 s instead of 3.3 s and the overview 4.7 s instead of 6.9 s (PostgreSQL). Used by the
+  results stream (`results_query::each_observation`), `answer_matrix::build`,
+  `subscale_evaluator::evaluate_run`, `run_contract::chain` (progress page of a run), the transfer package. The
+  run's debug ZIP no longer reads traces at all.
+- Measured (`results_memory_test`, 200 sittings of 1 MB): analysis basis, overview, answer matrix, subscale
+  evaluation and run contract used 190–199 MB on PostgreSQL and 365 MB on MariaDB before (the run contract 197 MB on
+  MariaDB, 14 MB on PostgreSQL); now 22–28 MB on PostgreSQL and 32–38 MB on MariaDB. The run contract on
+  PostgreSQL needs more than before (28 instead of 14 MB): its batches are in PHP's memory now, where PostgreSQL had
+  buffered the recordset outside PHP's limit — bounded instead of growing with the run.
+- The size check counts stored trace bytes as well as sittings: above 4 GiB a selection is declined with its size
+  (`results:toolargebytes`), as above 50,000 sittings before.
+- "limit -1": Moodle's shutdown handler raises the limit to unlimited before any other shutdown function runs. The
+  limit now comes from the error itself ("512 MB"). The message says where the page was (filter, analysis basis,
+  tab) and how much it had used; the old advice ("below what Moodle recommends") is gone.
+- One line in the server's error log for every exhaustion of the page: `local_catquizlab memory: phase=… peak=…
+  limit=… phases=start=…,filter=…,basis=… url=… experimentid=… tab=… sittings=… traces=… largestbatch=… read=…`.
+- PHP's other wordings of the same failure ("Hard memory limit of …", "Out of memory") are recognised.
+- Plot drawings for the PDF download are kept in an application cache bound to the session, not in the session: a
+  page of large plots put megabytes into the session, loaded and written back by every later request of that user,
+  and a tab with more than 24 plots lost the PDFs of its first ones.
+
+### Plots fit below the navigation bar (#146)
+- A plot drawn at the page's full width grew to 1800 × 1070 pixels on a 1920 × 1080 screen, taller than the window:
+  part of it always lay under Moodle's fixed navigation bar. Its height is now bounded by the window (proportions
+  kept, centred); jumps to a plot stop below the bar. Playwright checks 1920 × 1080, 1280 × 720 and 390 × 844, and
+  the check fails without the change (bottom at 1117 px in a window of 1080).
+
+### CI (#145, Moodle 5.3 job of 09.11.2026)
+- `library.spec.js`: with cron running in the background (all CI jobs), the delete task can finish before the page
+  is read; the row is then gone, which is the end state. The test accepts "being deleted without a second delete" or
+  "gone", read in one step. The in-between state is now checked where no cron runs: a Behat scenario (non-JS).
+- `downloads.spec.js`: a control that delivers no file now names itself, its tab and what the page shows instead
+  (the CI log named nothing but a timeout). A PNG the browser cannot draw says so beside the button instead of doing
+  nothing.
+
 ## [0.7.52] — 2026-11-09 — Re-audit: exact clustering, a trace contract, one writer per sitting, a quadratic summary
 
 No database change. A new class (`local\sitting_lock`); the upgrade rebuilds Moodle's class cache.

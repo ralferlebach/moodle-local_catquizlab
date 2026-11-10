@@ -108,3 +108,31 @@ test('the mode comparison draws one signed point per twin and common subscale', 
     expect(at(0.2, -0.1)?.count).toBe(5);
     await expect(page.locator('[data-region="catquizlab-mode-deficit"]')).toContainText(/n = 10 points|n = 10 Punkte/);
 });
+
+test('a plot fits below the fixed navigation bar on a wide and on a narrow window (#146)', async({page}) => {
+    const id = seed('seed_modes.php', [], 'MODES_EXPERIMENTID');
+    needs(!id, 'cli/seed_modes.php could not be run here.');
+    await login(page);
+    for (const viewport of [{width: 1920, height: 1080}, {width: 1280, height: 720}, {width: 390, height: 844}]) {
+        await page.setViewportSize(viewport);
+        await page.goto('/local/catquizlab/results.php?experimentid=' + id + '&tab=deficits', {waitUntil: 'networkidle'});
+        const plot = page.locator('[data-region="catquizlab-mode-plot"] svg').first();
+        await expect(plot).toBeVisible();
+        // Scrolled so that the plot starts right below the bar: it ends inside the window, and the bar covers
+        // nothing of it. A plot of the page's full width was taller than a wide window.
+        const fits = await plot.evaluate((svg) => {
+            const bar = document.querySelector('nav.navbar.fixed-top, nav.navbar');
+            const below = bar ? bar.getBoundingClientRect().bottom : 0;
+            window.scrollBy(0, svg.getBoundingClientRect().top - below);
+            const box = svg.getBoundingClientRect();
+            const middle = document.elementFromPoint(box.left + box.width / 2, box.top + 2);
+            return {
+                top: Math.round(box.top), bottom: Math.round(box.bottom), below: Math.round(below),
+                window: window.innerHeight, covered: !svg.contains(middle) && !svg.parentElement.contains(middle),
+            };
+        });
+        expect(fits.bottom, JSON.stringify({viewport, fits})).toBeLessThanOrEqual(fits.window);
+        expect(fits.top, JSON.stringify({viewport, fits})).toBeGreaterThanOrEqual(fits.below);
+        expect(fits.covered, JSON.stringify({viewport, fits})).toBe(false);
+    }
+});

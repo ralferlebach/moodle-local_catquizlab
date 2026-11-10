@@ -126,7 +126,8 @@ class histogram_chart {
         $sy = static fn(float $y): float => self::TOP + (1 - $y / $top) * $ploth;
 
         $svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ' . self::WIDTH . ' ' . self::HEIGHT
-            . '" role="img" aria-label="' . s($this->title) . '" style="max-width:100%;height:auto;">';
+            . '" class="local-catquizlab-chart" role="img" aria-label="' . s($this->title)
+            . '" style="max-width:100%;height:auto;">';
         foreach ($bins['counts'] as $i => $count) {
             if ($count === 0) {
                 continue;

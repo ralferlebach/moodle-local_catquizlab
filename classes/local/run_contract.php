@@ -300,40 +300,44 @@ class run_contract {
             'semax' => null, 'poolsize' => (int) $DB->count_records('local_catquizlab_item', ['runid' => $runid]),
             'violations' => [], 'violating' => []];
         $map = engine_validity::question_scales($runid);
-        $records = $DB->get_recordset_select(
-            'local_catquizlab_attempt',
-            'runid = :runid AND status IN (:collected, :validated)',
-            ['runid' => $runid, 'collected' => attempt_scheduler::STATUS_COLLECTED,
-                'validated' => attempt_scheduler::STATUS_VALIDATED],
-            'id ASC',
-            'id, tracejson'
-        );
-        try {
-            foreach ($records as $record) {
-                $trace = json_decode((string) $record->tracejson, true) ?: [];
-                $rules = self::check_sitting($runid, $trace, $map);
-                $out['sittings']++;
-                $n = (int) ($trace['nitems'] ?? count((array) ($trace['items'] ?? [])));
-                $out['minitems'] = $out['minitems'] === null ? $n : min($out['minitems'], $n);
-                $out['maxitems'] = $out['maxitems'] === null ? $n : max($out['maxitems'], $n);
-                if (isset($trace['finalse']) && is_numeric($trace['finalse'])) {
-                    $finalse = round((float) $trace['finalse'], 4);
-                    $out['semin'] = $out['semin'] === null ? $finalse : min($out['semin'], $finalse);
-                    $out['semax'] = $out['semax'] === null ? $finalse : max($out['semax'], $finalse);
-                }
-                $leaf = self::max_per_subscale($trace, $runid, $map);
-                if ($leaf !== null) {
-                    $out['maxpersubscale'] = max((int) $out['maxpersubscale'], $leaf);
-                }
-                foreach ($rules as $rule) {
-                    $out['violations'][$rule] = ($out['violations'][$rule] ?? 0) + 1;
-                }
-                if ($rules !== []) {
-                    $out['violating'][(int) $record->id] = $rules;
+        // In batches bounded by bytes (#147): a recordset over a run is the whole run in PHP's memory on
+        // MySQL/MariaDB, whose driver buffers every result.
+        $records = (static function () use ($runid): \Generator {
+            $batches = trace_reader::batches(
+                'a.runid = :runid AND a.status IN (:collected, :validated)',
+                ['runid' => $runid, 'collected' => attempt_scheduler::STATUS_COLLECTED,
+                    'validated' => attempt_scheduler::STATUS_VALIDATED],
+                'a.id, a.tracejson'
+            );
+            foreach ($batches as $batch) {
+                foreach ($batch as $record) {
+                    yield $record;
+                    $record->tracejson = null;
                 }
             }
-        } finally {
-            $records->close();
+        })();
+        foreach ($records as $record) {
+            $trace = json_decode((string) $record->tracejson, true) ?: [];
+            $rules = self::check_sitting($runid, $trace, $map);
+            $out['sittings']++;
+            $n = (int) ($trace['nitems'] ?? count((array) ($trace['items'] ?? [])));
+            $out['minitems'] = $out['minitems'] === null ? $n : min($out['minitems'], $n);
+            $out['maxitems'] = $out['maxitems'] === null ? $n : max($out['maxitems'], $n);
+            if (isset($trace['finalse']) && is_numeric($trace['finalse'])) {
+                $finalse = round((float) $trace['finalse'], 4);
+                $out['semin'] = $out['semin'] === null ? $finalse : min($out['semin'], $finalse);
+                $out['semax'] = $out['semax'] === null ? $finalse : max($out['semax'], $finalse);
+            }
+            $leaf = self::max_per_subscale($trace, $runid, $map);
+            if ($leaf !== null) {
+                $out['maxpersubscale'] = max((int) $out['maxpersubscale'], $leaf);
+            }
+            foreach ($rules as $rule) {
+                $out['violations'][$rule] = ($out['violations'][$rule] ?? 0) + 1;
+            }
+            if ($rules !== []) {
+                $out['violating'][(int) $record->id] = $rules;
+            }
         }
 
         return $out;

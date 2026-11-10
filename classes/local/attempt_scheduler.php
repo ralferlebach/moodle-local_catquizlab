@@ -633,6 +633,7 @@ class attempt_scheduler {
                 'engineattemptid' => null,
                 'status'          => self::STATUS_QUEUED,
                 'tracejson'       => null,
+                'tracebytes'      => null,
                 'runtimems'       => null,
                 'timecreated'     => $now,
                 'timemodified'    => $now,

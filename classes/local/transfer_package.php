@@ -166,15 +166,24 @@ class transfer_package {
             ];
         }
 
+        // In batches bounded by bytes (#147): the package carries every trace, but not a second copy of them all
+        // in the database driver's buffer.
         $attempts = [];
-        foreach ($DB->get_records('local_catquizlab_attempt', ['runid' => $runid], 'id') as $attempt) {
-            $attempts[] = [
-                'personindex'     => $index[$attempt->personid] ?? null,
-                'status'          => (int) $attempt->status,
-                'tracejson'       => $attempt->tracejson,
-                'runtimems'       => $attempt->runtimems === null ? null : (int) $attempt->runtimems,
-                'engineattemptid' => $attempt->engineattemptid === null ? null : (int) $attempt->engineattemptid,
-            ];
+        $batches = trace_reader::batches(
+            'a.runid = :runid',
+            ['runid' => $runid],
+            'a.id, a.personid, a.status, a.tracejson, a.runtimems, a.engineattemptid'
+        );
+        foreach ($batches as $batch) {
+            foreach ($batch as $attempt) {
+                $attempts[] = [
+                    'personindex'     => $index[$attempt->personid] ?? null,
+                    'status'          => (int) $attempt->status,
+                    'tracejson'       => $attempt->tracejson,
+                    'runtimems'       => $attempt->runtimems === null ? null : (int) $attempt->runtimems,
+                    'engineattemptid' => $attempt->engineattemptid === null ? null : (int) $attempt->engineattemptid,
+                ];
+            }
         }
 
         $results = [];
@@ -249,6 +258,7 @@ class transfer_package {
                 'personid'        => $personid,
                 'status'          => (int) ($attempt['status'] ?? 20),
                 'tracejson'       => $attempt['tracejson'] ?? null,
+                'tracebytes'      => isset($attempt['tracejson']) ? strlen((string) $attempt['tracejson']) : null,
                 'runtimems'       => $attempt['runtimems'] ?? null,
                 'engineattemptid' => $attempt['engineattemptid'] ?? null,
                 'timecreated'     => $now,

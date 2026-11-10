@@ -275,7 +275,14 @@ class artefact_store {
 
         $run = $DB->get_record('local_catquizlab_run', ['id' => $runid], '*', MUST_EXIST);
         [$conditions, $params] = self::scope_select($scope, $runid, $attemptid);
-        $attempts = $DB->get_records_select('local_catquizlab_attempt', $conditions, $params, 'id ASC');
+        // Without the traces (#147): the ZIP does not carry them, and a whole run's traces were megabytes each.
+        $attempts = $DB->get_records_select(
+            'local_catquizlab_attempt',
+            $conditions,
+            $params,
+            'id ASC',
+            'id, status, tries, engineattemptid'
+        );
 
         $includehtml = (bool) get_config('local_catquizlab', 'artefacts_include_html');
         $files = [];

@@ -291,10 +291,12 @@ class scatter_chart {
     }
 
     /**
-     * Keep a drawing in the session for its PDF export, under a key.
+     * Keep a drawing for its PDF export, under a key (#108, #147).
      *
-     * The PDF endpoint renders only drawings this plugin made for this user,
-     * never SVG sent by a browser. The last few are kept.
+     * The PDF endpoint renders only drawings this plugin made for this session, never SVG sent by a browser. They
+     * used to be kept in the session itself, the last 24: a page of large plots put megabytes into the session, which
+     * every following request of that user loaded and wrote back — and a tab with more plots than that lost the PDFs
+     * of its first ones. They are kept in an application cache now, under a key bound to the session, for a day.
      *
      * @param string $drawing The SVG.
      * @param string $name The file name.
@@ -304,12 +306,33 @@ class scatter_chart {
         global $SESSION;
 
         $key = substr(sha1($drawing), 0, 16);
-        $kept = (array) ($SESSION->local_catquizlab_plots ?? []);
-        unset($kept[$key]);
-        $kept[$key] = ['svg' => $drawing, 'name' => $name];
-        $SESSION->local_catquizlab_plots = array_slice($kept, -24, null, true);
+        \cache::make('local_catquizlab', 'plotdrawings')->set(self::pdf_cache_key($key), ['svg' => $drawing, 'name' => $name]);
+        // What earlier versions kept in the session goes with the first drawing kept the new way.
+        unset($SESSION->local_catquizlab_plots);
 
         return $key;
+    }
+
+    /**
+     * A drawing kept for its PDF in this session, or null.
+     *
+     * @param string $key The key {@see keep_for_pdf()} returned.
+     * @return array|null svg and name.
+     */
+    public static function kept_for_pdf(string $key): ?array {
+        $kept = \cache::make('local_catquizlab', 'plotdrawings')->get(self::pdf_cache_key($key));
+
+        return is_array($kept) && isset($kept['svg']) ? $kept : null;
+    }
+
+    /**
+     * The cache key of a drawing: only the session that drew it finds it.
+     *
+     * @param string $key The drawing's key.
+     * @return string
+     */
+    protected static function pdf_cache_key(string $key): string {
+        return sha1(session_id() . '|' . $key);
     }
 
     /**

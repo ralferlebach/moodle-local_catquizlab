@@ -89,8 +89,19 @@ test('create, find, open, compare, copy and delete an experiment from the librar
     const gone = page.locator('[data-region="catquizlab-library"] tbody tr').filter({
         has: page.locator('th', {hasText: new RegExp('^\\s*' + name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\s*$')}),
     });
-    await expect(gone).toHaveAttribute('data-phase', 'deleting');
-    await expect(gone.locator('[data-region="catquizlab-library-delete"]')).toHaveCount(0);
+    // Where cron runs in the background (the CI jobs do), the task may already have deleted it: then the row is
+    // gone, which is the end state (#145). Read in one step, so the row cannot vanish between two reads.
+    const state = () => page.evaluate((wanted) => {
+        const rows = [...document.querySelectorAll('[data-region="catquizlab-library"] tbody tr')]
+            .filter((tr) => (tr.querySelector('th')?.textContent || '').trim() === wanted);
+        if (rows.length === 0) {
+            return 'gone';
+        }
+        return rows[0].getAttribute('data-phase') + (rows[0].querySelector('[data-region="catquizlab-library-delete"]')
+            ? '+delete' : '');
+    }, name);
+    await expect.poll(state, {message: 'being deleted without a second delete, or already gone'})
+        .toMatch(/^(deleting|gone)$/);
 
     // What cron does next, done now: the queued delete task. Then the experiment is gone and its copy stays.
     // The library reloads itself when its rows change (livestatus); leave it first, so that reload does not

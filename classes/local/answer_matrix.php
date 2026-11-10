@@ -43,46 +43,62 @@ class answer_matrix {
      * @return array{questionids: int[], rows: array[]}
      */
     public static function build(int $runid): array {
-        global $DB;
-
-        $sql = "SELECT a.id AS attemptid, a.personid, a.tracejson, p.profilejson, p.stratum
-                  FROM {local_catquizlab_attempt} a
-                  JOIN {local_catquizlab_person} p ON p.id = a.personid
-                 WHERE a.runid = :runid AND a.tracejson IS NOT NULL
-              ORDER BY a.personid ASC, a.id ASC";
-        $records = $DB->get_records_sql($sql, ['runid' => $runid]);
-
+        // In batches bounded by bytes (#147): a whole run of long sittings at once was more than the memory of a
+        // request, and on MySQL/MariaDB the driver holds a whole result in PHP's memory.
         $questionids = [];
         $rows = [];
-        foreach ($records as $record) {
-            $trace = json_decode((string) $record->tracejson, true);
-            $responses = (is_array($trace) && isset($trace['responses']) && is_array($trace['responses']))
-                ? $trace['responses']
-                : [];
-
-            $normalised = [];
-            foreach ($responses as $questionid => $fraction) {
-                $questionid = (int) $questionid;
-                $questionids[$questionid] = true;
-                $normalised[$questionid] = $fraction === null ? null : (float) $fraction;
+        $batches = trace_reader::batches(
+            'a.runid = :runid AND a.tracejson IS NOT NULL',
+            ['runid' => $runid],
+            'a.id, a.id AS attemptid, a.personid, a.tracejson, p.profilejson, p.stratum',
+            'JOIN {local_catquizlab_person} p ON p.id = a.personid'
+        );
+        foreach ($batches as $batch) {
+            foreach ($batch as $record) {
+                $rows[] = self::row($record, $questionids);
+                $record->tracejson = null;
             }
-
-            $profile = json_decode((string) $record->profilejson, true);
-            $label = is_array($profile) && isset($profile['label'])
-                ? (string) $profile['label']
-                : ('P' . (int) $record->personid);
-
-            $rows[] = [
-                'attemptid' => (int) $record->attemptid,
-                'personid'  => (int) $record->personid,
-                'person'    => $label,
-                'stratum'   => (string) $record->stratum,
-                'responses' => $normalised,
-            ];
         }
+        // Person by person, as before the batches.
+        usort($rows, static fn(array $a, array $b): int
+            => [$a['personid'], $a['attemptid']] <=> [$b['personid'], $b['attemptid']]);
 
         ksort($questionids);
         return ['questionids' => array_keys($questionids), 'rows' => $rows];
+    }
+
+    /**
+     * One row of the matrix from one sitting.
+     *
+     * @param \stdClass $record The sitting with its person's profile and stratum.
+     * @param array $questionids The questions seen so far, extended.
+     * @return array
+     */
+    protected static function row(\stdClass $record, array &$questionids): array {
+        $trace = json_decode((string) $record->tracejson, true);
+        $responses = (is_array($trace) && isset($trace['responses']) && is_array($trace['responses']))
+            ? $trace['responses']
+            : [];
+
+        $normalised = [];
+        foreach ($responses as $questionid => $fraction) {
+            $questionid = (int) $questionid;
+            $questionids[$questionid] = true;
+            $normalised[$questionid] = $fraction === null ? null : (float) $fraction;
+        }
+
+        $profile = json_decode((string) $record->profilejson, true);
+        $label = is_array($profile) && isset($profile['label'])
+            ? (string) $profile['label']
+            : ('P' . (int) $record->personid);
+
+        return [
+            'attemptid' => (int) $record->attemptid,
+            'personid'  => (int) $record->personid,
+            'person'    => $label,
+            'stratum'   => (string) $record->stratum,
+            'responses' => $normalised,
+        ];
     }
 
     /**

@@ -653,7 +653,61 @@ function xmldb_local_catquizlab_upgrade($oldversion): bool {
         upgrade_plugin_savepoint(true, 2026110902, 'local', 'catquizlab');
     }
 
+    if ($oldversion < 2026111001) {
+        // The size of each trace, kept beside it (#147): the results read traces in batches bounded by bytes, and
+        // measuring every trace on every page would read them all twice.
+        $table = new xmldb_table('local_catquizlab_attempt');
+        $field = new xmldb_field('tracebytes', XMLDB_TYPE_INTEGER, '10', null, null, null, null, 'tracejson');
+        if (!$dbman->field_exists($table, $field)) {
+            $dbman->add_field($table, $field);
+        }
+        local_catquizlab_upgrade_measure_traces();
+        upgrade_plugin_savepoint(true, 2026111001, 'local', 'catquizlab');
+    }
+
     return true;
+}
+
+/**
+ * Write the size of every stored trace that has none yet (#147), a thousand sittings per statement.
+ *
+ * @return void
+ */
+function local_catquizlab_upgrade_measure_traces(): void {
+    global $DB;
+
+    $total = $DB->count_records_select('local_catquizlab_attempt', 'tracejson IS NOT NULL AND tracebytes IS NULL');
+    if ($total === 0) {
+        return;
+    }
+    $progress = new progress_bar('local_catquizlab_tracebytes', 500, true);
+    $done = 0;
+    $lastid = 0;
+    do {
+        $ids = array_keys($DB->get_records_select(
+            'local_catquizlab_attempt',
+            'id > :lastid AND tracejson IS NOT NULL AND tracebytes IS NULL',
+            ['lastid' => $lastid],
+            'id ASC',
+            'id',
+            0,
+            1000
+        ));
+        if ($ids === []) {
+            break;
+        }
+        upgrade_set_timeout();
+        [$in, $params] = $DB->get_in_or_equal($ids, SQL_PARAMS_NAMED);
+        $DB->execute(
+            'UPDATE {local_catquizlab_attempt} SET tracebytes = ' . $DB->sql_length('tracejson') . ' WHERE id ' . $in,
+            $params
+        );
+        $lastid = (int) end($ids);
+        $done += count($ids);
+        $progress->update(min($done, $total), $total, get_string('upgrade:tracebytes', 'local_catquizlab', (object) [
+            'done' => min($done, $total), 'total' => $total,
+        ]));
+    } while (count($ids) === 1000);
 }
 
 /**

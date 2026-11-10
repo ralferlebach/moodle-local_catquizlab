@@ -34,12 +34,12 @@ $context = context_system::instance();
 require_capability('local/catquizlab:view', $context);
 
 $key = required_param('key', PARAM_ALPHANUM);
-$kept = (array) ($SESSION->local_catquizlab_plots ?? []);
-if (!isset($kept[$key]['svg'])) {
+$kept = \local_catquizlab\output\scatter_chart::kept_for_pdf($key);
+if ($kept === null) {
     throw new moodle_exception('chart:pdfgone', 'local_catquizlab');
 }
-$svg = (string) $kept[$key]['svg'];
-$name = clean_filename((string) ($kept[$key]['name'] ?? 'catquizlab-plot'));
+$svg = (string) $kept['svg'];
+$name = clean_filename((string) ($kept['name'] ?? 'catquizlab-plot'));
 
 // The drawing's own proportions on a landscape A4 page.
 $width = 640;

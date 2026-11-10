@@ -342,7 +342,10 @@ class results_query {
                 $trace = json_decode((string) ($attempt->tracejson ?? ''), true);
                 if (is_array($trace)) {
                     $trace['enginevalidity'] = $measure;
-                    $DB->set_field('local_catquizlab_attempt', 'tracejson', json_encode($trace), ['id' => $id]);
+                    $json = (string) json_encode($trace);
+                    $DB->update_record('local_catquizlab_attempt', (object) [
+                        'id' => $id, 'tracejson' => $json, 'tracebytes' => strlen($json),
+                    ]);
                 }
             }
             $this->enginemeasures[$id] = $measure;
@@ -452,6 +455,13 @@ class results_query {
     public const TOO_MANY = 50000;
 
     /**
+     * @var int Stored trace bytes above which the results page declines a selection (#147). The memory a page
+     *     needs no longer grows with them (traces are read in bounded batches), but the time does: every byte is
+     *     read and decoded at least once per page.
+     */
+    public const TOO_MANY_BYTES = 4294967296;
+
+    /**
      * Whether this selection is larger than a page can honestly analyse.
      *
      * "All experiments" on an installation with a year of work behind it is
@@ -465,24 +475,31 @@ class results_query {
         global $DB;
 
         $runs = $this->runs();
+        $none = ['toolarge' => false, 'count' => 0, 'limit' => self::TOO_MANY, 'bytes' => 0,
+            'bytelimit' => self::TOO_MANY_BYTES];
         if ($runs === []) {
-            return ['toolarge' => false, 'count' => 0, 'limit' => self::TOO_MANY];
+            return $none;
         }
 
         [$insql, $params] = $DB->get_in_or_equal(array_keys($runs), SQL_PARAMS_NAMED, 'run');
         $params['collected'] = attempt_scheduler::STATUS_COLLECTED;
         $params['validated'] = attempt_scheduler::STATUS_VALIDATED;
 
-        $count = (int) $DB->count_records_select(
-            'local_catquizlab_attempt',
-            'runid ' . $insql . ' AND status IN (:collected, :validated) AND tracejson IS NOT NULL',
+        $row = $DB->get_record_sql(
+            'SELECT COUNT(1) AS sittings, SUM(' . trace_reader::bytes_sql('a') . ') AS bytes
+               FROM {local_catquizlab_attempt} a
+              WHERE a.runid ' . $insql . ' AND a.status IN (:collected, :validated) AND a.tracejson IS NOT NULL',
             $params
         );
+        $count = (int) ($row->sittings ?? 0);
+        $bytes = (int) ($row->bytes ?? 0);
 
         return [
-            'toolarge' => $count > self::TOO_MANY,
-            'count'    => $count,
-            'limit'    => self::TOO_MANY,
+            'toolarge'  => $count > self::TOO_MANY || $bytes > self::TOO_MANY_BYTES,
+            'count'     => $count,
+            'limit'     => self::TOO_MANY,
+            'bytes'     => $bytes,
+            'bytelimit' => self::TOO_MANY_BYTES,
         ];
     }
 
@@ -657,35 +674,30 @@ class results_query {
         // thousand sittings peaked at 48 MB while keeping none of them. The
         // person cache is per run for the same reason: across nine runs of a
         // thousand people it was nine thousand profiles.
+        // Batches bounded by sittings and by bytes of trace (#147): a fixed five hundred sittings of several
+        // hundred questions each were more than a web request's memory, and on MySQL/MariaDB the driver holds the
+        // whole result of a query in PHP's memory before the first row is read. See {@see trace_reader}.
         foreach (array_keys($runs) as $runid) {
             $persons = [];
-            $lastid = 0;
-
-            do {
-                // Restricted to given sittings where asked (#99): a twin family
-                // of a few tests is fetched as itself, not found by reading all.
-                $where = 'runid = :runid AND id > :lastid AND status IN (:collected, :validated) AND tracejson IS NOT NULL';
-                $batchparams = [
-                    'runid'     => $runid,
-                    'lastid'    => $lastid,
-                    'collected' => attempt_scheduler::STATUS_COLLECTED,
-                    'validated' => attempt_scheduler::STATUS_VALIDATED,
-                ];
-                if ($this->onlyattempts !== null) {
-                    [$onlyin, $onlyparams] = $DB->get_in_or_equal($this->onlyattempts ?: [0], SQL_PARAMS_NAMED, 'only');
-                    $where .= ' AND id ' . $onlyin;
-                    $batchparams += $onlyparams;
-                }
-                $batch = $DB->get_records_select(
-                    'local_catquizlab_attempt',
-                    $where,
-                    $batchparams,
-                    'id ASC',
-                    'id, runid, personid, runtimems, tracejson, engineattemptid',
-                    0,
-                    self::BATCH
-                );
-
+            // Restricted to given sittings where asked (#99): a twin family
+            // of a few tests is fetched as itself, not found by reading all.
+            $where = 'a.runid = :runid AND a.status IN (:collected, :validated) AND a.tracejson IS NOT NULL';
+            $batchparams = [
+                'runid'     => $runid,
+                'collected' => attempt_scheduler::STATUS_COLLECTED,
+                'validated' => attempt_scheduler::STATUS_VALIDATED,
+            ];
+            if ($this->onlyattempts !== null) {
+                [$onlyin, $onlyparams] = $DB->get_in_or_equal($this->onlyattempts ?: [0], SQL_PARAMS_NAMED, 'only');
+                $where .= ' AND a.id ' . $onlyin;
+                $batchparams += $onlyparams;
+            }
+            $batches = trace_reader::batches(
+                $where,
+                $batchparams,
+                'a.id, a.runid, a.personid, a.runtimems, a.tracejson, a.engineattemptid'
+            );
+            foreach ($batches as $batch) {
                 // The end reason of every sitting in the batch, in one query
                 // (#106): the latest code each one's history carries.
                 $this->endreasons = [];
@@ -720,7 +732,6 @@ class results_query {
                     }
                 }
                 foreach ($batch as $attempt) {
-                    $lastid = (int) $attempt->id;
                     foreach ($this->observation_row($attempt, $runs, $persons, $personfields) as $row) {
                         $pass['attempts']++;
                         $pass['replications'][$row['replication']] = true;
@@ -728,8 +739,11 @@ class results_query {
                         $pass['cells'][self::cell_key($row)] = true;
                         yield $row;
                     }
+                    // Read: the trace goes, so that the batch shrinks as it is walked.
+                    $attempt->tracejson = null;
                 }
-            } while (count($batch) === self::BATCH);
+                unset($batch);
+            }
         }
         // A whole pass, read to its end: what it yielded is the provenance, and
         // a caller that has just read it need not read everything again.
@@ -741,8 +755,8 @@ class results_query {
     /** @var array|null What the last whole pass yielded: attempts and replications; null until one ended. */
     protected ?array $lastpass = null;
 
-    /** @var int Sittings read per query while streaming. */
-    public const BATCH = 500;
+    /** @var int Sittings read per query while streaming; bytes bound it as well, see {@see trace_reader}. */
+    public const BATCH = trace_reader::ROWS;
 
     /**
      * One observation from one sitting.

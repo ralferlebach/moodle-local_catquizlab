@@ -171,20 +171,41 @@ if (in_array($action, ['csv', 'json', 'meta'], true)) {
 // it is. Mid-output that is a page with its tabs and nothing below them, which
 // is what was reported. A fatal error is not catchable, but it does reach the
 // shutdown handlers, and one of them can say what happened (#99).
-\local_catquizlab\local\resource_guard::register($component);
+// It also says where the page was and with how much data, in the server's error log (#147): the page said
+// "limit -1" and nothing else, which named neither the cause nor the limit.
+$size = ['count' => 0, 'bytes' => 0];
+\local_catquizlab\local\resource_guard::register($component, static function () use (&$size): array {
+    $read = \local_catquizlab\local\trace_reader::figures();
+    return [
+        'experimentid' => optional_param('experimentid', 0, PARAM_INT),
+        'tab' => optional_param('tab', 'overview', PARAM_ALPHA),
+        'sittings' => (int) ($size['count'] ?? 0),
+        'traces' => \local_catquizlab\local\resource_guard::megabytes((int) ($size['bytes'] ?? 0)),
+        'largestbatch' => \local_catquizlab\local\resource_guard::megabytes($read['largest']),
+        'read' => \local_catquizlab\local\resource_guard::megabytes($read['read']),
+    ];
+});
 
 // Counted before anything is read. A selection this large is declined with a
-// number and a way forward, rather than rendered until the memory runs out —
-// which looks like a page that simply stops after the tabs.
+// number and a way forward, rather than rendered until the memory or the time
+// runs out — which looks like a page that simply stops after the tabs. Counted
+// in sittings and in stored trace bytes (#147): a few thousand sittings of
+// several hundred questions each are more data than fifty thousand short ones.
 $size = $query->size_check();
 if ($size['toolarge']) {
     echo $OUTPUT->header();
     echo \local_catquizlab\output\shell::render('results', optional_param('experimentid', 0, PARAM_INT));
     echo $OUTPUT->notification(
-        get_string('results:toolarge', $component, (object) [
-            'count' => $size['count'],
-            'limit' => $size['limit'],
-        ]),
+        $size['count'] > $size['limit']
+            ? get_string('results:toolarge', $component, (object) [
+                'count' => $size['count'],
+                'limit' => $size['limit'],
+            ])
+            : get_string('results:toolargebytes', $component, (object) [
+                'count' => $size['count'],
+                'size' => \local_catquizlab\local\resource_guard::megabytes($size['bytes']),
+                'limit' => \local_catquizlab\local\resource_guard::megabytes($size['bytelimit']),
+            ]),
         \core\output\notification::NOTIFY_WARNING
     );
     echo $OUTPUT->footer();
@@ -213,15 +234,19 @@ $reproexperiment = optional_param('experimentid', 0, PARAM_INT);
 echo $OUTPUT->heading(get_string('heading:results', $component));
 echo html_writer::tag('p', get_string('results:intro', $component), ['class' => 'text-muted']);
 
+\local_catquizlab\local\resource_guard::phase('filter');
 echo $page->render_filter_bar();
 echo $page->render_tabs();
+\local_catquizlab\local\resource_guard::phase('basis');
 echo $page->render_provenance($reproexperiment);
+\local_catquizlab\local\resource_guard::phase('tab');
 echo $page->render_tab();
 
 // PNG downloads (#108): drawn in the browser from each plot's own SVG, at twice
 // the size, so that the file is sharp on a slide.
 $PAGE->requires->js_amd_inline('
     require([], function() {
+        var pngfailed = ' . json_encode(get_string('chart:pngfailed', $component)) . ';
         document.addEventListener("click", function(e) {
             var button = e.target.closest("[data-download=\\"png\\"]");
             if (!button) {
@@ -233,6 +258,18 @@ $PAGE->requires->js_amd_inline('
                 return;
             }
             var image = new Image();
+            // Said where it was asked, not silently nothing (#121, CI 09.11.2026): a drawing the browser cannot
+            // read as an image left the button without any effect.
+            image.onerror = function() {
+                if (!box.querySelector("[data-region=\\"catquizlab-png-error\\"]")) {
+                    var note = document.createElement("div");
+                    note.setAttribute("role", "alert");
+                    note.setAttribute("data-region", "catquizlab-png-error");
+                    note.className = "small text-danger";
+                    note.textContent = pngfailed;
+                    box.appendChild(note);
+                }
+            };
             image.onload = function() {
                 var canvas = document.createElement("canvas");
                 canvas.width = image.naturalWidth * 2;

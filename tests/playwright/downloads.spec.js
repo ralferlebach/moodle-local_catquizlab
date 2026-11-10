@@ -55,10 +55,25 @@ async function signin(page) {
  * @returns {Promise<{name: string, body: Buffer}>}
  */
 async function download(page, control) {
-    const [file] = await Promise.all([
-        page.waitForEvent('download', {timeout: 60 * 1000}),
-        control.click(),
-    ]);
+    // Which control, said when nothing arrives (CI 09.11.2026, Moodle 5.3: a bare timeout named neither the tab,
+    // nor the control, nor what the browser showed instead).
+    const what = await control.evaluate((el) => [el.getAttribute('data-download') || el.tagName.toLowerCase(),
+        (el.textContent || '').trim(), (el.getAttribute('href') || '').slice(0, 120)].join(' | '));
+    const at = page.url();
+    let file;
+    try {
+        [file] = await Promise.all([
+            page.waitForEvent('download', {timeout: 60 * 1000}),
+            control.click(),
+        ]);
+    } catch (e) {
+        const shown = await page.evaluate(() => {
+            const note = document.querySelector('[data-region="catquizlab-png-error"]');
+            return (note ? 'PNG: ' + note.textContent + ' ' : '') + (document.body?.innerText || '').slice(0, 800);
+        }).catch(() => '(page not readable)');
+        throw new Error('No download from [' + what + '] on ' + at + ' (now ' + page.url() + '): ' + e.message
+            + '\n--- page ---\n' + shown);
+    }
     const path = await file.path();
     expect(path, 'the download completed').toBeTruthy();
     return {name: file.suggestedFilename(), body: fs.readFileSync(path)};

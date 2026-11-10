@@ -33,9 +33,15 @@
 require(__DIR__ . '/../../classes/local/resource_guard.php');
 
 $texts = [
-    \local_catquizlab\local\resource_guard::MEMORY => 'PROBE-OUT-OF-MEMORY limit={limit}',
+    \local_catquizlab\local\resource_guard::MEMORY => 'PROBE-OUT-OF-MEMORY limit={limit} phase={phase}',
     \local_catquizlab\local\resource_guard::TIME   => 'PROBE-OUT-OF-TIME limit={limit}',
 ];
+
+// What Moodle's own shutdown handler does first (#147): it raises the limit to unlimited so it can finish. The
+// page then said "limit -1"; the limit has to come from the error itself.
+register_shutdown_function(static function (): void {
+    ini_set('memory_limit', '-1');
+});
 
 register_shutdown_function(static function () use ($texts): void {
     $html = \local_catquizlab\local\resource_guard::message_for(error_get_last(), $texts);
@@ -43,6 +49,7 @@ register_shutdown_function(static function () use ($texts): void {
 });
 
 echo "PROBE-START\n";
+\local_catquizlab\local\resource_guard::phase('basis');
 
 // Grow until PHP stops the process, the way the results page did.
 $hold = [];

@@ -186,11 +186,22 @@ class subscale_evaluator {
 
         $scalemapindex = self::scalemap_index($runid);
 
-        $sql = "SELECT a.id, a.tracejson, p.profilejson
-                  FROM {local_catquizlab_attempt} a
-                  JOIN {local_catquizlab_person} p ON p.id = a.personid
-                 WHERE a.runid = :runid AND a.tracejson IS NOT NULL";
-        $rows = $DB->get_records_sql($sql, ['runid' => $runid]);
+        // In batches bounded by bytes (#147): the whole run at once was more than a request's memory for long
+        // sittings, and on MySQL/MariaDB the driver holds a whole result in PHP's memory.
+        $rows = (static function () use ($runid): \Generator {
+            $batches = trace_reader::batches(
+                'a.runid = :runid AND a.tracejson IS NOT NULL',
+                ['runid' => $runid],
+                'a.id, a.tracejson, p.profilejson',
+                'JOIN {local_catquizlab_person} p ON p.id = a.personid'
+            );
+            foreach ($batches as $batch) {
+                foreach ($batch as $row) {
+                    yield $row;
+                    $row->tracejson = null;
+                }
+            }
+        })();
 
         $people = [];
         foreach ($rows as $row) {

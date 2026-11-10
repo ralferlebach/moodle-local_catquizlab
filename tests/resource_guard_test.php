@@ -43,6 +43,61 @@ final class resource_guard_test extends \advanced_testcase {
         $this->assertNull(resource_guard::classify($other));
         $this->assertNull(resource_guard::classify($warning));
         $this->assertNull(resource_guard::classify(null));
+        // The other two wordings PHP uses for the same thing (#147).
+        $this->assertSame(resource_guard::MEMORY, resource_guard::classify(['type' => E_ERROR,
+            'message' => 'Hard memory limit of 134217728 bytes exhausted (tried to allocate 2097152 bytes)']));
+        $this->assertSame(resource_guard::MEMORY, resource_guard::classify(['type' => E_ERROR,
+            'message' => 'Out of memory (allocated 6291456) (tried to allocate 1048576 bytes)']));
+    }
+
+    /**
+     * The limit is read from the error, not from the setting Moodle has raised meanwhile (#147).
+     *
+     * The page on the production server said "limit -1": Moodle's shutdown handler raises the limit to unlimited
+     * before any other shutdown function runs.
+     *
+     * @return void
+     */
+    public function test_the_limit_comes_from_the_error(): void {
+        $this->assertSame(536870912, resource_guard::limit_from(
+            'Allowed memory size of 536870912 bytes exhausted (tried to allocate 20480 bytes)'
+        ));
+        $this->assertSame(134217728, resource_guard::limit_from('Hard memory limit of 134217728 bytes exhausted'));
+        $this->assertNull(resource_guard::limit_from('Out of memory (allocated 6291456)'));
+        $this->assertSame('512 MB', resource_guard::megabytes(536870912));
+
+        $previous = ini_get('memory_limit');
+        ini_set('memory_limit', '-1');
+        try {
+            $html = resource_guard::message_for(
+                ['type' => E_ERROR, 'message' => 'Allowed memory size of 536870912 bytes exhausted'],
+                [resource_guard::MEMORY => 'limit={limit} peak={peak} phase={phase}', resource_guard::TIME => 't'] +
+                    ['phases' => ['start' => 'preparing']]
+            );
+        } finally {
+            ini_set('memory_limit', $previous);
+        }
+        $this->assertStringContainsString('limit=512 MB', $html);
+        $this->assertStringNotContainsString('-1', $html);
+        $this->assertMatchesRegularExpression('/peak=\d+ MB/', $html);
+    }
+
+    /**
+     * A memory exhaustion leaves one line in the error log that says where and with what (#147).
+     *
+     * @return void
+     */
+    public function test_the_log_line_says_where_and_with_what(): void {
+        resource_guard::phase('filter');
+        resource_guard::phase('basis');
+        $line = resource_guard::log_line(['type' => E_ERROR,
+            'message' => 'Allowed memory size of 536870912 bytes exhausted (tried to allocate 20480 bytes)']);
+        $this->assertStringStartsWith('local_catquizlab memory:', $line);
+        $this->assertStringContainsString(' phase=basis ', $line);
+        $this->assertStringContainsString(' limit=512MB ', $line);
+        $this->assertMatchesRegularExpression('/ phases=start=\d+MB,filter=\d+MB /', $line);
+        $this->assertNull(resource_guard::log_line(['type' => E_ERROR, 'message' => 'Maximum execution time of 30 s']));
+        resource_guard::phase('start');
     }
 
     /**
@@ -77,7 +132,8 @@ final class resource_guard_test extends \advanced_testcase {
         // It started, it died of memory, and it said so after dying.
         $this->assertStringContainsString('PROBE-START', $output);
         $this->assertStringContainsString('PROBE-OUT-OF-MEMORY', $output);
-        $this->assertStringContainsString('limit=16M', $output);
+        // The limit from the error itself, although the limit was raised to unlimited before the guard ran (#147).
+        $this->assertStringContainsString('limit=16 MB phase=basis', $output);
         $this->assertStringNotContainsString('PROBE-NO-MESSAGE', $output);
     }
 
@@ -107,9 +163,18 @@ final class resource_guard_test extends \advanced_testcase {
      * @return void
      */
     public function test_the_page_texts_name_the_limit(): void {
-        foreach (['results:outofmemory', 'results:outoftime'] as $key) {
-            $text = get_string($key, 'local_catquizlab', '{limit}');
-            $this->assertStringContainsString('{limit}', $text, $key . ' does not name the limit');
+        $text = get_string('results:outoftime', 'local_catquizlab', '{limit}');
+        $this->assertStringContainsString('{limit}', $text, 'results:outoftime does not name the limit');
+        $text = get_string('results:outofmemory', 'local_catquizlab', (object) [
+            'limit' => '{limit}', 'peak' => '{peak}', 'phase' => '{phase}',
+        ]);
+        foreach (['{limit}', '{peak}', '{phase}'] as $part) {
+            $this->assertStringContainsString($part, $text, 'results:outofmemory does not say ' . $part);
+        }
+        // Not the old advice: a 512 MB server is not below what Moodle recommends.
+        $this->assertStringNotContainsString('below what Moodle recommends', $text);
+        foreach (resource_guard::PHASES as $phase) {
+            $this->assertNotEmpty(get_string('results:phase' . $phase, 'local_catquizlab'));
         }
     }
 }

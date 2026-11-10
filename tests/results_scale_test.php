@@ -170,6 +170,21 @@ final class results_scale_test extends \advanced_testcase {
         $filter = ['experimentid' => (int) $run->experimentid];
 
         $steps = [
+            // What the page renders before the tab (#147): the filter bar and the analysis basis. They were never
+            // measured here, and on a live installation the page ran out of memory right after the tabs.
+            'filter bar' => function () use ($filter): void {
+                (new \local_catquizlab\output\results_page(new results_query($filter), 'overview', $filter))
+                    ->render_filter_bar();
+            },
+            'analysis basis' => function () use ($filter): void {
+                (new \local_catquizlab\output\results_page(new results_query($filter), 'overview', $filter))
+                    ->render_provenance((int) $filter['experimentid']);
+            },
+            'all experiments' => function (): void {
+                $page = new \local_catquizlab\output\results_page(new results_query([]), 'overview', []);
+                $page->render_filter_bar();
+                $page->render_provenance(0);
+            },
             'overview' => function () use ($filter): void {
                 (new \local_catquizlab\output\results_page(new results_query($filter), 'overview', $filter))->render_tab();
             },

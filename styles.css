@@ -30,3 +30,13 @@
 .path-admin-local-catquizlab #region-main :is(p, span, small, .small, .text-muted, td, li, dd, div) > a:not(.btn):not(.nav-link):not(.dropdown-item):not(.page-link) {
     text-decoration: underline;
 }
+
+/* A plot fits into the window below Moodle's fixed navigation bar (#146). Drawn at the full width of the page, a
+   plot of 640 by 380 grew to 1800 by 1070 pixels on a wide screen: taller than the window, so part of it always lay
+   under the navigation bar however it was scrolled. Its height is now bounded by the window; the drawing keeps its
+   proportions and stands centred. Jumps to a plot stop below the bar. */
+.local-catquizlab-chart {
+    width: 100%;
+    max-height: calc(100vh - 8rem);
+    scroll-margin-top: 5rem;
+}
