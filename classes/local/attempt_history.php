@@ -190,8 +190,15 @@ class attempt_history {
             '$1[redacted]',
             $text
         );
+        // Every other secret name by the one rule of all logs (#149): encoded and array names, keys, e-mail addresses.
+        $text = log_redactor::redact_pairs($text);
+        $text = (string) preg_replace('/\b(Authorization:\s*(?:Bearer|Basic)?)\s*\S+/i', '$1 [redacted]', $text);
 
-        return (string) preg_replace('/("(?:sesskey|wstoken|token|password)"\s*:\s*")[^"]*(")/i', '$1[redacted]$2', $text);
+        return (string) preg_replace(
+            '/("(?:sesskey|wstoken|token|password|secret|email)"\s*:\s*")[^"]*(")/i',
+            '$1[redacted]$2',
+            $text
+        );
     }
 
     /**

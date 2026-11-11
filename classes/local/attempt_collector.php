@@ -88,8 +88,24 @@ class attempt_collector {
                 $attempt,
                 $statuses
             ): ?array {
-                $status = $DB->get_field('local_catquizlab_attempt', 'status', ['id' => $attempt->id]);
-                return in_array((int) $status, $statuses, true) ? self::collect((int) $attempt->id) : null;
+                $row = $DB->get_record('local_catquizlab_attempt', ['id' => $attempt->id], 'id, status, tries, runid');
+                if (!$row || !in_array((int) $row->status, $statuses, true)) {
+                    return null;
+                }
+                $trace = self::collect((int) $attempt->id);
+                // A sitting that waited for its trace and has it now is collected now, and said so in its history, as
+                // when the pipeline's look finds it (#138). It used to change status here without a word: its history
+                // ended with "waiting for its trace", and the run was not told that one more sitting had finished.
+                if ($trace !== null && (int) $row->status === attempt_scheduler::STATUS_TRACEPENDING) {
+                    $looks = $DB->count_records('local_catquizlab_attemptlog', ['attemptid' => $row->id,
+                        'outcome' => attempt_history::TRACE_PENDING]);
+                    attempt_history::record((int) $row->id, attempt_history::COLLECTED, [
+                        'tryno' => (int) $row->tries,
+                        'detail' => get_string('history:tracearrived', 'local_catquizlab', $looks),
+                    ]);
+                    run_lifecycle::attempt_finished((int) $row->runid);
+                }
+                return $trace;
             });
             if ($trace !== null) {
                 $collected++;
@@ -349,7 +365,7 @@ class attempt_collector {
         }
 
         $json = json_encode($trace, JSON_UNESCAPED_SLASHES);
-        $DB->update_record('local_catquizlab_attempt', (object) ([
+        $DB->update_record('local_catquizlab_attempt', (object) (trace_digest::fields((string) $json) + [
             'id'              => $attemptid,
             'status'          => attempt_scheduler::STATUS_COLLECTED,
             'tracejson'       => $json,

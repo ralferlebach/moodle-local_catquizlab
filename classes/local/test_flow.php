@@ -109,6 +109,8 @@ class test_flow {
         // Which scales were active, locked or dropped after each step — where
         // the engine recorded their changes (#106); null where it did not.
         $states = scale_states::by_step($trace, $count);
+        // The responses by question, once (#147): looked up for every step, they were searched for every step.
+        $responseindex = self::response_index((array) ($progress['responses'] ?? []));
         $steps = [];
         for ($index = 0; $index < $count; $index++) {
             $question = $played[$index] ?? null;
@@ -121,7 +123,7 @@ class test_flow {
                 'scaleid'    => $question !== null ? (int) ($question['catscaleid'] ?? 0) : 0,
                 // The score is kept with the responses, not with the question:
                 // read from the question alone, it was always empty (#106).
-                'fraction'   => self::score_of($question, $progress),
+                'fraction'   => self::score_of($question, $progress, $responseindex),
                 'ability'    => self::ability_at($path, $index),
                 // How many scales had an estimate after this step: what the
                 // engine's ability path records.
@@ -364,13 +366,35 @@ class test_flow {
     }
 
     /**
+     * The engine's responses by question id, the first one found for each — as {@see score_of()} finds them by
+     * searching: by the response's key, or by its questionid.
+     *
+     * @param array $responses The engine's responses.
+     * @return array<string, mixed>
+     */
+    protected static function response_index(array $responses): array {
+        $index = [];
+        foreach ($responses as $key => $response) {
+            $ids = array_unique([(string) $key, (string) (is_array($response) ? ($response['questionid'] ?? '') : '')]);
+            foreach ($ids as $id) {
+                if ($id !== '' && !array_key_exists($id, $index)) {
+                    $index[$id] = $response;
+                }
+            }
+        }
+
+        return $index;
+    }
+
+    /**
      * The score of a played question, from wherever the engine kept it.
      *
      * @param array|null $question The played question.
      * @param array $progress The progress snapshot.
+     * @param array|null $responseindex Its responses by question id, from {@see response_index()}.
      * @return float|null
      */
-    protected static function score_of(?array $question, array $progress): ?float {
+    protected static function score_of(?array $question, array $progress, ?array $responseindex = null): ?float {
         if ($question === null) {
             return null;
         }
@@ -378,6 +402,10 @@ class test_flow {
             return (float) $question['fraction'];
         }
         $id = (string) ($question['id'] ?? $question['questionid'] ?? '');
+        if ($responseindex !== null) {
+            $response = $responseindex[$id] ?? null;
+            return isset($response['fraction']) && is_numeric($response['fraction']) ? (float) $response['fraction'] : null;
+        }
         foreach ((array) ($progress['responses'] ?? []) as $key => $response) {
             if ((string) $key === $id || (string) ($response['questionid'] ?? '') === $id) {
                 return isset($response['fraction']) && is_numeric($response['fraction']) ? (float) $response['fraction'] : null;
@@ -409,17 +437,27 @@ class test_flow {
         $enginetime = isset($trace['information']) && is_numeric($trace['information']) ? (float) $trace['information'] : null;
         $enginese = isset($trace['finalse']) && is_numeric($trace['finalse']) ? (float) $trace['finalse'] : null;
 
+        // Each item's parameters read once (#147): the sum below is over every item played so far at every step's
+        // ability, six hundred times six hundred for a long sitting, and reading them each time was most of a step
+        // export's time. The same arithmetic, in the same order.
+        $parameters = [];
+        foreach ($played as $j => $question) {
+            $parameters[$j] = self::item_parameters((array) $question);
+        }
         foreach ($steps as $index => $step) {
             $ti = null;
             if ($step['ability'] !== null && count($played) > $index) {
                 $ti = 0.0;
+                $theta = (float) $step['ability'];
                 for ($j = 0; $j <= $index; $j++) {
-                    $information = self::item_information((array) $played[$j], (float) $step['ability']);
-                    if ($information === null) {
+                    if ($parameters[$j] === null) {
                         $ti = null;
                         break;
                     }
-                    $ti += $information;
+                    // The arithmetic of information_at(), written out: called a few hundred thousand times per sitting.
+                    [$a, $b, $c] = $parameters[$j];
+                    $p = $c + (1.0 - $c) / (1.0 + exp(-$a * ($theta - $b)));
+                    $ti += ($p <= 0.0 || $p >= 1.0) ? 0.0 : $a * $a * (($p - $c) ** 2 / (1.0 - $c) ** 2) * ((1.0 - $p) / $p);
                 }
             }
             $steps[$index]['ti'] = $ti;
@@ -462,6 +500,19 @@ class test_flow {
      * @return float|null
      */
     public static function item_information(array $question, float $theta): ?float {
+        $parameters = self::item_parameters($question);
+
+        return $parameters === null ? null : self::information_at($parameters, $theta);
+    }
+
+    /**
+     * An item's discrimination, difficulty and guessing, as {@see item_information()} reads them; null for a model it
+     * does not compute. Read once per item where the information is computed at many abilities (#147).
+     *
+     * @param array $question A played question from the engine's progress.
+     * @return float[]|null [a, b, c].
+     */
+    public static function item_parameters(array $question): ?array {
         $model = (string) ($question['model'] ?? '');
         if (!in_array($model, ['rasch', 'raschbirnbaum', 'mixedraschbirnbaum'], true)) {
             return null;
@@ -472,6 +523,19 @@ class test_flow {
         if ($c < 0.0 || $c >= 1.0) {
             return null;
         }
+
+        return [$a, $b, $c];
+    }
+
+    /**
+     * An item's information at an ability, from {@see item_parameters()}.
+     *
+     * @param float[] $parameters [a, b, c].
+     * @param float $theta The ability.
+     * @return float
+     */
+    public static function information_at(array $parameters, float $theta): float {
+        [$a, $b, $c] = $parameters;
         $p = $c + (1.0 - $c) / (1.0 + exp(-$a * ($theta - $b)));
         if ($p <= 0.0 || $p >= 1.0) {
             return 0.0;

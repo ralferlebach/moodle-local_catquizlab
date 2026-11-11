@@ -440,4 +440,36 @@ final class purger_test extends \advanced_testcase {
         $this->assertFalse(purger::name_confirms('Experiment 1', $stored, $shown), 'a part of it');
         $this->assertFalse(purger::name_confirms('   ', '', ''), 'nothing');
     }
+
+    /**
+     * An experiment is gone only when nothing of it is left (#145, AK1): what is left is found, also by its runs' ids
+     * once the runs are gone, and the deletion ends with nothing left.
+     *
+     * @return void
+     */
+    public function test_an_experiment_is_gone_only_when_nothing_is_left(): void {
+        global $DB;
+        $this->resetAfterTest();
+        $this->setAdminUser();
+
+        $runid = $this->make_run(registry::STATUS_READY, 3);
+        $experimentid = (int) $DB->get_field('local_catquizlab_run', 'experimentid', ['id' => $runid]);
+        $left = purger::left_of($experimentid, [$runid]);
+        $this->assertSame(1, $left['local_catquizlab_run']);
+        $this->assertSame(3, $left['local_catquizlab_attempt']);
+
+        // A row of a run that no longer exists is still found by the run's id.
+        $DB->delete_records('local_catquizlab_run', ['id' => $runid]);
+        $this->assertSame(['local_catquizlab_attempt' => 3], purger::left_of($experimentid, [$runid]));
+        $DB->delete_records('local_catquizlab_attempt', ['runid' => $runid]);
+        $this->assertSame([], purger::left_of($experimentid, [$runid]));
+
+        // The whole path: deleted, and nothing left of it.
+        $runid = $this->make_run(registry::STATUS_READY, 2);
+        $experimentid = (int) $DB->get_field('local_catquizlab_run', 'experimentid', ['id' => $runid]);
+        $result = purger::delete_experiment($experimentid, false, true);
+        $this->assertTrue($result['ok']);
+        $this->assertFalse($DB->record_exists('local_catquizlab_experiment', ['id' => $experimentid]));
+        $this->assertSame([], purger::left_of($experimentid, [$runid]));
+    }
 }

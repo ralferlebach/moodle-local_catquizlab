@@ -249,6 +249,10 @@ if ($action === 'requeuetask' && optional_param('taskid', 0, PARAM_INT) > 0) {
 // sittings. Only for those allowed to see debug material: screenshots and page
 // snapshots show what a simulated person saw, and a run's design.
 if ($action === 'artefactzip' && $runid > 0) {
+    // By the download button's POST only (#149): its session key never in a URL.
+    if (!data_submitted()) {
+        throw new moodle_exception('invalidrequest', 'error');
+    }
     require_sesskey();
 
     $scope = optional_param('scope', \local_catquizlab\local\artefact_store::SCOPE_RUN, PARAM_ALPHA);

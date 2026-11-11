@@ -479,10 +479,47 @@ class engine_validity {
             'nminscale' => (int) ($settings['maxquestionsscalegroup']['catquiz_minquestionspersubscale'] ?? 0),
             'semax' => is_numeric($semax) && (float) $semax > 0 ? (float) $semax : null,
             'rootscaleid' => (int) ($settings['catquiz_catscales'] ?? 0),
+            'source' => $settings !== [] ? 'engine' : 'none',
         ];
+        // Where the engine's test can no longer be read — deleted, or the engine not there — its settings are the
+        // values the run provisioned it with, from the run's own design (#112): the rules were silently not applied
+        // at all before, and every sitting passed the minimum and the standard error.
+        if ($settings === []) {
+            $thresholds = self::thresholds_from_design($runid) ?? $thresholds;
+        }
         $memo['thresholds'][$runid] = $thresholds;
 
         return $thresholds;
+    }
+
+    /**
+     * The thresholds as the run provisioned its engine test with them, from its design: what test_provisioner wrote
+     * into the engine's settings. Null for a run without a design.
+     *
+     * @param int $runid The run.
+     * @return array|null
+     */
+    protected static function thresholds_from_design(int $runid): ?array {
+        global $DB;
+
+        $record = $DB->get_record('local_catquizlab_run', ['id' => $runid]);
+        $definition = $record ? run_registry::definition_for($record) : [];
+        if ($definition === []) {
+            return null;
+        }
+        $options = test_provisioner::options_from_definition($definition);
+        $strategy = (string) ($definition['strategy'] ?? '');
+        $root = (int) $DB->get_field_sql('SELECT catscaleid FROM {local_catquizlab_scalemap}
+            WHERE runid = ? AND parentcatscaleid = 0 ORDER BY generation DESC', [$runid], IGNORE_MULTIPLE);
+
+        return [
+            'nmintest' => strategy_catalog::uses($strategy, 'globalmin') ? (int) $options['minquestions'] : 0,
+            'nminscale' => strategy_catalog::uses($strategy, 'subscalemin') ? (int) $options['minquestionspersubscale'] : 0,
+            'semax' => strategy_catalog::uses_standard_error($strategy) && is_numeric($options['se_max'])
+                && (float) $options['se_max'] > 0 ? (float) $options['se_max'] : null,
+            'rootscaleid' => $root,
+            'source' => 'definition',
+        ];
     }
 
     /**

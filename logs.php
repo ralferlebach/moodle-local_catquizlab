@@ -105,6 +105,10 @@ if (optional_param('tail', 0, PARAM_BOOL)) {
 // Both downloads say what they hold: filter, time range, limit, whether they
 // are cut (#132 AK 5).
 if (optional_param('downloadjson', 0, PARAM_BOOL)) {
+    // By the download button's POST only (#149): its session key never in a URL.
+    if (!data_submitted()) {
+        throw new moodle_exception('invalidrequest', 'error');
+    }
     require_sesskey();
 
     send_file(
@@ -120,6 +124,9 @@ if (optional_param('downloadjson', 0, PARAM_BOOL)) {
 }
 
 if (optional_param('download', 0, PARAM_BOOL)) {
+    if (!data_submitted()) {
+        throw new moodle_exception('invalidrequest', 'error');
+    }
     require_sesskey();
 
     send_file(

@@ -29,6 +29,11 @@ require_once(__DIR__ . '/../../config.php');
 require_once($CFG->libdir . '/pdflib.php');
 
 require_login();
+// By the download control's POST only (#149): the session key and the plot's key in its body, never in a URL — not in
+// the browser's history, the web server's access log or a referrer.
+if (!data_submitted()) {
+    throw new moodle_exception('invalidrequest', 'error');
+}
 require_sesskey();
 $context = context_system::instance();
 require_capability('local/catquizlab:view', $context);

@@ -38,7 +38,8 @@ use local_catquizlab\output\results_page;
 $tab = optional_param('tab', 'overview', PARAM_ALPHA);
 
 $filter = [];
-foreach (['experimentid', 'replication'] as $key) {
+// One run as well (#147, D5): the results of a single run, as the run page links them.
+foreach (['experimentid', 'replication', 'runid'] as $key) {
     $value = optional_param($key, 0, PARAM_INT);
     if ($value > 0) {
         $filter[$key] = $value;
@@ -93,6 +94,10 @@ require_capability('local/catquizlab:view', $context);
 // before both, every download ended in "Call to undefined function
 // send_file()" (#121).
 if (optional_param('action', '', PARAM_ALPHA) === 'package') {
+    // By the download button's POST only (#149): its session key never in a URL.
+    if (!data_submitted()) {
+        throw new moodle_exception('invalidrequest', 'error');
+    }
     require_sesskey();
     require_once($CFG->libdir . '/filelib.php');
     $packageid = required_param('experimentid', PARAM_INT);
@@ -178,6 +183,8 @@ $size = ['count' => 0, 'bytes' => 0];
     $read = \local_catquizlab\local\trace_reader::figures();
     return [
         'experimentid' => optional_param('experimentid', 0, PARAM_INT),
+        'runid' => optional_param('runid', 0, PARAM_INT),
+        'replication' => optional_param('replication', 0, PARAM_INT),
         'tab' => optional_param('tab', 'overview', PARAM_ALPHA),
         'sittings' => (int) ($size['count'] ?? 0),
         'traces' => \local_catquizlab\local\resource_guard::megabytes((int) ($size['bytes'] ?? 0)),
@@ -237,10 +244,20 @@ echo html_writer::tag('p', get_string('results:intro', $component), ['class' => 
 \local_catquizlab\local\resource_guard::phase('filter');
 echo $page->render_filter_bar();
 echo $page->render_tabs();
+// Held until complete (#147, AK8): a page that runs out of memory half way through a table or a plot shows the
+// message in its place instead of half of it.
+\local_catquizlab\local\resource_guard::buffer();
 \local_catquizlab\local\resource_guard::phase('basis');
 echo $page->render_provenance($reproexperiment);
 \local_catquizlab\local\resource_guard::phase('tab');
 echo $page->render_tab();
+\local_catquizlab\local\resource_guard::phase('done');
+\local_catquizlab\local\resource_guard::release();
+
+// What this request took, step by step, for administrators who ask (#147, AK3): ?profile=1.
+if (optional_param('profile', 0, PARAM_BOOL) && has_capability('moodle/site:config', $context)) {
+    echo \local_catquizlab\output\request_profile::render();
+}
 
 // PNG downloads (#108): drawn in the browser from each plot's own SVG, at twice
 // the size, so that the file is sharp on a slide.

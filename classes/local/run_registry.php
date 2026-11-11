@@ -93,29 +93,33 @@ class run_registry {
      * Describe one run: its coordinates, status and progress.
      *
      * @param \stdClass $record The run record.
+     * @param array|null $known What {@see describe_many()} counted for it: attempts, done, failed, experiment.
      * @return array
      */
-    public static function describe(\stdClass $record): array {
+    public static function describe(\stdClass $record, ?array $known = null): array {
         global $DB;
 
         $definition = self::definition_for($record);
         $model = (string) ($definition['model'] ?? '');
         $strategy = (string) ($definition['strategy'] ?? '');
-        $attempts = $DB->count_records('local_catquizlab_attempt', ['runid' => $record->id]);
-        $done = $DB->count_records_select(
-            'local_catquizlab_attempt',
-            'runid = :runid AND status >= :status',
-            ['runid' => $record->id, 'status' => registry::STATUS_FINISHED]
-        );
+        if ($known !== null) {
+            $attempts = (int) ($known['attempts'] ?? 0);
+            $done = (int) ($known['done'] ?? 0);
+            $experiment = (string) ($known['experiment'] ?? '');
+        } else {
+            $attempts = $DB->count_records('local_catquizlab_attempt', ['runid' => $record->id]);
+            $done = $DB->count_records_select(
+                'local_catquizlab_attempt',
+                'runid = :runid AND status >= :status',
+                ['runid' => $record->id, 'status' => registry::STATUS_FINISHED]
+            );
+            $experiment = (string) $DB->get_field('local_catquizlab_experiment', 'name', ['id' => $record->experimentid]);
+        }
 
         return [
             'id'            => (int) $record->id,
             'experimentid'  => (int) $record->experimentid,
-            'experiment'    => (string) $DB->get_field(
-                'local_catquizlab_experiment',
-                'name',
-                ['id' => $record->experimentid]
-            ),
+            'experiment'    => $experiment,
             'cellkey'       => (string) $record->cellkey,
             'replication'   => (int) $record->replication,
             'seed'          => (int) $record->seed,
@@ -123,7 +127,7 @@ class run_registry {
             'status'        => (int) $record->status,
             // Paused by the circuit breaker and finished with failures are not
             // "running" and "finished" (#133): said with their cause and count.
-            'statuslabel'   => self::status_label_of($record, $attempts - $done),
+            'statuslabel'   => self::status_label_of($record, $attempts - $done, $known['failed'] ?? null),
             'actions'       => registry::allowed_actions((int) $record->status),
             'terminal'      => registry::is_terminal((int) $record->status),
             'strategy'      => $strategy,
@@ -146,6 +150,53 @@ class run_registry {
             'timemodified'  => (int) $record->timemodified,
             'duration'      => max(0, (int) $record->timemodified - (int) $record->timecreated),
         ];
+    }
+
+    /**
+     * Describe many runs, with what {@see describe()} counts per run read in three queries for all of them (#147):
+     * a selection of three hundred runs asked four questions per run before anything else.
+     *
+     * @param \stdClass[] $records The run records.
+     * @return array<int, array> Run id => description, in the order given.
+     */
+    public static function describe_many(array $records): array {
+        global $DB;
+
+        if ($records === []) {
+            return [];
+        }
+        $runids = array_map(static fn(\stdClass $r): int => (int) $r->id, $records);
+        $known = array_fill_keys($runids, ['attempts' => 0, 'done' => 0, 'failed' => 0, 'experiment' => '']);
+        foreach (array_chunk($runids, 1000) as $chunk) {
+            [$in, $params] = $DB->get_in_or_equal($chunk, SQL_PARAMS_NAMED, 'run');
+            $counts = $DB->get_records_sql(
+                'SELECT runid, COUNT(1) AS attempts,
+                        SUM(CASE WHEN status >= :finished THEN 1 ELSE 0 END) AS done,
+                        SUM(CASE WHEN status = :failed THEN 1 ELSE 0 END) AS failed
+                   FROM {local_catquizlab_attempt}
+                  WHERE runid ' . $in . '
+               GROUP BY runid',
+                $params + ['finished' => registry::STATUS_FINISHED, 'failed' => attempt_scheduler::STATUS_FAILED]
+            );
+            foreach ($counts as $runid => $count) {
+                $known[(int) $runid] = ['attempts' => (int) $count->attempts, 'done' => (int) $count->done,
+                    'failed' => (int) $count->failed, 'experiment' => ''];
+            }
+        }
+        $experimentids = array_values(array_unique(array_map(
+            static fn(\stdClass $r): int => (int) $r->experimentid,
+            $records
+        )));
+        [$in, $params] = $DB->get_in_or_equal($experimentids, SQL_PARAMS_NAMED, 'exp');
+        $names = $DB->get_records_select_menu('local_catquizlab_experiment', 'id ' . $in, $params, '', 'id, name');
+        $out = [];
+        foreach ($records as $record) {
+            $facts = $known[(int) $record->id];
+            $facts['experiment'] = (string) ($names[(int) $record->experimentid] ?? '');
+            $out[(int) $record->id] = self::describe($record, $facts);
+        }
+
+        return $out;
     }
 
     /**
@@ -426,9 +477,10 @@ class run_registry {
      *
      * @param \stdClass $record The run.
      * @param int $notdone Sittings not finished.
+     * @param int|null $failed Failed sittings, where the caller counted them already.
      * @return string
      */
-    public static function status_label_of(\stdClass $record, int $notdone = 0): string {
+    public static function status_label_of(\stdClass $record, int $notdone = 0, ?int $failed = null): string {
         global $DB;
 
         $status = (int) $record->status;
@@ -440,7 +492,7 @@ class run_registry {
             return get_string('status:pausedbreaker', 'local_catquizlab', reason_catalog::label($cause));
         }
         if ($status === registry::STATUS_FINISHED) {
-            $failed = $DB->count_records(
+            $failed = $failed ?? $DB->count_records(
                 'local_catquizlab_attempt',
                 ['runid' => (int) $record->id, 'status' => attempt_scheduler::STATUS_FAILED]
             );

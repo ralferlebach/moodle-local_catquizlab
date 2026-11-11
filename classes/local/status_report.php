@@ -199,8 +199,10 @@ class status_report {
                     [
                         'label' => get_string('ops:startworkers', $component),
                         // The action itself, not a link to the setup tab: clicking it
-                        // used to open a page and start nothing.
-                        'url'   => worker_launcher::start_url()->out(false),
+                        // used to open a page and start nothing. Posted (#149): its session key never in a URL.
+                        'url'   => (new \moodle_url('/local/catquizlab/operations.php'))->out(false),
+                        'command' => 'startworkers',
+                        'sesskey' => sesskey(),
                     ]
                 );
             }

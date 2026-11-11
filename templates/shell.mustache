@@ -22,7 +22,7 @@
     * experimentid - the one in context, or 0
     * selecturl - where the selector posts
     * newurl - where a new experiment is started
-    * situation - headline, detail, ok/warn/problem and action for the installation (no experiment chosen)
+    * situation - headline, detail, ok/warn/problem and action (label, url, post, params: an action with a session key is a POST form) for the installation (no experiment chosen)
     * status - the experiment's status (experiment_status::snapshot): name, phase, label, badge,
       sittings, problemtext, hasproblems, reason, computedtext, technical, next, shownext
     * settingsurl - where settings live
@@ -115,7 +115,15 @@
                     <strong data-region="catquizlab-situation-state">{{headline}}</strong>
                     <span class="small" data-region="catquizlab-situation-reason">{{detail}}</span>
                 </div>
-                {{#action}}<a href="{{url}}" class="btn btn-sm btn-primary text-white ml-2">{{label}}</a>{{/action}}
+                {{#action}}
+                    {{#post}}
+                        <form method="post" action="{{url}}" class="d-inline ml-2">
+                            {{#params}}<input type="hidden" name="{{name}}" value="{{value}}">{{/params}}
+                            <button type="submit" class="btn btn-sm btn-primary text-white">{{label}}</button>
+                        </form>
+                    {{/post}}
+                    {{^post}}<a href="{{url}}" class="btn btn-sm btn-primary text-white ml-2">{{label}}</a>{{/post}}
+                {{/action}}
             </div>
         </div>
     {{/situation}}

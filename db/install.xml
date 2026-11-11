@@ -182,6 +182,8 @@
         <FIELD NAME="status" TYPE="int" LENGTH="2" NOTNULL="true" DEFAULT="0" SEQUENCE="false" COMMENT="0=queued, 10=running, 20=collected, 30=validated, 40=failed."/>
         <FIELD NAME="tracejson" TYPE="text" NOTNULL="false" SEQUENCE="false" COMMENT="Analysis-friendly trace copied from the engine tables/debug info: item sequence, score components, theta/SE path, activations, stop reason."/>
         <FIELD NAME="tracebytes" TYPE="int" LENGTH="10" NOTNULL="false" SEQUENCE="false" COMMENT="Length of tracejson, written with it: results read traces in batches bounded by bytes (#147)."/>
+        <FIELD NAME="digestjson" TYPE="text" NOTNULL="false" SEQUENCE="false" COMMENT="The trace without its step-by-step records (trace_digest): what the results read (#147)."/>
+        <FIELD NAME="digestbytes" TYPE="int" LENGTH="10" NOTNULL="false" SEQUENCE="false" COMMENT="Length of digestjson, written with it."/>
         <FIELD NAME="runtimems" TYPE="int" LENGTH="10" NOTNULL="false" SEQUENCE="false" COMMENT="Wall-clock runtime of the attempt in milliseconds, reported by the worker."/>
         <FIELD NAME="tries" TYPE="int" LENGTH="4" NOTNULL="true" DEFAULT="0" SEQUENCE="false" COMMENT="Number of times the attempt has been claimed/tried (for retry limiting)."/>
         <FIELD NAME="leaseowner" TYPE="char" LENGTH="100" NOTNULL="false" SEQUENCE="false" COMMENT="Worker instance holding the claim. A claim without an owner cannot be recovered deliberately, only by a timeout that guesses."/>

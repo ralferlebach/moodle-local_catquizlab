@@ -50,13 +50,15 @@ class answer_matrix {
         $batches = trace_reader::batches(
             'a.runid = :runid AND a.tracejson IS NOT NULL',
             ['runid' => $runid],
-            'a.id, a.id AS attemptid, a.personid, a.tracejson, p.profilejson, p.stratum',
-            'JOIN {local_catquizlab_person} p ON p.id = a.personid'
+            'a.id, a.id AS attemptid, a.personid, ' . trace_reader::digest_fields('a') . ', p.profilejson, p.stratum',
+            'JOIN {local_catquizlab_person} p ON p.id = a.personid',
+            true
         );
         foreach ($batches as $batch) {
             foreach ($batch as $record) {
                 $rows[] = self::row($record, $questionids);
                 $record->tracejson = null;
+                $record->digestjson = null;
             }
         }
         // Person by person, as before the batches.
@@ -75,7 +77,8 @@ class answer_matrix {
      * @return array
      */
     protected static function row(\stdClass $record, array &$questionids): array {
-        $trace = json_decode((string) $record->tracejson, true);
+        // The responses are in the digest (#147).
+        $trace = trace_digest::decode($record);
         $responses = (is_array($trace) && isset($trace['responses']) && is_array($trace['responses']))
             ? $trace['responses']
             : [];

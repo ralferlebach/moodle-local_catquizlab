@@ -6,6 +6,141 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.7.57] — 2026-11-11 — Results at scale (#147), collection race (#138), validity (#112), acceptance tools (#121, #123, #132), no keys in URLs (#149)
+
+Database change: two columns on `local_catquizlab_attempt` (`digestjson`, `digestbytes`); an ad-hoc task fills them in
+for sittings collected before (`build_trace_digests`, requeues itself in shares of 5000; until then the results take the
+digest from the trace as they read it).
+
+- **Digests (AK4, AK5).** A long sitting's trace is mostly the engine's record of every step (progress of each question,
+  ability path): 94–96 % of it at 625 questions and 20 subscales. The results read none of it. `trace_digest` is the
+  trace without those records, written beside it at collection and import; every pass of the results page, its tabs and
+  exports, the answer matrix and the subscale evaluation read the digest. Only the step export, the single test flow and
+  the comparison of flows read whole traces — the step export now in batches instead of one query per sitting.
+  `size_check()` counts the bytes the analysis reads (digests).
+- **Fewer passes and queries (AK5).** Runs are described in three queries for all of them, not four per run, and once
+  per query object; people are read per batch, profiles per batch when first needed, run records once per query.
+  `provenance()` takes any whole pass this query has ended; the overview's people section and the export tab's counts
+  come from passes that read them anyway. The test flow tab no longer reads every trace for a verdict that reads none.
+  Overview tab of 6 037 local sittings: 26 369 → 1 856 queries, 3.9 → 0.8 s.
+- **Memory (AK4, D3).** The subscales tab holds its subscale results packed (`subscale_store`, 49 bytes a result) and
+  computes every figure from all of them; its three plots draw a stable sample of at most 2 000 points, said on the
+  plot. Robustness and the run export no longer hold every sitting's item list; robustness reads its sittings' digests
+  and profiles 200 at a time. 9 000 sittings of 625 questions and 20 subscales: the subscales tab died at 512 MB
+  before and peaks at 36 MB now.
+- **Stable samples (AK7).** Plot samples are drawn by a hash of the sitting (`stable_sample`), the same on every reading,
+  instead of `random_int()`; below 2 000 points nothing is sampled, as before.
+- **Same results (AK7, D4).** `trace_digest_test` compares everything the results produce — overview, provenance,
+  validity counts, scale coverage, subscale rows, every export level, mode detection, robustness, answer matrix, subscale
+  evaluation — from digests, from traces without digest and from whole traces, for three validity filters and both
+  rules: identical to the last digit. `cli/measure_results.php --compare` does the same on any site.
+- **Export tab.** The attempt level's row count is the export's own (sittings of the chosen validity), not every sitting
+  with a trace.
+- **Fatal errors (AK1, AK2, AK3, AK8, AK10).** The log line now has `kind` (memory, system, time), `step`, `tried`,
+  `current`, `limitini`, `limitraised`, `file`, `line`, `php`, `sapi`, `maxexec`, `runtime`, `queries`, the process's
+  `rss`/`hwm` and the memory cgroup's limit, use and OOM kills, and every phase and step with peak/ms/queries.
+  "Out of memory (allocated …)" is the system's, not PHP's limit, and said so (`results:outofsystemmemory`); a timeout
+  is logged as `local_catquizlab time:`. The analysis is buffered until complete: at a fatal error the half-written
+  table or plot is discarded and the message stands in its place, with `role="alert"`.
+- **Request profile (AK3).** `results.php?profile=1` shows site administrators what the request took, phase by phase
+  and step by step (`request_profile`).
+- **One run** in the results page: `runid` is taken from the URL.
+- **Step export** 2.7 times faster: the item parameters are read once per sitting, the responses indexed once.
+- **Measurement tools.** `cli/seed_results_scale.php` seeds long experiments (twins, two strategies, invalid shares);
+  `cli/measure_results.php` measures every step in its own process (a step that dies is recorded with its fatal error).
+- Tests: `trace_digest_test`, `resource_guard_kinds_test` (real memory exhaustion and real timeout with half a table
+  written), Playwright `results_scope.spec.js` (all experiments, one experiment, one run: every tab whole; the step export
+  as a whole file).
+- **#138: a waiting sitting collected by a run's re-collection is recorded.** `attempt_collector::collect_run()` collects
+  sittings waiting for their trace as well; when the engine's attempt had arrived it set them "collected" without a word:
+  no "collected" in the history, and the run was not told one more sitting had finished. Now recorded as when the
+  pipeline's look finds the trace. Found with the new `cli/race_collect.php`: real collected sittings played again by
+  separate processes at once — workers reporting completion again and again, the pipeline's look, the run's
+  re-collection, the lease recovery and a reader — while the engine's attempt is away and comes back. Checked per
+  sitting: never "collected" before the engine attempt is back, never without trace or engine attempt, collected once in
+  its history, the same trace, no second engine attempt, lease released. 0.7.56 failed "collected once" on PostgreSQL and
+  MariaDB; 0.7.57 passes every check on both. The sittings are put back as they were.
+- **#149: no key in a URL any more.** Decided 11.11.2026: no session key and no other key is sent by GET. The plot's
+  PDF download, the library's delete, the presets' delete, the "start workers" action of the status card and the state
+  line, and the axis and comparison forms of the results page sent the session key (the PDF also the plot's key) in
+  the URL — into the browser's history, the web server's access log and the next page's referrer. They are posted
+  now; the delete preview of an experiment needs no key (it changes nothing; the deleting is the confirmation form's
+  POST). The PDF, the reproduction package, both log downloads and the run's artefact ZIP refuse a GET.
+  `cli/scan_get_secrets.php` crawls the plugin's pages as an administrator and lists every link, GET form or script
+  request with a key (0 found on 144 pages); `no_secret_in_url_test`; `accept_exports.php` and `accept_logs.php` post
+  these downloads and check that the GET is refused.
+- **#143, #144: a marker's tooltip names every member.** A marker of several observations said the first label and
+  "and N other(s)"; it now names every person, twin or subscale on it, each once with how often ("a ×2; b; c").
+  Playwright `plot_semantics.spec.js`: every marker of the overview, global, deficits and subscales plots is exactly
+  its CSV rows (same exact coordinates, same count) and its tooltip names every label of them.
+- **#145: "gone" only after a complete deletion.** The experiment's own row goes last, and only when nothing of it is
+  left in the lab's tables — rows of its runs included, found by the runs' ids once the runs are gone
+  (`purger::left_of()`). Anything left stops the deletion with `purge:incomplete`; the task is retried and the list shows
+  the experiment as being deleted meanwhile.
+- **#146: plots at every width and zoom.** Playwright `chart_layout.spec.js`: 320, 375, 390, 768, 1024, 1280, 1440 and
+  1920 CSS pixels, and 125 % and 200 % zoom — every plot of the deficits tab and the overview below the bar, inside the
+  window, uncovered, with its texts inside it, its download menu reachable by keyboard and not under the bar; the
+  bounding boxes in `chart-layout.json` and a screenshot of each case. A second test: every rule of `styles.css` names
+  the plugin, and Moodle's bar is the same on a page of Moodle's own.
+- **#112: engine validity without the engine test's settings.** `engine_validity::thresholds()` took the stop rule's
+  minimum items and SE limit only from the engine test the run was provisioned with. A run whose engine test had gone (or
+  an imported run) had no thresholds, and every sitting of it counted as valid under the engine rule — silently. Now the
+  thresholds come from the run's design where the engine test is gone (`source: definition`), and a sitting is
+  "unknown" only where neither says. Covered by `validity_matrix_test` (ten kinds of sittings × both rules × every
+  strategy, the same counts in the stream, overview, provenance, every export, the export tab, the funnel and the
+  reproduction package).
+- **#121: HTTP acceptance of every download.** `cli/accept_exports.php --experimentid=N` logs in as a temporary manager
+  and a temporary user without a role and fetches every export family through the web server: CSV, JSON (its
+  `metadata.rows` against its rows), metadata, the reproduction package, log text and JSON, the run artefacts ZIP, plot
+  SVG and PDF — for one experiment, all and an empty selection; status, type, file name, size, SHA-256 and schema per
+  case, and that the user without a role gets no file.
+- **#132: HTTP acceptance of the logs page under a large trace.** `cli/accept_logs.php --runid=N` writes 250 000 request
+  lines of the run's sittings across a day boundary into the server's trace files and asks the logs page through the
+  web server: three pages (none twice, joined, in order), newest first, errors only (the count written), a search, both
+  downloads with their filter, a window across midnight from two day files, the live tail while lines are written, the
+  user without a role, retention. Every request goes out with the trace header, so the server records what it cost.
+  Afterwards it takes its lines out again (`trace_seed::remove()`).
+- **#123: the run contract end to end.** `cli/smoke.php --budget=G1,G2,S1,S2,SE1,SE2` plays real sittings under the
+  given budgets, and every smoke run now compares each collected sitting's end and length between the engine's own
+  record (its status, the host's stop code, the stop text), the analysis (what the attempt detail and the tabs show),
+  the export of sittings and the reproduction package's contract. `cli/contract_matrix.sh` runs the cases of the
+  provisioning read-back test — three strategies, global budgets 3–6 and 1–8, subscale budgets 1–3 and 2–2, SE targets
+  0.30 and 0.50 — plus the classical test's all items, the sweep with cell overrides (#104) and the root scale (#102).
+- **Load matrix with real CAT sittings (#110, #124, #136).** `cli/load_matrix.sh` plays workers × mode (classic and
+  allsubs as long tests of `MINANSWERS` questions, a short control mode), each step through `cli/smoke.php`, while
+  `cli/load_sampler.php` samples the web server's processes, their resident memory and the database's connections;
+  `cli/request_report.php` then reads every traced request of the step: status, 5xx, fatals, PHP peak, process RSS,
+  queries per request, web server processes, sittings, and when each sitting's first request came (staggered starts,
+  #120). `smoke.php --concurrency` gives the installation's worker setting back when it ends.
+- **Request traces say more (#132, #110).** Each traced request's line now carries its database queries (`queries`) and
+  the serving process's resident memory at its end (`rssmb`, `hwmmb`) besides PHP's peak.
+
+## [0.7.56] — 2026-11-11 — Security: no request URI in the fatal-error log (#149)
+
+No database change.
+
+- `resource_guard::log_line()` wrote the request's whole `REQUEST_URI` — query string included, so a `sesskey`, a
+  token or a personal filter value — to the server's error log when a results page ran out of memory. The line now
+  carries only allowed, typed fields: the script path without query, fragment or slash arguments; phase, peak, limit
+  and phase peaks (#147); `experimentid`, `runid`, `replication`, `sittings` as numbers; `tab` only as one of the
+  results page's tabs; `traces`, `largestbatch`, `read` as sizes. Anything else the page adds is dropped and counted
+  (`dropped=N`). Every value is one printable ASCII token of at most 160 bytes: no line break, control character or
+  space from the request can start a line of its own (log injection), and an overlong value is cut visibly (`~cutN`).
+- New request id in the line (`rid`, `ridsource`): Apache's `UNIQUE_ID`, a proxy's `X-Request-Id`, the worker's
+  correlation id, or a random one. The page's own out-of-memory message shows the same id (`data-requestid`), so a
+  screenshot finds its log line without the log needing anything personal.
+- New `log_redactor`: one rule for all logs — names are compared decoded (also twice), lower case and without array
+  brackets, so `ses%73key`, `SESSKEY`, `sesskey[]` and repeated names are caught as well as `sesskey`, `token`, `key`,
+  `password`, `secret`, `authorization` and `email`; values that are e-mail addresses go whatever their name. The
+  worker request trace (`request_trace`), attempt history and failure reports (`attempt_history`), the log viewer with
+  its downloads and the reproduction package (`log_view`), the debug trace's parameters (`debug_trace`) and the
+  worker's own reports (`worker/navigation.js`, `worker/run_attempt.js`) use it.
+- New `cli/scan_logs_for_secrets.php` (class `log_scan`): reads existing server logs (also `.gz`), counts lines and
+  secret parameters by name and line number — never by value — and with `--redact-to` writes copies without them.
+- Tests: `fatal_log_redaction_test` (a simulated and a real memory exhaustion with `sesskey=TESTSECRET`,
+  `token=TESTSECRET`, encoded, repeated and array names, CRLF, escape sequences, 100 000-byte paths, forged context),
+  `log_redactor_test`, `log_scan_test`, worker `navigation.test.js`.
+
 ## [0.7.55] — 2026-11-10 — CI: three tests that depended on the runner, not on the plugin
 
 No database change, no change in behaviour. Each cause reproduced locally (Moodle 5.2 with the pinned M5 engine set

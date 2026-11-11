@@ -78,6 +78,29 @@ Bearbeitungen:
 4. Größte Workerzahl ohne AH00161 und ohne Kapazitätsfehler ⇒
    `worker_safety_cap` mit Reserve setzen.
 
+## Lastmatrix mit echten CAT-Sittings (0.7.57)
+
+`cli/load_matrix.sh` misst Worker × Modus (`WORKERS="1 5 10 25 50"`). Die Modi:
+- classic und allsubs als lange Tests (`MINANSWERS`, Vorgabe 120 Fragen),
+- ein kurzer Kontrollmodus (allsubs, 2–4 Fragen).
+
+Pro Stufe:
+
+1. `cli/smoke.php` spielt ein Experiment mit Personen = Worker × `PER`.
+2. `cli/load_sampler.php` tastet alle 2 s ab:
+   - Webserver-Prozesse,
+   - deren RSS (Summe und Maximum),
+   - DB-Verbindungen,
+   - Load,
+   - freien Speicher.
+3. `cli/request_report.php` wertet jeden getracten Request der Stufe aus:
+   - Status, 5xx, Fatals, Exceptions,
+   - PHP-Spitze (max/p95/p50), RSS des Prozesses, Abfragen je Request,
+   - Zahl der Webserver-Prozesse, Sittings und Korrelationen.
+4. `cli/capacity_report.php` sichert den Zustand der Worker.
+
+Danach steht `worker_concurrency` wieder auf dem vorherigen Wert.
+
 ## Tests
 
 `tests/worker_capacity_test.php`: 60 → 50 mit Draining (keine Claims, Stop beim

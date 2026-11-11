@@ -92,6 +92,57 @@ class results_export {
         return ['steps' => array_sum($steps), 'items' => $items, 'seconds' => $work * self::SECONDS_PER_ITEM_STEP];
     }
 
+    /**
+     * The row counts of every level that is counted from the sittings, and the cost of TI@n, in one pass (#147).
+     *
+     * The export tab used to read the whole selection once per level: four passes for four numbers, and a fifth
+     * for the cost estimate.
+     *
+     * @param results_query $query The selection.
+     * @return array{counts: array<string, int>, cost: array{steps: int, items: int, seconds: float}}
+     */
+    public static function all_row_counts(results_query $query): array {
+        global $DB;
+
+        $runs = [];
+        $steps = [];
+        $subscales = 0;
+        $items = 0;
+        $sittings = 0;
+        foreach ($query->each_observation() as $row) {
+            $sittings++;
+            $runid = (int) $row['runid'];
+            $runs[$runid] = true;
+            $steps[$runid] = ($steps[$runid] ?? 0) + (int) ($row['nitems'] ?? 0);
+            $subscales += (int) ($row['nscales'] ?? 0);
+            $items += count((array) ($row['items'] ?? []));
+        }
+        $work = 0.0;
+        $pool = 0;
+        foreach ($steps as $runid => $count) {
+            $size = $DB->count_records('local_catquizlab_item', ['runid' => $runid]);
+            $pool = max($pool, $size);
+            $work += $count * $size;
+        }
+        $counts = [
+            self::LEVEL_RUN => count($runs),
+            // The rows the export of this selection has: one per sitting of the chosen validity. The size check
+            // counts every sitting with a trace, valid or not, and the table said so for an export of fewer rows.
+            self::LEVEL_ATTEMPT => $sittings,
+            self::LEVEL_STEP => array_sum($steps),
+            self::LEVEL_SUBSCALE => $subscales,
+            self::LEVEL_ITEM => $items,
+        ];
+        foreach (array_keys(self::levels()) as $level) {
+            if (!array_key_exists($level, $counts)) {
+                $counts[$level] = self::row_count($query, $level);
+            }
+        }
+
+        return ['counts' => $counts, 'cost' => ['steps' => array_sum($steps), 'items' => $pool,
+            'seconds' => $work * self::SECONDS_PER_ITEM_STEP]];
+    }
+
     /** @var string One row per step of every sitting (#106). */
     public const LEVEL_STEP = 'step';
 
@@ -413,8 +464,11 @@ class results_export {
      * @return \Generator
      */
     protected static function step_rows(results_query $query): \Generator {
+        // Every sitting's steps: whole traces, in batches, not one query per sitting (#147).
+        $query->whole_traces();
         foreach ($query->each_observation() as $observation) {
-            $detail = $observation + results_query::detail($observation);
+            // Step by step: the whole trace.
+            $detail = $observation + results_query::detail($observation, true);
             $flow = test_flow::steps($detail);
             if (self::$engineinfo) {
                 $flow = test_flow::with_engine_information(
@@ -539,8 +593,11 @@ class results_export {
             'stopsuccess', 'meanruntimems',
         ];
 
+        // Streamed, without the item lists no figure here reads (#147): the whole selection with every item of every
+        // sitting was most of this export's memory.
         $byrun = [];
-        foreach ($query->observations() as $observation) {
+        foreach ($query->each_observation() as $observation) {
+            unset($observation['items']);
             $byrun[$observation['runid']][] = $observation;
         }
 

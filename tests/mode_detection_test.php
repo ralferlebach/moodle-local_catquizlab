@@ -115,6 +115,8 @@ final class mode_detection_test extends \advanced_testcase {
                 $items = [];
                 $responses = [];
                 $abilities = [];
+                // Each scale's standard error, as the engine stores it: the run's rules ask for one (#112).
+                $ses = [];
                 // The sixth twin's sitting in "all sub" answers everything correctly: no ability is determined.
                 $allcorrect = $strategy === 'allsubs' && $twin === 6;
                 foreach (self::PLAYS[$strategy] as $subscale => $estimate) {
@@ -125,13 +127,14 @@ final class mode_detection_test extends \advanced_testcase {
                         $responses[$questionid] = $allcorrect || $index % 2 === 0 ? 1.0 : 0.0;
                     }
                     $abilities[$base + $subscale] = $global + $estimate;
+                    $ses[$base + $subscale] = 0.4;
                 }
                 $DB->insert_record('local_catquizlab_attempt', (object) [
                     'runid' => $run->id, 'personid' => $person->id, 'status' => attempt_scheduler::STATUS_COLLECTED,
                     'tries' => 1, 'timecreated' => time(), 'timemodified' => time(),
                     'tracejson' => json_encode(['finaltheta' => $global, 'finalse' => 0.3, 'items' => $items,
                         'responses' => $responses, 'nitems' => count($items), 'stopreason' => 'se',
-                        'scaleabilities' => $abilities]),
+                        'scaleabilities' => $abilities, 'scalestandarderrors' => $ses]),
                 ]);
             }
         }
@@ -539,7 +542,8 @@ final class mode_detection_test extends \advanced_testcase {
         $coverage = (new results_query($filter));
         $coverage->subscale_observations();
         $chain = $coverage->scale_coverage()['chain'];
-        $this->assertSame(['fromvalid' => 68, 'paired' => 68, 'valid' => 68, 'withse' => 0], $chain);
+        // Every one with its standard error, as the engine stores it (#112).
+        $this->assertSame(['fromvalid' => 68, 'paired' => 68, 'valid' => 68, 'withse' => 68], $chain);
 
         // The spread per strategy, all collected beside the valid ones — described, not explained.
         $spread = $coverage->scale_coverage()['spread'];

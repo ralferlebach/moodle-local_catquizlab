@@ -833,11 +833,18 @@ class scatter_chart {
             $n = (int) $cluster['n'];
             $label = $cluster['label'];
             if ($n > 1) {
-                // One label when all members share it; otherwise the first in order and how many others (#143).
-                $others = count(array_unique($cluster['labels'])) - 1;
+                // One label when all members share it; otherwise every member's, in order, each once with how often it
+                // stands there (#143, #144): a tooltip naming one person or subscale and counting the rest kept the
+                // others from a reader who cannot see the export.
+                $counted = array_count_values($cluster['labels']);
+                $others = count($counted) - 1;
+                $named = [];
+                foreach ($counted as $member => $times) {
+                    $named[] = $member . ($times > 1 ? ' ×' . $times : '');
+                }
                 $label = get_string($others > 0 ? 'chart:clusterlabelmixed' : 'chart:clusterlabel', 'local_catquizlab', (object) [
                     'n' => $n, 'x' => self::format($cluster['x']), 'y' => self::format($cluster['y']),
-                    'label' => $cluster['label'], 'others' => $others,
+                    'label' => $cluster['label'], 'others' => $others, 'labels' => implode('; ', $named),
                 ]);
             }
             $title = $label !== '' ? '<title>' . s($label) . '</title>' : '';
@@ -901,11 +908,7 @@ class scatter_chart {
         $items[] = \html_writer::tag('button', get_string('chart:downloadpng', 'local_catquizlab'), [
             'type' => 'button', 'data-download' => 'png', 'data-filename' => $name . '.png',
         ]);
-        $items[] = \html_writer::link(
-            new \moodle_url('/local/catquizlab/plotpdf.php', ['key' => $key, 'sesskey' => sesskey()]),
-            get_string('chart:downloadpdf', 'local_catquizlab'),
-            ['data-download' => 'pdf']
-        );
+        $items[] = self::pdf_control($key);
         if ($csv !== '') {
             $items[] = \html_writer::link(
                 'data:text/csv;charset=utf-8;base64,' . base64_encode($csv),
@@ -925,6 +928,28 @@ class scatter_chart {
         );
 
         return self::download_menu($items, $settings);
+    }
+
+    /**
+     * The PDF download of a kept plot: a small form posting the plot's key and the session key (#149).
+     *
+     * A link carried both in its URL, and so into the browser's history, the access log and the referrer of the next
+     * page. Looks like the other entries of the download menu.
+     *
+     * @param string $key The key from {@see keep_for_pdf()}.
+     * @return string
+     */
+    public static function pdf_control(string $key): string {
+        return \html_writer::tag(
+            'form',
+            \html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'key', 'value' => $key])
+                . \html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'sesskey', 'value' => sesskey()])
+                . \html_writer::tag('button', get_string('chart:downloadpdf', 'local_catquizlab'), [
+                    'type' => 'submit', 'class' => 'btn btn-sm btn-link text-left p-1', 'data-download' => 'pdf',
+                ]),
+            ['method' => 'post', 'action' => (new \moodle_url('/local/catquizlab/plotpdf.php'))->out(false),
+                'class' => 'd-inline m-0']
+        );
     }
 
     /**

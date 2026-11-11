@@ -214,4 +214,40 @@ final class request_trace_test extends \advanced_testcase {
         $ours = array_filter($callbacks, static fn(array $c): bool => ($c['component'] ?? '') === 'local_catquizlab');
         $this->assertNotEmpty($ours);
     }
+
+    /**
+     * What a request cost the database and its process goes into its line (#132, #110), and nothing else does.
+     *
+     * @return void
+     */
+    public function test_a_line_carries_the_queries_and_the_process_memory(): void {
+        $figures = request_trace::process_figures(37);
+        $this->assertSame(37, $figures['queries']);
+        if (is_readable('/proc/self/status')) {
+            $this->assertGreaterThan(0, $figures['rssmb']);
+            $this->assertGreaterThanOrEqual($figures['rssmb'], $figures['hwmmb']);
+        }
+        $line = request_trace::record(
+            self::REQUEST,
+            200,
+            1790000001.0,
+            0,
+            0,
+            null,
+            null,
+            $figures + ['secret' => 'x']
+        );
+        $this->assertSame(37, $line['queries']);
+        $this->assertArrayNotHasKey('secret', $line);
+        $this->assertSame(['exception', 'fatal'], array_slice(array_keys($line), -2), 'the long fields stay last');
+
+        // Without them, the line is as before.
+        $plain = request_trace::record(self::REQUEST, 200, 1790000001.0, 0, 0, null, null);
+        $this->assertArrayNotHasKey('queries', $plain);
+        $this->assertArrayNotHasKey('rssmb', $plain);
+        $this->assertSame([], request_trace::process_figures(null) === [] ? [] : array_diff_key(
+            request_trace::process_figures(null),
+            ['rssmb' => 1, 'hwmmb' => 1]
+        ));
+    }
 }

@@ -65,7 +65,6 @@ $PAGE->set_url($pageurl);
 // take — "4 runs, 150 attempts, 96 questions" rather than "this cannot be
 // undone".
 if ($action === 'delete' && $id > 0) {
-    require_sesskey();
     // Its own capability: someone who may start runs and stop workers can do
     // their whole job without ever being able to destroy a measurement.
     require_capability('local/catquizlab:purge', $context);
@@ -73,6 +72,15 @@ if ($action === 'delete' && $id > 0) {
     $deep = optional_param('deep', 1, PARAM_BOOL);
     $preview = \local_catquizlab\local\purger::preview_experiment($id, (bool) $deep);
     $typed = optional_param('confirmname', '', PARAM_TEXT);
+    // The preview is only read, and the link to it carries no session key (#149). What deletes is the confirmation
+    // form's POST, with its session key; a GET carrying the name — a link, a prefetch, a history entry — deletes
+    // nothing (#129).
+    if ($typed !== '') {
+        if (!data_submitted()) {
+            redirect($manageurl, get_string('purge:postonly', $component), null, \core\output\notification::NOTIFY_WARNING);
+        }
+        require_sesskey();
+    }
 
     // Typing the name is the confirmation. A button that only needs a click is
     // a button that gets clicked, and this one destroys measurements. Compared

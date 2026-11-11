@@ -145,6 +145,7 @@ class request_trace {
         }
         self::$active = false;
         try {
+            global $DB;
             $line = self::record(
                 self::$request,
                 (int) (http_response_code() ?: 200),
@@ -152,7 +153,9 @@ class request_trace {
                 connection_status(),
                 memory_get_peak_usage(true),
                 self::$exception,
-                error_get_last()
+                error_get_last(),
+                self::process_figures(isset($DB) && is_object($DB) && method_exists($DB, 'perf_get_queries')
+                    ? (int) $DB->perf_get_queries() : null)
             );
             self::write($line);
         } catch (\Throwable $e) {
@@ -171,6 +174,7 @@ class request_trace {
      * @param int $peakbytes Peak memory.
      * @param array|null $exception The exception behind an error page.
      * @param array|null $lasterror error_get_last().
+     * @param array $process What else was measured of the request (#132, #110): queries, rssmb, hwmmb — each optional.
      * @return array
      */
     public static function record(
@@ -180,7 +184,8 @@ class request_trace {
         int $connection,
         int $peakbytes,
         ?array $exception,
-        ?array $lasterror
+        ?array $lasterror,
+        array $process = []
     ): array {
         $fatal = null;
         if ($lasterror !== null && in_array((int) ($lasterror['type'] ?? 0), self::FATAL, true)) {
@@ -212,9 +217,35 @@ class request_trace {
             'connection' => $states === [] ? 'normal' : implode('+', $states),
             'peakmb' => round($peakbytes / 1048576, 1),
             'pid' => (int) getmypid(),
+        ] + array_intersect_key($process, array_flip(['queries', 'rssmb', 'hwmmb'])) + [
             'exception' => $exception,
             'fatal' => $fatal,
         ];
+    }
+
+    /**
+     * The database queries of the request and the memory of the process that served it, at its end (#132, #110).
+     *
+     * rssmb is what the process holds now; hwmmb the most it ever held — under Apache's prefork or mod_php one
+     * process serves many requests, so hwmmb is the process's, not this request's: the request's own is peakmb.
+     *
+     * @param int|null $queries The request's database queries, if known.
+     * @return array queries, rssmb, hwmmb — those that could be read.
+     */
+    public static function process_figures(?int $queries): array {
+        $out = $queries === null ? [] : ['queries' => $queries];
+        // Not with @: a suppressed warning still replaces error_get_last(), which the shutdown handlers read for a fatal.
+        $path = '/proc/self/status';
+        $status = is_file($path) && is_readable($path) ? file_get_contents($path, false, null, 0, 8192) : false;
+        if (is_string($status)) {
+            foreach (['rssmb' => 'VmRSS', 'hwmmb' => 'VmHWM'] as $name => $key) {
+                if (preg_match('/^' . $key . ':\s+(\d+) kB/m', $status, $m)) {
+                    $out[$name] = round((int) $m[1] / 1024, 1);
+                }
+            }
+        }
+
+        return $out;
     }
 
     /**
@@ -475,7 +506,8 @@ class request_trace {
      * @return string
      */
     public static function redact_uri(string $uri): string {
-        return (string) preg_replace('/((?:^|[?&])(?:sesskey|wstoken|token|password|key)=)[^&#]*/i', '$1[redacted]', $uri);
+        // One rule for every log (#149): encoded, repeated and array names too, and no fragment, no control characters.
+        return log_redactor::redact_uri($uri);
     }
 
     /**

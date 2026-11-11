@@ -51,12 +51,19 @@ if ($from <= 0) {
 
 $figures = ['from' => $from, 'until' => $until, 'requests' => 0, 'status' => [], 'http5xx' => 0, 'fatals' => 0,
     'exceptions' => 0, 'aborted' => 0, 'peakmb' => ['max' => null, 'p50' => null, 'p95' => null], 'bypage' => [],
-    'problems' => [], 'problemsomitted' => 0];
+    'problems' => [], 'problemsomitted' => 0, 'rssmb' => ['max' => null, 'p50' => null, 'p95' => null],
+    'queries' => ['max' => null, 'p50' => null, 'p95' => null], 'processes' => 0, 'sittings' => 0, 'correlations' => 0];
 // Every request that ended in 4xx/5xx, with an exception, a fatal or a broken
 // connection is named, not only counted: "exceptions: 4" and "status 404: 4"
 // in a green run said that something happened, not what (#135 re-audit).
 $maxproblems = 50;
 $peaks = [];
+$rss = [];
+$queries = [];
+$pids = [];
+$sittings = [];
+$correlations = [];
+$starts = [];
 foreach (request_trace::each($from, $until) as $line) {
     $figures['requests']++;
     $status = (int) ($line['status'] ?? 0);
@@ -67,6 +74,22 @@ foreach (request_trace::each($from, $until) as $line) {
     $figures['aborted'] += ($line['connection'] ?? 'normal') === 'normal' ? 0 : 1;
     $peak = (float) ($line['peakmb'] ?? 0);
     $peaks[] = $peak;
+    // The process's resident memory and the request's queries, where the trace has them (0.7.57 on, #110).
+    if (isset($line['rssmb'])) {
+        $rss[] = (float) $line['rssmb'];
+    }
+    if (isset($line['queries'])) {
+        $queries[] = (int) $line['queries'];
+    }
+    $pids[(int) ($line['pid'] ?? 0)] = true;
+    $sittings[(int) ($line['attemptid'] ?? 0)] = true;
+    $correlations[(string) ($line['correlationid'] ?? '')] = true;
+    // When each worker's sitting first reached the server (#120): starts staggered, or a wave.
+    $cid = (string) ($line['correlationid'] ?? '');
+    $ms = (int) ($line['unixms'] ?? 0);
+    if ($cid !== '' && (!isset($starts[$cid]) || $ms < $starts[$cid])) {
+        $starts[$cid] = $ms;
+    }
     // The page without its query: attempt.php, not attempt.php?cmid=….
     $page = (string) strtok((string) ($line['path'] ?? ''), '?');
     $figures['bypage'][$page]['n'] = ($figures['bypage'][$page]['n'] ?? 0) + 1;
@@ -102,6 +125,34 @@ if ($peaks !== []) {
     $at = static fn(float $q): float => $peaks[(int) min(count($peaks) - 1, floor($q * (count($peaks) - 1) + 0.5))];
     $figures['peakmb'] = ['max' => end($peaks), 'p50' => $at(0.5), 'p95' => $at(0.95)];
 }
+$quantiles = static function (array $values): array {
+    if ($values === []) {
+        return ['max' => null, 'p50' => null, 'p95' => null];
+    }
+    sort($values);
+    $at = static fn(float $q) => $values[(int) min(count($values) - 1, floor($q * (count($values) - 1) + 0.5))];
+    return ['max' => end($values), 'p50' => $at(0.5), 'p95' => $at(0.95)];
+};
+$figures['rssmb'] = $quantiles($rss);
+$figures['queries'] = $quantiles($queries);
+// Web server processes that served the window: under prefork or mod_php, the slots that were busy at some point.
+$figures['processes'] = count($pids);
+$figures['sittings'] = count(array_filter(array_keys($sittings)));
+$figures['correlations'] = count($correlations);
+// The first request of each correlation, in order, as seconds after the first of all; and the closest two starts.
+asort($starts);
+$first = $starts === [] ? 0 : reset($starts);
+$figures['starts'] = array_map(static fn(int $ms): float => round(($ms - $first) / 1000, 2), array_slice($starts, 0, 200, true));
+$gaps = [];
+$previous = null;
+foreach ($starts as $ms) {
+    if ($previous !== null) {
+        $gaps[] = ($ms - $previous) / 1000;
+    }
+    $previous = $ms;
+}
+$figures['startgap'] = $gaps === [] ? null : ['min' => round(min($gaps), 2), 'max' => round(max($gaps), 2),
+    'mean' => round(array_sum($gaps) / count($gaps), 2)];
 $figures['memorylimit'] = (string) ini_get('memory_limit');
 
 $broken = [];
@@ -143,6 +194,19 @@ if (!empty($options['json'])) {
         $figures['peakmb']['p95'] ?? '-',
         $figures['peakmb']['p50'] ?? '-',
         $figures['memorylimit']
+    ));
+    cli_writeln(sprintf(
+        'Process RSS (MB): max %s, p95 %s, p50 %s; queries per request: max %s, p95 %s, p50 %s; '
+            . '%d web server processes, %d sittings, %d correlation ids',
+        $figures['rssmb']['max'] ?? '-',
+        $figures['rssmb']['p95'] ?? '-',
+        $figures['rssmb']['p50'] ?? '-',
+        $figures['queries']['max'] ?? '-',
+        $figures['queries']['p95'] ?? '-',
+        $figures['queries']['p50'] ?? '-',
+        $figures['processes'],
+        $figures['sittings'],
+        $figures['correlations']
     ));
     foreach ($figures['status'] as $status => $n) {
         cli_writeln(sprintf('  status %d: %d', $status, $n));

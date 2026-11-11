@@ -138,3 +138,80 @@ test('a plot fits below the fixed navigation bar on a wide and on a narrow windo
         expect(fits.covered, JSON.stringify({viewport, fits})).toBe(false);
     }
 });
+
+/**
+ * A plot's own CSV (its "Download" menu) as rows of series, x, y, label.
+ *
+ * @param {import('@playwright/test').Locator} figure The plot's figure: the SVG's region with its download menu.
+ * @returns {Promise<string[][]>}
+ */
+const plotCsv = async(figure) => {
+    const href = await figure.locator('[data-download="csv"]').first().getAttribute('href');
+    const text = Buffer.from(href.slice(href.indexOf(',') + 1), 'base64').toString('utf8');
+    const parse = (line) => {
+        const cells = [];
+        let cell = '';
+        let quoted = false;
+        for (let i = 0; i < line.length; i++) {
+            const ch = line[i];
+            if (quoted && ch === '"' && line[i + 1] === '"') {
+                cell += '"';
+                i++;
+            } else if (ch === '"') {
+                quoted = !quoted;
+            } else if (ch === ',' && !quoted) {
+                cells.push(cell);
+                cell = '';
+            } else {
+                cell += ch;
+            }
+        }
+        cells.push(cell);
+        return cells;
+    };
+    return text.split('\n').filter((l) => l !== '').map(parse);
+};
+
+test('every marker is its CSV rows, and its tooltip names every one of them (#143, #144)', async({page}) => {
+    const density = seed('seed_results.php', ['--persons=40', '--length=625', '--identical', '--label=DENSITYCSV'],
+        'DENSITYCSV_EXPERIMENTID');
+    const modes = seed('seed_modes.php', [], 'MODES_EXPERIMENTID');
+    needs(!density || !modes, 'cli/seed_results.php or cli/seed_modes.php could not be run here.');
+    await login(page);
+    let compared = 0;
+    for (const [id, tab] of [[density, 'overview'], [density, 'global'], [modes, 'deficits'], [modes, 'subscales']]) {
+        await page.goto('/local/catquizlab/results.php?experimentid=' + id + '&tab=' + tab, {waitUntil: 'networkidle'});
+        const figures = page.locator('[data-region="catquizlab-plot-export"]');
+        for (let i = 0; i < await figures.count(); i++) {
+            // The figure's SVG is the one before its download menu.
+            const plot = figures.nth(i).locator('xpath=preceding::*[local-name()="svg"][1]');
+            const rows = await plotCsv(figures.nth(i));
+            const [head, ...data] = rows;
+            if (head.join(',') !== 'series,x,y,label') {
+                continue;
+            }
+            // The drawn points: rows without a series, with finite numbers, grouped by their exact coordinates.
+            const groups = new Map();
+            for (const [series, x, y, label] of data) {
+                if (series !== '' || !isFinite(Number(x)) || !isFinite(Number(y)) || x === '' || y === '') {
+                    continue;
+                }
+                const key = (Number(x) + 0) + '|' + (Number(y) + 0);
+                groups.set(key, [...(groups.get(key) || []), label]);
+            }
+            const found = await markers(plot);
+            const say = `${tab} plot ${i}`;
+            expect(found.length, say + ': one marker per exact coordinate').toBe(groups.size);
+            for (const marker of found) {
+                const members = groups.get((marker.x + 0) + '|' + (marker.y + 0));
+                expect(members, say + ': a marker without CSV rows at ' + marker.x + ',' + marker.y).toBeTruthy();
+                expect(marker.count, say).toBe(members.length);
+                for (const label of new Set(members)) {
+                    expect(marker.title, say + ': the tooltip names ' + label).toContain(label);
+                }
+            }
+            compared++;
+        }
+    }
+    expect(compared, 'plots compared with their CSV').toBeGreaterThan(1);
+});

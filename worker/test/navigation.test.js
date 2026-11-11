@@ -116,6 +116,25 @@ test('pure helpers: lost contexts and secrets in URLs', () => {
     );
 });
 
+test('the worker hides the same names as the server logs (#149)', () => {
+    for (const name of ['sesskey', 'SESSKEY', 'ses%73key', 'ses%2573key', 'sesskey[]', 'token', 'wstoken', 'key',
+        'password', 'secret', 'client_secret', 'authorization', 'email', 'e-mail', 'MoodleSession']) {
+        assert.ok(nav.isSecretName(name), name);
+    }
+    for (const name of ['cmid', 'cellkey', 'errorcode', 'experimentid', 'tab', '']) {
+        assert.ok(!nav.isSecretName(name), name);
+    }
+    const url = 'https://x.org/a.php?cmid=4&ses%73key=TESTSECRET&sesskey=TESTSECRET2&wstoken[]=TESTSECRET'
+        + '&key=TESTSECRET&authorization=TESTSECRET&q=probe%40example.org&cellkey=strategy';
+    const clean = nav.sanitiseUrl(url);
+    assert.ok(!clean.includes('TESTSECRET'), clean);
+    assert.ok(!clean.includes('probe'), clean);
+    assert.ok(clean.includes('cmid=4') && clean.includes('cellkey=strategy'), clean);
+    // Inside free text too, as in a failure report.
+    const text = nav.sanitiseUrl('failed url=https://x.org/a.php?sesskey=TESTSECRET&cmid=4 (secret=TESTSECRET)');
+    assert.ok(!text.includes('TESTSECRET'), text);
+});
+
 test('a page snapshot leaves the session key behind (#107)', () => {
     const html = '<script>M.cfg = {"wwwroot":"x","sesskey":"Ab12Cd34"};</script>'
         + '<input type="hidden" name="sesskey" value="Ab12Cd34">'

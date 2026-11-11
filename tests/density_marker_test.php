@@ -296,11 +296,11 @@ final class density_marker_test extends \advanced_testcase {
     }
 
     /**
-     * Several labels on one marker are not hidden behind the first one (#143).
+     * Several labels on one marker are not hidden behind the first one (#143, #144): every one is named, with how often.
      *
      * @return void
      */
-    public function test_a_marker_with_several_labels_says_how_many_others(): void {
+    public function test_a_marker_with_several_labels_names_every_one(): void {
         $this->resetAfterTest();
         $same = $this->markers($this->length_chart(array_fill(0, 3, ['x' => 625, 'y' => 0.3, 'label' => 'CLASSIC']))
             ->render());
@@ -309,7 +309,7 @@ final class density_marker_test extends \advanced_testcase {
         $mixed = $this->markers($this->length_chart([['x' => 625, 'y' => 0.3, 'label' => 'b'],
             ['x' => 625, 'y' => 0.3, 'label' => 'a'], ['x' => 625, 'y' => 0.3, 'label' => 'c'],
             ['x' => 625, 'y' => 0.3, 'label' => 'a']])->render());
-        $this->assertSame('4 points at (625; 0.3) — a and 2 other(s)', $mixed[0]['title']);
+        $this->assertSame('4 points at (625; 0.3) — a ×2; b; c', $mixed[0]['title']);
     }
 
     /**

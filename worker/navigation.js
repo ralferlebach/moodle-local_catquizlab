@@ -63,8 +63,73 @@ function isContextLost(error) {
  * @param {string} url The URL.
  * @returns {string}
  */
+const SECRET_NAMES = ['key', 'apikey', 'privatekey', 'secretkey', 'accesskey', 'enrolkey', 'enrolmentkey', 'wskey',
+    'pass', 'passwd', 'pw', 'pwd', 'auth', 'sid', 'mail', 'code', 'otp', 'pin'];
+const SECRET_PARTS = ['sesskey', 'token', 'secret', 'password', 'passwort', 'authoriz', 'email', 'cookie', 'moodlesession',
+    'sessionid', 'credential', 'signature', 'logintoken'];
+
+/**
+ * Decode a URI component without throwing on a malformed one.
+ *
+ * @param {string} text The text.
+ * @returns {string}
+ */
+function decodeQuietly(text) {
+    try {
+        return decodeURIComponent(text.replace(/\+/g, ' '));
+    } catch (e) {
+        return text;
+    }
+}
+
+/**
+ * Whether a parameter of this name must never reach a log with its value — the same rule as the server's
+ * log_redactor (#149): decoded (also twice), lower case, brackets and everything but letters and digits removed.
+ *
+ * @param {string} name The name as it was sent.
+ * @returns {boolean}
+ */
+function isSecretName(name) {
+    let normalised = String(name || '');
+    for (let i = 0; i < 3; i++) {
+        const decoded = decodeQuietly(normalised);
+        if (decoded === normalised) {
+            break;
+        }
+        normalised = decoded;
+    }
+    normalised = normalised.toLowerCase().split('[')[0].replace(/[^a-z0-9]/g, '');
+    if (normalised === '') {
+        return false;
+    }
+    return SECRET_NAMES.includes(normalised) || SECRET_PARTS.some((part) => normalised.includes(part));
+}
+
+/**
+ * Whether a value is, once decoded, an e-mail address.
+ *
+ * @param {string} value The value as it was sent.
+ * @returns {boolean}
+ */
+function looksLikeEmail(value) {
+    return /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i.test(decodeQuietly(decodeQuietly(String(value || ''))));
+}
+
+/**
+ * A URL — or any text with URLs in it — without the secrets it may carry: every "name=value" pair whose name is
+ * secret, or whose value is an e-mail address, loses its value (#149).
+ *
+ * @param {string} url The URL.
+ * @returns {string}
+ */
 function sanitiseUrl(url) {
-    return String(url || '').replace(/([?&](?:wstoken|token|sesskey|password|key)=)[^&#\s]*/gi, '$1[redacted]');
+    return String(url || '').replace(/(^|[?&;\s,|(["'])([A-Za-z0-9_.%[\]-]{1,64})=([^&;?#\s"'<>|,)]*)/g,
+        (whole, before, name, value) => {
+            if (value === '' || value === '[redacted]') {
+                return whole;
+            }
+            return isSecretName(name) || looksLikeEmail(value) ? `${before}${name}=[redacted]` : whole;
+        });
 }
 
 /**
@@ -624,5 +689,5 @@ class Recorder {
     }
 }
 
-module.exports = {STATE, SUBMIT, UNCERTAIN, isContextLost, sanitiseUrl, sanitiseHtml, stateInPage, waitForState,
-    clickAndSettle, safeClick, acceptDialogs, withContextRetry, classifySubmit, reconcile, describeSubmit, Recorder};
+module.exports = {STATE, SUBMIT, UNCERTAIN, isContextLost, isSecretName, sanitiseUrl, sanitiseHtml, stateInPage,
+    waitForState, clickAndSettle, safeClick, acceptDialogs, withContextRetry, classifySubmit, reconcile, describeSubmit, Recorder};

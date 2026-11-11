@@ -253,12 +253,15 @@ class transfer_package {
             if ($personid === null) {
                 continue;
             }
+            $digest = trace_digest::fields($attempt['tracejson'] ?? null);
             $DB->insert_record('local_catquizlab_attempt', (object) [
                 'runid'           => $runid,
                 'personid'        => $personid,
                 'status'          => (int) ($attempt['status'] ?? 20),
                 'tracejson'       => $attempt['tracejson'] ?? null,
                 'tracebytes'      => isset($attempt['tracejson']) ? strlen((string) $attempt['tracejson']) : null,
+                'digestjson'      => $digest['digestjson'],
+                'digestbytes'     => $digest['digestbytes'],
                 'runtimems'       => $attempt['runtimems'] ?? null,
                 'engineattemptid' => $attempt['engineattemptid'] ?? null,
                 'timecreated'     => $now,

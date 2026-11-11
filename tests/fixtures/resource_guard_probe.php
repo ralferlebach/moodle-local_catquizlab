@@ -30,6 +30,7 @@
 // phpcs:disable moodle.Files.MoodleInternal.MoodleInternalGlobalState
 // phpcs:disable moodle.Files.RequireLogin.Missing
 
+require(__DIR__ . '/../../classes/local/log_redactor.php');
 require(__DIR__ . '/../../classes/local/resource_guard.php');
 
 $texts = [

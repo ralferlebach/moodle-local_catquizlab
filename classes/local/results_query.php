@@ -112,16 +112,20 @@ class results_query {
             $conditions['replication'] = (int) $this->filter['replication'];
         }
 
+        // Once per request (#147): every pass asked again, and every run four questions of its own.
+        if ($this->runscache !== null) {
+            return $this->runscache;
+        }
         $runs = [];
-        foreach ($DB->get_records('local_catquizlab_run', $conditions, 'id ASC') as $record) {
-            $row = run_registry::describe($record);
-            $row['tier'] = $this->tier_of($record);
+        $records = $DB->get_records('local_catquizlab_run', $conditions, 'id ASC');
+        foreach (run_registry::describe_many($records) as $runid => $row) {
+            $row['tier'] = $this->tier_of($records[$runid]);
             if ($this->matches($row)) {
                 $runs[$row['id']] = $row;
             }
         }
 
-        return $runs;
+        return $this->runscache = $runs;
     }
 
     /**
@@ -200,6 +204,32 @@ class results_query {
     public static function reset_caches(): void {
         self::$maxitems = [];
         self::$detail = [];
+        self::$detailfor = '';
+        self::$inhand = null;
+        self::$batchpeople = [];
+        self::$batchprofiles = null;
+        self::$prefetched = [];
+        self::$prefetchedprofiles = [];
+    }
+
+    /** @var array<int, \stdClass|false> Run records this query has read (#147). */
+    protected array $runrecords = [];
+
+    /**
+     * A run's record, read once per query (#147): every pass asked for it again, per run and per figure. Per query,
+     * not per request: a static cache outlives the data it was read from, in tests and in long CLI processes.
+     *
+     * @param int $runid The run.
+     * @return \stdClass|false
+     */
+    protected function run_record(int $runid) {
+        global $DB;
+
+        if (!array_key_exists($runid, $this->runrecords)) {
+            $this->runrecords[$runid] = $DB->get_record('local_catquizlab_run', ['id' => $runid]);
+        }
+
+        return $this->runrecords[$runid];
     }
 
     /**
@@ -339,13 +369,18 @@ class results_query {
                 $this->engineunknown[$id] = engine_validity::unmeasured_reason((int) ($attempt->engineattemptid ?? 0));
             }
             if ($measure !== null) {
-                $trace = json_decode((string) ($attempt->tracejson ?? ''), true);
+                // Kept in the trace and its digest alike. The row in hand may carry only the digest (#147): the
+                // trace is read for this one sitting, once — the next pass finds the measure in the digest.
+                $stored = isset($attempt->tracejson) && $attempt->tracejson !== null
+                    ? (string) $attempt->tracejson
+                    : (string) $DB->get_field('local_catquizlab_attempt', 'tracejson', ['id' => $id]);
+                $trace = json_decode($stored, true);
                 if (is_array($trace)) {
                     $trace['enginevalidity'] = $measure;
                     $json = (string) json_encode($trace);
-                    $DB->update_record('local_catquizlab_attempt', (object) [
+                    $DB->update_record('local_catquizlab_attempt', (object) ([
                         'id' => $id, 'tracejson' => $json, 'tracebytes' => strlen($json),
-                    ]);
+                    ] + trace_digest::fields($json)));
                 }
             }
             $this->enginemeasures[$id] = $measure;
@@ -367,7 +402,7 @@ class results_query {
         global $DB;
 
         if (!isset($this->runfacts[$runid])) {
-            $record = $DB->get_record('local_catquizlab_run', ['id' => $runid]);
+            $record = $this->run_record($runid);
             $definition = $record ? run_registry::definition_for($record) : [];
             if ($definition === []) {
                 $this->runfacts[$runid] = [];
@@ -455,9 +490,9 @@ class results_query {
     public const TOO_MANY = 50000;
 
     /**
-     * @var int Stored trace bytes above which the results page declines a selection (#147). The memory a page
-     *     needs no longer grows with them (traces are read in bounded batches), but the time does: every byte is
-     *     read and decoded at least once per page.
+     * @var int Bytes the analysis reads above which the results page declines a selection (#147): digests, or traces
+     *     where a sitting has no digest yet. The memory a page needs does not grow with them (they are read in bounded
+     *     batches), but the time does: every byte is read and decoded at least once per page.
      */
     public const TOO_MANY_BYTES = 4294967296;
 
@@ -486,7 +521,7 @@ class results_query {
         $params['validated'] = attempt_scheduler::STATUS_VALIDATED;
 
         $row = $DB->get_record_sql(
-            'SELECT COUNT(1) AS sittings, SUM(' . trace_reader::bytes_sql('a') . ') AS bytes
+            'SELECT COUNT(1) AS sittings, SUM(' . trace_reader::digest_bytes_sql('a') . ') AS bytes
                FROM {local_catquizlab_attempt} a
               WHERE a.runid ' . $insql . ' AND a.status IN (:collected, :validated) AND a.tracejson IS NOT NULL',
             $params
@@ -529,22 +564,25 @@ class results_query {
      * values are kept — as numbers, not as observations.
      *
      * @param int $maxpoints The most points the scatter sample keeps.
-     * @return array Summaries (all, strategy, cell), itemcounts, points and n.
+     * @return array Summaries (all, strategy, cell), itemcounts, points, sample, sampled, people (key => true ability),
+     *     outside and n.
      */
     public function overview(int $maxpoints = 2000): array {
         $all = new stream_summary();
         $bystrategy = [];
         $bycell = [];
         $itemcounts = [];
-        $points = [];
         $seen = 0;
         // A second reservoir for the ability plots of the global tab (#99):
         // true and estimated ability, error and run, never more than
         // $maxpoints kept — and, in the same pass, how many true abilities lie
         // outside the scale range of their run (#105).
-        $sample = [];
+        // Both samples are drawn the same way on every reading (#147): a plot looks the same each time it is opened.
+        $sample = new stable_sample($maxpoints, 'abilities');
+        $pointsample = new stable_sample($maxpoints, 'lengthprecision');
         $sampled = 0;
         $outside = 0;
+        $people = [];
         $ranges = [];
 
         foreach ($this->each_observation() as $observation) {
@@ -556,17 +594,10 @@ class results_query {
                     'error'     => (float) $observation['error'],
                     'runid'     => (int) $observation['runid'],
                 ];
-                if (count($sample) < $maxpoints) {
-                    $sample[] = $row;
-                } else {
-                    $slot = random_int(0, $sampled - 1);
-                    if ($slot < $maxpoints) {
-                        $sample[$slot] = $row;
-                    }
-                }
+                $sample->offer((string) $observation['attemptid'], $row);
                 $runid = (int) $observation['runid'];
                 if (!isset($ranges[$runid])) {
-                    $record = $GLOBALS['DB']->get_record('local_catquizlab_run', ['id' => $runid]);
+                    $record = $this->run_record($runid);
                     $ranges[$runid] = ability_distribution::of($record ? run_registry::definition_for($record) : []);
                 }
                 if (!ability_distribution::inside($ranges[$runid], (float) $observation['truetheta'])) {
@@ -580,6 +611,10 @@ class results_query {
             }
 
             $all->add($observation);
+            // The simulated people, each once (twins share their ability), for the overview's people section: in this
+            // pass, not in a pass of its own (#147).
+            $people[(string) $observation['twinid'] !== '' ? 'twin:' . $observation['twinid']
+                : 'person:' . $observation['personid']] = (float) $observation['truetheta'];
 
             $strategy = (string) $observation['strategy'];
             $bystrategy[$strategy] = $bystrategy[$strategy] ?? new stream_summary();
@@ -589,19 +624,11 @@ class results_query {
             $bycell[$cell] = $bycell[$cell] ?? new stream_summary();
             $bycell[$cell]->add($observation);
 
-            // A reservoir sample for the scatter chart: an even chance for
-            // every sitting, never more than $maxpoints kept.
+            // A sample for the scatter chart: an even chance for every sitting, never more than $maxpoints kept.
             if ($observation['se'] !== null) {
                 $seen++;
-                $point = ['x' => $observation['nitems'], 'y' => $observation['se']];
-                if (count($points) < $maxpoints) {
-                    $points[] = $point;
-                } else {
-                    $slot = random_int(0, $seen - 1);
-                    if ($slot < $maxpoints) {
-                        $points[$slot] = $point;
-                    }
-                }
+                $pointsample->offer((string) $observation['attemptid'], ['x' => $observation['nitems'],
+                    'y' => $observation['se']]);
             }
         }
 
@@ -610,9 +637,10 @@ class results_query {
             'strategy'   => $bystrategy,
             'cell'       => $bycell,
             'itemcounts' => $itemcounts,
-            'points'     => $points,
-            'sample'     => $sample,
+            'points'     => $pointsample->rows(),
+            'sample'     => $sample->rows(),
             'sampled'    => $sampled,
+            'people'     => $people,
             'outside'    => $outside,
             'n'          => $all->count(),
         ];
@@ -641,6 +669,9 @@ class results_query {
         }
         $this->lastpass = null;
         $pass = ['attempts' => 0, 'replications' => [], 'people' => [], 'cells' => []];
+        if ($this->onlyattempts === null) {
+            self::$passes++;
+        }
 
         $runs = $this->runs();
         if ($runs === []) {
@@ -692,10 +723,15 @@ class results_query {
                 $where .= ' AND a.id ' . $onlyin;
                 $batchparams += $onlyparams;
             }
+            // The digest, not the trace (#147): the end of each sitting, its items and responses, without the
+            // engine's record of every step — a tenth of the bytes of a long sitting.
             $batches = trace_reader::batches(
                 $where,
                 $batchparams,
-                'a.id, a.runid, a.personid, a.runtimems, a.tracejson, a.engineattemptid'
+                'a.id, a.runid, a.personid, a.runtimems, a.engineattemptid, '
+                    . ($this->wholetraces ? 'NULL AS digestjson, a.tracejson' : trace_reader::digest_fields('a')),
+                '',
+                !$this->wholetraces
             );
             foreach ($batches as $batch) {
                 // The end reason of every sitting in the batch, in one query
@@ -731,7 +767,35 @@ class results_query {
                         $this->endreasons[(int) $code->attemptid] = (string) $code->reasoncode;
                     }
                 }
+                // The batch's people in one query (#147), not one query per sitting; their profiles, which only some
+                // views read, in one query when the first of them is asked for (detail()).
+                self::$batchpeople = array_values(array_unique(array_map(
+                    static fn($a): int => (int) $a->personid,
+                    $batch
+                )));
+                self::$batchprofiles = null;
+                $wanted = [];
                 foreach ($batch as $attempt) {
+                    if (!array_key_exists((int) $attempt->personid, $persons)) {
+                        $wanted[(int) $attempt->personid] = true;
+                    }
+                }
+                if ($wanted !== []) {
+                    [$inpeople, $peopleparams] = $DB->get_in_or_equal(array_keys($wanted), SQL_PARAMS_NAMED, 'person');
+                    $found = $DB->get_records_select(
+                        'local_catquizlab_person',
+                        'id ' . $inpeople,
+                        $peopleparams,
+                        '',
+                        $personfields
+                    );
+                    foreach (array_keys($wanted) as $personid) {
+                        $persons[$personid] = $found[$personid] ?? null;
+                    }
+                }
+                foreach ($batch as $attempt) {
+                    // The sitting in hand, for detail() while the caller looks at its row.
+                    self::$inhand = $attempt;
                     foreach ($this->observation_row($attempt, $runs, $persons, $personfields) as $row) {
                         $pass['attempts']++;
                         $pass['replications'][$row['replication']] = true;
@@ -740,7 +804,9 @@ class results_query {
                         yield $row;
                     }
                     // Read: the trace goes, so that the batch shrinks as it is walked.
+                    self::$inhand = null;
                     $attempt->tracejson = null;
+                    $attempt->digestjson = null;
                 }
                 unset($batch);
             }
@@ -752,8 +818,86 @@ class results_query {
         }
     }
 
+    /** @var array[]|null The runs of the selection, once read. */
+    protected ?array $runscache = null;
+
+    /** @var array<int, string> Tiers of experiments, once read. */
+    protected array $tiers = [];
+
     /** @var array|null What the last whole pass yielded: attempts and replications; null until one ended. */
     protected ?array $lastpass = null;
+
+    /** @var bool Whether passes read whole traces instead of digests: for the step-by-step export (#147). */
+    protected bool $wholetraces = false;
+
+    /**
+     * Read whole traces in the passes of this query, in batches, rather than digests: for a reader that needs every
+     * sitting's steps — the step export — and fetched them one query per sitting (#147).
+     *
+     * @param bool $whole Whole traces.
+     * @return self
+     */
+    public function whole_traces(bool $whole = true): self {
+        $this->wholetraces = $whole;
+
+        return $this;
+    }
+
+    /** @var \stdClass|null The sitting a pass is yielding now, with its digest (#147). */
+    protected static ?\stdClass $inhand = null;
+
+    /** @var array<int, \stdClass> Sittings fetched ahead for detail(), by id (#147). */
+    protected static array $prefetched = [];
+
+    /** @var array<int, string> Profiles fetched ahead for detail(), by person. */
+    protected static array $prefetchedprofiles = [];
+
+    /**
+     * Fetch the digests and profiles of these observations ahead, in two queries, for {@see detail()} — where they are
+     * looked at one by one outside a pass, a query each was a query per sitting (#147). Replaces what was fetched
+     * ahead before; an empty list forgets it.
+     *
+     * @param array[] $observations Rows of {@see each_observation()}.
+     * @return void
+     */
+    public static function prefetch(array $observations): void {
+        global $DB;
+
+        self::$prefetched = [];
+        self::$prefetchedprofiles = [];
+        $attemptids = array_values(array_unique(array_map(static fn(array $o): int => (int) $o['attemptid'], $observations)));
+        $personids = array_values(array_unique(array_map(
+            static fn(array $o): int => (int) ($o['personid'] ?? 0),
+            $observations
+        )));
+        if ($attemptids !== []) {
+            [$in, $params] = $DB->get_in_or_equal($attemptids, SQL_PARAMS_NAMED, 'pre');
+            self::$prefetched = $DB->get_records_sql('SELECT a.id, ' . trace_reader::digest_fields('a')
+                . ' FROM {local_catquizlab_attempt} a WHERE a.id ' . $in, $params);
+        }
+        if (array_filter($personids) !== []) {
+            [$in, $params] = $DB->get_in_or_equal(array_values(array_filter($personids)));
+            self::$prefetchedprofiles = $DB->get_records_select_menu(
+                'local_catquizlab_person',
+                'id ' . $in,
+                $params,
+                '',
+                'id, profilejson'
+            );
+        }
+    }
+
+    /** @var int[] The people of the batch a pass is reading (#147). */
+    protected static array $batchpeople = [];
+
+    /** @var array<int, string>|null Their profiles, once one was asked for. */
+    protected static ?array $batchprofiles = null;
+
+    /** @var int Whole passes over the selection begun in this request (#147). */
+    public static int $passes = 0;
+
+    /** @var int Sittings read one at a time by {@see detail()} in this request (#147). */
+    public static int $detailqueries = 0;
 
     /** @var int Sittings read per query while streaming; bytes bound it as well, see {@see trace_reader}. */
     public const BATCH = trace_reader::ROWS;
@@ -770,7 +914,7 @@ class results_query {
     protected function observation_row(\stdClass $attempt, array $runs, array &$persons, string $personfields): \Generator {
         global $DB;
 
-        $trace = json_decode((string) $attempt->tracejson, true) ?: [];
+        $trace = trace_digest::decode($attempt);
 
         $personid = (int) $attempt->personid;
         if (!array_key_exists($personid, $persons)) {
@@ -1193,10 +1337,15 @@ class results_query {
      * row being looked at, and cached for that row only, so the tabs that walk
      * every observation hold one decoded pair at a time instead of all of them.
      *
+     * The digest of the trace unless $whole is asked for (#147): every reader but the step-by-step test flow needs
+     * only the digest. While a pass is reading the sitting, it comes from the row in hand, not from another query —
+     * a query per sitting was a full trace per sitting, read one at a time, on every subscale and test flow tab.
+     *
      * @param array $observation One row of {@see observations()}.
+     * @param bool $whole The whole trace, with the engine's record of every step.
      * @return array{profile: array, trace: array}
      */
-    public static function detail(array $observation): array {
+    public static function detail(array $observation, bool $whole = false): array {
         global $DB;
 
         // Keyed by sitting and person together, and forgotten whenever a new
@@ -1204,7 +1353,7 @@ class results_query {
         // selection answered for a later sitting that happened to reuse the
         // id — twelve subscale rows went missing in a test run that way.
         $attemptid = (int) ($observation['attemptid'] ?? 0);
-        $key = $attemptid . ':' . (int) ($observation['personid'] ?? 0);
+        $key = $attemptid . ':' . (int) ($observation['personid'] ?? 0) . ($whole ? ':whole' : '');
         if ($attemptid > 0 && $key === self::$detailfor) {
             return self::$detail;
         }
@@ -1212,12 +1361,42 @@ class results_query {
         $trace = [];
         $profile = [];
 
-        if ($attemptid > 0) {
+        $inhand = self::$inhand !== null && (int) self::$inhand->id === $attemptid ? self::$inhand
+            : (self::$prefetched[$attemptid] ?? null);
+        if ($attemptid > 0 && !$whole && $inhand !== null) {
+            $trace = trace_digest::decode($inhand);
+        } else if (
+            $attemptid > 0 && $whole && $inhand !== null && empty($inhand->digestjson)
+                && !empty($inhand->tracejson)
+        ) {
+            // A pass of whole traces has the whole trace in hand.
+            $trace = json_decode((string) $inhand->tracejson, true) ?: [];
+        } else if ($attemptid > 0 && !$whole) {
+            $row = $DB->get_record_sql('SELECT a.id, ' . trace_reader::digest_fields('a')
+                . ' FROM {local_catquizlab_attempt} a WHERE a.id = :id', ['id' => $attemptid]);
+            $trace = $row ? trace_digest::decode($row) : [];
+            self::$detailqueries++;
+        } else if ($attemptid > 0) {
             $json = $DB->get_field('local_catquizlab_attempt', 'tracejson', ['id' => $attemptid]);
             $trace = json_decode((string) $json, true) ?: [];
+            self::$detailqueries++;
         }
         $personid = (int) ($observation['personid'] ?? 0);
-        if ($personid > 0) {
+        if ($personid > 0 && isset(self::$prefetchedprofiles[$personid])) {
+            $profile = json_decode((string) self::$prefetchedprofiles[$personid], true) ?: [];
+        } else if ($personid > 0 && in_array($personid, self::$batchpeople, true)) {
+            if (self::$batchprofiles === null) {
+                [$in, $params] = $DB->get_in_or_equal(self::$batchpeople);
+                self::$batchprofiles = $DB->get_records_select_menu(
+                    'local_catquizlab_person',
+                    'id ' . $in,
+                    $params,
+                    '',
+                    'id, profilejson'
+                );
+            }
+            $profile = json_decode((string) (self::$batchprofiles[$personid] ?? ''), true) ?: [];
+        } else if ($personid > 0) {
             $json = $DB->get_field('local_catquizlab_person', 'profilejson', ['id' => $personid]);
             $profile = json_decode((string) $json, true) ?: [];
         }
@@ -1259,6 +1438,27 @@ class results_query {
      * The per-subscale observations behind the local diagnostics.
      *
      * @return array[] Rows from {@see local_analysis::rows()}.
+     */
+    public function subscale_store(): subscale_store {
+        if ($this->scalestore === null) {
+            $store = new subscale_store();
+            foreach ($this->each_subscale_observation() as $row) {
+                $store->add($row);
+            }
+            $this->scalestore = $store;
+        }
+
+        return $this->scalestore;
+    }
+
+    /** @var subscale_store|null The subscale results of the last subscale_store(). */
+    protected ?subscale_store $scalestore = null;
+
+    /**
+     * The per-subscale observations, as one array: for a caller that needs every field of every row. The subscales tab
+     * reads {@see subscale_store()}: a few fields, packed, for selections of a hundred thousand subscale results.
+     *
+     * @return array[]
      */
     public function subscale_observations(): array {
         // Read once per evaluation: the population block and the tab below it
@@ -1472,7 +1672,7 @@ class results_query {
      */
     public function scale_coverage(): array {
         if ($this->scalecoverage === null) {
-            $this->subscale_observations();
+            $this->subscale_store();
         }
 
         return $this->scalecoverage;
@@ -1601,9 +1801,9 @@ class results_query {
             $conditions['replication'] = (int) $this->filter['replication'];
         }
         $this->scoperuns = [];
-        foreach ($DB->get_records('local_catquizlab_run', $conditions, 'id ASC') as $record) {
-            $row = run_registry::describe($record);
-            $row['tier'] = $this->tier_of($record);
+        $records = $DB->get_records('local_catquizlab_run', $conditions, 'id ASC');
+        foreach (run_registry::describe_many($records) as $runid => $row) {
+            $row['tier'] = $this->tier_of($records[$runid]);
             $this->scoperuns[(int) $row['id']] = $row;
         }
 
@@ -1628,11 +1828,13 @@ class results_query {
      * Shown with every table and chart: without the aggregation level and the
      * observation count, a number on screen cannot be interpreted.
      *
-     * @param bool $fromlastpass From the last whole pass, where one has just ended, rather than reading again.
+     * @param bool $fromlastpass Kept for callers: any whole pass this query has ended is used (#147).
      * @return array{runs: int, attempts: int, replications: int, people: int, cells: int, dispersion: string, computed: int}
      */
     public function provenance(bool $fromlastpass = false): array {
-        if ($fromlastpass && $this->lastpass !== null) {
+        // From any whole pass this query has read to its end (#147): it counted the same sittings, replications,
+        // people and cells, and reading everything again for four counts was a pass of its own on every page.
+        if ($this->lastpass !== null) {
             return [
                 'runs'         => count($this->runs()),
                 'attempts'     => $this->lastpass['attempts'],
@@ -1685,11 +1887,12 @@ class results_query {
             return $tier;
         }
 
-        return (string) $DB->get_field(
-            'local_catquizlab_experiment',
-            'tier',
-            ['id' => $record->experimentid]
-        );
+        $experimentid = (int) $record->experimentid;
+        if (!array_key_exists($experimentid, $this->tiers)) {
+            $this->tiers[$experimentid] = (string) $DB->get_field('local_catquizlab_experiment', 'tier', ['id' => $experimentid]);
+        }
+
+        return $this->tiers[$experimentid];
     }
 
     /**

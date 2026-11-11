@@ -710,9 +710,10 @@ async function describePage(page) {
 
     // Anything that looks like a token goes, wherever it came from: an error
     // report is a thing people paste into issues.
-    const redact = (s) => (s || '')
-        .replace(/([?&](?:wstoken|token|sesskey)=)[^&\s"']+/gi, '$1(hidden)')
-        .replace(/\b[a-f0-9]{32}\b/gi, '(hidden)');
+    // The same name rule as every server log (#149), then whatever still looks like a token or an address.
+    const redact = (s) => nav.sanitiseUrl(s || '')
+        .replace(/\b[a-f0-9]{32}\b/gi, '(hidden)')
+        .replace(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi, '(hidden)');
 
     const parts = [`url=${redact(page.url())}`, `title="${title}"`];
 

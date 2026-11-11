@@ -70,6 +70,45 @@ class purger {
         'local_catquizlab_execqueue' => 'queue',
     ];
     /**
+     * What is still left of an experiment and its runs in the lab's tables (#145).
+     *
+     * @param int $experimentid The experiment.
+     * @param int[] $runids Its runs, as they were before deleting began.
+     * @return array<string, int> Table => rows left; empty when nothing is.
+     */
+    public static function left_of(int $experimentid, array $runids): array {
+        global $DB;
+
+        $left = [];
+        $runs = $DB->count_records('local_catquizlab_run', ['experimentid' => $experimentid]);
+        if ($runs > 0) {
+            $left['local_catquizlab_run'] = $runs;
+        }
+        foreach (self::EXPERIMENT_TABLES as $table => $label) {
+            if ($DB->get_manager()->table_exists($table)) {
+                $count = $DB->count_records($table, ['experimentid' => $experimentid]);
+                if ($count > 0) {
+                    $left[$table] = $count;
+                }
+            }
+        }
+        foreach (array_chunk($runids, 500) as $chunk) {
+            [$insql, $params] = $DB->get_in_or_equal($chunk, SQL_PARAMS_NAMED, 'run');
+            foreach (self::RUN_TABLES as $table => $label) {
+                if (!$DB->get_manager()->table_exists($table)) {
+                    continue;
+                }
+                $count = $DB->count_records_select($table, 'runid ' . $insql, $params);
+                if ($count > 0) {
+                    $left[$table] = ($left[$table] ?? 0) + $count;
+                }
+            }
+        }
+
+        return $left;
+    }
+
+    /**
      * What deleting an experiment would remove, before it is removed.
      *
      * An irreversible action needs to be able to say what it will do, and in
@@ -286,6 +325,13 @@ class purger {
         $stopped = experiment_stop::stop($experimentid);
 
         $totals = ['runs' => 0];
+        // Its runs, named now: once they are gone, rows still carrying their ids are only found by these (#145).
+        $runids = array_map('intval', array_keys($DB->get_records(
+            'local_catquizlab_run',
+            ['experimentid' => $experimentid],
+            '',
+            'id'
+        )));
         foreach ($DB->get_records('local_catquizlab_run', ['experimentid' => $experimentid], 'id ASC', 'id') as $run) {
             $result = self::delete_run((int) $run->id, $deep, true);
             if (!$result['ok']) {
@@ -314,6 +360,17 @@ class purger {
             }
         }
 
+        // The experiment goes last, and only when nothing of it is left (#145, AK1): "gone" in the list is the end of
+        // a complete deletion, never of a partial one. Anything left stops it here; the task is retried, and the list
+        // shows the experiment as being deleted, with this message, until a retry finds nothing left.
+        $left = self::left_of($experimentid, $runids);
+        if ($left !== []) {
+            $parts = [];
+            foreach ($left as $table => $count) {
+                $parts[] = $table . ' ' . $count;
+            }
+            throw new \moodle_exception('purge:incomplete', 'local_catquizlab', '', implode(', ', $parts));
+        }
         $DB->delete_records('local_catquizlab_experiment', ['id' => $experimentid]);
         $totals['experiment'] = 1;
 

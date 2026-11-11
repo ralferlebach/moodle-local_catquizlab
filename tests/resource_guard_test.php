@@ -46,7 +46,8 @@ final class resource_guard_test extends \advanced_testcase {
         // The other two wordings PHP uses for the same thing (#147).
         $this->assertSame(resource_guard::MEMORY, resource_guard::classify(['type' => E_ERROR,
             'message' => 'Hard memory limit of 134217728 bytes exhausted (tried to allocate 2097152 bytes)']));
-        $this->assertSame(resource_guard::MEMORY, resource_guard::classify(['type' => E_ERROR,
+        // The system's own exhaustion is not PHP's limit, and is not reported as one (#147, AK2).
+        $this->assertSame(resource_guard::SYSTEM, resource_guard::classify(['type' => E_ERROR,
             'message' => 'Out of memory (allocated 6291456) (tried to allocate 1048576 bytes)']));
     }
 
@@ -96,7 +97,10 @@ final class resource_guard_test extends \advanced_testcase {
         $this->assertStringContainsString(' phase=basis ', $line);
         $this->assertStringContainsString(' limit=512MB ', $line);
         $this->assertMatchesRegularExpression('/ phases=start=\d+MB,filter=\d+MB /', $line);
-        $this->assertNull(resource_guard::log_line(['type' => E_ERROR, 'message' => 'Maximum execution time of 30 s']));
+        // A timeout is logged as one, not as memory (#147, AK1, AK2); anything else is not logged here.
+        $this->assertStringStartsWith('local_catquizlab time:', resource_guard::log_line(['type' => E_ERROR,
+            'message' => 'Maximum execution time of 30 s']));
+        $this->assertNull(resource_guard::log_line(['type' => E_ERROR, 'message' => 'Call to undefined function x()']));
         resource_guard::phase('start');
     }
 

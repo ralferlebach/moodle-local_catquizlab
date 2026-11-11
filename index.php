@@ -182,7 +182,7 @@ foreach ($listed as $row) {
         'deletelabel'  => $deletestate !== null ? get_string('delete:again', $component) : '',
         'statedetail'  => $statedetail,
         'deleteurl'    => (new moodle_url('/local/catquizlab/experiment.php', [
-            'id' => $row['id'], 'action' => 'delete', 'sesskey' => sesskey(),
+            'id' => $row['id'], 'action' => 'delete',
         ]))->out(false),
     ]);
 }

@@ -128,6 +128,8 @@ final class results_scale_test extends \advanced_testcase {
             $persons[] = (int) $person->id;
         }
         $scaleabilities = array_fill_keys(array_keys($scales), 0.1);
+        // Each scale's standard error, as the engine stores it: the run's rules ask for one (#112).
+        $scaleses = array_fill_keys(array_keys($scales), 0.4);
         // The pool: questions 1 to 85 spread over the twelve subscales, so that
         // validity per scale is measured as for a real sitting (#112).
         $leaves = array_keys($scales);
@@ -155,6 +157,7 @@ final class results_scale_test extends \advanced_testcase {
                     )),
                     'nitems' => 35, 'steps' => 35, 'stopreason' => 'se',
                     'scaleabilities' => $scaleabilities,
+                    'scalestandarderrors' => $scaleses,
                 ]),
             ];
             if (count($rows) === 2500) {

@@ -246,21 +246,21 @@ class local_analysis {
      * of true and estimated deviation, per class of item count. The classes do
      * not say what is enough — they are for the diagnosis, not for a verdict.
      *
-     * @param array $rows Subscale observations.
+     * @param iterable $rows Subscale observations.
      * @return array[] One row per class of scale_exposure::CLASSES and one for an unknown count,
      *      each: class, label, and summarise()'s measures; classes without a row are left out.
      */
-    public static function by_item_class(array $rows): array {
-        $groups = [];
-        foreach ($rows as $row) {
-            $groups[(string) ($row['itemclass'] ?? scale_exposure::class_of($row['items'] ?? null))][] = $row;
-        }
+    public static function by_item_class(iterable $rows): array {
+        $groups = self::summarise_groups(
+            $rows,
+            static fn(array $row): string => (string) ($row['itemclass'] ?? scale_exposure::class_of($row['items'] ?? null))
+        );
         $out = [];
         foreach (array_merge(array_column(scale_exposure::CLASSES, 'key'), [scale_exposure::CLASS_UNKNOWN]) as $key) {
-            if (empty($groups[$key])) {
+            if (empty($groups[$key]) || $groups[$key]['n'] === 0) {
                 continue;
             }
-            $out[] = ['class' => $key, 'label' => scale_exposure::class_label($key)] + self::summarise($groups[$key]);
+            $out[] = ['class' => $key, 'label' => scale_exposure::class_label($key)] + $groups[$key];
         }
 
         return $out;
@@ -269,29 +269,59 @@ class local_analysis {
     /**
      * Summarise the local recovery of a set of subscale observations.
      *
-     * @param array $rows Subscale observations.
+     * @param iterable $rows Subscale observations.
      * @return array The summary: n, bias, rmse, correlation, agreement, mean local SE.
      */
-    public static function summarise(array $rows): array {
-        $errors = [];
-        $truedeltas = [];
-        $estdeltas = [];
-        $ses = [];
-        $within1 = 0;
-        $within2 = 0;
-        $withse = 0;
+    public static function summarise(iterable $rows): array {
+        return self::summarise_groups($rows, static fn(array $row): string => '')[''] ?? self::summary_of(self::sums());
+    }
 
+    /**
+     * Summarise rows by group in one reading of them (#147): what {@see summarise()} gives for each group's rows,
+     * computed from the same numbers in the same order, without holding the rows.
+     *
+     * @param iterable $rows Subscale observations.
+     * @param callable $groupof Row => its group.
+     * @return array<string, array> Group => summary, in the order first seen.
+     */
+    public static function summarise_groups(iterable $rows, callable $groupof): array {
+        $sums = [];
         foreach ($rows as $row) {
-            $errors[] = (float) $row['error'];
-            $truedeltas[] = (float) $row['truedelta'];
-            $estdeltas[] = (float) $row['estdelta'];
+            $group = (string) $groupof($row);
+            $sums[$group] = $sums[$group] ?? self::sums();
+            $sums[$group]['errors'][] = (float) $row['error'];
+            $sums[$group]['truedeltas'][] = (float) $row['truedelta'];
+            $sums[$group]['estdeltas'][] = (float) $row['estdelta'];
             if ($row['localse'] !== null) {
-                $ses[] = (float) $row['localse'];
-                $withse++;
-                $within1 += $row['within1se'] ? 1 : 0;
-                $within2 += $row['within2se'] ? 1 : 0;
+                $sums[$group]['ses'][] = (float) $row['localse'];
+                $sums[$group]['withse']++;
+                $sums[$group]['within1'] += $row['within1se'] ? 1 : 0;
+                $sums[$group]['within2'] += $row['within2se'] ? 1 : 0;
             }
         }
+
+        return array_map([self::class, 'summary_of'], $sums);
+    }
+
+    /**
+     * What a group's summary is made of, before any row.
+     *
+     * @return array
+     */
+    protected static function sums(): array {
+        return ['errors' => [], 'truedeltas' => [], 'estdeltas' => [], 'ses' => [], 'within1' => 0, 'within2' => 0,
+            'withse' => 0];
+    }
+
+    /**
+     * The summary of what was gathered for a group.
+     *
+     * @param array $sums What {@see sums()} started and the rows filled in.
+     * @return array
+     */
+    protected static function summary_of(array $sums): array {
+        ['errors' => $errors, 'truedeltas' => $truedeltas, 'estdeltas' => $estdeltas, 'ses' => $ses,
+            'within1' => $within1, 'within2' => $within2, 'withse' => $withse] = $sums;
 
         $n = count($errors);
         if ($n === 0) {
@@ -324,20 +354,17 @@ class local_analysis {
     /**
      * Group subscale observations and summarise each group.
      *
-     * @param array $rows Subscale observations.
+     * @param iterable $rows Subscale observations.
      * @param string $groupby A field of the observations, e.g. 'key' or 'category'.
      * @return array[] One row per group.
      */
-    public static function group(array $rows, string $groupby): array {
-        $groups = [];
-        foreach ($rows as $row) {
-            $groups[(string) $row[$groupby]][] = $row;
-        }
+    public static function group(iterable $rows, string $groupby): array {
+        $groups = self::summarise_groups($rows, static fn(array $row): string => (string) $row[$groupby]);
         ksort($groups, SORT_NATURAL);
 
         $out = [];
-        foreach ($groups as $key => $members) {
-            $out[] = array_merge(['group' => $key], self::summarise($members));
+        foreach ($groups as $key => $summary) {
+            $out[] = array_merge(['group' => $key], $summary);
         }
 
         return $out;

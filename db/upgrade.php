@@ -665,6 +665,24 @@ function xmldb_local_catquizlab_upgrade($oldversion): bool {
         upgrade_plugin_savepoint(true, 2026111001, 'local', 'catquizlab');
     }
 
+    if ($oldversion < 2026111101) {
+        // The digest of each trace beside it (#147): the results read the end of a sitting, its items and responses,
+        // not the engine's record of every step, which is nine tenths of a long trace. Filled in by a task for the
+        // sittings collected before; until then the results take the digest from the trace as they read it.
+        $table = new xmldb_table('local_catquizlab_attempt');
+        $fields = [
+            new xmldb_field('digestjson', XMLDB_TYPE_TEXT, null, null, null, null, null, 'tracebytes'),
+            new xmldb_field('digestbytes', XMLDB_TYPE_INTEGER, '10', null, null, null, null, 'digestjson'),
+        ];
+        foreach ($fields as $field) {
+            if (!$dbman->field_exists($table, $field)) {
+                $dbman->add_field($table, $field);
+            }
+        }
+        \core\task\manager::queue_adhoc_task(new \local_catquizlab\task\build_trace_digests(), true);
+        upgrade_plugin_savepoint(true, 2026111101, 'local', 'catquizlab');
+    }
+
     return true;
 }
 

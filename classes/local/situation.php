@@ -264,9 +264,17 @@ class situation {
             'ok'       => in_array($state, [self::WORKING, self::IDLE], true),
             'warn'     => $state === self::FAILING,
             'problem'  => in_array($state, [self::STALLED, self::NOTREADY], true),
+            // An action with a session key is posted (#149): the key in the form's body, never in a URL — not in the
+            // browser's history, the access log or the next page's referrer. Other actions stay links.
             'action'   => $actionurl === null ? null : [
                 'label' => $actionlabel,
-                'url'   => $actionurl->out(false),
+                'post'  => $actionurl->get_param('sesskey') !== null,
+                'url'   => $actionurl->get_param('sesskey') !== null ? $actionurl->out_omit_querystring() : $actionurl->out(false),
+                'params' => array_map(
+                    static fn($name, $value): array => ['name' => $name, 'value' => (string) $value],
+                    array_keys($actionurl->params()),
+                    array_values($actionurl->params())
+                ),
             ],
         ];
     }

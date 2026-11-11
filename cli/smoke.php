@@ -62,6 +62,7 @@ use local_catquizlab\local\worker_registry;
     'concurrency' => 0,
     'no-navigation-failures' => false,
     'expect-recovered' => 0,
+    'budget' => '',
 ], ['h' => 'help']);
 
 if ($options['help']) {
@@ -74,6 +75,10 @@ Options:
   --minanswers=15      How many answers an attempt must give to count.
   --minutes=5          How long to wait for the worker.
   --keep               Leave the experiment behind for inspection.
+  --budget=G1,G2,S1,S2,SE1,SE2
+                       The run's budgets instead of the smoke defaults (#123):
+                       global min/max items, subscale min/max items, SE min/max.
+                       The answer floor is then the global minimum.
 EOT);
     exit(0);
 }
@@ -101,6 +106,18 @@ $strategy = (string) $options['strategy'];
 $persons = max(1, (int) $options['persons']);
 $deadline = time() + (max(1, (int) $options['minutes']) * MINSECS);
 $minanswers = max(2, (int) $options['minanswers']);
+// The budgets of an end-to-end contract case (#123), as the provisioning read-back test has them.
+$budget = null;
+if ((string) $options['budget'] !== '') {
+    $parts = array_map('trim', explode(',', (string) $options['budget']));
+    if (count($parts) !== 6 || array_filter($parts, static fn($v) => !is_numeric($v)) !== []) {
+        cli_error('--budget takes six numbers: global min,max, subscale min,max, SE min,max.');
+    }
+    $budget = ['global' => ['minitems' => (int) $parts[0], 'maxitems' => (int) $parts[1]],
+        'subscale' => ['minitems' => (int) $parts[2], 'maxitems' => (int) $parts[3]],
+        'se' => ['min' => (float) $parts[4], 'max' => (float) $parts[5]]];
+    $minanswers = max(1, (int) $parts[0]);
+}
 
 /**
  * Say what is happening, with the time it took.
@@ -225,6 +242,10 @@ $definition['budgets']['subscale'] = [
 // counting mistake here; there is no reason for a smoke test to ask for
 // precision no real experiment would.
 $definition['budgets']['se'] = ['min' => 0.35, 'max' => 1.0];
+if ($budget !== null) {
+    $definition['budgets'] = $budget + $definition['budgets'];
+    step('Budgets of the case: ' . json_encode($budget));
+}
 
 // Issue #104's case: a shared maximum of 35 for a sweep over the classical
 // test and two adaptive strategies, with 80 and 40 given to the latter as their
@@ -379,10 +400,28 @@ $otherwork = $DB->execute(
     ]
 );
 step('Other queued work deferred for the duration.');
+// And given back when this ends, however it ends: a failed check (cli_error) used to leave every other queued sitting
+// of the installation an hour in the future.
+register_shutdown_function(static function () use ($experimentid): void {
+    global $DB;
+    $DB->execute(
+        'UPDATE {local_catquizlab_attempt}
+            SET nextruntime = 0
+          WHERE status = :queued
+            AND nextruntime > :now
+            AND runid NOT IN (SELECT id FROM {local_catquizlab_run} WHERE experimentid = :experimentid)',
+        ['queued' => attempt_scheduler::STATUS_QUEUED, 'now' => time(), 'experimentid' => $experimentid]
+    );
+});
 
 // For a load test, several workers at once: the race of #100 showed under
 // load, not in a single browser.
 if ((int) $options['concurrency'] > 0) {
+    // For this test only: the installation's own setting comes back when it ends, however it ends.
+    $concurrencybefore = get_config('local_catquizlab', 'worker_concurrency');
+    register_shutdown_function(static function () use ($concurrencybefore): void {
+        set_config('worker_concurrency', $concurrencybefore === false ? null : $concurrencybefore, 'local_catquizlab');
+    });
     set_config('worker_concurrency', (int) $options['concurrency'], 'local_catquizlab');
 }
 
@@ -645,9 +684,9 @@ if ($missing !== []) {
     cli_error('Results are missing: ' . implode(', ', $missing));
 }
 
-if ((int) ($named['n'] ?? 0) < 1) {
-    cli_error('Results report no observations.');
-}
+// No valid observation fails the test — after the contract and the ends below are checked and printed (#123): a case
+// whose sittings all ended invalid says why, sitting by sitting, instead of stopping before it.
+$noobservations = (int) ($named['n'] ?? 0) < 1;
 
 $withestimate = (int) ($named['n'] ?? 0);
 
@@ -691,6 +730,23 @@ if ($defects !== []) {
     cli_error('The run did not keep to its contract (#123).');
 }
 
+// Issue #123: the same end and the same length wherever a sitting is shown — the engine's own record, the analysis
+// (attempt detail and every tab), the export of sittings, the reproduction package — sitting by sitting.
+$started = microtime(true);
+$disagreements = smoke_ends_agree($experimentid);
+step('Ends compared sitting by sitting (engine, analysis, export, package): '
+    . ($disagreements === [] ? 'all agree.' : count($disagreements) . ' disagreement(s).'), $started);
+if ($disagreements !== []) {
+    foreach ($disagreements as $line) {
+        cli_writeln('  DISAGREES: ' . $line);
+    }
+    cli_error('A sitting ends differently in different places (#123).');
+}
+
+
+if ($noobservations) {
+    cli_error('Results report no observations.');
+}
 
 // Give the rest of the installation its queue back, whatever happened here.
 $DB->execute(
@@ -731,4 +787,104 @@ function smoke_work_taken(int $experimentid): int {
             'collected'    => attempt_scheduler::STATUS_COLLECTED,
         ]
     );
+}
+
+/**
+ * Every collected sitting's end and length, compared between the engine and every place that shows them (#123).
+ *
+ * The engine's code is read here from the engine's own tables (its status, the host's stop code) and the trace's stop
+ * text, independently of the analysis; the analysis' observation is what the attempt detail and the tabs show; the
+ * export row is what a CSV or JSON holds; the package's contract is what a reproduction package holds.
+ *
+ * @param int $experimentid The smoke experiment.
+ * @return string[] One line per disagreement; empty when all agree.
+ */
+function smoke_ends_agree(int $experimentid): array {
+    global $DB;
+
+    $out = [];
+    $query = new \local_catquizlab\local\results_query(['experimentid' => $experimentid, 'validity' => 'all']);
+    $observations = [];
+    foreach ($query->each_observation() as $observation) {
+        $observations[(int) $observation['attemptid']] = $observation;
+    }
+    $export = [];
+    foreach (
+        \local_catquizlab\local\results_export::iterate(
+            new \local_catquizlab\local\results_query(['experimentid' => $experimentid, 'validity' => 'all']),
+            \local_catquizlab\local\results_export::LEVEL_ATTEMPT
+        )['rows'] as $row
+    ) {
+        $export[(int) $row['attemptid']] = $row;
+    }
+    $sittings = $DB->get_records_sql(
+        'SELECT a.id, a.engineattemptid, a.tracejson
+           FROM {local_catquizlab_attempt} a
+           JOIN {local_catquizlab_run} r ON r.id = a.runid
+          WHERE r.experimentid = ? AND a.status = ?',
+        [$experimentid, attempt_scheduler::STATUS_COLLECTED]
+    );
+    $hasengine = $DB->get_manager()->table_exists('local_catquiz_attempts');
+    $hostcolumns = $DB->get_columns('adaptivequiz_attempt');
+    foreach ($sittings as $sitting) {
+        $id = (int) $sitting->id;
+        $trace = json_decode((string) $sitting->tracejson, true) ?: [];
+        $status = $hasengine ? $DB->get_field_select(
+            'local_catquiz_attempts',
+            'status',
+            "component IN ('adaptivequiz', 'mod_adaptivequiz') AND attemptid = ?",
+            [(int) $sitting->engineattemptid]
+        ) : false;
+        $host = isset($hostcolumns['stopcode'])
+            ? $DB->get_field('adaptivequiz_attempt', 'stopcode', ['id' => (int) $sitting->engineattemptid]) : false;
+        $engine = (string) \local_catquizlab\local\reason_catalog::engine_code(
+            (string) ($trace['stopreason'] ?? ''),
+            $status === false || $status === null ? null : (int) $status,
+            $host === false || $host === null ? null : (string) $host
+        );
+        $observation = $observations[$id] ?? null;
+        $row = $export[$id] ?? null;
+        if ($observation === null || $row === null) {
+            $out[] = 'sitting ' . $id . ': ' . ($observation === null ? 'not in the analysis' : 'not in the export');
+            continue;
+        }
+        // The analysis classifies the engine's end into the lab's outcomes (reason_catalog::outcome()); where the
+        // engine's own code fixes the outcome, it must be that one. Analysis, stored history and export say the same.
+        $fixed = ['reachedmaximumquestions' => 'max_items_reached', 'exceededmaxattempttime' => 'timeout',
+            'attemptclosedbytimelimit' => 'timeout'];
+        $seen = ['analysis' => (string) $observation['endreasoncode'], 'export' => (string) $row['endreasoncode']];
+        if ((string) ($observation['storedreasoncode'] ?? '') !== '') {
+            $seen['history'] = (string) $observation['storedreasoncode'];
+        }
+        if (count(array_unique($seen)) > 1 || (isset($fixed[$engine]) && $seen['analysis'] !== $fixed[$engine])) {
+            $out[] = 'sitting ' . $id . ' end: ' . json_encode(['engine' => $engine] + $seen);
+        }
+        $lengths = ['trace' => (int) ($trace['nitems'] ?? count((array) ($trace['items'] ?? []))),
+            'analysis' => (int) $observation['nitems'], 'export' => (int) $row['nitems']];
+        if (count(array_unique($lengths)) > 1) {
+            $out[] = 'sitting ' . $id . ' length: ' . json_encode($lengths);
+        }
+        cli_writeln(sprintf(
+            '    sitting %d: engine status %s, host %s, stop text "%s" -> %s -> %s; %d items, SE %s, %s',
+            $id,
+            json_encode($status === false ? null : $status),
+            json_encode($host === false ? null : $host),
+            substr((string) ($trace['stopreason'] ?? ''), 0, 60),
+            $engine ?: '?',
+            $seen['analysis'],
+            $lengths['trace'],
+            $observation['se'] === null ? '-' : sprintf('%.3f', $observation['se']),
+            $observation['validitystate']
+        ));
+    }
+    // The package holds the same contract as the run.
+    $package = \local_catquizlab\local\reproducibility::package($experimentid, false);
+    foreach ($package['runs'] as $run) {
+        $chain = \local_catquizlab\local\run_contract::chain((int) $run['id']);
+        if (json_encode($run['contract']) !== json_encode($chain)) {
+            $out[] = 'run ' . $run['id'] . ': the package holds another contract than the run';
+        }
+    }
+
+    return $out;
 }

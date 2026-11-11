@@ -244,7 +244,10 @@ class log_view {
      * @return string
      */
     public static function redact(string $text): string {
-        return (string) preg_replace(array_keys(self::REDACTIONS), array_values(self::REDACTIONS), $text);
+        $text = (string) preg_replace(array_keys(self::REDACTIONS), array_values(self::REDACTIONS), $text);
+
+        // Then by the one rule of all logs (#149): encoded and array names, keys, e-mail addresses as values.
+        return log_redactor::redact_pairs($text);
     }
 
     /**

@@ -211,7 +211,9 @@ final class scale_exposure_test extends \advanced_testcase {
                 'runid' => $run->id, 'personid' => $person->id, 'status' => attempt_scheduler::STATUS_COLLECTED,
                 'tries' => 1, 'timecreated' => time(), 'timemodified' => time(),
                 'tracejson' => json_encode($trace + ['finaltheta' => $global + 0.1, 'finalse' => 0.4,
-                    'stopreason' => 'se', 'scaleabilities' => array_fill_keys($scales, $global + 0.2)]),
+                    'stopreason' => 'se', 'scaleabilities' => array_fill_keys($scales, $global + 0.2),
+                    // Each scale's standard error, as the engine stores it: the run's rules ask for one (#112).
+                    'scalestandarderrors' => array_fill_keys($scales, 0.4)]),
             ]);
         }
 
@@ -263,12 +265,12 @@ final class scale_exposure_test extends \advanced_testcase {
         $this->assertStringContainsString('the sittings\' own steps — 12 sitting(s)', $html);
         $this->assertStringContainsString('12 scale result(s) estimated although no item of the scale was administered', $html);
         $this->assertStringNotContainsString('unknown item count', $html);
-        // The error against the item count, from the valid scale results unless asked otherwise;
-        // no standard errors in these sittings, so no plot of them.
+        // The error against the item count, from the valid scale results unless asked otherwise; the sittings carry
+        // their scales' standard errors (the run's rules ask for them, #112), so those are plotted too.
         $this->assertStringContainsString('data-region="catquizlab-erroritems"', $html);
         $this->assertStringContainsString('Local error by items administered on the scale', $html);
         $this->assertStringContainsString('All scale results are drawn, valid or not.', $html);
-        $this->assertStringNotContainsString('data-region="catquizlab-seitems"', $html);
+        $this->assertStringContainsString('data-region="catquizlab-seitems"', $html);
         $valid = ['runid' => $runid];
         $validhtml = (new results_page(new results_query($valid), 'subscales', $valid))->render_tab();
         $this->assertStringContainsString('Only valid scale results of valid sittings are drawn.', $validhtml);

@@ -103,6 +103,8 @@ foreach ($DB->get_records('local_catquizlab_run', ['experimentid' => $experiment
         $items = [];
         $responses = [];
         $abilities = [];
+        // Each scale's standard error, as the engine stores it: the run's rules ask for one (#112).
+        $ses = [];
         $allcorrect = $strategy === 'allsubs' && $twin === 6;
         foreach ($plays[$strategy] as $subscale => $estimate) {
             $played = $strategy === 'classic' ? $questions[$subscale] : array_slice($questions[$subscale], 0, 2);
@@ -111,13 +113,14 @@ foreach ($DB->get_records('local_catquizlab_run', ['experimentid' => $experiment
                 $responses[$questionid] = $allcorrect || $index % 2 === 0 ? 1.0 : 0.0;
             }
             $abilities[$base + $subscale] = $global + $estimate;
+            $ses[$base + $subscale] = 0.4;
         }
         $attemptid = (int) $DB->insert_record('local_catquizlab_attempt', (object) [
             'runid' => $run->id, 'personid' => $personid, 'status' => attempt_scheduler::STATUS_COLLECTED,
             'tries' => 1, 'runtimems' => 2000, 'timecreated' => time(), 'timemodified' => time(),
             'tracejson' => json_encode(['finaltheta' => $global, 'finalse' => 0.3, 'items' => $items,
                 'responses' => $responses, 'nitems' => count($items), 'stopreason' => 'se',
-                'scaleabilities' => $abilities]),
+                'scaleabilities' => $abilities, 'scalestandarderrors' => $ses]),
         ]);
         attempt_history::record($attemptid, attempt_history::COLLECTED, ['tryno' => 1]);
     }

@@ -308,7 +308,7 @@ class debug_trace {
     public static function submitted(array $data): array {
         $out = [];
         foreach ($data as $key => $value) {
-            if (preg_match('/sesskey|password|passwd|secret|token/i', (string) $key)) {
+            if (log_redactor::is_secret_name((string) $key)) {
                 $out[$key] = '[redacted]';
             } else if (is_array($value) || is_object($value)) {
                 $out[$key] = self::submitted((array) $value);
@@ -514,7 +514,8 @@ class debug_trace {
         foreach ($params as $key => $value) {
             $lower = \core_text::strtolower((string) $key);
 
-            $secret = false;
+            $secret = log_redactor::is_secret_name((string) $key)
+                || (is_string($value) && log_redactor::looks_like_email($value));
             foreach (self::SECRET as $needle) {
                 if (str_contains($lower, $needle)) {
                     $secret = true;

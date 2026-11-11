@@ -192,20 +192,23 @@ class subscale_evaluator {
             $batches = trace_reader::batches(
                 'a.runid = :runid AND a.tracejson IS NOT NULL',
                 ['runid' => $runid],
-                'a.id, a.tracejson, p.profilejson',
-                'JOIN {local_catquizlab_person} p ON p.id = a.personid'
+                'a.id, ' . trace_reader::digest_fields('a') . ', p.profilejson',
+                'JOIN {local_catquizlab_person} p ON p.id = a.personid',
+                true
             );
             foreach ($batches as $batch) {
                 foreach ($batch as $row) {
                     yield $row;
                     $row->tracejson = null;
+                    $row->digestjson = null;
                 }
             }
         })();
 
         $people = [];
         foreach ($rows as $row) {
-            $trace = json_decode((string) $row->tracejson, true);
+            // The digest is enough: the end estimates per scale (#147).
+            $trace = trace_digest::decode($row);
             $profile = json_decode((string) $row->profilejson, true);
             $scaleabilities = (is_array($trace) && isset($trace['scaleabilities'])) ? $trace['scaleabilities'] : [];
 

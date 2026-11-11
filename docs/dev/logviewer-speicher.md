@@ -58,6 +58,40 @@ Leseprofil jeder Ansicht unter der Zeilenzahl an.
 - Playwright `tests/playwright/logs.spec.js` gegen 250 000 Zeilen: öffnen,
   zurückblättern, filtern (alle 251 Serverfehler), Deep-Link, Live-Tail, Download.
 
+## HTTP-Abnahme (0.7.57)
+
+`cli/accept_logs.php --runid=N` prüft die Logseite über den Webserver, wie ein Mensch sie benutzt:
+
+1. Schreibt 250 000 Request-Zeilen der Sittings des Laufs über 30 Stunden in die Trace-Dateien des Servers,
+   also über eine Tagesgrenze hinweg in zwei Tagesdateien. Jede 997. Zeile ist ein Serverfehler mit Exception.
+2. Meldet sich als temporärer Manager an und fragt ab:
+   - drei Seiten (keine Zeile doppelt, lückenlos aneinander, chronologisch),
+   - die neueste Zeile zuerst,
+   - nur die Fehler (genau die geschriebenen 251),
+   - eine Suche nach genau einer Zeile,
+   - beide Downloads (Filter-Provenienz im Kopf),
+   - ein JSON-Fenster ±10 Minuten um Mitternacht (beide Dateien, steigende Zeit, erwartete Zeilenzahl),
+   - den Live-Tail über eine Minute, während Zeilen geschrieben werden (jede Abfrage bringt genau die neuen),
+   - einen Nutzer ohne Rolle (abgewiesen),
+   - einen Download per GET mit Schlüssel in der URL (abgewiesen, #149).
+3. Jede Anfrage trägt den Trace-Header. Damit schreibt der Server Status, Dauer, PHP-Spitze, Datenbankabfragen und
+   RSS des Prozesses auf, und das Skript liest diese Werte zurück.
+4. Prüft die Aufbewahrung: Eine abgelaufene Tagesdatei wird gelöscht, die heutige bleibt Zeile für Zeile erhalten.
+5. Nimmt seine eigenen Zeilen wieder heraus (`trace_seed::remove()`).
+
+Ergebnis lokal (Apache 2.4, mod_php 8.3, `memory_limit` 512M, Moodle 4.5.15, 11.11.2026, 0.7.57):
+
+| DB | Lauf | Seite (ms / PHP-Spitze / Abfragen) | JSON-Download 5000 Zeilen | max. PHP-Spitze | max. RSS | Fehler |
+|---|---|---|---|---|---|---|
+| PostgreSQL 16 | 27 (2000 Sittings) | 2448 ms / 16 MB / 156 | 2341 ms / 45,9 MB | 45,9 MB | 170,9 MB | 0 |
+| MariaDB | 1 (300 Sittings) | 2255 ms / 16 MB / 56 | — | 43,9 MB | 171,8 MB | 0 |
+
+Rohdaten: `132-accept-pg.txt`, `132-accept-pg.json`, `132-accept-maria.txt` im Nachweispaket.
+
 ## Offen
 
-Abnahme auf dem Zielsystem (DoD 6) mit `logs.php?runid=51`.
+Abnahme auf dem Zielsystem (DoD 6), auf clara:
+
+```
+sudo -u www-data php local/catquizlab/cli/accept_logs.php --runid=51 > /root/132-accept.txt
+```

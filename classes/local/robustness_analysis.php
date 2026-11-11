@@ -195,29 +195,34 @@ class robustness_analysis {
             return $empty;
         }
 
-        $subscalerows = [];
+        // Read as they are summarised, not held (#147): a cell of nine thousand sittings of twenty subscales held a
+        // hundred and eighty thousand rows. Their digests and profiles fetched two hundred sittings at a time, not one
+        // query each.
         $rankings = [];
-        foreach ($members as $member) {
-            $map = $scalemaps[$member['runid']] ?? [];
-            if ($map === []) {
-                continue;
+        $rows = (static function () use ($members, $scalemaps, &$rankings): \Generator {
+            foreach (array_chunk($members, 200) as $chunk) {
+                results_query::prefetch($chunk);
+                foreach ($chunk as $member) {
+                    $map = $scalemaps[$member['runid']] ?? [];
+                    if ($map === []) {
+                        continue;
+                    }
+                    // Valid scale results of valid sittings only, as every local figure (#112).
+                    $valid = local_analysis::valid_rows($member + results_query::detail($member), $map, self::$rule);
+                    yield from $valid;
+                    $ranking = local_analysis::ranking($valid, (string) $member['strategy']);
+                    if ($ranking !== null) {
+                        $rankings[] = $ranking;
+                    }
+                }
             }
-            // Valid scale results of valid sittings only, as every local figure (#112).
-            $rows = local_analysis::valid_rows($member + results_query::detail($member), $map, self::$rule);
-            foreach ($rows as $row) {
-                $subscalerows[] = $row;
-            }
-            $ranking = local_analysis::ranking($rows, (string) $member['strategy']);
-            if ($ranking !== null) {
-                $rankings[] = $ranking;
-            }
-        }
+            results_query::prefetch([]);
+        })();
+        $summary = local_analysis::summarise($rows);
 
-        if ($subscalerows === []) {
+        if ($summary['n'] === 0) {
             return $empty;
         }
-
-        $summary = local_analysis::summarise($subscalerows);
         $aggregate = local_analysis::aggregate_ranking($rankings);
 
         return [

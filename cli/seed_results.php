@@ -81,6 +81,10 @@ $definition['sweep']['factors']['strategy'] = $playable;
 // Six questions a sitting: within the budgets, so that the sittings are valid ones.
 $definition['budgets']['global'] = ['minitems' => 3, 'maxitems' => max(30, $length)];
 $definition['budgets']['subscale'] = ['minitems' => 1, 'maxitems' => max(10, $length)];
+// An SE bound the seeded sittings keep: six items give a standard error of up to about 1.5 at the edges of the ability
+// range. The runs are judged by their design (#112), as a real run is by its engine test; the sittings are meant to be
+// valid ones.
+$definition['budgets']['se'] = ['min' => 0.35, 'max' => 2.5];
 $definition['persons']['count'] = $persons;
 $definition['pool']['scales'] = ['categories' => 1, 'subcategories' => 1, 'itemspersubscale' => 6];
 $experimentid = (int) experiment_service::save($definition)['id'];

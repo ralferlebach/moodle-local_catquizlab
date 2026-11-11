@@ -395,12 +395,17 @@ class results_page {
      */
     public function render_provenance(int $experimentid = 0): string {
         $component = 'local_catquizlab';
+        // Each part of the basis is a step of its own in the request profile and the fatal-error line (#147, AK3).
+        \local_catquizlab\local\resource_guard::step('provenance');
         $provenance = $this->query->provenance();
 
         // The population first, results or not: a plan the stored people do not
         // match is to be seen before there is anything to read (#117).
+        \local_catquizlab\local\resource_guard::step('population');
         [$problems, $population] = $this->render_population();
+        \local_catquizlab\local\resource_guard::step('funnel');
         [$losses, $funnel] = $this->analysis_population_parts();
+        \local_catquizlab\local\resource_guard::step('warnings');
         $warnings = $this->basis_warnings($experimentid);
 
         if ($provenance['attempts'] === 0) {
@@ -467,6 +472,7 @@ class results_page {
 
         // What the ground truth was drawn from, named (#105): mean and
         // standard deviation, distribution and range of the selected runs.
+        \local_catquizlab\local\resource_guard::step('abilities');
         $more = $population . $funnel;
         $abilities = [];
         foreach ($this->query->ability_distributions() as $text => $runs) {
@@ -815,10 +821,12 @@ class results_page {
         // One streamed pass into per-group summaries: the sittings, their
         // item lists and their rows are never held, whatever the selection's
         // size (#99). The figures are the ones the row-based tables gave.
+        \local_catquizlab\local\resource_guard::step('overviewpass');
         $overview = $this->query->overview(self::MAX_POINTS);
         if ($overview['n'] === 0) {
             return $this->render_no_data();
         }
+        \local_catquizlab\local\resource_guard::step('overviewrender');
 
         $all = $overview['all'];
         $exposure = metrics::exposure_from_counts($overview['itemcounts'], $overview['n'], $this->query->pool_size());
@@ -870,7 +878,8 @@ class results_page {
         $out .= $this->render_summary_cell_table($overview['cell']);
 
         // The simulated people behind the numbers (#109, section 4).
-        $out .= $this->render_people();
+        \local_catquizlab\local\resource_guard::step('people');
+        $out .= $this->render_people($overview['people'] ?? null);
 
         return $out;
     }
@@ -1237,14 +1246,13 @@ class results_page {
             get_string('manage:col_actions', $component),
         ];
 
+        // The sizes, not the contents, and all of them in one pass with the cost of TI@n (#147): building four
+        // full datasets to print four numbers is how opening this tab cost as much as four downloads, and counting
+        // them one by one still read the selection five times.
+        $allcounts = results_export::all_row_counts($this->query);
         foreach (results_export::levels() as $level => $stringkey) {
-            // The size, not the contents. Building four full datasets to print
-            // four numbers is how opening this tab cost as much as four
-            // downloads.
-            // The step level counts its rows in the same pass that estimates
-            // what TI@n would cost: one pass over the traces, not two.
-            $stepcost = $level === results_export::LEVEL_STEP ? results_export::engine_info_cost($this->query) : null;
-            $rowcount = $stepcost !== null ? $stepcost['steps'] : results_export::row_count($this->query, $level);
+            $stepcost = $level === results_export::LEVEL_STEP ? $allcounts['cost'] : null;
+            $rowcount = $allcounts['counts'][$level];
             $links = \html_writer::link(
                 new \moodle_url('/local/catquizlab/results.php', $this->filter + [
                     'tab' => 'export', 'level' => $level, 'action' => 'csv',
@@ -1303,7 +1311,13 @@ class results_page {
         $out .= \local_catquizlab\output\accessible_table::render($table);
 
         // What the file will say about itself, shown before it is written.
-        $metadata = results_export::metadata($this->query, results_export::LEVEL_ATTEMPT);
+        // With the row count of the pass above: counting the rows again was a pass of its own (#147).
+        $metadata = results_export::metadata(
+            $this->query,
+            results_export::LEVEL_ATTEMPT,
+            false,
+            $allcounts['counts'][results_export::LEVEL_ATTEMPT]
+        );
         $out .= \html_writer::tag('h3', get_string('export:metadata', $component), ['class' => 'h5 mt-4']);
         $out .= \html_writer::tag('p', get_string('export:metadataexplain', $component), ['class' => 'text-muted']);
         $out .= \html_writer::tag('p', get_string('export:idsnote', $component), ['class' => 'text-muted small']);
@@ -1392,10 +1406,10 @@ class results_page {
         $families = [];
         $runids = [];
         foreach ($this->query->each_observation() as $observation) {
-            // The trace and the profile for this one row; see
-            // results_query::detail() for why they are not in the row.
+            // The row is enough: the verdict reads its SE, its stop and its length. It used to read the whole
+            // trace and the profile of every sitting first, one query each, for nothing (#147).
             $verdict = test_flow::feasibility(
-                $observation + results_query::detail($observation),
+                $observation,
                 $this->cat_parameters($observation['runid'])
             );
             $key = $verdict['verdict'] ?? 'unknown';
@@ -1693,8 +1707,9 @@ class results_page {
             'value' => get_string('axes:apply', $component)]);
         $fields .= \html_writer::end_div();
 
+        // Posted (#149): the form saves profiles with the session key, which a GET form put into the URL.
         $form = \html_writer::tag('form', $hidden . $fields, [
-            'method' => 'get', 'action' => (new \moodle_url('/local/catquizlab/results.php'))->out(false),
+            'method' => 'post', 'action' => (new \moodle_url('/local/catquizlab/results.php'))->out(false),
             'data-region' => 'catquizlab-axis-form', 'data-plot' => $type,
         ]);
 
@@ -1829,7 +1844,8 @@ class results_page {
             $notes[] = get_string('compare:scaleactivenote', $component);
         }
         foreach ($selected as $observation) {
-            $detail = $observation + results_query::detail($observation);
+            // Step by step: the whole trace.
+            $detail = $observation + results_query::detail($observation, true);
             $strategy = (string) $observation['strategy'];
             if ($scaleid > 0 && !\local_catquizlab\local\strategy_catalog::uses_subscales($strategy)) {
                 $notes[] = get_string('compare:notapplicable', $component, (object) [
@@ -1985,8 +2001,9 @@ class results_page {
         global $DB;
         $component = 'local_catquizlab';
 
+        // Posted (#149): the form saves templates with the session key, which a GET form put into the URL.
         $out = \html_writer::start_tag('form', [
-            'method' => 'get', 'action' => (new \moodle_url('/local/catquizlab/results.php'))->out(false),
+            'method' => 'post', 'action' => (new \moodle_url('/local/catquizlab/results.php'))->out(false),
             'class' => 'mb-3', 'data-region' => 'catquizlab-compare-form',
         ]);
         $out .= \html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'tab', 'value' => 'testflow']);
@@ -2109,16 +2126,20 @@ class results_page {
      * The simulated people of the selection: how their abilities are distributed (#109, section 4).
      *
      * Read as a stream, each person once — twins in other runs share their
-     * ability and are the same simulated person.
+     * ability and are the same simulated person. From the overview's own pass where it has read them (#147).
      *
+     * @param array|null $values Person key => true ability, as {@see results_query::overview()} gives them.
      * @return string
      */
-    protected function render_people(): string {
+    protected function render_people(?array $values = null): string {
         $component = 'local_catquizlab';
-        $values = [];
-        foreach ($this->query->each_observation() as $observation) {
-            $key = (string) $observation['twinid'] !== '' ? 'twin:' . $observation['twinid'] : 'person:' . $observation['personid'];
-            $values[$key] = (float) $observation['truetheta'];
+        if ($values === null) {
+            $values = [];
+            foreach ($this->query->each_observation() as $observation) {
+                $key = (string) $observation['twinid'] !== '' ? 'twin:' . $observation['twinid']
+                    : 'person:' . $observation['personid'];
+                $values[$key] = (float) $observation['truetheta'];
+            }
         }
         $out = \html_writer::tag('h3', get_string('people:heading', $component), ['class' => 'h5 mt-4']);
         if ($values === []) {
@@ -2153,9 +2174,7 @@ class results_page {
             \html_writer::tag('button', get_string('chart:downloadpng', $component), [
                 'type' => 'button', 'data-download' => 'png', 'data-filename' => $peoplename . '.png',
             ]),
-            \html_writer::link(new \moodle_url('/local/catquizlab/plotpdf.php', [
-                'key' => scatter_chart::keep_for_pdf($svg, $peoplename), 'sesskey' => sesskey(),
-            ]), get_string('chart:downloadpdf', $component), ['data-download' => 'pdf']),
+            scatter_chart::pdf_control(scatter_chart::keep_for_pdf($svg, $peoplename)),
             \html_writer::link(
                 'data:text/csv;charset=utf-8;base64,' . base64_encode($csv),
                 get_string('chart:downloadcsv', $component),
@@ -2295,6 +2314,7 @@ class results_page {
      * @return string
      */
     protected function render_coverage(): string {
+        \local_catquizlab\local\resource_guard::step('coverage');
         $component = 'local_catquizlab';
         $counts = $this->query->validity_counts();
         if ($counts['total'] === 0) {
@@ -2498,6 +2518,40 @@ class results_page {
     }
 
     /**
+     * At most MAX_POINTS rows to draw, the same ones on every reading (#147): all of them where there are no more.
+     *
+     * @param iterable $rows Index => row, as {@see \local_catquizlab\local\subscale_store::rows()} gives them.
+     * @param string $salt Which plot the sample is for.
+     * @return array[] The rows, in the order of the selection.
+     */
+    protected function sample_rows(iterable $rows, string $salt): array {
+        $sample = new \local_catquizlab\local\stable_sample(self::MAX_POINTS, $salt);
+        foreach ($rows as $index => $row) {
+            $sample->offer((string) $index, ['index' => (int) $index] + $row);
+        }
+        $kept = $sample->rows();
+        usort($kept, static fn(array $a, array $b): int => $a['index'] <=> $b['index']);
+
+        return $kept;
+    }
+
+    /**
+     * Say on a plot that it shows a sample, where it does.
+     *
+     * @param scatter_chart $chart The plot.
+     * @param int $shown Points drawn.
+     * @param int $total Points there are.
+     * @return void
+     */
+    protected function note_sample(scatter_chart $chart, int $shown, int $total): void {
+        if ($shown < $total) {
+            $chart->add_note(get_string('chart:sampledscales', 'local_catquizlab', (object) [
+                'shown' => $shown, 'total' => $total,
+            ]));
+        }
+    }
+
+    /**
      * The local error and the local standard error against the items administered on the scale (#113).
      *
      * The same scale results as every other figure of this tab: the valid ones
@@ -2505,16 +2559,30 @@ class results_page {
      * not known has no place on the x axis — it is counted beneath, not drawn
      * at zero.
      *
-     * @param array $rows Subscale observations of the selection.
+     * @param \local_catquizlab\local\subscale_store $store Subscale observations of the selection, packed.
      * @return string
      */
-    protected function render_item_plots(array $rows): string {
+    protected function render_item_plots(\local_catquizlab\local\subscale_store $store): string {
         $component = 'local_catquizlab';
-        $known = array_values(array_filter($rows, static fn(array $row): bool => $row['items'] !== null));
-        if ($known === []) {
+        // Counted over all, drawn from a sample of at most MAX_POINTS each (#147).
+        $known = 0;
+        $knownwithse = 0;
+        foreach ($store->rows() as $row) {
+            $known += $row['items'] !== null ? 1 : 0;
+            $knownwithse += $row['items'] !== null && $row['localse'] !== null ? 1 : 0;
+        }
+        if ($known === 0) {
             return '';
         }
-        $unknown = count($rows) - count($known);
+        $unknown = count($store) - $known;
+        $knownrows = (static function () use ($store): \Generator {
+            foreach ($store->rows() as $index => $row) {
+                if ($row['items'] !== null) {
+                    yield $index => $row;
+                }
+            }
+        })();
+        $sample = $this->sample_rows($knownrows, 'subscaleitems');
         $mode = (string) ($this->filter['validity'] ?? \local_catquizlab\local\result_validity::VALID);
         $selection = get_string('chart:itemsshown_' . $mode, $component);
         $na = get_string('flow:na', $component);
@@ -2536,7 +2604,7 @@ class results_page {
         $this->configure_chart($error, 'localerroritems');
         $error->set_points(array_map(
             static fn(array $row): array => ['x' => (int) $row['items'], 'y' => $row['error'], 'label' => $label($row)],
-            $known
+            $sample
         ))->set_description(get_string('chart:pointissubscale', $component))
             ->add_horizontal_line(0.0, get_string('chart:zeroline', $component))
             ->add_note($selection)
@@ -2544,12 +2612,20 @@ class results_page {
         if ($unknown > 0) {
             $error->add_note(get_string('chart:itemsunknown', $component, $unknown));
         }
+        $this->note_sample($error, count($sample), $known);
         $out = \html_writer::div($error->render(), '', ['data-region' => 'catquizlab-erroritems']);
 
-        $withse = array_values(array_filter($known, static fn(array $row): bool => $row['localse'] !== null));
-        if ($withse === []) {
+        if ($knownwithse === 0) {
             return $out;
         }
+        $withserows = (static function () use ($store): \Generator {
+            foreach ($store->rows() as $index => $row) {
+                if ($row['items'] !== null && $row['localse'] !== null) {
+                    yield $index => $row;
+                }
+            }
+        })();
+        $withse = $this->sample_rows($withserows, 'subscaleitemsse');
         $se = new scatter_chart(
             get_string('chart:seitems', $component),
             get_string('axis:itemsonscale', $component),
@@ -2567,9 +2643,10 @@ class results_page {
         if ($unknown > 0) {
             $se->add_note(get_string('chart:itemsunknown', $component, $unknown));
         }
-        if (count($known) > count($withse)) {
-            $se->add_note(get_string('chart:itemsnose', $component, count($known) - count($withse)));
+        if ($known > $knownwithse) {
+            $se->add_note(get_string('chart:itemsnose', $component, $known - $knownwithse));
         }
+        $this->note_sample($se, count($withse), $knownwithse);
 
         return $out . \html_writer::div($se->render(), '', ['data-region' => 'catquizlab-seitems']);
     }
@@ -2577,10 +2654,10 @@ class results_page {
     /**
      * The local recovery by how many items the scale was given (#113).
      *
-     * @param array $rows Subscale observations.
+     * @param iterable $rows Subscale observations.
      * @return string
      */
-    protected function render_item_classes(array $rows): string {
+    protected function render_item_classes(iterable $rows): string {
         $component = 'local_catquizlab';
         $classes = local_analysis::by_item_class($rows);
         if ($classes === []) {
@@ -2732,7 +2809,8 @@ class results_page {
      */
     protected function render_single_flow(array $observation): string {
         $component = 'local_catquizlab';
-        $detail = $observation + results_query::detail($observation);
+        // Step by step: the whole trace.
+        $detail = $observation + results_query::detail($observation, true);
         $flow = test_flow::with_engine_information(
             test_flow::steps($detail),
             (array) ($detail['trace'] ?? []),
@@ -2938,7 +3016,13 @@ class results_page {
         $out = \html_writer::tag('h3', get_string('results:robustnessgroup', $component), ['class' => 'h5']);
         $out .= \html_writer::tag('p', get_string('results:robustnessexplain', $component), ['class' => 'text-muted']);
 
-        $observations = $this->query->observations();
+        // Without their item lists, which no figure here reads (#147): six hundred items of nine thousand sittings
+        // were most of what this tab held.
+        $observations = [];
+        foreach ($this->query->each_observation() as $observation) {
+            unset($observation['items']);
+            $observations[] = $observation;
+        }
         if ($observations === []) {
             return $out . \html_writer::div(
                 get_string('results:noobservations', $component),
@@ -3165,7 +3249,9 @@ class results_page {
      */
     protected function render_subscales(): string {
         $component = 'local_catquizlab';
-        $rows = $this->query->subscale_observations();
+        // Packed, read once (#147): a hundred and eighty thousand subscale results as arrays were more than a request's
+        // memory. The figures are computed from all of them, the plots drawn from a sample of at most MAX_POINTS.
+        $store = $this->query->subscale_store();
 
         // The heading and the explanation come first even with nothing to show:
         // a tab that says only "no data" leaves the reader guessing what it
@@ -3174,14 +3260,15 @@ class results_page {
         $out .= \html_writer::tag('p', get_string('results:localexplain', $component), ['class' => 'text-muted']);
         $out .= $this->render_scale_coverage();
 
-        if ($rows === []) {
+        if (count($store) === 0) {
             return $out . \html_writer::div(
                 get_string('results:nosubscaledata', $component),
                 'alert alert-info'
             ) . $this->render_spread();
         }
 
-        $summary = local_analysis::summarise($rows);
+        $summary = local_analysis::summarise($store->rows());
+        $sample = $this->sample_rows($store->rows(), 'subscales');
 
         // The primary local plot: the true deviation against the estimated one.
         // Absolute abilities would blame the local diagnostics for a global
@@ -3205,16 +3292,22 @@ class results_page {
                     'estdelta' => format_float((float) $row['estdelta'], 3),
                 ]),
             ],
-            $rows
+            $sample
         ))->set_description(get_string('chart:pointissubscale', $component))
             ->add_identity_line(get_string('chart:identity', $component));
+        $this->note_sample($chart, count($sample), count($store));
 
         // Only where the true deviation varies (#105, section 7). In the
         // conforming stratum it is 0 by design — no category or subscale
         // variation — and every point sat on the vertical line x = 0: data
         // read correctly, a comparison with nothing to compare.
-        $truedeltas = array_map(static fn(array $row): float => (float) $row['truedelta'], $rows);
-        $spread = $truedeltas === [] ? 0.0 : max($truedeltas) - min($truedeltas);
+        $least = null;
+        $most = null;
+        foreach ($store->rows() as $row) {
+            $least = $least === null ? (float) $row['truedelta'] : min($least, (float) $row['truedelta']);
+            $most = $most === null ? (float) $row['truedelta'] : max($most, (float) $row['truedelta']);
+        }
+        $spread = $least === null ? 0.0 : $most - $least;
         if ($spread < 1e-6) {
             $out .= \html_writer::div(
                 get_string('chart:novariation', $component),
@@ -3239,12 +3332,12 @@ class results_page {
         }
 
         $out .= \html_writer::tag('h3', get_string('results:errorbysubscale', $component), ['class' => 'h5 mt-4']);
-        $out .= $this->render_local_table(local_analysis::group($rows, 'category'), 'category');
+        $out .= $this->render_local_table(local_analysis::group($store->rows(), 'category'), 'category');
 
         $out .= \html_writer::tag('h3', get_string('results:subscaletable', $component), ['class' => 'h5 mt-4']);
-        $out .= $this->render_local_table(local_analysis::group($rows, 'key'), 'key');
-        $out .= $this->render_item_classes($rows);
-        $out .= $this->render_item_plots($rows);
+        $out .= $this->render_local_table(local_analysis::group($store->rows(), 'key'), 'key');
+        $out .= $this->render_item_classes($store->rows());
+        $out .= $this->render_item_plots($store);
         $out .= $this->render_spread();
 
         return $out;

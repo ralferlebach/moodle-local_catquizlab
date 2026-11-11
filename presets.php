@@ -43,6 +43,10 @@ $PAGE->set_url($pageurl);
 require_capability('local/catquizlab:view', $context);
 
 if ($action === 'delete' && $id > 0) {
+    // By the delete button's POST only (#149): no session key in a link, and a link deletes nothing.
+    if (!data_submitted()) {
+        redirect($pageurl);
+    }
     require_sesskey();
     require_capability('local/catquizlab:edit', $context);
     try {
@@ -116,10 +120,11 @@ if ($rows === []) {
     foreach ($rows as $row) {
         $actions = '';
         if (has_capability('local/catquizlab:edit', $context) && !$row['locked']) {
-            $actions = html_writer::link(
+            $actions = $OUTPUT->single_button(
                 new moodle_url($pageurl, ['action' => 'delete', 'id' => $row['id'], 'sesskey' => sesskey()]),
                 get_string('delete'),
-                ['class' => 'text-danger']
+                'post',
+                ['class' => 'd-inline', 'type' => \core\output\single_button::BUTTON_DANGER]
             );
         } else if ($row['locked']) {
             $actions = html_writer::tag('span', get_string('preset:lockedshort', $component), [

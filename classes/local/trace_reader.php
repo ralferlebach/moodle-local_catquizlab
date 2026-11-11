@@ -50,6 +50,9 @@ final class trace_reader {
     /** @var int Bytes of trace read in this request. */
     protected static int $read = 0;
 
+    /** @var int Batches read in this request. */
+    protected static int $batches = 0;
+
     /**
      * The size of a trace in SQL: the stored size, or the measured one where an older row has none.
      *
@@ -66,21 +69,52 @@ final class trace_reader {
     }
 
     /**
+     * What a reader of digests reads of a sitting, in SQL (#147): the digest, or the trace where a sitting collected
+     * before 0.7.57 has no digest yet — never both. {@see trace_digest::decode()} reads the row.
+     *
+     * @param string $alias The table alias of local_catquizlab_attempt.
+     * @return string
+     */
+    public static function digest_fields(string $alias = 'a'): string {
+        return $alias . '.digestjson, CASE WHEN ' . $alias . '.digestjson IS NULL THEN ' . $alias . '.tracejson ELSE NULL END'
+            . ' AS tracejson';
+    }
+
+    /**
+     * The bytes a reader of digests reads of a sitting, in SQL: the digest's size, or the trace's where there is none.
+     *
+     * @param string $alias The table alias of local_catquizlab_attempt.
+     * @return string
+     */
+    public static function digest_bytes_sql(string $alias = 'a'): string {
+        return 'CASE WHEN ' . $alias . '.digestbytes IS NOT NULL THEN ' . $alias . '.digestbytes ELSE '
+            . self::bytes_sql($alias) . ' END';
+    }
+
+    /**
      * The sittings a condition selects, in id order, batch by batch.
      *
      * @param string $where A condition on local_catquizlab_attempt, aliased "a"; named parameters only.
      * @param array $params Its parameters.
      * @param string $fields What to read, aliased: "a.id" first.
      * @param string $join Joins for the fields (applied when the rows are read, not when they are chosen).
+     * @param bool $digests Whether the fields are {@see digest_fields()}: the budget is then counted in their bytes.
      * @return \Generator<array<int, \stdClass>> Batches keyed by sitting id.
      */
-    public static function batches(string $where, array $params, string $fields, string $join = ''): \Generator {
+    public static function batches(
+        string $where,
+        array $params,
+        string $fields,
+        string $join = '',
+        bool $digests = false
+    ): \Generator {
         global $DB;
 
         $lastid = 0;
+        $sizesql = $digests ? self::digest_bytes_sql('a') : self::bytes_sql('a');
         do {
             $sizes = $DB->get_records_sql_menu(
-                'SELECT a.id, ' . self::bytes_sql('a') . ' AS bytes
+                'SELECT a.id, ' . $sizesql . ' AS bytes
                    FROM {local_catquizlab_attempt} a
                   WHERE (' . $where . ') AND a.id > :tracereaderlastid
                ORDER BY a.id ASC',
@@ -104,6 +138,7 @@ final class trace_reader {
                 }
                 self::$largest = max(self::$largest, $bytes);
                 self::$read += $bytes;
+                self::$batches++;
                 yield $rows;
             }
             if ($sizes !== []) {
@@ -143,10 +178,10 @@ final class trace_reader {
     /**
      * What this request has read: the largest batch and the total, in bytes of trace.
      *
-     * @return array{largest: int, read: int}
+     * @return array{largest: int, read: int, batches: int}
      */
     public static function figures(): array {
-        return ['largest' => self::$largest, 'read' => self::$read];
+        return ['largest' => self::$largest, 'read' => self::$read, 'batches' => self::$batches];
     }
 
     /**
@@ -157,6 +192,7 @@ final class trace_reader {
     public static function reset(): void {
         self::$largest = 0;
         self::$read = 0;
+        self::$batches = 0;
         self::$budget = null;
     }
 }
