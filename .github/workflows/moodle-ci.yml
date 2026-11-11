@@ -4,7 +4,7 @@
 # Triggered on push / PR to any branch EXCEPT main — i.e. the integration
 # branch "development" and all feature branches (dev workflow).
 #
-# Matrix: Moodle 4.5 / 5.2 / 5.3 × PHP 8.1–8.4 (supported combinations) × MariaDB / PostgreSQL
+# Matrix: Moodle 4.5 / 5.2 / 5.3 × PHP 8.2–8.4 (supported combinations) × MariaDB / PostgreSQL
 #
 # The plugin declares NO hard plugin dependencies: local_catquiz and
 # mod_adaptivequiz are detected at runtime (classes/local/environment.php), so
@@ -68,7 +68,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        php: ['8.1', '8.2', '8.3']
+        php: ['8.2', '8.3']
 
     steps:
       - uses: actions/checkout@v5
@@ -189,15 +189,13 @@ jobs:
       matrix:
         # Moodle 5.3 is supported upstream; use DB versions required by 5.3.
         moodle: [MOODLE_405_STABLE, MOODLE_502_STABLE, MOODLE_503_STABLE]
-        php: ['8.1', '8.2', '8.3']
+        php: ['8.2', '8.3']
         db:
           - { engine: mariadb, type: mariadb, port: 3306, user: root,   pass: root   }
           - { engine: pgsql,   type: pgsql,   port: 5432, user: moodle, pass: moodle }
         exclude:
           # Moodle 5.2 and 5.3 require PHP 8.3+.
-          - { moodle: MOODLE_502_STABLE, php: '8.1' }
           - { moodle: MOODLE_502_STABLE, php: '8.2' }
-          - { moodle: MOODLE_503_STABLE, php: '8.1' }
           - { moodle: MOODLE_503_STABLE, php: '8.2' }
         # Explicit additional PHP 8.4 coverage only for Moodle 5.3.
         include:
