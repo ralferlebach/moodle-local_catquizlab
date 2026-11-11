@@ -6,6 +6,24 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.7.55] — 2026-11-10 — CI: three tests that depended on the runner, not on the plugin
+
+No database change, no change in behaviour. Each cause reproduced locally (Moodle 5.2 with the pinned M5 engine set
+and 4.5), each fix checked against the unfixed state.
+
+- `plot_semantics.spec.js` (#146) failed on Moodle 5.2 and 5.3: Bootstrap 5 scrolls smoothly by default, so
+  `window.scrollBy()` had not moved the page yet when the plot was measured (top 2814 px). Now scrolls with
+  `behavior: 'instant'`. Without the CSS of 0.7.53 the test still fails on 5.2 (plot bottom 1117 px of 1080).
+- `trace_progress.spec.js` (625 questions) failed on Moodle 5.2 whenever the pipeline tick (every five minutes, cron
+  every twenty seconds in the job) ran during the test: `cli/seed_question_progress.php` seeded an engine attempt
+  without a question usage, which the tick rightly deletes as one that never started (`engine_hygiene`), and the page
+  showed 0 of 625. The seed now gives it a question usage, as every engine attempt has from its first question on.
+- `audit_test::test_the_setup_keeps_the_engine_trace` failed on one runner (Moodle 5.3, PHP 8.4, PostgreSQL): the
+  setup downloads Node packages and a browser and asks two internet hosts first; that failed there, the setup rightly
+  stopped before the pipeline, and the engine retention stayed "minimal". New `worker_runtime::assume_for_testing()`
+  (PHPUnit and Behat only, like `setup_wizard::assume_ready_for_testing()`); the two wizard tests take the runtime as
+  installed. New test `test_without_a_runtime_the_pipeline_stays_off` covers the other case on purpose.
+
 ## [0.7.54] — 2026-11-10 — CI: PHPDoc check, and every CI lint gate run before delivery
 
 No database change.

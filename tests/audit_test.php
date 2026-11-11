@@ -47,6 +47,16 @@ use local_catquizlab\output\shell;
  */
 final class audit_test extends \advanced_testcase {
     /**
+     * The worker runtime is looked at again after every test.
+     *
+     * @return void
+     */
+    protected function tearDown(): void {
+        \local_catquizlab\local\worker_runtime::assume_for_testing(null);
+        parent::tearDown();
+    }
+
+    /**
      * The frame: one per request, selector under the tabs, a way to start one.
      *
      * @return void
@@ -300,6 +310,9 @@ final class audit_test extends \advanced_testcase {
             // would be nothing to play.
             $this->markTestSkipped('Needs local_catquiz, which this job does not install.');
         }
+        // The browser and the Node packages are taken as installed: their download is not what this test is about,
+        // and with it the test failed whenever the network of the CI runner did.
+        \local_catquizlab\local\worker_runtime::assume_for_testing(true);
         \local_catquizlab\local\setup_wizard::run(true);
 
         // The switch nothing used to flip: an installation could pass every
@@ -1416,10 +1429,37 @@ final class audit_test extends \advanced_testcase {
         set_config('progressretentiondays', 30, 'local_catquiz');
         $this->assertFalse(\local_catquizlab\local\setup_wizard::engine_keeps_trace());
 
+        // As above: the runtime's download is taken as done. On 10.11.2026 it failed on one CI runner (Moodle 5.3,
+        // PHP 8.4, PostgreSQL), the setup rightly stopped before the pipeline, and the retention stayed "minimal".
+        \local_catquizlab\local\worker_runtime::assume_for_testing(true);
         \local_catquizlab\local\setup_wizard::run(true);
 
         $this->assertSame('trace', get_config('local_catquiz', 'progressretention'));
         $this->assertSame(0, (int) get_config('local_catquiz', 'progressretentiondays'));
         $this->assertTrue(\local_catquizlab\local\setup_wizard::engine_keeps_trace());
+    }
+
+    /**
+     * Without a worker runtime the setup does not switch the pipeline on — what the CI runner of 10.11.2026 saw by
+     * accident, here on purpose.
+     *
+     * @return void
+     */
+    public function test_without_a_runtime_the_pipeline_stays_off(): void {
+        $this->resetAfterTest();
+        $this->setAdminUser();
+
+        if (!\local_catquizlab\local\environment::engine_available()) {
+            $this->markTestSkipped('Needs local_catquiz, which this job does not install.');
+        }
+        set_config('worker_exec_enabled', 0, 'local_catquizlab');
+        set_config('enabled', 0, 'local_catquizlab');
+
+        \local_catquizlab\local\worker_runtime::assume_for_testing(false);
+        $result = \local_catquizlab\local\setup_wizard::run(true);
+
+        $this->assertNotContains('pipeline', $result['changed']);
+        $this->assertSame(0, (int) get_config('local_catquizlab', 'enabled'));
+        $this->assertSame(0, (int) get_config('local_catquizlab', 'worker_exec_enabled'));
     }
 }

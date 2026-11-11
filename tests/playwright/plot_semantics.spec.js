@@ -123,7 +123,9 @@ test('a plot fits below the fixed navigation bar on a wide and on a narrow windo
         const fits = await plot.evaluate((svg) => {
             const bar = document.querySelector('nav.navbar.fixed-top, nav.navbar');
             const below = bar ? bar.getBoundingClientRect().bottom : 0;
-            window.scrollBy(0, svg.getBoundingClientRect().top - below);
+            // At once: Moodle 5 (Bootstrap 5) scrolls smoothly by default, and the plot would be measured before it
+            // has moved.
+            window.scrollBy({top: svg.getBoundingClientRect().top - below, behavior: 'instant'});
             const box = svg.getBoundingClientRect();
             const middle = document.elementFromPoint(box.left + box.width / 2, box.top + 2);
             return {

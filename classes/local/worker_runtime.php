@@ -43,6 +43,26 @@ class worker_runtime {
         '/snap/bin/node',
     ];
 
+    /** @var bool|null Whether the runtime is in place, as a test declares it, or null to look and install. */
+    protected static $assumed = null;
+
+    /**
+     * Declare the runtime in place or not, for tests that must not depend on the network.
+     *
+     * Putting the runtime in place downloads Node packages and a browser and asks two hosts on the internet. A test
+     * of what the setup does around it then fails whenever the network of the machine it runs on does.
+     * Honoured only under PHPUnit or Behat. Production never reaches this.
+     *
+     * @param bool|null $ok What {@see ensure()} answers, or null to do the work again.
+     * @return void
+     */
+    public static function assume_for_testing(?bool $ok): void {
+        if (!defined('PHPUNIT_TEST') && !defined('BEHAT_SITE_RUNNING')) {
+            return;
+        }
+        self::$assumed = $ok;
+    }
+
     /**
      * Look at the runtime without touching it.
      *
@@ -364,6 +384,16 @@ class worker_runtime {
         $component = 'local_catquizlab';
         $changed = [];
         $log = [];
+
+        if (self::$assumed !== null) {
+            // Only what needs the network is assumed; the plugin's own setting is made as always.
+            if (trim((string) get_config($component, 'worker_base_url')) === '') {
+                set_config('worker_base_url', $CFG->wwwroot, $component);
+                $changed[] = 'baseurl';
+            }
+
+            return ['ok' => self::$assumed, 'changed' => $changed, 'log' => [], 'steps' => []];
+        }
 
         // The server's side first, asked fresh. Starting an npm install that
         // cannot write or cannot reach the registry costs minutes and ends in

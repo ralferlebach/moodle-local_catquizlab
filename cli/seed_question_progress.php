@@ -33,6 +33,7 @@ define('CLI_SCRIPT', true);
 
 require(__DIR__ . '/../../../config.php');
 require_once($CFG->libdir . '/clilib.php');
+require_once($CFG->libdir . '/questionlib.php');
 
 use local_catquizlab\local\attempt_history;
 use local_catquizlab\local\attempt_scheduler;
@@ -91,8 +92,13 @@ $personid = (int) $DB->insert_record('local_catquizlab_person', (object) [
     'abilityglobal' => 0.0, 'profilejson' => json_encode(['global' => 0.0]), 'moodleuserid' => $user->id,
     'timecreated' => time(), 'timemodified' => time(),
 ]);
+// With a question usage, as an engine attempt has from its first question on. Without one it is an attempt that
+// never started, and the pipeline tick deletes it (engine_hygiene) — in CI, whenever the tick ran during the test.
+$quba = question_engine::make_questions_usage_by_activity('mod_adaptivequiz', context_system::instance());
+$quba->set_preferred_behaviour('deferredfeedback');
+question_engine::save_questions_usage_by_activity($quba);
 $engine = (int) $DB->insert_record('adaptivequiz_attempt', (object) [
-    'instance' => $instance, 'userid' => $user->id, 'uniqueid' => 0, 'attemptstate' => 'inprogress',
+    'instance' => $instance, 'userid' => $user->id, 'uniqueid' => $quba->get_id(), 'attemptstate' => 'inprogress',
     'attemptstopcriteria' => '', 'questionsattempted' => $answered, 'timecreated' => time(), 'timemodified' => time(),
 ]);
 $worker = 'catquizlab-exec-qprogress';
