@@ -63,6 +63,7 @@ use local_catquizlab\local\worker_registry;
     'no-navigation-failures' => false,
     'expect-recovered' => 0,
     'budget' => '',
+    'require-all' => false,
 ], ['h' => 'help']);
 
 if ($options['help']) {
@@ -74,6 +75,7 @@ Options:
   --persons=2          How many simulated people.
   --minanswers=15      How many answers an attempt must give to count.
   --minutes=5          How long to wait for the worker.
+  --require-all        Fail unless every queued sitting was collected or failed in that time (load matrix).
   --keep               Leave the experiment behind for inspection.
   --budget=G1,G2,S1,S2,SE1,SE2
                        The run's budgets instead of the smoke defaults (#123):
@@ -388,31 +390,15 @@ step(sprintf(
 // claimable, so on a busy instance it would spend the whole timeout on
 // somebody else's attempts and this test would report a failure that says
 // nothing about the thing it was testing.
-$otherwork = $DB->execute(
-    'UPDATE {local_catquizlab_attempt}
-        SET nextruntime = :later
-      WHERE status = :queued
-        AND runid NOT IN (SELECT id FROM {local_catquizlab_run} WHERE experimentid = :experimentid)',
-    [
-        'later'        => time() + HOURSECS,
-        'queued'       => attempt_scheduler::STATUS_QUEUED,
-        'experimentid' => $experimentid,
-    ]
-);
-step('Other queued work deferred for the duration.');
+// Deferred is exactly what was there, and given back exactly (#120, audit 11.11.2026): before 0.7.59 the deferral set
+// every other queued sitting an hour ahead and the end set them all to 0 - a retry's own backoff, set by the scheduler,
+// was gone either way. Now each sitting's own nextruntime is kept, in the database too, so that even a killed run is
+// put right by the next one; and a sitting the scheduler has touched since keeps what the scheduler gave it.
+$deferred = \local_catquizlab\local\queue_deferral::defer_others($experimentid, HOURSECS);
+step('Other queued work deferred for the duration (' . $deferred . ' sittings, each to be given back its own time).');
 // And given back when this ends, however it ends: a failed check (cli_error) used to leave every other queued sitting
 // of the installation an hour in the future.
-register_shutdown_function(static function () use ($experimentid): void {
-    global $DB;
-    $DB->execute(
-        'UPDATE {local_catquizlab_attempt}
-            SET nextruntime = 0
-          WHERE status = :queued
-            AND nextruntime > :now
-            AND runid NOT IN (SELECT id FROM {local_catquizlab_run} WHERE experimentid = :experimentid)',
-        ['queued' => attempt_scheduler::STATUS_QUEUED, 'now' => time(), 'experimentid' => $experimentid]
-    );
-});
+register_shutdown_function([\local_catquizlab\local\queue_deferral::class, 'restore']);
 
 // For a load test, several workers at once: the race of #100 showed under
 // load, not in a single browser.
@@ -472,6 +458,65 @@ while (time() < $deadline) {
     }
 }
 step($collected . ' collected, ' . $failed . ' failed.', $started);
+// What did not finish, each sitting with where it stands (audit 11.11.2026, #110/#134): before 0.7.59 a sitting
+// left behind said nothing - in the load matrix one of twenty sat out the time limit in a retry's backoff after its
+// worker failed ("DOM.resolveNode timed out") and every other worker had left the empty queue.
+$unfinished = $DB->get_records_select(
+    'local_catquizlab_attempt',
+    'runid IN (SELECT id FROM {local_catquizlab_run} WHERE experimentid = ?) AND status NOT IN (?, ?)',
+    [$experimentid, attempt_scheduler::STATUS_COLLECTED, attempt_scheduler::STATUS_FAILED],
+    'id ASC',
+    'id, status, tries, nextruntime, leaseowner'
+);
+foreach ($unfinished as $sitting) {
+    $last = $DB->get_records(
+        'local_catquizlab_attemptlog',
+        ['attemptid' => $sitting->id],
+        'id DESC',
+        'id, outcome, reasoncode, detail',
+        0,
+        1
+    );
+    $last = reset($last);
+    cli_writeln(sprintf(
+        '  NOT FINISHED: sitting %d, status %d, tries %d, next run %s, lease %s; last history: %s',
+        $sitting->id,
+        $sitting->status,
+        $sitting->tries,
+        (int) $sitting->nextruntime > time() ? 'in ' . ((int) $sitting->nextruntime - time()) . ' s' : 'due',
+        (string) ($sitting->leaseowner ?? '') ?: '-',
+        $last ? $last->outcome . ' ' . ($last->reasoncode ?? '') . ' ' . substr((string) $last->detail, 0, 120) : 'none'
+    ));
+}
+$notfinished = count($unfinished);
+
+// Everything above is the state at the time limit; everything below checks the sittings against each other and must
+// not check a moving run (gate 12.11.2026): the workers kept playing after the limit, a sitting was collected between
+// the reproduction package and the run's own contract, and the two differed for that alone. So this experiment's queued
+// sittings are held back, the ones in play are given time to end, and only then is anything compared.
+if ($notfinished > 0) {
+    $started = microtime(true);
+    $held = smoke_hold_own($experimentid, []);
+    register_shutdown_function(static function () use (&$held): void {
+        smoke_release_own($held);
+    });
+    $waituntil = time() + 240;
+    while (($inplay = smoke_in_play($experimentid)) > 0 && time() < $waituntil) {
+        sleep(5);
+    }
+    // A sitting whose execution failed in the meantime is queued again, with its retry's time: held back as well.
+    $held = smoke_hold_own($experimentid, $held);
+    $runs = 'runid IN (SELECT id FROM {local_catquizlab_run} WHERE experimentid = ?) AND status = ?';
+    $collected = $DB->count_records_select('local_catquizlab_attempt', $runs, [$experimentid, attempt_scheduler::STATUS_COLLECTED]);
+    $failed = $DB->count_records_select('local_catquizlab_attempt', $runs, [$experimentid, attempt_scheduler::STATUS_FAILED]);
+    step(sprintf(
+        'Time limit: %d queued sitting(s) held back for the checks, %s; now %d collected, %d failed.',
+        count($held),
+        $inplay > 0 ? $inplay . ' still in play after 240 s' : 'the ones in play have ended',
+        $collected,
+        $failed
+    ), $started);
+}
 
 // Every execution counts, not only the final state (#100). A navigation failure
 // that a retry covered up is still a navigation failure: under load it is the
@@ -608,11 +653,12 @@ $traces = $DB->get_records_select(
     'runid IN (SELECT id FROM {local_catquizlab_run} WHERE experimentid = ?) AND status = ?',
     [$experimentid, attempt_scheduler::STATUS_COLLECTED],
     'id ASC',
-    'id, tracejson'
+    'id, engineattemptid, tracejson'
 );
 
 $shortest = PHP_INT_MAX;
 $stopreasons = [];
+$short = [];
 foreach ($traces as $trace) {
     $decoded = json_decode((string) $trace->tracejson, true);
 
@@ -622,17 +668,52 @@ foreach ($traces as $trace) {
     // questions the attempt answered. It answered twenty.
     $answered = (int) ($decoded['steps'] ?? ($decoded['nitems'] ?? 0));
     $shortest = min($shortest, $answered);
+    if ($answered < $minanswers) {
+        $short[(int) $trace->id] = ['answered' => $answered, 'stopreason' => (string) ($decoded['stopreason'] ?? ''),
+            'engineattemptid' => (int) ($trace->engineattemptid ?? 0)];
+    }
 
     if (!empty($decoded['stopreason'])) {
         $stopreasons[(string) $decoded['stopreason']] = true;
     }
 }
-if ($traces === [] || $shortest < $minanswers) {
-    cli_error('Attempts answered fewer than ' . $minanswers . ' questions (shortest: '
-        . ($shortest === PHP_INT_MAX ? 0 : $shortest) . ').');
+if ($traces === []) {
+    cli_error('No collected attempt has a trace.');
 }
-step('Every collected attempt answered at least ' . $shortest . ' questions (needed '
-    . $minanswers . '); stopped because: ' . (implode(', ', array_keys($stopreasons)) ?: 'unrecorded') . '.');
+// Too short fails the test too — after the contract and the ends below are checked and printed (#123): why a sitting
+// ended early (the pool, a rule, the engine) is what the case is for.
+$tooshort = $shortest < $minanswers;
+step(($tooshort ? 'TOO SHORT: the shortest attempt answered ' : 'Every collected attempt answered at least ') . $shortest
+    . ' questions (needed ' . $minanswers . '); stopped because: '
+    . (implode(', ', array_keys($stopreasons)) ?: 'unrecorded') . '.');
+// Each sitting that ended short, with the engine's own end code beside the trace's (audit 11.11.2026, #110): the cause
+// per sitting, not one line for all of them.
+if ($short !== []) {
+    $enginestatus = [];
+    $engineids = array_filter(array_column($short, 'engineattemptid'));
+    if ($engineids !== [] && $DB->get_manager()->table_exists('local_catquiz_attempts')) {
+        [$inengine, $engineparams] = $DB->get_in_or_equal(array_values($engineids), SQL_PARAMS_NAMED);
+        $enginestatus = $DB->get_records_select_menu(
+            'local_catquiz_attempts',
+            "component IN ('adaptivequiz', 'mod_adaptivequiz') AND attemptid " . $inengine,
+            $engineparams,
+            '',
+            'attemptid, status'
+        );
+    }
+    foreach ($short as $id => $entry) {
+        $status = $enginestatus[$entry['engineattemptid']] ?? null;
+        cli_writeln(sprintf(
+            '  short: sitting %d answered %d; trace stop "%s"; engine attempt %d status %s%s',
+            $id,
+            $entry['answered'],
+            $entry['stopreason'],
+            $entry['engineattemptid'],
+            $status === null ? 'unknown' : (string) $status,
+            $status !== null && (int) $status === 10 ? ' (the questions ran out before the minimum: the engine\'s end)' : ''
+        ));
+    }
+}
 
 // 7. Results: numbers, not just rows.
 $started = microtime(true);
@@ -744,18 +825,19 @@ if ($disagreements !== []) {
 }
 
 
+if (!empty($options['require-all']) && $notfinished > 0) {
+    cli_error($notfinished . ' of ' . $queued . ' sittings did not finish in ' . (int) $options['minutes']
+        . ' minutes (listed above).');
+}
+if ($tooshort) {
+    cli_error('Attempts answered fewer than ' . $minanswers . ' questions (shortest: ' . $shortest . ').');
+}
 if ($noobservations) {
     cli_error('Results report no observations.');
 }
 
-// Give the rest of the installation its queue back, whatever happened here.
-$DB->execute(
-    'UPDATE {local_catquizlab_attempt}
-        SET nextruntime = 0
-      WHERE status = :queued
-        AND nextruntime > :now',
-    ['queued' => attempt_scheduler::STATUS_QUEUED, 'now' => time()]
-);
+// Give the rest of the installation its queue back, each sitting its own time.
+\local_catquizlab\local\queue_deferral::restore();
 
 if (empty($options['keep'])) {
     \local_catquizlab\local\purger::delete_experiment($experimentid, true, true);
@@ -803,6 +885,15 @@ function smoke_ends_agree(int $experimentid): array {
     global $DB;
 
     $out = [];
+    // The sittings first, and only these compared: one collected while the analysis and the export are read would be
+    // missing from whichever was read before it - a difference of timing, not of ends.
+    $sittings = $DB->get_records_sql(
+        'SELECT a.id, a.engineattemptid, a.tracejson
+           FROM {local_catquizlab_attempt} a
+           JOIN {local_catquizlab_run} r ON r.id = a.runid
+          WHERE r.experimentid = ? AND a.status = ?',
+        [$experimentid, attempt_scheduler::STATUS_COLLECTED]
+    );
     $query = new \local_catquizlab\local\results_query(['experimentid' => $experimentid, 'validity' => 'all']);
     $observations = [];
     foreach ($query->each_observation() as $observation) {
@@ -817,13 +908,6 @@ function smoke_ends_agree(int $experimentid): array {
     ) {
         $export[(int) $row['attemptid']] = $row;
     }
-    $sittings = $DB->get_records_sql(
-        'SELECT a.id, a.engineattemptid, a.tracejson
-           FROM {local_catquizlab_attempt} a
-           JOIN {local_catquizlab_run} r ON r.id = a.runid
-          WHERE r.experimentid = ? AND a.status = ?',
-        [$experimentid, attempt_scheduler::STATUS_COLLECTED]
-    );
     $hasengine = $DB->get_manager()->table_exists('local_catquiz_attempts');
     $hostcolumns = $DB->get_columns('adaptivequiz_attempt');
     foreach ($sittings as $sitting) {
@@ -853,8 +937,17 @@ function smoke_ends_agree(int $experimentid): array {
         $fixed = ['reachedmaximumquestions' => 'max_items_reached', 'exceededmaxattempttime' => 'timeout',
             'attemptclosedbytimelimit' => 'timeout'];
         $seen = ['analysis' => (string) $observation['endreasoncode'], 'export' => (string) $row['endreasoncode']];
-        if ((string) ($observation['storedreasoncode'] ?? '') !== '') {
-            $seen['history'] = (string) $observation['storedreasoncode'];
+        // The end as the history recorded it at collection, where it did: a reason code of a recovered or failed
+        // execution before or after it (submit_connect_failed, worker_timeout …) is about that execution, not the end.
+        $collectedcode = $DB->get_field_sql(
+            'SELECT reasoncode FROM {local_catquizlab_attemptlog}
+              WHERE attemptid = ? AND outcome = ? AND reasoncode IS NOT NULL
+           ORDER BY id DESC',
+            [$id, \local_catquizlab\local\attempt_history::COLLECTED],
+            IGNORE_MULTIPLE
+        );
+        if ($collectedcode !== false && (string) $collectedcode !== '') {
+            $seen['history'] = (string) $collectedcode;
         }
         if (count(array_unique($seen)) > 1 || (isset($fixed[$engine]) && $seen['analysis'] !== $fixed[$engine])) {
             $out[] = 'sitting ' . $id . ' end: ' . json_encode(['engine' => $engine] + $seen);
@@ -877,14 +970,118 @@ function smoke_ends_agree(int $experimentid): array {
             $observation['validitystate']
         ));
     }
-    // The package holds the same contract as the run.
-    $package = \local_catquizlab\local\reproducibility::package($experimentid, false);
-    foreach ($package['runs'] as $run) {
-        $chain = \local_catquizlab\local\run_contract::chain((int) $run['id']);
-        if (json_encode($run['contract']) !== json_encode($chain)) {
-            $out[] = 'run ' . $run['id'] . ': the package holds another contract than the run';
+    // The package holds the same contract as the run - for the same sittings: where a sitting changed state between
+    // reading the package and reading the run, the two are read again, and a run that never held still is said so.
+    $differs = [];
+    for ($try = 1; $try <= 10; $try++) {
+        $before = smoke_sitting_states($experimentid);
+        $package = \local_catquizlab\local\reproducibility::package($experimentid, false);
+        $differs = [];
+        foreach ($package['runs'] as $run) {
+            $chain = \local_catquizlab\local\run_contract::chain((int) $run['id']);
+            if (json_encode($run['contract']) !== json_encode($chain)) {
+                $differs[] = (int) $run['id'];
+            }
         }
+        if (smoke_sitting_states($experimentid) === $before) {
+            foreach ($differs as $runid) {
+                $out[] = 'run ' . $runid . ': the package holds another contract than the run';
+            }
+            return $out;
+        }
+        sleep(2);
     }
+    $out[] = 'the package and the runs could not be compared: sittings changed state during each of 10 readings';
 
     return $out;
+}
+
+/**
+ * The state of every sitting of an experiment, to tell whether two readings saw the same run.
+ *
+ * @param int $experimentid The smoke experiment.
+ * @return string A digest of id, status and last change of every sitting.
+ */
+function smoke_sitting_states(int $experimentid): string {
+    global $DB;
+
+    $rows = $DB->get_records_sql(
+        'SELECT a.id, a.status, a.timemodified
+           FROM {local_catquizlab_attempt} a
+           JOIN {local_catquizlab_run} r ON r.id = a.runid
+          WHERE r.experimentid = ?
+       ORDER BY a.id ASC',
+        [$experimentid]
+    );
+    $digest = '';
+    foreach ($rows as $row) {
+        // The heartbeat refreshes timemodified of a sitting in play; only a settled sitting's time says it changed.
+        $digest .= $row->id . ':' . $row->status . ':'
+            . ((int) $row->status === attempt_scheduler::STATUS_RUNNING ? '' : $row->timemodified) . ';';
+    }
+
+    return sha1($digest);
+}
+
+/**
+ * Sittings of an experiment being played or waiting for their trace.
+ *
+ * @param int $experimentid The smoke experiment.
+ * @return int
+ */
+function smoke_in_play(int $experimentid): int {
+    global $DB;
+
+    return $DB->count_records_select(
+        'local_catquizlab_attempt',
+        'runid IN (SELECT id FROM {local_catquizlab_run} WHERE experimentid = ?) AND status IN (?, ?)',
+        [$experimentid, attempt_scheduler::STATUS_RUNNING, attempt_scheduler::STATUS_TRACEPENDING]
+    );
+}
+
+/**
+ * Hold back an experiment's queued sittings, so no worker claims one while the smoke test checks the run.
+ *
+ * @param int $experimentid The smoke experiment.
+ * @param array $held Sittings already held, id => their own nextruntime.
+ * @return array Every sitting held, id => its own nextruntime.
+ */
+function smoke_hold_own(int $experimentid, array $held): array {
+    global $DB;
+
+    $until = time() + DAYSECS;
+    $queued = $DB->get_records_sql_menu(
+        'SELECT id, nextruntime FROM {local_catquizlab_attempt}
+          WHERE status = ? AND nextruntime < ?
+            AND runid IN (SELECT id FROM {local_catquizlab_run} WHERE experimentid = ?)',
+        [attempt_scheduler::STATUS_QUEUED, $until - HOURSECS, $experimentid]
+    );
+    foreach (array_chunk(array_keys($queued), 500, true) as $chunk) {
+        [$in, $params] = $DB->get_in_or_equal($chunk);
+        $DB->execute(
+            'UPDATE {local_catquizlab_attempt} SET nextruntime = ? WHERE status = ? AND id ' . $in,
+            array_merge([$until, attempt_scheduler::STATUS_QUEUED], $params)
+        );
+    }
+
+    return $held + array_map('intval', $queued);
+}
+
+/**
+ * Give held sittings their own time back, where they are still queued: with --keep they are played as any other.
+ *
+ * @param array $held Sittings held, id => their own nextruntime.
+ */
+function smoke_release_own(array $held): void {
+    global $DB;
+
+    foreach ($held as $id => $nextruntime) {
+        $DB->set_field_select(
+            'local_catquizlab_attempt',
+            'nextruntime',
+            $nextruntime,
+            'id = ? AND status = ?',
+            [$id, attempt_scheduler::STATUS_QUEUED]
+        );
+    }
 }

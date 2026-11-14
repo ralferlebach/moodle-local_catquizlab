@@ -6,6 +6,94 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.7.59] — 2026-11-12 — Audit 11.11.2026: counts the downloads have (#115), three levels of an end (#134), a test's queue given back exactly (#120), web memory limit in the traces (#132), a hung page ends its sitting after one timeout
+
+No database change.
+
+- **Export tab counts = download rows (#115/#112/#147).** New `cli/provenance_snapshot.php`: for one experiment and
+  each validity (valid, invalid, unknown, all) the observations, the export tab's count, the CSV rows and the JSON rows
+  parsed back from the streamed files, the size check and the queue; exit 1 where any disagree. It found two counts of
+  the tab that were not the download's: the item level counted the items each sitting used (605 000 for a download of
+  1 250 rows, one per materialised item of the selection's runs), the run level only runs with a sitting of the chosen
+  validity (0 for a download of 2 rows). Both now count what the download has. The 9 000 → 8 706 of the audit is the
+  attempt level: 0.7.56 printed the size check (every sitting with a trace, any validity), 0.7.57 the sittings of the
+  chosen validity - the download, byte-identical in both, has 8 706 rows (reproduced with the same seed: valid 8 706,
+  invalid 294, all 9 000).
+- **Three levels of how a sitting ended (#134).** Results and the attempt export keep apart the terminal code (the
+  collected history row's; a failure's only where nothing was collected), the transport events of executions that
+  failed and were retried, and the answer submissions reconciled and continued. Before, the history code was whichever
+  came last, so a sitting that lost a request and then ran out of questions said `submit_connect_failed`. Attempt
+  export: `terminalreasoncode`, `transportevents`, `recoveredevents`, `executions`, appended.
+- **An execution nobody reported is a failure in the history (#134).** A worker killed in the middle of a sitting
+  (Kampagne B: SIGKILL) reports nothing; its sitting went back into the queue with only a "requeued" row, and the
+  export's `transportevents` stayed empty for an execution that was lost. Releasing a dead worker's sittings and
+  reclaiming a lapsed lease now write the failure row first (`worker_timeout`, the worker named, tagged
+  `[worker:gone]` / `[lease:lapsed]`), then the retry decision, as for a failure the worker reported itself.
+- **The collected row carries its end (#134).** A worker's completion report collects the trace first - which is when
+  the stop reason and its code are known - and writes the collected history row after; the code went to a collected
+  row that did not exist yet. Every sitting collected through a worker's report had a collected row without a code, so
+  `terminalreasoncode` came out empty in the live runs of Kampagne B (the unit test had written the row first). The
+  code now waits for its row.
+- **Smoke and load tests give other queued work back exactly (#120).** `queue_deferral`: each deferred sitting's own
+  `nextruntime` is recorded (in the configuration too, so a killed run is put right by the next) and restored only
+  where the deferral still holds it. Before, every other queued sitting went an hour ahead and, at the end, to 0: a
+  retry's backoff was lost either way.
+- **Web memory limit in every request trace (#132).** `request_trace` lines carry `memorylimit` as the request had it;
+  `cli/accept_logs.php` reports the web server's limit from its own requests beside the command line's (which the
+  audit rightly found said `-1`).
+- **A worker waits for a sitting that is not due yet (#110/#133).** An empty claim now says when the next queued sitting
+  of a run that hands out work is due (`nextdue`, seconds); the worker waits for it - polling at most every 30 s,
+  `--max-idle` / `CATQUIZLAB_MAX_IDLE` in all, default 300 s - instead of leaving. In the CLASSIC load test with 10
+  workers one sitting failed ("DOM.resolveNode timed out" on the overloaded machine), went into its retry's backoff,
+  and every worker had left the queue as empty by the time it was due: it sat out the 30-minute limit unplayed.
+- **A page that stopped answering ends the sitting after one timeout (#110/#133).** In the rerun of the same load test
+  one sitting's page froze after its 26th answer. The worker swallowed the first timed-out call, waited out the next,
+  then asked the frozen page for a screenshot, its DOM and its title: 15 minutes, and the retry fell due after the
+  50-minute limit. Now a DevTools call that runs into the protocol timeout is never swallowed or repeated, and the
+  failure is saved from what was recorded before (previous screenshot, events; event `page-unresponsive`) instead of
+  asking the frozen page three times more: one timeout instead of six. The timeout is the worker's own,
+  `--protocol-timeout` / `CATQUIZLAB_PROTOCOL_TIMEOUT`, default 180 s as Puppeteer's; 90 s was tried: after 37 minutes of
+  the same load test 11 executions had failed and 12 sittings were collected (a starved renderer is slow, not dead). Worker test
+  `unresponsive.test.js` freezes a page on purpose.
+- **"Out of questions" before the minimum is the pool's limit only where the pool was short (#123/#141).** The run
+  contract took the engine's word: every `noremainingquestions(beforeminimum)` under the global minimum was
+  `pool_exhausted_before_min`, kind "design (the pool could not supply the minimum)". In the ALLSUBS load test two
+  sittings ended so at 85 and 90 of 240 items, the minimum 120: the engine had removed one subscale early (at 5 and 2
+  items) and closed the two others at their subscale minimum of 40. Now the contract counts what the pool could still
+  have given the sitting - per scale the unplayed items, within the subscale maximum - and says
+  `ran_out_with_items_left` (defect) where that reaches the minimum; `pool_exhausted_before_min` stays for a pool that
+  could not. Where the per-scale count cannot be made (unmapped items) the engine's word stands.
+- `cli/smoke.php` lists every sitting that ended short (trace stop, engine status code) and every sitting that did not
+  finish (status, tries, next run, lease, last history entry); `--require-all` fails the test on any unfinished one,
+  and `cli/load_matrix.sh` passes it. When the time limit ends the wait with sittings outstanding, the smoke test
+  holds back the experiment's queued sittings and lets the ones in play end (at most 240 s) before it checks anything:
+  the workers went on playing during the checks, and in the gate's load test (300 sittings, 252 collected in 30
+  minutes on 2 CPUs) a sitting collected between reading the reproduction package and the run made the two contracts
+  differ (`DISAGREES: the package holds another contract than the run`). The end comparison now also takes its sittings
+  before the analysis and the export, and compares package and run only on readings with the same sittings. The load matrix's summary no longer
+  stops at the sampler's unfinished last line.
+- `scale_inventory_test::test_a_sound_tree_passes` stages engine scales with the ids the database gives them; it was
+  skipped everywhere before (one of the 16 skips the audit asked about).
+
+---
+
+## [0.7.58] — 2026-11-11 — CI fixes: Behat fixture under the design thresholds (#112), worker E2E end comparison
+
+No database change, no change to what the plugin does; two test fixes found by the CI run on 0.7.57's predecessor.
+
+- **Behat, "Compare related tests" and "Layout" (all three Moodle lines, both scenarios red in CI).** The step
+  `a full-trace sitting is collected in run …` wrote a sitting of three questions. Since #112 a run without a readable
+  engine test is judged by its own design, whose minimum is ten questions and whose SE bound is 1.0, so the sitting
+  counted as invalid and neither the comparison nor the layout section had anything to show. The fixture now plays ten
+  questions and ends at SE ≤ 1.0, a sitting the design counts as valid; the rule stays as it is.
+- **Worker E2E, step "Issue 134 — a lost response and a lost request are reconciled" (legacy, moodle5, moodle53).**
+  `smoke.php` took the reason code of the last history entry (a recovered `submit_connect_failed`) for the sitting's
+  end and reported "DISAGREES". It now compares the code of the COLLECTED entry with the engine, the analysis, the
+  export and the package (already in the 0.7.57 ZIP, not in the CI'd commit).
+- `.gitattributes`, `.gitignore`, `cli/experiment.json`: line endings as in the repository.
+
+---
+
 ## [0.7.57] — 2026-11-11 — Results at scale (#147), collection race (#138), validity (#112), acceptance tools (#121, #123, #132), no keys in URLs (#149)
 
 Database change: two columns on `local_catquizlab_attempt` (`digestjson`, `digestbytes`); an ad-hoc task fills them in
@@ -106,6 +194,12 @@ digest from the trace as they read it).
   the export of sittings and the reproduction package's contract. `cli/contract_matrix.sh` runs the cases of the
   provisioning read-back test — three strategies, global budgets 3–6 and 1–8, subscale budgets 1–3 and 2–2, SE targets
   0.30 and 0.50 — plus the classical test's all items, the sweep with cell overrides (#104) and the root scale (#102).
+  `smoke.php` checks and prints the contract and the ends before it fails a case for too short a sitting or for no valid
+  observation, and gives the installation's other queued sittings back however it ends (a failed check left them an
+  hour in the future).
+- **Seeders judged by their design (#112).** `seed_modes.php` writes each scale's standard error, `seed_results.php`
+  gives its runs an SE bound its sittings keep: with the design's thresholds applied (see above) their sittings are the
+  valid ones they were meant to be.
 - **Load matrix with real CAT sittings (#110, #124, #136).** `cli/load_matrix.sh` plays workers × mode (classic and
   allsubs as long tests of `MINANSWERS` questions, a short control mode), each step through `cli/smoke.php`, while
   `cli/load_sampler.php` samples the web server's processes, their resident memory and the database's connections;

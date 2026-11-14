@@ -216,6 +216,9 @@ class request_trace {
             'durationms' => (int) round(1000 * max(0.0, $now - (float) $request['started'])),
             'connection' => $states === [] ? 'normal' : implode('+', $states),
             'peakmb' => round($peakbytes / 1048576, 1),
+            // The limit this request ran under, as PHP had it (#132): a peak means little without its ceiling, and the
+            // web server's limit is not the command line's.
+            'memorylimit' => (string) ini_get('memory_limit'),
             'pid' => (int) getmypid(),
         ] + array_intersect_key($process, array_flip(['queries', 'rssmb', 'hwmmb'])) + [
             'exception' => $exception,

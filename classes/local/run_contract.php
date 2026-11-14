@@ -60,6 +60,10 @@ class run_contract {
         'global_max_exceeded' => 'defect',
         'global_min_undercut' => 'defect',
         'pool_exhausted_before_min' => 'design',
+        // The engine said it ran out before the minimum, yet the pool still held enough items the sitting could have
+        // been given — within every subscale's maximum — to reach it (load test 11.11.2026, ALLSUBS: 85 of 240 played,
+        // one subscale left at 5 of 80). Not the pool's limit: the engine's selection.
+        'ran_out_with_items_left' => 'defect',
         'subscale_max_exceeded' => 'defect',
         'classic_not_all_items' => 'defect',
         // Stopped on the standard error with a final SE above the target it stopped for (#123).
@@ -351,7 +355,8 @@ class run_contract {
      * @param array|null $map Question id => scale chain; the run's own by default.
      * @param string $endcode The engine's stop code of the sitting; '' reads it from the trace. A pool
      *     exhausted before the minimum (e.g. noremainingquestionsbeforeminimum, #141) is reported as
-     *     pool_exhausted_before_min, not as an undercut.
+     *     pool_exhausted_before_min, not as an undercut — where the pool could not have given the minimum; where
+     *     it still held enough items within the subscale maxima, as ran_out_with_items_left.
      * @return string[] Keys of RULES.
      */
     public static function check_sitting(int $runid, array $trace, ?array $map = null, string $endcode = ''): array {
@@ -383,7 +388,13 @@ class run_contract {
         $answered = isset($trace['enginevalidity']['n']) && is_numeric($trace['enginevalidity']['n'])
             ? (int) $trace['enginevalidity']['n'] : $n;
         if ($answered < $limits['minquestions']) {
-            $rules[] = in_array($code, self::POOL_EXHAUSTED, true) ? 'pool_exhausted_before_min' : 'global_min_undercut';
+            if (!in_array($code, self::POOL_EXHAUSTED, true)) {
+                $rules[] = 'global_min_undercut';
+            } else {
+                $left = self::items_left($trace, $runid, $map, $n, $limits);
+                $rules[] = $left !== null && $answered + $left >= $limits['minquestions']
+                    ? 'ran_out_with_items_left' : 'pool_exhausted_before_min';
+            }
         }
         if ($limits['maxpersubscale'] > 0) {
             $leaf = self::max_per_subscale($trace, $runid, $map);
@@ -459,6 +470,41 @@ class run_contract {
         }
 
         return max($exposure['direct']);
+    }
+
+    /**
+     * How many more items the pool could still have given a sitting, within each subscale's maximum.
+     *
+     * Per scale the items the run filed under it and not played in the sitting, capped by what the subscale maximum
+     * still allowed. Without a per-scale count of the sitting (no steps in the trace), only where no subscale maximum
+     * applies: the pool less the items played. Null where it cannot be told.
+     *
+     * @param array $trace The sitting's trace.
+     * @param int $runid The run.
+     * @param array|null $map Question id => scale chain; the run's own by default.
+     * @param int $n Items played.
+     * @param array $limits The run's limits.
+     * @return int|null
+     */
+    protected static function items_left(array $trace, int $runid, ?array $map, int $n, array $limits): ?int {
+        $map = $map ?? engine_validity::question_scales($runid);
+        $exposure = scale_exposure::reconstruct($trace, $runid, $map);
+        if ($exposure['source'] !== scale_exposure::SOURCE_STEPS || $exposure['direct'] === []) {
+            return $limits['maxpersubscale'] > 0 || $limits['poolsize'] <= 0 ? null : max(0, $limits['poolsize'] - $n);
+        }
+        // The pool per scale an item is filed under, by the same mapping the sitting's counts were made with.
+        $pool = [];
+        foreach ($map as $chain) {
+            $pool[$chain[0]] = ($pool[$chain[0]] ?? 0) + 1;
+        }
+        $left = 0;
+        foreach ($pool as $scaleid => $pooled) {
+            $played = (int) ($exposure['direct'][$scaleid] ?? 0);
+            $unplayed = max(0, (int) $pooled - $played);
+            $left += $limits['maxpersubscale'] > 0 ? min($unplayed, max(0, $limits['maxpersubscale'] - $played)) : $unplayed;
+        }
+
+        return $left;
     }
 
     /**

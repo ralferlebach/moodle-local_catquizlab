@@ -68,6 +68,18 @@ class attempt_history {
     public const STALE = 'stale';
 
     /**
+     * Ends found before their collected row was written: sitting id => reason code (#134).
+     *
+     * A worker's completion report collects the trace first, which is when the stop reason is known, and writes the
+     * collected row after. The code went to whichever collected row was there before, which for a first collection
+     * is none: every sitting collected through the worker's report had a collected row without a code, and the
+     * export's terminalreasoncode was empty (Kampagne B, audit 11.11.2026). The code waits here for its row.
+     *
+     * @var array<int, string>
+     */
+    protected static array $pendingcodes = [];
+
+    /**
      * Record one execution.
      *
      * @param int $attemptid The sitting.
@@ -108,7 +120,7 @@ class attempt_history {
                     (string) ($detail['detail'] ?? ''),
                     (array) (json_decode((string) self::diagnosis_json($detail), true) ?: [])
                 )
-                : null,
+                : ($outcome === self::COLLECTED ? self::take_pending_code($attemptid) : null),
             'timecreated'     => time(),
         ]);
     }
@@ -367,7 +379,24 @@ class attempt_history {
         $row = reset($rows);
         if ($row) {
             $DB->set_field('local_catquizlab_attemptlog', 'reasoncode', $code, ['id' => $row->id]);
+        } else {
+            // Its collected row is not written yet (a worker's completion report collects first): it takes the code
+            // when it is.
+            self::$pendingcodes[$attemptid] = $code;
         }
+
+        return $code;
+    }
+
+    /**
+     * The end found for a sitting whose collected row is being written now, once.
+     *
+     * @param int $attemptid The sitting.
+     * @return string|null
+     */
+    protected static function take_pending_code(int $attemptid): ?string {
+        $code = self::$pendingcodes[$attemptid] ?? null;
+        unset(self::$pendingcodes[$attemptid]);
 
         return $code;
     }

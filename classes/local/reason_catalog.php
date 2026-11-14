@@ -233,6 +233,10 @@ class reason_catalog {
         if (strpos($message, '[lease:lost]') !== false) {
             return 'lease_lost';
         }
+        // An execution nobody reported, written when its worker was found dead or its lease ran out (#134).
+        if (strpos($message, '[worker:gone]') !== false || strpos($message, '[lease:lapsed]') !== false) {
+            return 'worker_timeout';
+        }
         if (preg_match('/\[reconcile:(mismatch|missing)\]/', $message)) {
             return 'submit_state_mismatch';
         }

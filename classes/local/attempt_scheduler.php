@@ -34,6 +34,12 @@ namespace local_catquizlab\local;
  * calls it, and the collect/execute steps act on the rows it produces.
  */
 class attempt_scheduler {
+    /** @var string Tag of the failure row for a sitting whose worker was found dead (#134). */
+    public const WORKER_GONE = '[worker:gone]';
+
+    /** @var string Tag of the failure row for a sitting whose lease ran out unrenewed (#134). */
+    public const LEASE_LAPSED = '[lease:lapsed]';
+
     /** @var int Attempt status: queued, not yet played. */
     public const STATUS_QUEUED = 0;
 
@@ -254,6 +260,7 @@ class attempt_scheduler {
         foreach ($held as $attempt) {
             $DB->set_field('local_catquizlab_attempt', 'leaseowner', null, ['id' => $attempt->id]);
             $DB->set_field('local_catquizlab_attempt', 'leaseexpires', 0, ['id' => $attempt->id]);
+            self::record_lost_execution((int) $attempt->id, (int) $attempt->tries, $workerid, self::WORKER_GONE);
             self::apply_retry((int) $attempt->id, (int) $attempt->tries, $now, 'lease_released');
         }
 
@@ -396,7 +403,39 @@ class attempt_scheduler {
             : get_string('history:leasenoengine', 'local_catquizlab', (object) [
                 'worker' => (string) ($attempt->leaseowner ?? '?'), 'reason' => $state['reason'],
             ]));
+        self::record_lost_execution(
+            (int) $attempt->id,
+            (int) $attempt->tries,
+            (string) ($attempt->leaseowner ?? ''),
+            self::LEASE_LAPSED
+        );
         self::apply_retry((int) $attempt->id, (int) $attempt->tries, $now, $why);
+    }
+
+    /**
+     * The failure of an execution nobody reported: its worker died or stopped renewing the lease (#134).
+     *
+     * A worker that fails reports it, and its report is the history's failure row with a reason code. A worker that is
+     * killed reports nothing: before 0.7.59 its sitting went back into the queue with only a "requeued" row, the
+     * export's transport events stayed empty, and a sitting played twice looked like one played once (Kampagne B,
+     * audit 11.11.2026: a worker killed with SIGKILL in the middle of a sitting).
+     *
+     * @param int $attemptid The sitting.
+     * @param int $tries Its execution.
+     * @param string $workerid The worker that held it.
+     * @param string $tag WORKER_GONE or LEASE_LAPSED; reason_catalog reads it as worker_timeout.
+     * @return void
+     */
+    protected static function record_lost_execution(int $attemptid, int $tries, string $workerid, string $tag): void {
+        attempt_history::record($attemptid, attempt_history::FAILED, [
+            'tryno' => $tries,
+            'workerid' => $workerid !== '' ? $workerid : null,
+            'detail' => $tag . ' ' . get_string(
+                $tag === self::WORKER_GONE ? 'history:workergone' : 'history:leaselapsed',
+                'local_catquizlab',
+                $workerid !== '' ? $workerid : '?'
+            ),
+        ]);
     }
 
     /**

@@ -246,9 +246,13 @@ class behat_local_catquizlab extends behat_base {
 
         $DB->set_field('local_catquizlab_run', 'status', \local_catquizlab\local\registry::STATUS_FINISHED, ['id' => $run->id]);
 
+        // Ten items: a sitting the run's own design counts as valid — its minimum is ten questions, its SE bound 1.0
+        // (#112: a run is judged by its design where no engine test can be read, as here).
         $played = [];
-        $parameters = [['11', '1.2', '-0.5'], ['12', '0.8', '0.3'], ['13', '1.5', '1.1']];
-        foreach ($parameters as [$qid, $a, $b]) {
+        $base = [['1.2', '-0.5'], ['0.8', '0.3'], ['1.5', '1.1'], ['1.0', '-1.2'], ['0.9', '0.6']];
+        for ($k = 0; $k < 10; $k++) {
+            $qid = (string) (11 + $k);
+            [$a, $b] = $base[$k % 5];
             $played[$qid] = ['id' => $qid, 'catscaleid' => '5', 'model' => 'raschbirnbaum',
                 'discrimination' => $a, 'difficulty' => $b, 'guessing' => '0'];
         }
@@ -256,6 +260,14 @@ class behat_local_catquizlab extends behat_base {
         foreach ($played as $item) {
             $information += \local_catquizlab\local\test_flow::item_information($item, 0.2);
         }
+        $path = [];
+        $responses = [];
+        foreach (array_keys($played) as $k => $qid) {
+            $estimate = round(0.2 + 0.6 * (-1) ** $k / ($k + 1), 4);
+            $path[] = ['step' => $k + 1, 'abilities' => ['1' => $estimate, '5' => $estimate]];
+            $responses[$qid] = ['questionid' => $qid, 'fraction' => $k % 3 === 1 ? '0.000' : '1.000'];
+        }
+        $path[count($path) - 1]['abilities'] = ['1' => 0.2, '5' => 0.2];
 
         /** @var \local_catquizlab_generator $generator */
         $generator = \testing_util::get_data_generator()->get_plugin_generator('local_catquizlab');
@@ -265,20 +277,13 @@ class behat_local_catquizlab extends behat_base {
             'status' => \local_catquizlab\local\attempt_scheduler::STATUS_COLLECTED, 'tries' => 1, 'runtimems' => 4000,
             'tracejson' => json_encode([
                 'finaltheta' => 0.2, 'finalse' => 1 / sqrt($information), 'information' => $information,
-                'items' => [11, 12, 13], 'nitems' => 3, 'stopreason' => 'Reached maximum number of questions',
+                'items' => array_map('intval', array_keys($played)), 'nitems' => count($played),
+                'stopreason' => 'Reached maximum number of questions',
                 'scaleabilities' => [],
-                'abilitypath' => [
-                    ['step' => 1, 'abilities' => ['1' => 0.4, '5' => 0.4]],
-                    ['step' => 2, 'abilities' => ['1' => -0.1, '5' => -0.1]],
-                    ['step' => 3, 'abilities' => ['1' => 0.2, '5' => 0.2]],
-                ],
+                'abilitypath' => $path,
                 'progress' => [
                     'playedquestions' => $played,
-                    'responses' => [
-                        '11' => ['questionid' => '11', 'fraction' => '1.000'],
-                        '12' => ['questionid' => '12', 'fraction' => '0.000'],
-                        '13' => ['questionid' => '13', 'fraction' => '1.000'],
-                    ],
+                    'responses' => $responses,
                     'activescales' => [5], 'droppedscales' => [], 'lockedscales' => [],
                 ],
             ]),

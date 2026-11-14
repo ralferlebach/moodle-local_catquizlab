@@ -58,6 +58,22 @@ function isContextLost(error) {
 }
 
 /**
+ * Whether an error says the page has stopped answering: a DevTools call ran into the protocol timeout.
+ *
+ * A renderer that hangs (load test of 11.11.2026: a sitting's page froze after its 26th answer) answers no further
+ * call. Every later call on the page waits out the same timeout again, so such an error ends the sitting at once
+ * instead of being swallowed or retried: before 0.7.59 three swallowed or repeated calls and three more for the
+ * failure's screenshot, DOM and title held the sitting for 15 minutes.
+ *
+ * @param {*} error The error or message.
+ * @returns {boolean}
+ */
+function isUnresponsive(error) {
+    const message = String((error && error.message) || error || '');
+    return /\b[A-Z][A-Za-z]+\.[A-Za-z]+ timed out\b|'protocolTimeout'/.test(message);
+}
+
+/**
  * A URL without the secrets it may carry.
  *
  * @param {string} url The URL.
@@ -358,7 +374,13 @@ async function safeClick(handle, recorder = null) {
         }
         return (at.tagName + (at.id ? '#' + at.id : '') + (at.className ? '.' + String(at.className).split(/\s+/)[0] : ''))
             .slice(0, 80);
-    }).catch(() => '');
+    }).catch((error) => {
+        // A page that no longer answers is not clicked anyway: the click would wait out the timeout once more.
+        if (isUnresponsive(error)) {
+            throw error;
+        }
+        return '';
+    });
     if (covered === '') {
         await handle.click();
         return;
@@ -556,6 +578,8 @@ class Recorder {
         this.submissions = [];
         this.submitcounts = {};
         this.started = Date.now();
+        // Set once a call on the page ran into the protocol timeout: nothing more is asked of it.
+        this.unresponsive = '';
 
         page.on('console', (message) => {
             if (message.type() === 'error') {
@@ -623,6 +647,10 @@ class Recorder {
             }
         } catch (error) {
             this.event('screenshot-failed', error.message);
+            if (isUnresponsive(error)) {
+                this.unresponsive = error.message;
+                throw error;
+            }
         }
     }
 
@@ -657,20 +685,32 @@ class Recorder {
         if (previous) {
             write('screenshot-previous.jpg', previous);
         }
-        try {
-            write('screenshot-last.jpg', await this.page.screenshot({type: 'jpeg', quality: 70, fullPage: true}));
-        } catch (shotError) {
-            this.event('screenshot-failed', shotError.message);
+        // A page that stopped answering gives no screenshot, DOM or title; asking for each would wait out the
+        // protocol timeout three times more. What it last showed is the previous screenshot and the events.
+        let unresponsive = this.unresponsive || (isUnresponsive(error) ? error.message : '');
+        if (unresponsive) {
+            this.event('page-unresponsive', `no live screenshot, DOM or title taken: ${unresponsive}`);
         }
-        try {
-            write('dom.html', sanitiseHtml(await this.page.content()));
-        } catch (domError) {
-            this.event('dom-failed', domError.message);
+        if (!unresponsive) {
+            try {
+                write('screenshot-last.jpg', await this.page.screenshot({type: 'jpeg', quality: 70, fullPage: true}));
+            } catch (shotError) {
+                this.event('screenshot-failed', shotError.message);
+                unresponsive = isUnresponsive(shotError) ? shotError.message : '';
+            }
+        }
+        if (!unresponsive) {
+            try {
+                write('dom.html', sanitiseHtml(await this.page.content()));
+            } catch (domError) {
+                this.event('dom-failed', domError.message);
+                unresponsive = isUnresponsive(domError) ? domError.message : '';
+            }
         }
 
         let title = '';
         try {
-            title = await this.page.title();
+            title = unresponsive ? '' : await this.page.title();
         } catch (titleError) {
             title = '';
         }
@@ -689,5 +729,5 @@ class Recorder {
     }
 }
 
-module.exports = {STATE, SUBMIT, UNCERTAIN, isContextLost, isSecretName, sanitiseUrl, sanitiseHtml, stateInPage,
+module.exports = {STATE, SUBMIT, UNCERTAIN, isContextLost, isUnresponsive, isSecretName, sanitiseUrl, sanitiseHtml, stateInPage,
     waitForState, clickAndSettle, safeClick, acceptDialogs, withContextRetry, classifySubmit, reconcile, describeSubmit, Recorder};

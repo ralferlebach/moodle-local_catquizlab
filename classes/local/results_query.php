@@ -483,8 +483,16 @@ class results_query {
         }
     }
 
-    /** @var array<int, string> End reason codes of the batch being read, by sitting. */
+    /** @var array<int, string> End reason codes of the batch being read, by sitting: the terminal one (#134). */
     protected array $endreasons = [];
+
+    /**
+     * @var array<int, array> What else the history of each sitting in the batch records (#134, audit 11.11.2026):
+     *      'transport' the codes of executions that failed and were retried, 'recovered' the codes of answer
+     *      submissions reconciled and continued, 'executions' how many times it was started. Kept apart from the
+     *      terminal code, so a sitting that lost a response on the way and then ran out of questions says both.
+     */
+    protected array $endhistory = [];
 
     /** @var int Observations beyond which an unfiltered selection is refused. */
     public const TOO_MANY = 50000;
@@ -754,17 +762,48 @@ class results_query {
                         $this->enginestatus[(int) $engineattemptid] = $status === null ? null : (int) $status;
                     }
                 }
+                $this->endhistory = [];
                 if ($batch !== [] && $DB->get_manager()->table_exists('local_catquizlab_attemptlog')) {
                     [$inreason, $reasonparams] = $DB->get_in_or_equal(array_keys($batch), SQL_PARAMS_NAMED, 'att');
                     $codes = $DB->get_records_select(
                         'local_catquizlab_attemptlog',
-                        'attemptid ' . $inreason . ' AND reasoncode IS NOT NULL',
+                        'attemptid ' . $inreason,
                         $reasonparams,
                         'id ASC',
-                        'id, attemptid, reasoncode'
+                        'id, attemptid, outcome, reasoncode'
                     );
+                    $fallback = [];
                     foreach ($codes as $code) {
-                        $this->endreasons[(int) $code->attemptid] = (string) $code->reasoncode;
+                        $id = (int) $code->attemptid;
+                        $this->endhistory[$id] ??= ['transport' => [], 'recovered' => [], 'executions' => 0];
+                        $reason = (string) ($code->reasoncode ?? '');
+                        switch ((string) $code->outcome) {
+                            case attempt_history::STARTED:
+                                $this->endhistory[$id]['executions']++;
+                                break;
+                            case attempt_history::COLLECTED:
+                                // The terminal end: the engine's stop, written onto the collected row.
+                                if ($reason !== '') {
+                                    $this->endreasons[$id] = $reason;
+                                }
+                                break;
+                            case attempt_history::RECOVERED:
+                                if ($reason !== '') {
+                                    $this->endhistory[$id]['recovered'][] = $reason;
+                                }
+                                break;
+                            case attempt_history::FAILED:
+                            case attempt_history::ABANDONED:
+                                if ($reason !== '') {
+                                    $this->endhistory[$id]['transport'][] = $reason;
+                                    // A sitting never collected ends with its last failure, and only then.
+                                    $fallback[$id] = $reason;
+                                }
+                                break;
+                        }
+                    }
+                    foreach ($fallback as $id => $reason) {
+                        $this->endreasons[$id] ??= $reason;
                     }
                 }
                 // The batch's people in one query (#147), not one query per sitting; their profiles, which only some
@@ -1072,7 +1111,13 @@ class results_query {
             'runtimems'   => (int) ($attempt->runtimems ?? 0),
             // How it ended, as a code and in words, and where it ended (#106).
             'endreasoncode'  => $endcode,
+            // The terminal code the history records (the collected row's; a failure's only where nothing was
+            // collected), and apart from it what happened on the way (#134): retried executions and reconciled
+            // submissions. A transport event is never the end of a sitting that went on to finish.
             'storedreasoncode' => $this->endreasons[(int) $attempt->id] ?? '',
+            'transportevents' => implode(';', $this->endhistory[(int) $attempt->id]['transport'] ?? []),
+            'recoveredevents' => implode(';', $this->endhistory[(int) $attempt->id]['recovered'] ?? []),
+            'executions' => (int) ($this->endhistory[(int) $attempt->id]['executions'] ?? 0),
             'endreasonlabel' => $endcode !== ''
                 ? reason_catalog::label($endcode)
                 : '',

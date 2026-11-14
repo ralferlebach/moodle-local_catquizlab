@@ -107,7 +107,6 @@ class results_export {
         $runs = [];
         $steps = [];
         $subscales = 0;
-        $items = 0;
         $sittings = 0;
         foreach ($query->each_observation() as $row) {
             $sittings++;
@@ -115,7 +114,6 @@ class results_export {
             $runs[$runid] = true;
             $steps[$runid] = ($steps[$runid] ?? 0) + (int) ($row['nitems'] ?? 0);
             $subscales += (int) ($row['nscales'] ?? 0);
-            $items += count((array) ($row['items'] ?? []));
         }
         $work = 0.0;
         $pool = 0;
@@ -124,14 +122,24 @@ class results_export {
             $pool = max($pool, $size);
             $work += $count * $size;
         }
+        // The run and item downloads are per run of the selection, whatever validity its sittings have: one row per
+        // run (with its count of sittings, 0 included) and one per materialised item of those runs. The tab counted
+        // runs with a sitting of the chosen validity and item uses of sittings - 605 000 for a download of 1 250 rows
+        // (provenance snapshot, audit 11.11.2026, #115).
+        $selectionruns = array_keys($query->runs());
+        $itemrows = 0;
+        if ($selectionruns !== []) {
+            [$inruns, $runparams] = $DB->get_in_or_equal($selectionruns, SQL_PARAMS_NAMED, 'run');
+            $itemrows = $DB->count_records_select('local_catquizlab_item', 'runid ' . $inruns, $runparams);
+        }
         $counts = [
-            self::LEVEL_RUN => count($runs),
+            self::LEVEL_RUN => count($selectionruns),
             // The rows the export of this selection has: one per sitting of the chosen validity. The size check
             // counts every sitting with a trace, valid or not, and the table said so for an export of fewer rows.
             self::LEVEL_ATTEMPT => $sittings,
             self::LEVEL_STEP => array_sum($steps),
             self::LEVEL_SUBSCALE => $subscales,
-            self::LEVEL_ITEM => $items,
+            self::LEVEL_ITEM => $itemrows,
         ];
         foreach (array_keys(self::levels()) as $level) {
             if (!array_key_exists($level, $counts)) {
@@ -211,15 +219,10 @@ class results_export {
 
         switch ($level) {
             case self::LEVEL_RUN:
-                // One row per run in the selection.
-                $runs = [];
-                foreach ($observations as $row) {
-                    $runs[(int) $row['runid']] = true;
-                }
-                return count($runs);
-
+            case self::LEVEL_ITEM:
             case self::LEVEL_ATTEMPT:
-                return (int) $query->size_check()['count'];
+                // As the download has them (#115): all_row_counts() counts them so.
+                return self::all_row_counts($query)['counts'][$level];
 
             case self::LEVEL_STEP:
                 // One row per question each sitting was asked.
@@ -231,19 +234,12 @@ class results_export {
                 return $total;
 
             case self::LEVEL_SUBSCALE:
-            case self::LEVEL_ITEM:
-                // These expand per observation, and the factor is the number
-                // of subscales or of items the sitting used. Counted from the
-                // observations rather than by building the rows.
+                // One row per subscale a sitting reports on, which each observation carries as a count.
                 $total = 0;
                 foreach ($observations as $row) {
-                    $total += $level === self::LEVEL_ITEM
-                        ? count((array) ($row['items'] ?? []))
-                        : (int) ($row['nscales'] ?? 0);
+                    $total += (int) ($row['nscales'] ?? 0);
                 }
 
-                // Subscale rows are one per subscale a sitting reports on,
-                // which each observation now carries as a count.
                 return $total;
 
             case self::LEVEL_DETECTION:
@@ -380,6 +376,11 @@ class results_export {
         'productiveitems', 'engineverdictavailable',
         // The statistical rules alone, apart from the end of the test (#112). Appended: no column moves.
         'statisticalvalid',
+        // Three levels of how a sitting ended, kept apart (#134, audit 11.11.2026): the terminal code from the
+        // history (the collected row's; the last failure's only where nothing was collected), the transport events
+        // of executions that failed and were retried, the answer submissions reconciled and continued, and how
+        // many executions it took. Appended: no column moves.
+        'terminalreasoncode', 'transportevents', 'recoveredevents', 'executions',
     ];
 
     /** @var array<int, array> Ability distribution and range by run, for this request. */
@@ -541,6 +542,10 @@ class results_export {
                 : (int) $observation['productiveitems'];
             $row['engineverdictavailable'] = $observation['enginevalid'] === null ? 0 : 1;
             $row['statisticalvalid'] = !empty($observation['statisticalvalid']) ? 1 : 0;
+            $row['terminalreasoncode'] = (string) ($observation['storedreasoncode'] ?? '');
+            $row['transportevents'] = (string) ($observation['transportevents'] ?? '');
+            $row['recoveredevents'] = (string) ($observation['recoveredevents'] ?? '');
+            $row['executions'] = (int) ($observation['executions'] ?? 0);
             yield $row;
         }
     }

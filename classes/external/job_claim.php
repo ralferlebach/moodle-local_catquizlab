@@ -201,7 +201,7 @@ class job_claim extends external_api {
         if (!$attempt) {
             $transaction->allow_commit();
 
-            return $none;
+            return ['nextdue' => self::next_due()] + $none;
         }
 
         $DB->update_record('local_catquizlab_attempt', (object) [
@@ -268,6 +268,36 @@ class job_claim extends external_api {
     }
 
     /**
+     * Seconds until the next queued sitting of a run that hands out work may be claimed; 0 when there is none.
+     *
+     * An empty claim is not always an empty queue: a sitting whose execution failed waits out its retry's backoff,
+     * and a person busy in another sitting is passed over for now. A worker told how long that is waits for it instead
+     * of leaving (audit 11.11.2026: in the load matrix one of twenty sittings sat out the whole time limit in a backoff
+     * after every worker had left the queue as empty).
+     *
+     * @return int Seconds, at least 1 where something is queued.
+     */
+    protected static function next_due(): int {
+        global $DB;
+
+        $next = $DB->get_field_sql(
+            'SELECT MIN(nextruntime) FROM {local_catquizlab_attempt}
+              WHERE status = :status
+                AND runid IN (SELECT id FROM {local_catquizlab_run} WHERE status IN (:ready, :running))',
+            [
+                'status'  => attempt_scheduler::STATUS_QUEUED,
+                'ready'   => \local_catquizlab\local\registry::STATUS_READY,
+                'running' => \local_catquizlab\local\registry::STATUS_RUNNING,
+            ]
+        );
+        if ($next === null || $next === false) {
+            return 0;
+        }
+
+        return max(1, (int) $next - time());
+    }
+
+    /**
      * Describes the return value.
      *
      * @return external_single_structure
@@ -299,6 +329,13 @@ class job_claim extends external_api {
                 false
             ),
             'execution'    => new external_value(PARAM_INT, 'Which try of the sitting this is (0 when none).', VALUE_OPTIONAL, 0),
+            'nextdue' => new external_value(
+                PARAM_INT,
+                'Without a job: seconds until the next queued sitting may be claimed (a retry\'s backoff, a busy person); '
+                    . '0 when nothing is queued.',
+                VALUE_OPTIONAL,
+                0
+            ),
             'message'   => new external_value(PARAM_TEXT, 'Human-readable status.'),
         ]);
     }

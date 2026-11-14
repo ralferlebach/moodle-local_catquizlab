@@ -292,6 +292,37 @@ final class worker_registry_test extends \advanced_testcase {
     }
 
     /**
+     * A sitting whose worker died, or whose lease ran out, gets the failure row its worker could not write (#134).
+     *
+     * Kampagne B of the audit of 11.11.2026: a worker killed in the middle of a sitting left only a "requeued" row,
+     * so the export's transport events said nothing of the execution that was lost.
+     *
+     * @return void
+     */
+    public function test_an_unreported_execution_is_recorded_as_a_failure(): void {
+        global $DB;
+        $this->resetAfterTest();
+
+        $dead = $this->add_attempt(attempt_scheduler::STATUS_RUNNING, 'ghost', time() + 300);
+        $DB->set_field('local_catquizlab_attempt', 'tries', 1, ['id' => $dead]);
+        $lapsed = $this->add_attempt(attempt_scheduler::STATUS_RUNNING, 'sleeper', time() - 60);
+        $DB->set_field('local_catquizlab_attempt', 'tries', 1, ['id' => $lapsed]);
+
+        $this->assertSame(1, attempt_scheduler::release_lease('ghost'));
+        $this->assertSame(1, attempt_scheduler::reclaim_stale(null, 3600));
+
+        foreach ([$dead => 'ghost', $lapsed => 'sleeper'] as $attemptid => $worker) {
+            $rows = array_values($DB->get_records('local_catquizlab_attemptlog', ['attemptid' => $attemptid], 'id ASC'));
+            $this->assertSame(['failed', 'requeued'], array_column($rows, 'outcome'), "sitting held by $worker");
+            $this->assertSame('worker_timeout', $rows[0]->reasoncode);
+            $this->assertSame($worker, $rows[0]->workerid);
+            $this->assertSame(1, (int) $rows[0]->tryno);
+            $this->assertStringContainsString($worker, $rows[0]->detail);
+            $this->assertSame(attempt_scheduler::STATUS_QUEUED, $this->attempt_status($attemptid));
+        }
+    }
+
+    /**
      * Releasing by owner touches only that owner's claims.
      *
      * @return void

@@ -206,8 +206,12 @@ try {
         $case = ['http' => $response['status'], 'type' => strtok($response['type'], ';'), 'bytes' => strlen($response['body']),
             'seconds' => $response['seconds'], 'server' => $cost === null ? null : array_intersect_key(
                 $cost,
-                array_flip(['status', 'durationms', 'peakmb', 'queries', 'rssmb', 'hwmmb', 'connection', 'pid'])
+                array_flip(['status', 'durationms', 'peakmb', 'memorylimit', 'queries', 'rssmb', 'hwmmb', 'connection', 'pid'])
             )];
+        // The web server's own limit, as each request reported it (#132): the command line's says nothing about it.
+        if ($cost !== null && isset($cost['memorylimit'])) {
+            $report['webmemorylimits'][(string) $cost['memorylimit']] = true;
+        }
         // A refusal is an exception Moodle turns into its error page: expected there, and only that one.
         $refused = $refusal !== '' && $cost !== null && $cost['fatal'] === null
             && ($cost['exception']['errorcode'] ?? '') === $refusal;
@@ -423,18 +427,21 @@ foreach ($report['cases'] as $case) {
 }
 $report['maxpeakmb'] = $peak;
 $report['maxrssmb'] = $rss;
+$report['webmemorylimits'] = array_keys($report['webmemorylimits'] ?? []);
 $report['failed'] = $failed;
 if ($options['json']) {
     echo json_encode($report, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES) . PHP_EOL;
     exit($failed ? 3 : 0);
 }
 printf(
-    "Issue #132 — %s, catquizlab %s, %s, PHP %s, %s, memory_limit %s, run %d (%d sittings)\n",
+    "Issue #132 — %s, catquizlab %s, %s, PHP %s, %s, memory_limit: web server %s (as its requests reported it),"
+        . " this command %s, run %d (%d sittings)\n",
     $report['site'],
     $report['version'],
     $report['time'],
     $report['php'],
     $report['db'],
+    $report['webmemorylimits'] === [] ? 'unknown' : implode('/', $report['webmemorylimits']),
     $report['memorylimit'],
     $runid,
     $report['sittings']

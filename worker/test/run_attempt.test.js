@@ -288,3 +288,18 @@ test('the handshake comes before the staggered wait, then "waiting" reports; a f
     }, 'w-9', 45000, async() => assert.fail('no wait after a failed handshake')), /ECONNREFUSED/);
 });
 
+
+test('a sitting not due yet is waited for, within the idle limit (audit 11.11.2026)', () => {
+    // Nothing queued: stop at once.
+    assert.strictEqual(worker.nextIdleWait(0, 0, 300), 0);
+    // A retry's backoff of 90 s: ask again in 30 s, then 30, then 30.
+    assert.strictEqual(worker.nextIdleWait(90, 0, 300), 30);
+    assert.strictEqual(worker.nextIdleWait(5, 60, 300), 5);
+    // Work deferred for an hour by a test run is not waited for.
+    assert.strictEqual(worker.nextIdleWait(3600, 0, 300), 0);
+    // The limit counts all waiting of one claim.
+    assert.strictEqual(worker.nextIdleWait(30, 290, 300), 0);
+    assert.strictEqual(worker.nextIdleWait(10, 290, 300), 10);
+    // Idle waiting switched off.
+    assert.strictEqual(worker.nextIdleWait(10, 0, 0), 0);
+});

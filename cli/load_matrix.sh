@@ -38,7 +38,7 @@ for w in $WORKERS; do
         "$PHP" "$CLI/load_sampler.php" --seconds=$(( MINUTES * 60 + 600 )) > "$OUT/$name-samples.jsonl" 2>/dev/null &
         sampler=$!
         if timeout $(( MINUTES * 60 + 300 )) "$PHP" "$CLI/smoke.php" "${args[@]}" --persons="$persons" --concurrency="$w" \
-            --minutes="$MINUTES" > "$OUT/$name.log" 2>&1; then result=PASS; else result=FAIL; fi
+            --minutes="$MINUTES" --require-all > "$OUT/$name.log" 2>&1; then result=PASS; else result=FAIL; fi
         until=$(date +%s)
         kill "$sampler" 2>/dev/null; wait "$sampler" 2>/dev/null
         "$PHP" "$CLI/request_report.php" --from="$from" --until="$until" --json > "$OUT/$name-requests.json" 2>/dev/null
@@ -46,7 +46,13 @@ for w in $WORKERS; do
         summary=$(python3 - "$OUT/$name-requests.json" "$OUT/$name-samples.jsonl" <<'PY'
 import json, sys
 r = json.load(open(sys.argv[1]))
-s = [json.loads(l) for l in open(sys.argv[2]) if l.strip()]
+s = []
+for l in open(sys.argv[2]):
+    # The sampler is stopped mid-line at the end of a step: an unfinished last line is not a sample.
+    try:
+        s.append(json.loads(l))
+    except ValueError:
+        pass
 web = max((x.get('webrssmb') or 0 for x in s), default=0)
 db = max((x.get('dbconnections') or 0 for x in s), default=0)
 gap = r.get('startgap') or {}

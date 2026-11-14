@@ -81,6 +81,16 @@ const BASE_URL = normaliseBaseUrl(args['base-url']);
 const TOKEN = process.env.CATQUIZLAB_WORKER_TOKEN || args.token || '';
 const WORKER_ID = args['worker-id'] || 'catquizlab-worker';
 const MAX_JOBS = parseInt(args['max-jobs'] || '0', 10); // 0 = until the queue is empty.
+// How long the worker waits, in all, for queued sittings that are not yet due (a retry's backoff, a person busy in
+// another sitting) before it calls the queue empty. 0 = leave at once, as before 0.7.59 (audit 11.11.2026: one of
+// twenty sittings sat out a load test's whole time limit in its backoff after every worker had left).
+const MAX_IDLE_S = Math.max(0, parseInt(args['max-idle'] || process.env.CATQUIZLAB_MAX_IDLE || '300', 10) || 0);
+// How long one DevTools call on the page may take before the page counts as hung, in seconds; Puppeteer's own default.
+// A shorter limit was tried: with 90 s, 11 executions had failed and 12 sittings were collected after 37 minutes of the
+// CLASSIC load test with 10 workers on two cores (a starved renderer is slow, not dead). What makes a hung page cheap is that a timed-out call ends the sitting
+// at once (navigation.js isUnresponsive), not a shorter timeout.
+const PROTOCOL_TIMEOUT_S = Math.max(30, parseInt(args['protocol-timeout'] || process.env.CATQUIZLAB_PROTOCOL_TIMEOUT
+    || '180', 10) || 180);
 // How long to wait after reporting in before claiming work (#120): the launcher
 // gives every worker its own, so that they do not all begin in the same second.
 const START_DELAY_MS = startDelayMs(args['start-delay']);
@@ -170,16 +180,42 @@ async function claimJob() {
     currentTrace = {};
     // "retry": another claim held the queue (the server serialises claims, #135).
     // That is not an empty queue, so the worker asks again rather than stopping.
+    let idle = 0;
     for (let round = 1; ; round++) {
         const job = await callWs('local_catquizlab_job_claim', {workerid: WORKER_ID});
         if (job && job.hasjob) {
             return job;
         }
-        if (!(job && job.retry) || round >= 6) {
-            return null;
+        if (job && job.retry && round < 6) {
+            await new Promise((resolve) => setTimeout(resolve, 500 * round));
+            continue;
         }
-        await new Promise((resolve) => setTimeout(resolve, 500 * round));
+        // Not due yet is not empty: wait for it, within MAX_IDLE_S in all, polling at most every 30 s.
+        const due = job ? Number(job.nextdue || 0) : 0;
+        const wait = nextIdleWait(due, idle, MAX_IDLE_S);
+        if (wait > 0) {
+            console.log(`Worker ${WORKER_ID}: nothing due yet; the next sitting is due in ${due} s, asking again in ${wait} s.`);
+            await new Promise((resolve) => setTimeout(resolve, wait * 1000));
+            idle += wait;
+            continue;
+        }
+        return null;
     }
+}
+
+/**
+ * How long to wait before asking again for a sitting that is not due yet; 0 = stop asking.
+ *
+ * @param {number} due Seconds until the next queued sitting is due (0 = nothing queued).
+ * @param {number} idle Seconds already waited for this claim.
+ * @param {number} maxIdle Seconds the worker may wait in all.
+ * @returns {number}
+ */
+function nextIdleWait(due, idle, maxIdle) {
+    if (!(due > 0) || idle >= maxIdle || due > maxIdle - idle) {
+        return 0;
+    }
+    return Math.max(1, Math.min(due, 30, maxIdle - idle));
 }
 
 /**
@@ -1401,7 +1437,7 @@ async function selfTest() {
  */
 async function main() {
     const puppeteer = require('puppeteer');
-    const browser = await puppeteer.launch({headless: 'new', args: ['--no-sandbox']});
+    const browser = await puppeteer.launch({headless: 'new', args: ['--no-sandbox'], protocolTimeout: PROTOCOL_TIMEOUT_S * 1000});
 
     // Say so, before claiming anything. Everything above this line has now
     // happened: Node ran, Puppeteer found a browser, and the web service
@@ -1682,4 +1718,5 @@ module.exports = {
     passwordFor,
     loginUrlFor,
     chooseOptionIndex,
+    nextIdleWait,
 };

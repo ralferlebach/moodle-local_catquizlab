@@ -240,6 +240,8 @@ final class request_trace_test extends \advanced_testcase {
         $this->assertSame(37, $line['queries']);
         $this->assertArrayNotHasKey('secret', $line);
         $this->assertSame(['exception', 'fatal'], array_slice(array_keys($line), -2), 'the long fields stay last');
+        // The limit the request ran under, beside its peak (#132): the web server's, not the command line's.
+        $this->assertSame((string) ini_get('memory_limit'), $line['memorylimit']);
 
         // Without them, the line is as before.
         $plain = request_trace::record(self::REQUEST, 200, 1790000001.0, 0, 0, null, null);

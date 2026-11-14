@@ -260,18 +260,31 @@ final class scale_inventory_test extends \advanced_testcase {
         $this->setAdminUser();
 
         $runid = $this->make_run();
-        $this->give_generations($runid, [[100, 1]]);
 
         // The engine has to know the scales the map names: a row pointing at a
         // deleted scale is worse than a missing row, because everything
-        // downstream materialises into a scale nobody can select from.
+        // downstream materialises into a scale nobody can select from. Its
+        // scales are created here, with whatever ids the database gives them
+        // (before 0.7.59 the test needed ids 100 and 101 to exist and was
+        // skipped everywhere: audit 11.11.2026).
+        $root = 100;
         if ($DB->get_manager()->table_exists('local_catquiz_catscales')) {
-            foreach ([100, 101] as $scaleid) {
-                if (!$DB->record_exists('local_catquiz_catscales', ['id' => $scaleid])) {
-                    $this->markTestSkipped('Cannot stage engine scales with fixed ids here.');
-                }
+            $root = (int) $DB->insert_record('local_catquiz_catscales', (object) [
+                'parentid' => 0, 'name' => 'Root', 'timecreated' => time(), 'timemodified' => time(),
+            ]);
+            $child = (int) $DB->insert_record('local_catquiz_catscales', (object) [
+                'parentid' => $root, 'name' => 'Sub', 'timecreated' => time(), 'timemodified' => time(),
+            ]);
+            if ($child !== $root + 1) {
+                // The map's subscale row names root + 1; keep the pair adjacent.
+                $DB->delete_records('local_catquiz_catscales', ['id' => $child]);
+                $DB->insert_record_raw('local_catquiz_catscales', (object) [
+                    'id' => $root + 1, 'parentid' => $root, 'name' => 'Sub', 'timecreated' => time(),
+                    'timemodified' => time(),
+                ], false, false, true);
             }
         }
+        $this->give_generations($runid, [[$root, 1]]);
 
         $health = \local_catquizlab\local\scale_health::check($runid);
 

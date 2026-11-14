@@ -120,7 +120,8 @@ final class run_contract_test extends \advanced_testcase {
         $runid = $this->run_with('allsubs', 30, [
             $this->trace(12), // Over the maximum of 10, six on each subscale.
             $this->trace(3, 'Reached maximum number of questions'), // Under 5 with items left.
-            $this->trace(3, 'You ran out of questions'), // Under 5, the pool exhausted.
+            // Under 5 as "out of questions", with 27 items left the sitting could still have been given: not the pool.
+            $this->trace(3, 'You ran out of questions'),
             $this->trace(6, 'Reached maximum number of questions', [1, 3, 5, 7, 9, 2]), // Five on subscale 11 (max 4).
             $this->trace(7),
         ]);
@@ -129,11 +130,12 @@ final class run_contract_test extends \advanced_testcase {
         $this->assertSame([
             'global_max_exceeded' => 1,
             'global_min_undercut' => 1,
-            'pool_exhausted_before_min' => 1,
+            'ran_out_with_items_left' => 1,
             'subscale_max_exceeded' => 2,
         ], $this->sorted($chain['violations']));
         $this->assertSame('defect', run_contract::RULES['global_max_exceeded']);
         $this->assertSame('design', run_contract::RULES['pool_exhausted_before_min']);
+        $this->assertSame('defect', run_contract::RULES['ran_out_with_items_left']);
         $this->assertCount(4, $chain['violatingsittings']);
         $this->assertFalse($chain['ok']);
         $rows = array_column($chain['rows'], null, 'param');
@@ -208,12 +210,59 @@ final class run_contract_test extends \advanced_testcase {
         // The maximum counts every question asked, pilots included: eleven asked is one too many.
         $long = $this->trace(11) + ['enginevalidity' => ['n' => 9]];
         $this->assertContains('global_max_exceeded', run_contract::check_sitting($runid, $long));
-        // The engine's own code for running out before the minimum is the design's, not a defect.
-        $this->assertSame(['pool_exhausted_before_min'], run_contract::check_sitting(
+        // The engine's own code for running out before the minimum is read against the pool: three answered and
+        // more than two items left the sitting could have been given, so not the pool's limit.
+        $this->assertSame(['ran_out_with_items_left'], run_contract::check_sitting(
             $runid,
             $this->trace(3) + ['enginevalidity' => ['n' => 3]],
             null,
             'noremainingquestionsbeforeminimum'
+        ));
+    }
+
+    /**
+     * "Out of questions" before the minimum is the pool's limit only where the pool could not give the minimum
+     * (load test 11.11.2026, ALLSUBS: 85 of 240 items played, one subscale left at 5 of 80, said "design").
+     *
+     * @return void
+     */
+    public function test_out_of_questions_is_the_pool_only_where_the_pool_is_short(): void {
+        $this->resetAfterTest();
+        $code = 'noremainingquestionsbeforeminimum';
+
+        // Thirty items, at most four per subscale (scale 11: odd items, 12: even), minimum five.
+        $runid = $this->run_with('allsubs', 30, []);
+        $this->assertSame(
+            ['ran_out_with_items_left'],
+            run_contract::check_sitting($runid, $this->trace(3), null, $code),
+            'three played, two and three more allowed on the subscales'
+        );
+
+        // At most two per subscale: four is all the test could ever give, the minimum of five is out of reach.
+        $runid = $this->run_with('allsubs', 30, [], ['subscale' => ['minitems' => 1, 'maxitems' => 2]]);
+        $this->assertSame(['pool_exhausted_before_min'], run_contract::check_sitting($runid, $this->trace(4), null, $code));
+        $this->assertSame(
+            ['pool_exhausted_before_min'],
+            run_contract::check_sitting($runid, $this->trace(3), null, $code),
+            'one item left, one short of the minimum'
+        );
+
+        // Four items in the pool: whatever the subscale maximum, five cannot be reached.
+        $runid = $this->run_with('allsubs', 4, []);
+        $this->assertSame(['pool_exhausted_before_min'], run_contract::check_sitting($runid, $this->trace(3), null, $code));
+
+        // Six: three played and three left, within the subscales' four, would have made the minimum.
+        $runid = $this->run_with('allsubs', 6, []);
+        $this->assertSame(['ran_out_with_items_left'], run_contract::check_sitting($runid, $this->trace(3), null, $code));
+
+        // Items the run cannot map to a scale: what is left within the subscale maximum cannot be told, the engine's
+        // word stands.
+        $runid = $this->run_with('allsubs', 30, []);
+        $this->assertSame(['pool_exhausted_before_min'], run_contract::check_sitting(
+            $runid,
+            $this->trace(2, 'You ran out of questions', [101, 102]),
+            null,
+            $code
         ));
     }
 
