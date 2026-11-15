@@ -114,7 +114,7 @@
         <ul class="small mb-0">
             {{#ambiguous.rows}}
                 <li>
-                    <a href="{{url}}">#{{runid}}</a> {{cellkey}} — {{generations}}
+                    <a href="{{url}}">#{{runid}}</a>{{#runlabel}} (<a href="{{experimenturl}}" title="{{experimentfull}}">{{experimentname}}</a>{{#shortened}}<span class="sr-only">{{experimentfull}}</span>{{/shortened}}, {{strategylabel}}){{/runlabel}} {{cellkey}} — {{generations}}
                     {{#str}}scales:generations, local_catquizlab{{/str}}
                 </li>
             {{/ambiguous.rows}}
@@ -139,6 +139,9 @@
     What is happening, above everything about how it is arranged. Somebody who
     has just pressed "run" wants this and nothing else.
 }}
+{{#overview}}
+    {{> local_catquizlab/progress_overview }}
+{{/overview}}
 {{#progress}}
     <div class="card mb-3">
         <div class="card-body">
@@ -156,12 +159,13 @@
                      data-region="catquizlab-progress-bar"
                      style="width: {{percent}}%;"
                      aria-valuenow="{{percent}}" aria-valuemin="0" aria-valuemax="100"
+                     aria-valuetext="{{sittingstext}}"
                      aria-label="{{#str}}progress:overall, local_catquizlab{{/str}}"></div>
             </div>
 
             {{! Questions, not only sittings (#141): moves while a long sitting is played. }}
             {{#questions}}
-                <div class="mb-3" data-region="catquizlab-questions" data-kind="{{kind}}">
+                <div class="mb-3" data-region="catquizlab-questions" data-kind="{{kind}}" data-done="{{done}}">
                     <div class="d-flex justify-content-between align-items-baseline small">
                         <span>{{#str}}questions:heading, local_catquizlab{{/str}}</span>
                         <span data-region="catquizlab-questions-text">{{text}}</span>
@@ -171,9 +175,11 @@
                              data-region="catquizlab-questions-bar"
                              style="width: {{percent}}%;"
                              aria-valuenow="{{percent}}" aria-valuemin="0" aria-valuemax="100"
+                             aria-valuetext="{{text}}"
                              aria-label="{{#str}}questions:bar, local_catquizlab{{/str}}"></div>
                     </div>
                     <span class="small text-muted" data-region="catquizlab-questions-kind">{{kindlabel}}</span>
+                    <span class="small text-muted" data-region="catquizlab-questions-discarded">{{discardedtext}}</span>
                 </div>
             {{/questions}}
 
@@ -191,6 +197,9 @@
                     <dt class="col-6 mb-0 d-md-none">{{#str}}eta:remaining, local_catquizlab{{/str}}</dt>
                     <dd class="col-6 col-md-3" data-region="catquizlab-eta-finish">{{text.finish}}</dd>
                     <dd class="col-6 col-md-3" data-region="catquizlab-eta-remaining">{{text.remaining}}</dd>
+                    {{! The experiment's own work apart from when it will be done (#160). }}
+                    <dt class="col-12 col-md-3 mb-0">{{#str}}eta:own, local_catquizlab{{/str}}</dt>
+                    <dd class="col-12 col-md-9" data-region="catquizlab-eta-own">{{text.own}}</dd>
                 </dl>
                 <p class="small text-muted mb-0">
                     <span class="badge badge-light" data-region="catquizlab-eta-status">{{text.status}}</span>
@@ -202,54 +211,23 @@
                     <summary>{{#str}}eta:methodlabel, local_catquizlab{{/str}}</summary>
                     <span data-region="catquizlab-eta-method">{{text.method}}</span>
                 </details>
+                <details class="small text-muted" data-region="catquizlab-eta-terms">
+                    <summary>{{#str}}eta:termsheading, local_catquizlab{{/str}}</summary>
+                    <dl class="mb-0">
+                        <dt>{{#str}}eta:own, local_catquizlab{{/str}}</dt>
+                        <dd>{{#str}}eta:termsown, local_catquizlab{{/str}}</dd>
+                        <dt>{{#str}}eta:owntime, local_catquizlab{{/str}}</dt>
+                        <dd>{{#str}}eta:termsowntime, local_catquizlab{{/str}}</dd>
+                        <dt>{{#str}}eta:doneby, local_catquizlab{{/str}}</dt>
+                        <dd>{{#str}}eta:termsdoneby, local_catquizlab{{/str}}</dd>
+                        <dt>{{#str}}eta:remaining, local_catquizlab{{/str}}</dt>
+                        <dd class="mb-0">{{#str}}eta:termsremaining, local_catquizlab{{/str}}</dd>
+                    </dl>
+                </details>
             </div>
             {{/time}}
 
-            {{#hasruns}}
-                <details class="mb-3" data-region="catquizlab-run-times" {{^manyruns}}open{{/manyruns}}>
-                <summary class="small">{{#str}}eta:rundetails, local_catquizlab{{/str}}</summary>
-                <div class="table-responsive position-relative">
-                <table class="table table-sm mb-0">
-                    <thead class="small">
-                        <tr>
-                            <th scope="col">{{#str}}progress:run, local_catquizlab{{/str}}</th>
-                            <th scope="col">{{#str}}progress:cell, local_catquizlab{{/str}}</th>
-                            <th scope="col">{{#str}}progress:bar, local_catquizlab{{/str}}</th>
-                            <th scope="col" class="text-right">{{#str}}report:sittings, local_catquizlab{{/str}}</th>
-                            <th scope="col">{{#str}}eta:started, local_catquizlab{{/str}}</th>
-                            <th scope="col">{{#str}}eta:elapsed, local_catquizlab{{/str}}</th>
-                            <th scope="col">{{#str}}eta:remaining, local_catquizlab{{/str}}</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        {{#runs}}
-                            <tr>
-                                <th scope="row" style="width: 5rem;">#{{runid}}</th>
-                                <td class="small text-muted">{{cellkey}}</td>
-                                <td style="width: 40%;">
-                                    <div class="progress" style="height: 0.4rem;">
-                                        <div class="progress-bar{{#held}} bg-danger{{/held}}"
-                                             role="progressbar"
-                                             data-region="catquizlab-run-{{runid}}-bar"
-                                             style="width: {{percent}}%;"
-                                             aria-valuenow="{{percent}}" aria-valuemin="0" aria-valuemax="100"
-                                             aria-label="{{#str}}progress:runbar, local_catquizlab, {{runid}}{{/str}}"></div>
-                                    </div>
-                                </td>
-                                <td class="small text-right" style="width: 7rem;">
-                                    <span data-region="catquizlab-run-{{runid}}-progress">{{done}} / {{total}}</span>
-                                    <br><span class="text-muted" data-region="catquizlab-run-{{runid}}-questions">{{questions.text}}</span>
-                                </td>
-                                <td class="small" data-region="catquizlab-run-{{runid}}-started">{{time.started}}</td>
-                                <td class="small" data-region="catquizlab-run-{{runid}}-elapsed">{{time.elapsed}}</td>
-                                <td class="small" data-region="catquizlab-run-{{runid}}-remaining">{{time.remaining}}</td>
-                            </tr>
-                        {{/runs}}
-                    </tbody>
-                </table>
-                </div>
-                </details>
-            {{/hasruns}}
+            {{> local_catquizlab/progress_runs }}
 
             <h4 class="h6">{{#str}}progress:nowheading, local_catquizlab{{/str}}</h4>
             <ul class="list-unstyled small mb-0" data-region="catquizlab-progress-now">
@@ -358,12 +336,20 @@
             <a href="{{logsurl}}">{{#str}}progress:openeventlog, local_catquizlab{{/str}}</a>
         </p>
         {{#runs.hasany}}
+            {{! Scrolls inside its box on a phone, the page does not (#150 AK7). }}
+            <div class="table-responsive">
             <table class="table table-sm">
                 <tbody>
                     {{#runs.rows}}
                         <tr>
-                            <td style="width: 9rem;">
+                            <td style="width: 14rem;">
                                 <a href="{{url}}">#{{id}}</a>
+                                {{#label}}
+                                    {{! Experiment, run and strategy together (#150). }}
+                                    <div class="small"><a href="{{experimenturl}}" title="{{experimentfull}}"
+                                        data-region="catquizlab-runlist-{{runid}}-experiment">{{experimentname}}</a>{{#shortened}}<span class="sr-only">{{experimentfull}}</span>{{/shortened}}</div>
+                                    <div class="small">{{strategylabel}}</div>
+                                {{/label}}
                                 <div class="small text-muted">{{cellkey}}</div>
                             </td>
                             {{!
@@ -379,6 +365,7 @@
                     {{/runs.rows}}
                 </tbody>
             </table>
+            </div>
         {{/runs.hasany}}
         {{^runs.hasany}}
             <p class="text-muted">{{#str}}progress:noruns, local_catquizlab{{/str}}</p>
@@ -393,6 +380,7 @@
             <div class="mb-3" data-card="pipeline">{{> local_catquizlab/statuscard }}</div>
         {{/pipelinestatus}}
 
+        <div class="table-responsive">
         <table class="table table-sm mb-2">
             {{!
                 Two times side by side with no headings: a reader had to guess
@@ -448,6 +436,7 @@
                 {{/tasks.adhoc}}
             </tbody>
         </table>
+        </div>
         {{^tasks.hasadhoc}}
             <p class="text-muted small mb-0">{{#str}}task:noadhoc, local_catquizlab{{/str}}</p>
         {{/tasks.hasadhoc}}
@@ -486,7 +475,7 @@
                     <ul class="list-inline small text-muted mb-1 mt-1">
                         <li class="list-inline-item">{{#str}}worker:slot, local_catquizlab{{/str}}: {{slot}}</li>
                         <li class="list-inline-item">{{#str}}worker:playing, local_catquizlab{{/str}}:
-                            {{#attemptid}}#{{attemptid}}{{#runid}} ({{#str}}run:label, local_catquizlab{{/str}} {{runid}}){{/runid}}{{/attemptid}}{{^attemptid}}{{#str}}worker:nothingplaying, local_catquizlab{{/str}}{{/attemptid}}</li>
+                            {{#attemptid}}#{{attemptid}}{{#runlabel}} (<a href="{{runurl}}">{{#str}}run:label, local_catquizlab{{/str}} {{runid}}</a>, <a href="{{experimenturl}}" title="{{experimentfull}}">{{experimentname}}</a>, {{strategylabel}}){{/runlabel}}{{/attemptid}}{{^attemptid}}{{#str}}worker:nothingplaying, local_catquizlab{{/str}}{{/attemptid}}</li>
                         <li class="list-inline-item">{{#str}}worker:jobsdone, local_catquizlab{{/str}}: {{jobsdone}}</li>
                         <li class="list-inline-item">{{#str}}worker:lastheartbeat, local_catquizlab{{/str}}: {{heartbeatago}}</li>
                         <li class="list-inline-item">{{#str}}worker:uptime, local_catquizlab{{/str}}: {{uptime}}</li>

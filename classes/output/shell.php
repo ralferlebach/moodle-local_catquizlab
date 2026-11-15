@@ -16,6 +16,7 @@
 
 namespace local_catquizlab\output;
 
+use local_catquizlab\local\experiment_order;
 use local_catquizlab\local\experiment_status;
 use local_catquizlab\local\situation;
 
@@ -168,11 +169,15 @@ class shell {
         // The selector is on every step, because the question "which
         // experiment" does not stop being relevant when the reader moves from
         // planning to watching.
+        // Every experiment A–Z (#153), not the 50 changed last: the one in view is always in it, and the list is
+        // searchable by typing (core/form-autocomplete), so length is no reason to cut it.
         $experiments = [];
-        foreach ($DB->get_records('local_catquizlab_experiment', null, 'timemodified DESC', 'id, name', 0, 50) as $row) {
+        $rows = experiment_order::sort($DB->get_records('local_catquizlab_experiment', null, '', 'id, name'));
+        foreach ($rows as $row) {
             $experiments[] = [
                 'id'       => (int) $row->id,
-                'name'     => format_string($row->name),
+                // Unescaped here: the template escapes, once (escaped twice, "&" showed as "&amp;", #152).
+                'name'     => format_string($row->name, true, ['escape' => false]),
                 'selected' => (int) $row->id === $experimentid,
             ];
         }

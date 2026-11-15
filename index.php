@@ -85,25 +85,40 @@ function local_catquizlab_status_class(int $status): string {
 // everything that keeps the experiment. Searchable and sortable by name, state
 // and last change, as plain GET parameters.
 $canpurge = has_capability('local/catquizlab:purge', $context);
-$search = trim(optional_param('q', '', PARAM_TEXT));
-$sort = optional_param('sort', 'modified', PARAM_ALPHA);
-if (!in_array($sort, ['modified', 'name', 'state'], true)) {
-    $sort = 'modified';
+// A–Z by default (#153), "last change" and "state" on request. The choice and the search are kept for the next
+// visit: the sort as a preference, the search for the session.
+$sort = optional_param('sort', '', PARAM_ALPHA);
+if (in_array($sort, ['modified', 'name', 'state'], true)) {
+    set_user_preference('local_catquizlab_library_sort', $sort);
+} else {
+    $sort = (string) get_user_preferences('local_catquizlab_library_sort', 'name');
+    $sort = in_array($sort, ['modified', 'name', 'state'], true) ? $sort : 'name';
 }
+$search = optional_param('q', null, PARAM_TEXT);
+if ($search !== null) {
+    $SESSION->local_catquizlab_library_search = trim((string) $search);
+}
+$search = (string) ($SESSION->local_catquizlab_library_search ?? '');
 $allexperiments = experiment_service::overview();
 $library = \local_catquizlab\local\experiment_status::library(array_column($allexperiments, 'id'));
 $listed = array_values(array_filter($allexperiments, static fn(array $row): bool => $search === ''
     || \core_text::strpos(\core_text::strtolower($row['name']), \core_text::strtolower($search)) !== false));
 $phaseorder = array_flip(\local_catquizlab\local\experiment_status::PHASES);
 usort($listed, static function (array $a, array $b) use ($sort, $library, $phaseorder): int {
-    if ($sort === 'name') {
-        return strnatcasecmp($a['name'], $b['name']);
-    }
+    // Every order ends A–Z and then by id: no two rows ever swap places between two loads (#153 AK2, AK4).
+    $byname = \local_catquizlab\local\experiment_order::compare(
+        (string) $a['name'],
+        (int) $a['id'],
+        (string) $b['name'],
+        (int) $b['id']
+    );
     if ($sort === 'state') {
-        return ($phaseorder[$library[$a['id']]['phase']] <=> $phaseorder[$library[$b['id']]['phase']])
-            ?: $b['timemodified'] <=> $a['timemodified'];
+        return ($phaseorder[$library[$a['id']]['phase']] <=> $phaseorder[$library[$b['id']]['phase']]) ?: $byname;
     }
-    return $b['timemodified'] <=> $a['timemodified'];
+    if ($sort === 'modified') {
+        return ($b['timemodified'] <=> $a['timemodified']) ?: $byname;
+    }
+    return $byname;
 });
 $experimentrows = [];
 // Being deleted in the background (0.7.49): said as such, and not offered for deleting again. The experiment
@@ -195,7 +210,8 @@ $librarycontext = [
         'selected' => $key === $sort,
     ], ['modified', 'name', 'state']),
     'actionurl' => (new moodle_url('/local/catquizlab/index.php'))->out(false),
-    'reseturl' => (new moodle_url('/local/catquizlab/index.php', ['tab' => 'experiments']))->out(false),
+    // An empty q, not none: the search is kept for the session (#153), so leaving it out would keep it.
+    'reseturl' => (new moodle_url('/local/catquizlab/index.php', ['tab' => 'experiments', 'q' => '']))->out(false),
     'total' => count($allexperiments),
     'shown' => count($experimentrows),
 ];

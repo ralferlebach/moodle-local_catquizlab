@@ -44,6 +44,9 @@ let renderedShape = null;
 /** @var {number} Which experiment the page is showing. */
 let experimentId = 0;
 
+/** @type {number} The page of the overview's sections (#158). */
+let overviewPage = 0;
+
 /** @var {number} Consecutive failed polls. */
 let failures = 0;
 
@@ -70,14 +73,18 @@ const setQuestions = (questions) => {
     }
     setRegion('catquizlab-questions-text', questions.text);
     setRegion('catquizlab-questions-kind', questions.kindlabel);
+    setRegion('catquizlab-questions-discarded', questions.discardedtext || '');
     const bar = document.querySelector('[data-region="catquizlab-questions-bar"]');
     if (bar) {
         bar.style.width = `${questions.percent}%`;
         bar.setAttribute('aria-valuenow', String(questions.percent));
+        bar.setAttribute('aria-valuetext', questions.text);
     }
     const box = document.querySelector('[data-region="catquizlab-questions"]');
     if (box) {
         box.setAttribute('data-kind', questions.kind);
+        // The count as a number, for whatever reads the page without parsing words (#141 DoD 2).
+        box.setAttribute('data-done', String(questions.done));
     }
 };
 
@@ -154,6 +161,7 @@ const applyTimes = (time) => {
     setRegion('catquizlab-eta-elapsed', time.text.elapsed);
     setRegion('catquizlab-eta-finish', time.text.finish);
     setRegion('catquizlab-eta-remaining', time.text.remaining);
+    setRegion('catquizlab-eta-own', time.text.own);
     setRegion('catquizlab-eta-status', time.text.status);
     setRegion('catquizlab-eta-reason', time.text.reason);
     setRegion('catquizlab-eta-method', time.text.method);
@@ -162,10 +170,137 @@ const applyTimes = (time) => {
     if (box) {
         box.setAttribute('data-reliability', time.reliability);
     }
-    (time.runs || []).forEach((run) => {
+    applyRunTimes(time.runs);
+};
+
+/**
+ * Each run's times (#160): its own work apart from when it will be done.
+ *
+ * @param {Array|undefined} runs The runs' times.
+ */
+const applyRunTimes = (runs) => {
+    (runs || []).forEach((run) => {
         setRegion(`catquizlab-run-${run.runid}-started`, run.text.started);
         setRegion(`catquizlab-run-${run.runid}-elapsed`, run.text.elapsed);
         setRegion(`catquizlab-run-${run.runid}-remaining`, run.text.remaining);
+        setRegion(`catquizlab-run-${run.runid}-finish`, run.text.finish);
+        setRegion(`catquizlab-run-${run.runid}-own`, run.text.own);
+        setRegion(`catquizlab-run-${run.runid}-owntime`, run.text.owntime);
+        setRegion(`catquizlab-run-${run.runid}-ahead`, (run.text.ahead || '') + (run.text.reason || ''));
+        if (run.text.basis !== undefined) {
+            setRegion(`catquizlab-run-${run.runid}-basis`, run.text.basis);
+        }
+    });
+};
+
+/**
+ * A progress bar: width, value and what a screen reader says for it.
+ *
+ * @param {string} region The bar's region.
+ * @param {number} percent How far along.
+ * @param {string|undefined} valuetext The value in words, with its unit.
+ */
+const setBar = (region, percent, valuetext) => {
+    const bar = document.querySelector(`[data-region="${region}"]`);
+    if (!bar) {
+        return;
+    }
+    bar.style.width = `${percent}%`;
+    bar.setAttribute('aria-valuenow', String(percent));
+    if (valuetext) {
+        bar.setAttribute('aria-valuetext', valuetext);
+    }
+};
+
+/**
+ * Each run's row: sittings, questions, status, bar.
+ *
+ * @param {Array|undefined} runs The runs.
+ */
+const applyRunRows = (runs) => {
+    (runs || []).forEach((run) => {
+        setRegion(`catquizlab-run-${run.runid}-progress`, `${run.done} / ${run.total}`);
+        if (run.questions) {
+            setRegion(`catquizlab-run-${run.runid}-questions`, run.questions.text);
+            const count = document.querySelector(`[data-region="catquizlab-run-${run.runid}-questions"]`);
+            if (count && run.questions.done !== undefined) {
+                count.setAttribute('data-done', String(run.questions.done));
+            }
+            setRegion(`catquizlab-run-${run.runid}-discarded`, run.questions.discardedtext || '');
+        }
+        if (run.statuslabel !== undefined) {
+            setRegion(`catquizlab-run-${run.runid}-status`, run.statuslabel);
+        }
+        setBar(`catquizlab-run-${run.runid}-bar`, run.percent, run.sittingstext);
+        const bar = document.querySelector(`[data-region="catquizlab-run-${run.runid}-bar"]`);
+        if (bar) {
+            bar.classList.toggle('bg-danger', Boolean(run.held));
+        }
+    });
+};
+
+/**
+ * All experiments (#158): the totals, each experiment and each of its runs, written into the regions the page has.
+ * Sections are never re-rendered, so one somebody opened stays open.
+ *
+ * @param {Object} overview The overview of the snapshot.
+ */
+const applyOverview = (overview) => {
+    const totals = overview.totals;
+    setRegion('catquizlab-overview-population', totals.text);
+    setRegion('catquizlab-overview-count', `${totals.done} / ${totals.total}`);
+    setBar('catquizlab-overview-bar', totals.percent, totals.sittingstext);
+    setRegion('catquizlab-overview-questions', totals.questions.text);
+    setBar('catquizlab-overview-questions-bar', totals.questions.percent, totals.questions.text);
+    (totals.states || []).forEach((state) => setRegion(`catquizlab-overview-state-${state.state}`, state.count));
+    setRegion('catquizlab-overview-finish', overview.time.text.finish);
+    setRegion('catquizlab-overview-remaining', overview.time.text.remaining);
+    setRegion('catquizlab-overview-status', overview.time.text.status);
+    setRegion('catquizlab-overview-reason', overview.time.text.reason);
+    const eta = document.querySelector('[data-region="catquizlab-overview-eta"]');
+    if (eta) {
+        eta.setAttribute('data-reliability', overview.time.reliability);
+    }
+    (overview.experiments || []).forEach((e) => {
+        const prefix = `catquizlab-exp-${e.experimentid}`;
+        setRegion(`${prefix}-label`, e.label);
+        setRegion(`${prefix}-reason`, e.reason);
+        setRegion(`${prefix}-count`, `${e.done} / ${e.total}`);
+        setBar(`${prefix}-bar`, e.percent, e.sittingstext);
+        setBar(`${prefix}-questions-bar`, e.questions.percent, e.questions.text);
+        setRegion(`${prefix}-questions`, e.questions.text);
+        ['started', 'elapsed', 'finish', 'remaining', 'own'].forEach((key) => setRegion(`${prefix}-${key}`, e.time.text[key]));
+        const section = document.querySelector(`[data-region="${prefix}"]`);
+        if (section) {
+            section.setAttribute('data-state', e.state);
+        }
+        applyRunRows(e.runs);
+        applyRunTimes(e.time.runs);
+    });
+};
+
+/**
+ * Keep the sections somebody opened or closed that way, across polls and across a reload when the page's shape
+ * changes (#158 AK7). Per tab; where storage is not available, the page simply opens as rendered.
+ */
+const rememberSections = () => {
+    document.querySelectorAll('details[data-experimentid]').forEach((section) => {
+        const key = `catquizlab-exp-open-${section.getAttribute('data-experimentid')}`;
+        try {
+            const stored = window.sessionStorage.getItem(key);
+            if (stored !== null) {
+                section.open = stored === '1';
+            }
+        } catch (e) {
+            // No storage: nothing to restore.
+        }
+        section.addEventListener('toggle', () => {
+            try {
+                window.sessionStorage.setItem(key, section.open ? '1' : '0');
+            } catch (e) {
+                // No storage: the state lasts until the next reload.
+            }
+        });
     });
 };
 
@@ -185,6 +320,9 @@ const applyProgress = (progress) => {
     if (overall) {
         overall.style.width = `${progress.percent}%`;
         overall.setAttribute('aria-valuenow', String(progress.percent));
+        if (progress.sittingstext) {
+            overall.setAttribute('aria-valuetext', progress.sittingstext);
+        }
     }
 
     // Questions (#141): the denominator and its kind come from the server.
@@ -195,19 +333,7 @@ const applyProgress = (progress) => {
     }
     setRegion('catquizlab-eta-stale', '');
 
-    (progress.runs || []).forEach((run) => {
-        setRegion(`catquizlab-run-${run.runid}-progress`, `${run.done} / ${run.total}`);
-        if (run.questions) {
-            setRegion(`catquizlab-run-${run.runid}-questions`, run.questions.text);
-        }
-
-        const bar = document.querySelector(`[data-region="catquizlab-run-${run.runid}-bar"]`);
-        if (bar) {
-            bar.style.width = `${run.percent}%`;
-            bar.setAttribute('aria-valuenow', String(run.percent));
-            bar.classList.toggle('bg-danger', Boolean(run.held));
-        }
-    });
+    applyRunRows(progress.runs);
 };
 
 /**
@@ -271,6 +397,9 @@ const applySnapshot = (status) => {
         return;
     }
 
+    if (status.overview) {
+        applyOverview(status.overview);
+    }
     if (status.progress) {
         applyProgress(status.progress);
     }
@@ -315,7 +444,7 @@ const poll = async() => {
             // The experiment the page is showing. Polling globally while the
             // table beside it showed one experiment made the two disagree by
             // construction.
-            args: {experimentid: experimentId},
+            args: {experimentid: experimentId, page: overviewPage},
         }])[0];
         applySnapshot(status);
     } catch (error) {
@@ -347,10 +476,13 @@ const stop = () => {
  *
  * @param {string} shape The shape the page was rendered with.
  * @param {number} experimentid The experiment the page is showing, or 0.
+ * @param {number} page The page of the overview's sections, with experiment 0.
  */
-export const init = (shape, experimentid) => {
+export const init = (shape, experimentid, page) => {
     renderedShape = shape || null;
     experimentId = parseInt(experimentid, 10) || 0;
+    overviewPage = parseInt(page, 10) || 0;
+    rememberSections();
     failures = 0;
     startedAt = Date.now();
 

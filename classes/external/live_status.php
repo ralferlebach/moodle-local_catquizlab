@@ -52,6 +52,8 @@ class live_status extends external_api {
             // answered about the whole installation while the table beside it
             // showed one experiment, and the two disagreed by design.
             'experimentid' => new external_value(PARAM_INT, 'The experiment in view, or 0.', VALUE_DEFAULT, 0),
+            // The page of experiment sections in "All experiments" (#158).
+            'page' => new external_value(PARAM_INT, 'The page of the overview, from 0.', VALUE_DEFAULT, 0),
         ]);
     }
 
@@ -59,11 +61,13 @@ class live_status extends external_api {
      * The current state of workers, queue, runs and the overall verdict.
      *
      * @param int $experimentid The experiment the page is showing, or 0.
+     * @param int $page The page of experiment sections in "All experiments", from 0.
      * @return array
      */
-    public static function execute(int $experimentid = 0): array {
-        $params = self::validate_parameters(self::execute_parameters(), ['experimentid' => $experimentid]);
+    public static function execute(int $experimentid = 0, int $page = 0): array {
+        $params = self::validate_parameters(self::execute_parameters(), ['experimentid' => $experimentid, 'page' => $page]);
         $experimentid = (int) $params['experimentid'];
+        $page = max(0, (int) $params['page']);
 
         global $DB;
 
@@ -124,7 +128,10 @@ class live_status extends external_api {
             'progress'       => $status !== null
                 ? ['label' => $status['label'], 'reason' => $status['reason']] + $status['progress']
                 : live_progress::snapshot($experimentid),
-        ] + ($status !== null ? [
+        ] + ($experimentid === 0 ? [
+            // All experiments (#158): the same figures the page was drawn from, for this page of sections.
+            'overview'       => self::overview_payload(\local_catquizlab\local\progress_overview::build($page)),
+        ] : []) + ($status !== null ? [
             // The experiment's status bar (#128), from the same snapshot.
             'status'         => self::status_view($status),
         ] : []);
@@ -152,15 +159,19 @@ class live_status extends external_api {
             return [];
         }
 
+        global $OUTPUT;
+
         $rows = [];
-        foreach ($DB->get_records('local_catquizlab_run', ['experimentid' => $experimentid], 'id ASC') as $run) {
-            $card = \local_catquizlab\local\status_report::run($run);
-            $counts = \local_catquizlab\local\run_lifecycle::attempt_counts((int) $run->id);
-
-            $total = (int) ($counts['total'] ?? 0);
-            $done = (int) ($counts['collected'] ?? 0);
-
-            global $OUTPUT;
+        $runs = $DB->get_records('local_catquizlab_run', ['experimentid' => $experimentid], 'id ASC');
+        // One reading for every run of the poll, the same the progress card reads (#141 AK6, #160 AK12).
+        $figures = \local_catquizlab\local\run_figures::read(array_keys($runs), time());
+        // The site's queue once for every card, not once per run (#160 AK12).
+        $sitequeue = attempt_scheduler::queue_breakdown();
+        foreach ($runs as $run) {
+            $f = $figures['runs'][(int) $run->id];
+            $card = \local_catquizlab\local\status_report::run($run, $f, $figures['workers'], $sitequeue);
+            $total = (int) $f['total'];
+            $done = (int) $f['collected'];
 
             $rows[] = [
                 'runid'   => (int) $run->id,
@@ -175,13 +186,64 @@ class live_status extends external_api {
                 'cardhtml' => $OUTPUT->render_from_template('local_catquizlab/statuscard', $card),
                 'done'    => $done,
                 'total'   => $total,
-                'percent' => $total > 0 ? (int) round(($done / $total) * 100) : 0,
-                'open'    => (int) ($counts['open'] ?? 0),
-                'failed'  => (int) ($counts['failed'] ?? 0),
+                // The progress card's percentage: 99 until it really is 100 (#141 AK6).
+                'percent' => $total > 0 ? ($done < $total ? min(99, (int) floor(100 * $done / $total)) : 100) : 0,
+                'open'    => (int) $f['open'],
+                'failed'  => (int) $f['failed'],
             ];
         }
 
         return $rows;
+    }
+
+    /**
+     * The overview as the poll serves it: the figures the page shows, nothing it does not.
+     *
+     * @param array $overview progress_overview::build().
+     * @return array
+     */
+    protected static function overview_payload(array $overview): array {
+        $run = static fn(array $r): array => [
+            'runid' => (int) $r['runid'], 'done' => (int) $r['done'], 'total' => (int) $r['total'],
+            'percent' => (int) $r['percent'], 'held' => (bool) $r['held'], 'sittingstext' => (string) $r['sittingstext'],
+            'statuslabel' => (string) $r['statuslabel'],
+            'questions' => ['text' => (string) $r['questions']['text'],
+                'discardedtext' => (string) $r['questions']['discardedtext']],
+        ];
+        $times = static fn(array $t): array => array_map(static fn(array $r): array => [
+            'runid' => (int) $r['runid'], 'reliability' => (string) $r['reliability'],
+            'text' => ['started' => $r['text']['started'], 'elapsed' => $r['text']['elapsed'],
+                'remaining' => $r['text']['remaining'], 'finish' => $r['text']['finish'], 'own' => $r['text']['own'],
+                'owntime' => $r['text']['owntime'], 'ahead' => $r['text']['ahead'], 'reason' => $r['text']['reason'],
+                'basis' => $r['text']['basis']],
+        ], $t['runs']);
+
+        return [
+            'totals' => [
+                'done' => (int) $overview['totals']['done'], 'total' => (int) $overview['totals']['total'],
+                'percent' => (int) $overview['totals']['percent'], 'text' => (string) $overview['totals']['text'],
+                'sittingstext' => (string) $overview['sittingstext'],
+                'questions' => ['text' => (string) $overview['totals']['questions']['text'],
+                    'percent' => (int) $overview['totals']['questions']['percent']],
+                'states' => array_map(
+                    static fn(array $x): array => ['state' => $x['state'], 'count' => (int) $x['count']],
+                    $overview['totals']['states']
+                ),
+            ],
+            'time' => ['reliability' => (string) $overview['time']['reliability'],
+                'text' => $overview['time']['text']],
+            'experiments' => array_map(static fn(array $e): array => [
+                'experimentid' => (int) $e['experimentid'], 'state' => (string) $e['state'], 'label' => (string) $e['label'],
+                'reason' => (string) $e['reason'], 'done' => (int) $e['done'], 'total' => (int) $e['total'],
+                'percent' => (int) $e['percent'], 'sittingstext' => (string) $e['sittingstext'],
+                'questions' => ['text' => (string) $e['questions']['text'], 'percent' => (int) $e['questions']['percent']],
+                'time' => ['reliability' => (string) $e['time']['reliability'], 'text' => [
+                    'started' => $e['time']['text']['started'], 'elapsed' => $e['time']['text']['elapsed'],
+                    'finish' => $e['time']['text']['finish'], 'remaining' => $e['time']['text']['remaining'],
+                    'own' => $e['time']['text']['own']], 'runs' => $times($e['time'])],
+                'runs' => array_map($run, $e['runs']),
+            ], $overview['experiments']),
+        ];
     }
 
     /**
@@ -293,6 +355,73 @@ class live_status extends external_api {
     }
 
     /**
+     * The overview's part of the answer (#158).
+     *
+     * @return external_single_structure
+     */
+    protected static function overview_structure(): external_single_structure {
+        $text = static fn(string $what): external_value => new external_value(PARAM_TEXT, $what);
+        $runtimes = new \core_external\external_multiple_structure(new external_single_structure([
+            'runid' => new external_value(PARAM_INT, 'The run.'),
+            'reliability' => new external_value(PARAM_ALPHA, 'How far to trust it.'),
+            'text' => new external_single_structure(['started' => $text('Started.'), 'elapsed' => $text('Elapsed.'),
+                'remaining' => $text('Until done.'), 'finish' => $text('When done.'), 'own' => $text('Own work.'),
+                'owntime' => $text('Own processing time.'), 'ahead' => $text('Work ahead.'), 'reason' => $text('Why.'),
+                'basis' => $text('On what its duration rests.')]),
+        ]), 'Per run.');
+
+        return new external_single_structure([
+            'totals' => new external_single_structure([
+                'done' => new external_value(PARAM_INT, 'Sittings done.'),
+                'total' => new external_value(PARAM_INT, 'Sittings planned.'),
+                'percent' => new external_value(PARAM_INT, 'From the exact denominator.'),
+                'text' => $text('The population in words.'),
+                'sittingstext' => $text('Done of planned sittings.'),
+                'questions' => new external_single_structure(['text' => $text('Questions.'),
+                    'percent' => new external_value(PARAM_INT, 'In questions.')]),
+                'states' => new \core_external\external_multiple_structure(new external_single_structure([
+                    'state' => new external_value(PARAM_ALPHA, 'A state.'),
+                    'count' => new external_value(PARAM_INT, 'Experiments in it.'),
+                ])),
+            ]),
+            'time' => new external_single_structure([
+                'reliability' => new external_value(PARAM_ALPHA, 'How far to trust it.'),
+                'text' => new external_single_structure(['status' => $text('Status.'), 'reason' => $text('Why.'),
+                    'remaining' => $text('Remaining.'), 'finish' => $text('Finish.')]),
+            ]),
+            'experiments' => new \core_external\external_multiple_structure(new external_single_structure([
+                'experimentid' => new external_value(PARAM_INT, 'The experiment.'),
+                'state' => new external_value(PARAM_ALPHA, 'Its state.'),
+                'label' => $text('Its state in words.'),
+                'reason' => $text('Why.'),
+                'done' => new external_value(PARAM_INT, 'Sittings done.'),
+                'total' => new external_value(PARAM_INT, 'Sittings planned.'),
+                'percent' => new external_value(PARAM_INT, 'How far along.'),
+                'sittingstext' => $text('Done of planned sittings.'),
+                'questions' => new external_single_structure(['text' => $text('Questions.'),
+                    'percent' => new external_value(PARAM_INT, 'In questions.')]),
+                'time' => new external_single_structure([
+                    'reliability' => new external_value(PARAM_ALPHA, 'How far to trust it.'),
+                    'text' => new external_single_structure(['started' => $text('Started.'), 'elapsed' => $text('Elapsed.'),
+                        'finish' => $text('Finish.'), 'remaining' => $text('Remaining.'), 'own' => $text('Own work.')]),
+                    'runs' => $runtimes,
+                ]),
+                'runs' => new \core_external\external_multiple_structure(new external_single_structure([
+                    'runid' => new external_value(PARAM_INT, 'The run.'),
+                    'done' => new external_value(PARAM_INT, 'Collected.'),
+                    'total' => new external_value(PARAM_INT, 'Planned.'),
+                    'percent' => new external_value(PARAM_INT, 'How far along.'),
+                    'held' => new external_value(PARAM_BOOL, 'Held.'),
+                    'sittingstext' => $text('Done of planned sittings.'),
+                    'statuslabel' => $text('Its status.'),
+                    'questions' => new external_single_structure(['text' => $text('Questions.'),
+                        'discardedtext' => $text('Questions that do not count.')]),
+                ])),
+            ])),
+        ], 'All experiments (#158), with experimentid 0 only.', VALUE_OPTIONAL);
+    }
+
+    /**
      * Return structure.
      *
      * @return external_single_structure
@@ -335,6 +464,11 @@ class live_status extends external_api {
                 'done'         => new external_value(PARAM_INT, 'Sittings collected.'),
                 'total'        => new external_value(PARAM_INT, 'Sittings planned.'),
                 'percent'      => new external_value(PARAM_INT, 'How far along.'),
+                'sittingstext' => new external_value(
+                    PARAM_TEXT,
+                    'Done of planned sittings, in words (#141 AK8).',
+                    VALUE_OPTIONAL
+                ),
                 'questions'    => new external_single_structure([
                     'done'        => new external_value(PARAM_INT, 'Questions answered, confirmed by the engine.'),
                     'expected'    => new external_value(
@@ -349,6 +483,8 @@ class live_status extends external_api {
                     'percent'     => new external_value(PARAM_INT, 'How far along, in questions.'),
                     'hasexpected' => new external_value(PARAM_BOOL, 'Whether there is a denominator.'),
                     'text'        => new external_value(PARAM_TEXT, 'Done of expected, in words.'),
+                    'discarded'   => new external_value(PARAM_INT, 'Answered in executions that do not count.'),
+                    'discardedtext' => new external_value(PARAM_TEXT, 'That, in words, or empty.'),
                 ], 'Progress in questions (#141).', VALUE_OPTIONAL),
                 'runs'         => new \core_external\external_multiple_structure(
                     new external_single_structure([
@@ -360,6 +496,7 @@ class live_status extends external_api {
                         'inflight' => new external_value(PARAM_INT, 'Being played now.'),
                         'failed'   => new external_value(PARAM_INT, 'Failed for good.'),
                         'complete' => new external_value(PARAM_BOOL, 'Whether it is done.'),
+                        'sittingstext' => new external_value(PARAM_TEXT, 'Done of planned sittings, in words.', VALUE_OPTIONAL),
                         'held'     => new external_value(PARAM_BOOL, 'Whether it was stopped.'),
                         'questions' => new external_single_structure([
                         'done'        => new external_value(PARAM_INT, 'Questions answered, confirmed by the engine.'),
@@ -375,6 +512,8 @@ class live_status extends external_api {
                         'percent'     => new external_value(PARAM_INT, 'How far along, in questions.'),
                         'hasexpected' => new external_value(PARAM_BOOL, 'Whether there is a denominator.'),
                         'text'        => new external_value(PARAM_TEXT, 'Done of expected, in words.'),
+                        'discarded'   => new external_value(PARAM_INT, 'Answered in executions that do not count.'),
+                        'discardedtext' => new external_value(PARAM_TEXT, 'That, in words, or empty.'),
                         ], 'Progress in questions (#141).', VALUE_OPTIONAL),
                     ]),
                     'Per run.'
@@ -396,7 +535,8 @@ class live_status extends external_api {
                         'started'   => new external_value(PARAM_TEXT, 'Started, with the time zone.'),
                         'elapsed'   => new external_value(PARAM_TEXT, 'Elapsed.'),
                         'finish'    => new external_value(PARAM_TEXT, 'Estimated or actual finish.'),
-                        'remaining' => new external_value(PARAM_TEXT, 'Remaining, with its range.'),
+                        'remaining' => new external_value(PARAM_TEXT, 'Until all runs are done, waiting included.'),
+                        'own'       => new external_value(PARAM_TEXT, 'The experiment\'s own remaining work (#160).'),
                         'status'    => new external_value(PARAM_TEXT, 'How far to trust it.'),
                         'reason'    => new external_value(PARAM_TEXT, 'Why there is no running estimate.'),
                         'method'    => new external_value(PARAM_TEXT, 'How it was computed.'),
@@ -409,9 +549,55 @@ class live_status extends external_api {
                             'text'        => new external_single_structure([
                                 'started'   => new external_value(PARAM_TEXT, 'Started.'),
                                 'elapsed'   => new external_value(PARAM_TEXT, 'Elapsed.'),
-                                'remaining' => new external_value(PARAM_TEXT, 'Remaining.'),
-                                'finish'    => new external_value(PARAM_TEXT, 'Finish.'),
+                                'remaining' => new external_value(PARAM_TEXT, 'Until the run is done, waiting included.'),
+                                'finish'    => new external_value(PARAM_TEXT, 'When it is done.'),
+                                'own'       => new external_value(PARAM_TEXT, 'Its own remaining work (#160).'),
+                                'owntime'   => new external_value(PARAM_TEXT, 'Its own processing time at its workers now.'),
+                                'ahead'     => new external_value(PARAM_TEXT, 'Work of other runs ahead of it, or empty.'),
+                                'reason'    => new external_value(PARAM_TEXT, 'Why there is no figure, or empty.'),
+                                'basis'     => new external_value(PARAM_TEXT, 'On what its duration rests (#160 AK10).'),
                             ]),
+                            'own'         => new external_single_structure([
+                                'sittings'     => new external_value(PARAM_INT, 'Sittings left.'),
+                                'questions'    => new external_value(
+                                    PARAM_INT,
+                                    'Questions left; null where unknown.',
+                                    VALUE_DEFAULT,
+                                    null,
+                                    NULL_ALLOWED
+                                ),
+                                'questionkind' => new external_value(PARAM_ALPHA, 'exact, estimate, bound or unknown.'),
+                                'workseconds'  => new external_value(
+                                    PARAM_INT,
+                                    'Worker seconds left; null without a duration.',
+                                    VALUE_DEFAULT,
+                                    null,
+                                    NULL_ALLOWED
+                                ),
+                                'basis'        => new external_value(PARAM_ALPHA, 'run, strategy, experiment, questions or none.'),
+                                'slots'        => new external_value(PARAM_FLOAT, 'Workers it has now.'),
+                                'seconds'      => new external_value(
+                                    PARAM_INT,
+                                    'Own processing time; null without workers.',
+                                    VALUE_DEFAULT,
+                                    null,
+                                    NULL_ALLOWED
+                                ),
+                            ], 'Its own remaining work, from the run alone (#160).'),
+                            'remaining'   => new external_value(
+                                PARAM_INT,
+                                'Seconds until done; null without a forecast.',
+                                VALUE_DEFAULT,
+                                null,
+                                NULL_ALLOWED
+                            ),
+                            'finish'      => new external_value(
+                                PARAM_INT,
+                                'When done; null without a forecast.',
+                                VALUE_DEFAULT,
+                                null,
+                                NULL_ALLOWED
+                            ),
                         ]),
                         'Per run.'
                     ),
@@ -429,6 +615,7 @@ class live_status extends external_api {
                 'computedtext' => new external_value(PARAM_TEXT, 'That time, in words.'),
                 'next'         => new external_value(PARAM_ALPHA, 'The kind of the next step.'),
             ], 'The experiment status bar (#128).', VALUE_OPTIONAL),
+            'overview'       => self::overview_structure(),
             'experiment'     => new external_single_structure([
                 'state'   => new external_value(PARAM_TEXT, 'The experiment state.'),
                 'label'   => new external_value(PARAM_TEXT, 'That state, in words.'),

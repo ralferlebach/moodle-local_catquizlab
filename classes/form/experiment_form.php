@@ -25,6 +25,7 @@
 namespace local_catquizlab\form;
 
 use local_catquizlab\local\experiment_definition;
+use local_catquizlab\local\lognormal;
 use local_catquizlab\local\model_catalog;
 use local_catquizlab\local\pool_mutator;
 use local_catquizlab\local\preset_library;
@@ -150,11 +151,50 @@ class experiment_form extends \moodleform {
         $mform->setType('discriminationa', PARAM_LOCALISEDFLOAT);
         $mform->setDefault('discriminationa', 1.0);
         $mform->hideIf('discriminationa', 'model', 'eq', '1pl');
+        // Log-normal has its own three inputs below (#159).
+        $mform->hideIf('discriminationa', 'discriminationdist', 'eq', 'lognormal');
 
         $mform->addElement('text', 'discriminationb', get_string('form:paramtwo', $component), ['size' => 10]);
         $mform->setType('discriminationb', PARAM_LOCALISEDFLOAT);
         $mform->setDefault('discriminationb', 0.3);
         $mform->hideIf('discriminationb', 'discriminationdist', 'eq', 'constant');
+        $mform->hideIf('discriminationb', 'discriminationdist', 'eq', 'lognormal');
+
+        // Log-normal discrimination as three coupled inputs (#159): μlog and σlog are what is stored, E(a) is
+        // derived; any two given, the editor computes the third (amd/src/lognormal.js), the server does the same.
+        foreach (lognormal::FIELDS as $role => $field) {
+            $mform->addElement(
+                'text',
+                $field,
+                get_string('lognormal:' . $role, $component),
+                ['size' => 12, 'inputmode' => 'decimal', 'data-lognormal' => $role]
+            );
+            $mform->setType($field, PARAM_RAW_TRIMMED);
+            $mform->addHelpButton($field, 'lognormal:' . $role, $component);
+            $mform->hideIf($field, 'discriminationdist', 'noteq', 'lognormal');
+            $mform->hideIf($field, 'model', 'eq', '1pl');
+        }
+        $mform->setDefault('lognormalmu', self::localised(lognormal::DEFAULT_MU));
+        $mform->setDefault('lognormalsigma', self::localised(lognormal::DEFAULT_SIGMA));
+        $mform->setDefault('lognormalmean', self::localised(round((float) lognormal::expected(
+            lognormal::DEFAULT_MU,
+            lognormal::DEFAULT_SIGMA
+        ), 6)));
+        // Which two the author typed last: those two decide, the third follows.
+        $mform->addElement('hidden', 'lognormalsource', 'mu,sigma');
+        $mform->setType('lognormalsource', PARAM_TEXT);
+        $mform->addElement(
+            'static',
+            'lognormalplot',
+            get_string('lognormal:plot', $component),
+            '<div data-region="catquizlab-lognormal" class="catquizlab-lognormal">'
+            . '<svg data-region="catquizlab-lognormal-svg" role="img" viewBox="0 0 480 220" width="100%" '
+            . 'style="max-width: 480px;" aria-labelledby="catquizlab-lognormal-text"></svg>'
+            . '<p id="catquizlab-lognormal-text" class="small text-muted mb-0" data-region="catquizlab-lognormal-text" '
+            . 'aria-live="polite"></p></div>'
+        );
+        $mform->hideIf('lognormalplot', 'discriminationdist', 'noteq', 'lognormal');
+        $mform->hideIf('lognormalplot', 'model', 'eq', '1pl');
 
         $mform->addElement('text', 'guessingmin', get_string('form:guessingmin', $component), ['size' => 10]);
         $mform->setType('guessingmin', PARAM_LOCALISEDFLOAT);
@@ -575,6 +615,11 @@ class experiment_form extends \moodleform {
             $mform->hideIf($base, 'sweepse', 'neq', '');
         }
         $PAGE->requires->js_call_amd('local_catquizlab/levels', 'init', []);
+        // The three log-normal inputs and their density sketch (#159).
+        $PAGE->requires->js_call_amd('local_catquizlab/lognormal', 'init', [get_string('decsep', 'langconfig')]);
+        $PAGE->requires->strings_for_js(['lognormal:errorfinite', 'lognormal:errorsigma', 'lognormal:errormean',
+            'lognormal:errorbelow', 'lognormal:errortwo', 'lognormal:constant', 'lognormal:meanline', 'lognormal:xaxis',
+            'lognormal:yaxis', 'lognormal:summary'], 'local_catquizlab');
         $PAGE->requires->strings_for_js([
             'levels:add', 'levels:remove', 'levels:min', 'levels:max', 'levels:value', 'levels:key',
             'levels:notvaried', 'levels:varied', 'levels:sharepercent', 'levels:notanumbershort', 'levels:shareshort',
@@ -645,6 +690,17 @@ class experiment_form extends \moodleform {
         foreach ($floats as $field) {
             if (array_key_exists($field, $data) && $data[$field] === false) {
                 $errors[$field] = get_string('form:notanumber', 'local_catquizlab');
+            }
+        }
+        // Log-normal: the two inputs that decide must be numbers and must have a solution (#159 AK07).
+        if (
+            ($data['discriminationdist'] ?? '') === 'lognormal' && ($data['model'] ?? '') !== '1pl'
+                && array_key_exists('lognormalmu', $data)
+        ) {
+            $solved = self::lognormal_solved($data);
+            if (!$solved['ok']) {
+                $field = $solved['field'] ?? 'lognormalsigma';
+                $errors[$field] = get_string($solved['error'], 'local_catquizlab');
             }
         }
         // Every level of the varied factors read, or refused with its line (#126).
@@ -1343,6 +1399,14 @@ JS;
             'discriminationa'    => self::localised((float) ($discrimination['value']
                 ?? $discrimination['meanlog'] ?? $discrimination['min'] ?? 1.0)),
             'discriminationb'    => self::localised((float) ($discrimination['sdlog'] ?? $discrimination['max'] ?? 0.3)),
+            // The stored μlog and σlog, and the E(a) they make (#159 AK17).
+            'lognormalmu'        => self::localised((float) ($discrimination['meanlog'] ?? lognormal::DEFAULT_MU)),
+            'lognormalsigma'     => self::localised((float) ($discrimination['sdlog'] ?? lognormal::DEFAULT_SIGMA)),
+            'lognormalmean'      => self::localised(round((float) lognormal::expected(
+                (float) ($discrimination['meanlog'] ?? lognormal::DEFAULT_MU),
+                (float) ($discrimination['sdlog'] ?? lognormal::DEFAULT_SIGMA)
+            ), 6)),
+            'lognormalsource'    => 'mu,sigma',
             'guessingmin'        => self::localised((float) ($guessing['min'] ?? $guessing['value'] ?? 0.1)),
             'guessingmax'        => self::localised((float) ($guessing['max'] ?? 0.25)),
             'categories'         => (int) ($params['categories'] ?? 4),
@@ -1566,6 +1630,37 @@ JS;
     }
 
     /**
+     * The log-normal parameters from the two inputs the author set last (#159).
+     *
+     * @param array $data The submitted data.
+     * @return array lognormal::solve(), with field: the input an error belongs to.
+     */
+    protected static function lognormal_solved(array $data): array {
+        $source = array_values(array_intersect(
+            explode(',', (string) ($data['lognormalsource'] ?? 'mu,sigma')),
+            array_keys(lognormal::FIELDS)
+        ));
+        if (count($source) !== 2) {
+            $source = ['mu', 'sigma'];
+        }
+        $given = [];
+        foreach ($source as $role) {
+            $raw = trim((string) ($data[lognormal::FIELDS[$role]] ?? ''));
+            $value = $raw === '' ? false : unformat_float($raw, true);
+            if ($value === false || $value === null) {
+                return ['ok' => false, 'error' => 'form:notanumber', 'field' => lognormal::FIELDS[$role]];
+            }
+            $given[$role] = (float) $value;
+        }
+        $solved = lognormal::solve($given);
+        $computed = array_values(array_diff(array_keys(lognormal::FIELDS), $source))[0];
+        $solved['field'] = $solved['error'] === 'lognormal:errorsigma' ? 'lognormalsigma'
+            : ($solved['error'] === 'lognormal:errormean' ? 'lognormalmean' : lognormal::FIELDS[$computed]);
+
+        return $solved;
+    }
+
+    /**
      * Assemble the model parameter block from the form fields.
      *
      * @param array $data The submitted data.
@@ -1582,7 +1677,10 @@ JS;
             $b = (float) ($data['discriminationb'] ?? 0.3);
 
             if ($dist === 'lognormal') {
-                $params['discrimination'] = ['dist' => 'lognormal', 'meanlog' => $a, 'sdlog' => $b];
+                // The two inputs the author set decide; only μlog and σlog are stored (#159 AK16).
+                $solved = self::lognormal_solved($data);
+                $params['discrimination'] = ['dist' => 'lognormal',
+                    'meanlog' => $solved['ok'] ? $solved['mu'] : $a, 'sdlog' => $solved['ok'] ? $solved['sigma'] : $b];
             } else if ($dist === 'uniform') {
                 $params['discrimination'] = ['dist' => 'uniform', 'min' => $a, 'max' => $b];
             } else {

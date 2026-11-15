@@ -655,6 +655,7 @@ if ($runid === 0) {
     $PAGE->requires->js_call_amd('local_catquizlab/livestatus', 'init', [
         \local_catquizlab\external\live_status::current_shape(),
         optional_param('experimentid', 0, PARAM_INT),
+        optional_param('xpage', 0, PARAM_INT),
     ]);
 
     echo $OUTPUT->render_from_template(

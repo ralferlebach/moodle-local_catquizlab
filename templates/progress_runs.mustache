@@ -1,0 +1,102 @@
+{{!
+    This file is part of Moodle - https://moodle.org/
+
+    Moodle is free software: you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+    the Free Software Foundation, either version 3 of the License, or
+    (at your option) any later version.
+
+    Moodle is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+    GNU General Public License for more details.
+
+    You should have received a copy of the GNU General Public License
+    along with Moodle.  If not, see <https://www.gnu.org/licenses/>.
+}}
+{{!
+    @template local_catquizlab/progress_runs
+
+    The run table of a progress snapshot: one row per run with its bar, sittings and questions, its own remaining
+    work and when it will be done (#141, #160). The same on an experiment's page and in the overview of all
+    experiments (#158), so the two cannot show a run differently.
+
+    Context variables required for this template:
+    * hasruns - Whether there are runs.
+    * manyruns - Whether the table starts folded.
+    * runs - The rows of live_progress::snapshot(), each with time.
+
+    Example context (json):
+    {
+        "hasruns": true,
+        "manyruns": false,
+        "runs": [{"runid": 86, "cellkey": "fastest", "strategylabel": "Fastest", "statuslabel": "Running", "url": "#",
+            "percent": 99,
+            "done": 997, "total": 1000, "held": false, "sittingstext": "997 of 1000 sittings",
+            "questions": {"text": "24910 of about 24985", "discardedtext": ""},
+            "time": {"started": "14/11/26, 10:00", "elapsed": "1 hour 25 mins", "own": "≈ 75 questions · 3 sittings",
+                "owntime": "No worker on it right now", "remaining": "≈ 2 mins", "finish": "14/11/26, 11:27",
+                "ahead": "", "reason": ""} }]
+    }
+}}
+{{#hasruns}}
+    <details class="mb-3" data-region="catquizlab-run-times" {{^manyruns}}open{{/manyruns}}>
+    <summary class="small">{{#str}}eta:rundetails, local_catquizlab{{/str}}</summary>
+    <div class="table-responsive position-relative">
+    <table class="table table-sm mb-0">
+        <thead class="small">
+            <tr>
+                <th scope="col">{{#str}}progress:run, local_catquizlab{{/str}}</th>
+                <th scope="col">{{#str}}progress:cell, local_catquizlab{{/str}}</th>
+                <th scope="col">{{#str}}progress:bar, local_catquizlab{{/str}}</th>
+                <th scope="col" class="text-right">{{#str}}report:sittings, local_catquizlab{{/str}}</th>
+                <th scope="col">{{#str}}eta:started, local_catquizlab{{/str}}</th>
+                <th scope="col">{{#str}}eta:elapsed, local_catquizlab{{/str}}</th>
+                <th scope="col">{{#str}}eta:own, local_catquizlab{{/str}}</th>
+                <th scope="col">{{#str}}eta:doneby, local_catquizlab{{/str}}</th>
+            </tr>
+        </thead>
+        <tbody>
+            {{#runs}}
+                <tr>
+                    <th scope="row" style="width: 5rem;"><a href="{{url}}">#{{runid}}</a></th>
+                    <td class="small">
+                        {{#strategylabel}}<span class="d-block">{{.}}</span>{{/strategylabel}}
+                        <span class="text-muted d-block">{{cellkey}}</span>
+                        <span class="text-muted d-block" data-region="catquizlab-run-{{runid}}-status">{{statuslabel}}</span>
+                    </td>
+                    <td style="width: 40%;">
+                        <div class="progress" style="height: 0.4rem;">
+                            <div class="progress-bar{{#held}} bg-danger{{/held}}"
+                                 role="progressbar"
+                                 data-region="catquizlab-run-{{runid}}-bar"
+                                 style="width: {{percent}}%;"
+                                 aria-valuenow="{{percent}}" aria-valuemin="0" aria-valuemax="100"
+                                 aria-valuetext="{{sittingstext}}"
+                                 aria-label="{{#str}}progress:runbar, local_catquizlab, {{runid}}{{/str}}"></div>
+                        </div>
+                    </td>
+                    <td class="small text-right" style="width: 7rem;">
+                        <span data-region="catquizlab-run-{{runid}}-progress">{{done}} / {{total}}</span>
+                        <br><span class="text-muted" data-region="catquizlab-run-{{runid}}-questions" data-done="{{questions.done}}">{{questions.text}}</span>
+                        <br><span class="text-muted" data-region="catquizlab-run-{{runid}}-discarded">{{questions.discardedtext}}</span>
+                    </td>
+                    <td class="small" data-region="catquizlab-run-{{runid}}-started">{{time.started}}</td>
+                    <td class="small" data-region="catquizlab-run-{{runid}}-elapsed">{{time.elapsed}}</td>
+                    <td class="small">
+                        <span data-region="catquizlab-run-{{runid}}-own">{{time.own}}</span>
+                        <br><span class="text-muted" data-region="catquizlab-run-{{runid}}-owntime">{{time.owntime}}</span>
+                    </td>
+                    <td class="small">
+                        <span data-region="catquizlab-run-{{runid}}-remaining">{{time.remaining}}</span>
+                        <br><span class="text-muted" data-region="catquizlab-run-{{runid}}-finish">{{time.finish}}</span>
+                        <br><span class="text-muted" data-region="catquizlab-run-{{runid}}-ahead">{{time.ahead}}{{time.reason}}</span>
+                        <br><span class="text-muted" data-region="catquizlab-run-{{runid}}-basis">{{time.basis}}</span>
+                    </td>
+                </tr>
+            {{/runs}}
+        </tbody>
+    </table>
+    </div>
+    </details>
+{{/hasruns}}

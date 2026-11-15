@@ -55,7 +55,8 @@
     }
 }}
 <div class="local-catquizlab-editor">
-    <div class="row">
+    {{! No negative gutters: on a phone they pushed the form 15 px past the page (#159 AK-14). }}
+    <div class="row mx-0">
         <div class="col-lg-3 order-lg-1">
             <nav aria-label="{{#str}}editor:sections, local_catquizlab{{/str}}">
                 <ol class="list-group list-group-flush mb-4">

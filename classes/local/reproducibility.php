@@ -143,6 +143,8 @@ class reproducibility {
                 'masterseed'  => (int) $run->masterseed,
                 'replication' => (int) $run->replication,
                 'manifest'    => $manifest,
+                // The experiment's name when this run was made (#152): the current one is the experiment's, above.
+                'experimentnameatrun' => (string) ($manifest['config']['definition']['name'] ?? ''),
             ];
 
             // What the engine was given, not only what was asked for (#121):
@@ -163,7 +165,10 @@ class reproducibility {
             'generated'   => date('c'),
             'experiment'  => [
                 'id'         => (int) $experiment->id,
+                // The current name; a rename changes only this and the description, never the design (#152).
                 'name'       => (string) $experiment->name,
+                // Null where the definition cannot be read; 'normalised' says why.
+                'designhash' => self::design_hash((string) $experiment->configjson),
                 'definition' => $definition,
                 // What the plugin made of it, which is what actually ran. From
                 // the stored text rather than the decoded array: a definition
@@ -262,6 +267,20 @@ class reproducibility {
         } catch (\Throwable $e) {
             // Said, not hidden: a package without them cannot claim to be complete.
             return ['effective' => null, 'effectiveerror' => $e->getMessage()];
+        }
+    }
+
+    /**
+     * The hash of the experimental design (#152), or null for a definition the plugin can no longer read.
+     *
+     * @param string $configjson The stored definition.
+     * @return string|null sha256, or null.
+     */
+    protected static function design_hash(string $configjson): ?string {
+        try {
+            return experiment_metadata::design_hash($configjson);
+        } catch (\Throwable $e) {
+            return null;
         }
     }
 

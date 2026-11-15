@@ -215,6 +215,35 @@ if ($action === 'duplicate' && $id > 0) {
     );
 }
 
+// Name and description of an experiment whose design its runs have locked (#152): changed, never the design.
+$metadataform = null;
+if ($id > 0 && experiment_service::run_count($id) > 0 && has_capability('local/catquizlab:edit', $context)) {
+    $metadataform = new \local_catquizlab\form\metadata_form(new moodle_url(
+        '/local/catquizlab/experiment.php',
+        ['id' => $id]
+    ));
+    if ($metadataform->is_submitted() && ($metadata = $metadataform->get_data()) !== null) {
+        require_sesskey();
+        require_capability('local/catquizlab:edit', $context);
+        $changed = \local_catquizlab\local\experiment_metadata::update(
+            $id,
+            (string) $metadata->metadataname,
+            (string) ($metadata->metadatadescription ?? ''),
+            (int) $metadata->seen
+        );
+        redirect(
+            new moodle_url('/local/catquizlab/experiment.php', ['id' => $id]),
+            get_string($changed['ok'] ? 'metadata:saved' : $changed['error'], $component),
+            null,
+            $changed['ok'] ? \core\output\notification::NOTIFY_SUCCESS : \core\output\notification::NOTIFY_ERROR
+        );
+    }
+    $record = $DB->get_record('local_catquizlab_experiment', ['id' => $id], 'id, name, configjson, timemodified', MUST_EXIST);
+    $stored = json_decode((string) $record->configjson, true) ?: [];
+    $metadataform->set_data(['id' => $id, 'seen' => (int) $record->timemodified, 'metadataname' => (string) $record->name,
+        'metadatadescription' => (string) ($stored['description'] ?? '')]);
+}
+
 if ($action === 'startdrafts' && $id > 0) {
     require_sesskey();
     require_capability('local/catquizlab:execute', $context);
@@ -535,10 +564,35 @@ if ($id > 0 && has_capability('local/catquizlab:export', $context)) {
 
 echo $OUTPUT->render_from_template('local_catquizlab/experiment_editor', [
     'sections'   => $sections,
-    'form'       => $frozennotice . $form->render(),
+    'form'       => $frozennotice . ($metadataform !== null ? $metadataform->render() . local_catquizlab_metadata_history($id)
+        : '') . $form->render(),
     'validation' => $validationcontext,
     'preview'    => $previewcontext,
     'exchange'   => $exchangecontext,
 ]);
 
 echo $OUTPUT->footer();
+
+/**
+ * The history of an experiment's name and description, as a small table, or nothing.
+ *
+ * @param int $id The experiment.
+ * @return string HTML.
+ */
+function local_catquizlab_metadata_history(int $id): string {
+    $history = \local_catquizlab\local\experiment_metadata::history($id);
+    if ($history === []) {
+        return '';
+    }
+    $table = new html_table();
+    $table->attributes['class'] = 'generaltable table-sm w-auto small';
+    $table->caption = get_string('metadata:history', 'local_catquizlab');
+    $table->head = [get_string('metadata:when', 'local_catquizlab'), get_string('metadata:who', 'local_catquizlab'),
+        get_string('metadata:from', 'local_catquizlab'), get_string('metadata:to', 'local_catquizlab')];
+    foreach ($history as $row) {
+        $table->data[] = [s($row['when']), s($row['who']), $row['oldname'], $row['newname']
+            . ($row['description'] ? ' ' . get_string('metadata:descriptionchanged', 'local_catquizlab') : '')];
+    }
+
+    return html_writer::table($table);
+}

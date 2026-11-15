@@ -21,8 +21,9 @@
  * dated back from now. Nothing is played: the state is written as the worker
  * and the scheduler would have left it.
  *
- * Options: --state=running|calculating|blocked|finished|empty. Prints
- * PROGRESS_<STATE>_EXPERIMENTID=<id>.
+ * Options: --state=running|calculating|blocked|finished|empty|parallel. Prints
+ * PROGRESS_<STATE>_EXPERIMENTID=<id>. --state=overview seeds three experiments for "All experiments" (#158),
+ * --state=library 55 planned ones for the A–Z order (#153); they print OVERVIEW_* and LIBRARY_* lines.
  *
  * @package    local_catquizlab
  * @copyright  2026 Ralf Erlebach
@@ -45,8 +46,77 @@ use local_catquizlab\local\run_lifecycle;
 
 [$options] = cli_get_params(['state' => 'running']);
 $state = (string) $options['state'];
-if (!in_array($state, ['running', 'calculating', 'blocked', 'finished', 'empty'], true)) {
-    cli_error('--state must be running, calculating, blocked, finished or empty');
+if (!in_array($state, ['running', 'calculating', 'blocked', 'finished', 'empty', 'parallel', 'overview', 'library'], true)) {
+    cli_error('--state must be running, calculating, blocked, finished, empty, parallel, overview or library');
+}
+
+// Issue #153: 55 planned experiments under one prefix, with umlauts, case, numbers and equal names, so the library,
+// the selector and the overview can be checked for A–Z past 50.
+if ($state === 'library') {
+    $prefix = 'Order ' . date('Ymd-His') . ' ';
+    $names = ['zebra', 'Äpfel', 'apfel', 'Apfel', 'Öl', 'oel', 'Run 10', 'Run 9', 'beta', 'Beta', 'ätzend', 'Zürich'];
+    for ($i = 1; count($names) < 55; $i++) {
+        $names[] = 'Experiment ' . $i;
+    }
+    foreach ($names as $name) {
+        $definition = experiment_definition::example_baseline();
+        $definition['name'] = $prefix . $name;
+        experiment_service::save($definition);
+    }
+    cli_writeln('LIBRARY_COUNT=' . count($names));
+    cli_writeln('LIBRARY_PREFIX=' . $prefix);
+    exit(0);
+}
+
+// Issue #158: three experiments for "All experiments", named so they sort A-Z apart from everything else here.
+// Not started (two draft runs), running (30 runs, one paused, one held) and finished (two runs). Queued sittings
+// are due in thirty days: nothing on the installation touches them.
+if ($state === 'overview') {
+    $now = time();
+    $stamp = date('Ymd-His');
+    $ids = [];
+    foreach (['a running' => 30, 'b finished' => 2, 'c planned' => 2] as $label => $runs) {
+        $definition = experiment_definition::example_baseline();
+        $definition['name'] = 'Overview ' . $stamp . ' ' . $label;
+        $experimentid = (int) experiment_service::save($definition)['id'];
+        $ids[$label] = $experimentid;
+        for ($r = 0; $r < $runs; $r++) {
+            $strategy = $r % 2 ? 'fastest' : 'classic';
+            $status = $label === 'c planned' ? registry::STATUS_DRAFT
+                : ($label === 'b finished' ? registry::STATUS_FINISHED : registry::STATUS_RUNNING);
+            $runid = (int) $DB->insert_record('local_catquizlab_run', (object) ['experimentid' => $experimentid,
+                'cellkey' => 'strategy=' . $strategy . '|r' . $r, 'seed' => 1, 'replication' => 1, 'status' => $status,
+                'manifestjson' => json_encode(['config' => ['strategy' => ['key' => $strategy],
+                    'definition' => ['strategy' => $strategy]]]),
+                'usermodified' => 0, 'timecreated' => $now, 'timemodified' => $now]);
+            for ($i = 0; $i < 4; $i++) {
+                $done = $label === 'b finished' || ($label === 'a running' && $i < 2);
+                $attemptid = (int) $DB->insert_record('local_catquizlab_attempt', (object) ['runid' => $runid,
+                    'personid' => 0, 'status' => $done ? attempt_scheduler::STATUS_COLLECTED : attempt_scheduler::STATUS_QUEUED,
+                    'tries' => $done ? 1 : 0, 'runtimems' => $done ? 20000 : null, 'leaseexpires' => 0,
+                    'nextruntime' => $done ? 0 : $now + 30 * DAYSECS, 'timecreated' => $now, 'timemodified' => $now]);
+                if ($done) {
+                    $DB->insert_record('local_catquizlab_attemptlog', (object) ['attemptid' => $attemptid,
+                        'runid' => $runid, 'tryno' => 1, 'outcome' => attempt_history::STARTED,
+                        'timecreated' => $now - 600 + 30 * $i]);
+                    $DB->insert_record('local_catquizlab_attemptlog', (object) ['attemptid' => $attemptid,
+                        'runid' => $runid, 'tryno' => 1, 'outcome' => attempt_history::COLLECTED, 'runtimems' => 20000,
+                        'timecreated' => $now - 580 + 30 * $i]);
+                }
+            }
+            if ($label === 'a running' && $r === 3) {
+                run_lifecycle::set_paused($runid, true, 'seeded');
+            }
+            if ($label === 'a running' && $r === 5) {
+                run_lifecycle::set_paused($runid, true, 'circuit_breaker:submit_http_5xx', ['seeded' => true]);
+            }
+        }
+    }
+    foreach ($ids as $label => $id) {
+        cli_writeln('OVERVIEW_' . strtoupper(explode(' ', $label)[1]) . '_EXPERIMENTID=' . $id);
+    }
+    cli_writeln('OVERVIEW_PREFIX=Overview ' . $stamp);
+    exit(0);
 }
 
 $definition = experiment_definition::example_baseline();
@@ -66,6 +136,8 @@ $plan = [
     'calculating' => [[1, 2], [0, 0]],
     'blocked'     => [[20, 0], [5, 0]],
     'finished'    => [[20, 0], [20, 0]],
+    // Issue #160: the first run nearly done (17 of 20, its last three created first), the second being played.
+    'parallel'    => [[17, 0], [5, 2]],
 ][$state];
 $durations = [12, 45];
 
@@ -101,7 +173,8 @@ foreach ($runs as $index => $run) {
             'leaseexpires' => $status === attempt_scheduler::STATUS_RUNNING ? $now + DAYSECS : 0,
             'nextruntime' => $status === attempt_scheduler::STATUS_QUEUED ? $now + 30 * DAYSECS : 0,
             'runtimems' => $status === attempt_scheduler::STATUS_COLLECTED ? $seconds * 1000 : 0,
-            'timecreated' => $now, 'timemodified' => $now,
+            // The nearly finished run's last sittings were created first: first in the claim order (#160).
+            'timecreated' => $state === 'parallel' && $index === 0 ? $now - HOURSECS : $now, 'timemodified' => $now,
         ]);
         if ($status === attempt_scheduler::STATUS_QUEUED) {
             continue;
@@ -111,7 +184,8 @@ foreach ($runs as $index => $run) {
             'tryno' => 1, 'outcome' => attempt_history::STARTED, 'workerid' => 'seed-worker', 'timecreated' => $begin]);
         if ($status === attempt_scheduler::STATUS_COLLECTED) {
             // In a running experiment the last ones end just now, so the capacity window sees them.
-            $end = $state === 'running' || $state === 'blocked' ? min($now - 1, $begin + $seconds) : $begin + $seconds;
+            $end = in_array($state, ['running', 'blocked', 'parallel'], true) ? min($now - 1, $begin + $seconds)
+                : $begin + $seconds;
             $DB->insert_record('local_catquizlab_attemptlog', (object) ['attemptid' => $attemptid, 'runid' => $run->id,
                 'tryno' => 1, 'outcome' => attempt_history::COLLECTED, 'workerid' => 'seed-worker',
                 'runtimems' => $seconds * 1000, 'timecreated' => $end]);

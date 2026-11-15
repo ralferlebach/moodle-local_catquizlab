@@ -64,6 +64,9 @@ use local_catquizlab\local\worker_registry;
     'expect-recovered' => 0,
     'budget' => '',
     'require-all' => false,
+    'strategies' => '',
+    'eta-probe' => '',
+    'watch-page' => '',
 ], ['h' => 'help']);
 
 if ($options['help']) {
@@ -76,6 +79,12 @@ Options:
   --minanswers=15      How many answers an attempt must give to count.
   --minutes=5          How long to wait for the worker.
   --require-all        Fail unless every queued sitting was collected or failed in that time (load matrix).
+  --strategies=a,b     A sweep over these strategies: one run each, played by the same workers (#160).
+  --eta-probe=FILE     Every 5 s a progress snapshot into FILE (JSON lines), each checked for contradictions; at the
+                       end every forecast against the actual end of its run, summary in FILE.summary.json (#160).
+  --watch-page=FILE    With --eta-probe: a browser signed in as a temporary manager reads the progress page every
+                       5 s while the run is played (header and run rows, as its poll left them, every sixth time
+                       freshly loaded) into FILE; each reading is checked against the snapshots (#141 DoD 2).
   --keep               Leave the experiment behind for inspection.
   --budget=G1,G2,S1,S2,SE1,SE2
                        The run's budgets instead of the smoke defaults (#123):
@@ -210,6 +219,14 @@ $definition['name'] = 'Smoke ' . $strategy . ' ' . date('His');
 $definition['replications'] = 1;
 $definition['persons']['count'] = $persons;
 $definition['strategy'] = $strategy;
+// Several runs, one per strategy, sharing the workers (#160 DoD04).
+$strategies = array_values(array_filter(array_map('trim', explode(',', (string) $options['strategies']))));
+if ($strategies !== []) {
+    $definition['strategy'] = $strategies[0];
+    $definition['sweep']['factors']['strategy'] = $strategies;
+    $definition['name'] = 'Smoke ' . implode('+', $strategies) . ' ' . date('His');
+}
+$probe = (string) $options['eta-probe'] !== '' ? new smoke_eta_probe((string) $options['eta-probe']) : null;
 // Enough items to answer $minanswers of them without running the pool dry:
 // an attempt that stops because there is nothing left to ask has not been
 // stopped by the CAT, and reading that as a short test is reading the wrong
@@ -434,6 +451,12 @@ if ((int) $launch['launched'] > 0) {
     cli_writeln('  worker output: ' . substr((string) $launch['output'], -400));
     cli_error('No worker started and none running (' . $launch['reason'] . ').');
 }
+// The page as a signed-in person reads it while the run is played (#141 DoD 2).
+$watcher = null;
+if ($probe !== null && (string) $options['watch-page'] !== '') {
+    $watcher = smoke_watch_start($experimentid, (string) $options['watch-page']);
+    step('A browser reads the progress page alongside, as user ' . $watcher['username'] . '.');
+}
 
 // 5. Wait for it to actually play them.
 $started = microtime(true);
@@ -441,6 +464,7 @@ $collected = 0;
 $failed = 0;
 while (time() < $deadline) {
     sleep(5);
+    $probe?->take($experimentid);
 
     $collected = $DB->count_records_select(
         'local_catquizlab_attempt',
@@ -458,6 +482,13 @@ while (time() < $deadline) {
     }
 }
 step($collected . ' collected, ' . $failed . ' failed.', $started);
+// The last snapshot after the end: finished runs must say so, with nothing left (#160 AK08).
+$probe?->take($experimentid);
+if ($watcher !== null) {
+    // One more reading of the finished state, then the browser is stopped and its user removed.
+    sleep(6);
+    smoke_watch_stop($watcher);
+}
 // What did not finish, each sitting with where it stands (audit 11.11.2026, #110/#134): before 0.7.59 a sitting
 // left behind said nothing - in the load matrix one of twenty sat out the time limit in a retry's backoff after its
 // worker failed ("DOM.resolveNode timed out") and every other worker had left the empty queue.
@@ -824,6 +855,38 @@ if ($disagreements !== []) {
     cli_error('A sitting ends differently in different places (#123).');
 }
 
+// Every forecast against the actual end of its run (#160 DoD04/DoD05).
+if ($probe !== null) {
+    $report = $probe->finish($experimentid);
+    foreach ($report['lines'] as $line) {
+        cli_writeln('  ' . $line);
+    }
+    step('ETA probe: ' . $report['snapshots'] . ' snapshots, ' . count($report['violations'])
+        . ' contradiction(s), ' . $report['parallel'] . ' with two or more runs in flight.');
+    foreach ($report['violations'] as $line) {
+        cli_writeln('  CONTRADICTS: ' . $line);
+    }
+    if ($report['violations'] !== []) {
+        cli_error('The progress snapshot contradicted itself (#160).');
+    }
+    if ($report['runs'] >= 2 && $report['parallel'] === 0) {
+        cli_error('No snapshot had two runs in flight at once: the parallel case of #160 was not exercised.');
+    }
+    if ($watcher !== null) {
+        $watched = smoke_watch_check($watcher['file'], $probe->snapshots());
+        foreach ($watched['lines'] as $line) {
+            cli_writeln('  ' . $line);
+        }
+        step('Page read alongside: ' . $watched['readings'] . ' readings, ' . count($watched['violations'])
+            . ' contradiction(s).');
+        foreach ($watched['violations'] as $line) {
+            cli_writeln('  CONTRADICTS: ' . $line);
+        }
+        if ($watched['violations'] !== []) {
+            cli_error('The progress page contradicted the server (#141).');
+        }
+    }
+}
 
 if (!empty($options['require-all']) && $notfinished > 0) {
     cli_error($notfinished . ' of ' . $queued . ' sittings did not finish in ' . (int) $options['minutes']
@@ -1083,5 +1146,398 @@ function smoke_release_own(array $held): void {
             'id = ? AND status = ?',
             [$id, attempt_scheduler::STATUS_QUEUED]
         );
+    }
+}
+
+/**
+ * Start a browser that reads the experiment's progress page as a temporary manager (#141 DoD 2).
+ *
+ * @param int $experimentid The experiment.
+ * @param string $file Where its readings go.
+ * @return array{process: resource, userid: int, username: string, file: string}
+ */
+function smoke_watch_start(int $experimentid, string $file): array {
+    global $CFG, $DB;
+
+    require_once($CFG->dirroot . '/user/lib.php');
+    $config = worker_launcher::config_from_settings();
+    $password = 'Wx9!' . random_string(24);
+    $user = create_user_record('catquizlab_watch_' . time() . '_' . strtolower(random_string(4)), $password);
+    // A complete profile, or the first page after signing in is the profile form, not the progress page.
+    $user->firstname = 'Progress';
+    $user->lastname = 'Reader';
+    $user->email = $user->username . '@example.invalid';
+    $DB->update_record('user', (object) ['id' => $user->id, 'firstname' => $user->firstname,
+        'lastname' => $user->lastname, 'email' => $user->email]);
+    role_assign(
+        (int) $DB->get_field('role', 'id', ['shortname' => 'manager'], MUST_EXIST),
+        (int) $user->id,
+        \context_system::instance()
+    );
+    @unlink($file);
+    $environment = getenv();
+    foreach (worker_launcher::runtime_environment($config) as $pair) {
+        [$name, $value] = explode('=', $pair, 2);
+        $environment[$name] = $value;
+    }
+    // In the environment, not the argument list: argv is readable by anyone on the machine.
+    $environment['CATQUIZLAB_WATCH_USER'] = $user->username;
+    $environment['CATQUIZLAB_WATCH_PASSWORD'] = $password;
+    $command = [$config['node'] !== '' ? $config['node'] : 'node', $CFG->dirroot . '/local/catquizlab/worker/watch_progress.js',
+        '--base-url=' . $config['baseurl'], '--experiment=' . $experimentid, '--out=' . $file];
+    $log = ['file', $file . '.log', 'a'];
+    $process = proc_open($command, [0 => ['file', '/dev/null', 'r'], 1 => $log, 2 => $log], $pipes, null, $environment);
+    if (!is_resource($process)) {
+        cli_error('The page reader could not be started.');
+    }
+
+    return ['process' => $process, 'userid' => (int) $user->id, 'username' => $user->username, 'file' => $file];
+}
+
+/**
+ * Stop the page reader and remove its user.
+ *
+ * @param array $watcher From smoke_watch_start().
+ * @return void
+ */
+function smoke_watch_stop(array $watcher): void {
+    global $DB;
+
+    proc_terminate($watcher['process'], 15);
+    for ($i = 0; $i < 40 && proc_get_status($watcher['process'])['running']; $i++) {
+        usleep(500000);
+    }
+    if (proc_get_status($watcher['process'])['running']) {
+        proc_terminate($watcher['process'], 9);
+    }
+    proc_close($watcher['process']);
+    $user = $DB->get_record('user', ['id' => $watcher['userid']]);
+    if ($user) {
+        delete_user($user);
+    }
+}
+
+/**
+ * The page's readings against the snapshots taken in the same minutes (#141 DoD 2).
+ *
+ * The page shows what its last poll brought, a few seconds old: a reading may be behind the snapshot taken just
+ * before it, never behind one taken ten seconds earlier, and never ahead of one taken five seconds later.
+ *
+ * @param string $file The readings.
+ * @param array[] $snapshots The probe's snapshots.
+ * @return array{readings: int, violations: string[], lines: string[]}
+ */
+function smoke_watch_check(string $file, array $snapshots): array {
+    $readings = [];
+    $errors = [];
+    $skipped = 0;
+    foreach (is_readable($file) ? file($file) : [] as $line) {
+        $reading = json_decode($line, true);
+        if (!is_array($reading)) {
+            continue;
+        }
+        if (isset($reading['error'])) {
+            $errors[] = (string) $reading['error'];
+        } else if (isset($reading['skipped'])) {
+            $skipped++;
+        } else if ($reading['questions'] !== null) {
+            $readings[] = $reading;
+        }
+    }
+    $violations = [];
+    if (count($readings) < 3) {
+        $violations[] = 'the page was read ' . count($readings) . ' time(s) with a question count, at least 3 needed'
+            . ($errors !== [] ? ': ' . implode('; ', $errors) : '');
+    }
+    // A retry may drop the answers of the try it replaces: a fall counts only where no sitting failed.
+    $failed = false;
+    foreach ($snapshots as $s) {
+        foreach ($s['runs'] as $r) {
+            $failed = $failed || $r['failed'] > 0;
+        }
+    }
+    $previous = null;
+    $rows = [];
+    foreach ($readings as $r) {
+        $at = '@' . $r['at'] . ' (' . $r['source'] . '): ';
+        if ($previous !== null && $r['questions'] < $previous['questions'] && !$failed) {
+            $violations[] = $at . 'the header\'s question count fell from ' . $previous['questions'] . ' to '
+                . $r['questions'];
+        }
+        foreach ($r['runs'] as $runid => $done) {
+            if ($done !== null && isset($rows[$runid]) && $done < $rows[$runid] && !$failed) {
+                $violations[] = $at . 'run ' . $runid . ': the row\'s question count fell from ' . $rows[$runid] . ' to '
+                    . $done;
+            }
+            $rows[$runid] = $done ?? ($rows[$runid] ?? null);
+        }
+        [$before, $current, $after] = [null, null, null];
+        foreach ($snapshots as $s) {
+            if ($s['at'] <= $r['at'] - 10) {
+                $before = $s;
+            }
+            if ($s['at'] <= $r['at']) {
+                $current = $s;
+            }
+            if ($after === null && $s['at'] >= $r['at'] + 5) {
+                $after = $s;
+            }
+        }
+        if ($before !== null && $r['questions'] < $before['questions'] && !$failed) {
+            $violations[] = $at . 'the page shows ' . $r['questions'] . ' questions, the server had '
+                . $before['questions'] . ' ten seconds before';
+        }
+        if ($after !== null && $r['questions'] > $after['questions']) {
+            $violations[] = $at . 'the page shows ' . $r['questions'] . ' questions, more than the server had after it ('
+                . $after['questions'] . ')';
+        }
+        if ($current !== null && (int) $r['percent'] >= 100) {
+            $queued = 0;
+            foreach ($current['runs'] as $run) {
+                $queued += max(0, $run['ownsittings'] - $run['inflight'] - $run['tracepending']);
+            }
+            if ($queued > 0) {
+                $violations[] = $at . 'the page shows 100 % of the questions with ' . $queued . ' sittings queued';
+            }
+        }
+        $previous = $r;
+    }
+    $loads = count(array_filter($readings, static fn(array $r): bool => $r['source'] === 'load'));
+    $range = $readings !== [] ? 'from ' . $readings[0]['questions'] . ' to ' . end($readings)['questions'] . ' questions'
+        : 'not read';
+
+    return ['readings' => count($readings), 'violations' => $violations, 'lines' => [
+        'The page was read ' . count($readings) . ' times while the run was played (' . $loads . ' freshly loaded, '
+            . 'the rest as its poll left it; ' . $skipped . ' skipped while it reloaded itself); header ' . $range . '.',
+    ]];
+}
+
+/**
+ * Progress snapshots taken while the workers play, checked for contradictions and against the actual ends (#160).
+ *
+ * @package    local_catquizlab
+ * @copyright  2026 Ralf Erlebach
+ * @license    http://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
+ */
+class smoke_eta_probe {
+    /** @var string Where the snapshots go. */
+    protected string $file;
+
+    /** @var array[] The compact snapshots. */
+    protected array $taken = [];
+
+    /** @var string[] Contradictions found. */
+    protected array $violations = [];
+
+    /**
+     * Start an empty file.
+     *
+     * @param string $file Where the snapshots go.
+     */
+    public function __construct(string $file) {
+        $this->file = $file;
+        file_put_contents($file, '');
+    }
+
+    /**
+     * The snapshots taken so far.
+     *
+     * @return array[]
+     */
+    public function snapshots(): array {
+        return $this->taken;
+    }
+
+    /**
+     * One snapshot, as the page gets it: kept, written and checked.
+     *
+     * @param int $experimentid The experiment.
+     * @return void
+     */
+    public function take(int $experimentid): void {
+        \local_catquizlab\local\question_progress::reset_caches();
+        $snapshot = \local_catquizlab\local\live_progress::snapshot($experimentid);
+        $time = $snapshot['time'];
+        $runs = [];
+        foreach ($time['runs'] as $run) {
+            $row = array_column($snapshot['runs'], null, 'runid')[$run['runid']];
+            $runs[] = ['runid' => $run['runid'], 'done' => $row['done'], 'total' => $row['total'],
+                'failed' => $row['failed'], 'inflight' => $row['inflight'], 'tracepending' => $row['tracepending'],
+                'questions' => $row['questions']['done'], 'expected' => $row['questions']['expected'],
+                'own' => $run['own']['workseconds'], 'ownsittings' => $run['own']['sittings'],
+                'ownquestions' => $run['own']['questions'], 'reliability' => $run['reliability'],
+                'remaining' => $run['remaining'], 'finish' => $run['finish'], 'margin' => $run['margin']];
+        }
+        // What the page's poll gets, a moment later (#141 AK6, #160 DoD04): the same figures or further along.
+        $poll = \local_catquizlab\external\live_status::execute($experimentid, 0)['progress'];
+        $pollruns = [];
+        foreach ($poll['runs'] ?? [] as $row) {
+            $pollruns[(int) $row['runid']] = ['done' => (int) $row['done'],
+                'questions' => (int) ($row['questions']['done'] ?? 0), 'percent' => (int) ($row['questions']['percent'] ?? 0)];
+        }
+        $line = ['at' => $time['computed'], 'state' => $snapshot['state'], 'done' => $snapshot['done'],
+            'total' => $snapshot['total'], 'questions' => $snapshot['questions']['done'],
+            'reliability' => $time['reliability'], 'remaining' => $time['remaining'], 'finish' => $time['finish'],
+            'range' => $time['range'], 'slots' => $time['capacity']['slots'], 'physical' => $time['capacity']['physical'],
+            'runs' => $runs, 'poll' => ['done' => (int) $poll['done'], 'total' => (int) $poll['total'],
+                'questions' => (int) ($poll['questions']['done'] ?? 0),
+                'qpercent' => (int) ($poll['questions']['percent'] ?? 0), 'runs' => $pollruns]];
+        $this->taken[] = $line;
+        file_put_contents($this->file, json_encode($line) . "\n", FILE_APPEND);
+        $this->check($line);
+    }
+
+    /**
+     * The contradictions a snapshot must not have (#160 AK08, AK09).
+     *
+     * @param array $s A compact snapshot.
+     * @return void
+     */
+    protected function check(array $s): void {
+        $at = '@' . $s['at'] . ': ';
+        $sum = static fn(string $key): int => array_sum(array_map(static fn(array $r): int => (int) $r[$key], $s['runs']));
+        if ($sum('done') !== $s['done'] || $sum('total') !== $s['total']) {
+            $this->violations[] = $at . 'the runs\' sittings do not add up to the experiment\'s';
+        }
+        if ($sum('questions') !== $s['questions']) {
+            $this->violations[] = $at . 'the runs\' questions do not add up to the experiment\'s';
+        }
+        $open = 0;
+        $latest = null;
+        foreach ($s['runs'] as $r) {
+            if ($r['ownsittings'] !== $r['total'] - $r['done'] - $r['failed']) {
+                $this->violations[] = $at . 'run ' . $r['runid'] . ': own sittings are not total - done - failed';
+            }
+            if ($r['remaining'] !== null && $r['remaining'] < 0) {
+                $this->violations[] = $at . 'run ' . $r['runid'] . ': negative remaining time';
+            }
+            if ($r['ownsittings'] === 0 && $r['reliability'] !== 'final') {
+                $this->violations[] = $at . 'run ' . $r['runid'] . ': nothing left, yet not final';
+            }
+            if ($r['ownsittings'] > 0) {
+                $open++;
+                if ($r['remaining'] !== null && ($latest === null || $r['remaining'] > $latest)) {
+                    $latest = $r['remaining'];
+                }
+            }
+        }
+        if ($open === 0 && $s['reliability'] !== 'final') {
+            $this->violations[] = $at . 'every run finished, the experiment is not final';
+        }
+        if ($s['reliability'] === 'final' && (int) $s['remaining'] !== 0) {
+            $this->violations[] = $at . 'final with time remaining';
+        }
+        // The question count only grows (#141 DoD): a retry may drop the answers of the try it replaces, so a
+        // fall is a contradiction only where no sitting failed in between.
+        $previous = count($this->taken) >= 2 ? $this->taken[count($this->taken) - 2] : null;
+        if ($previous !== null) {
+            $failed = static fn(array $x): int => array_sum(array_map(static fn(array $r): int => (int) $r['failed'], $x['runs']));
+            if ($s['questions'] < $previous['questions'] && $failed($s) === $failed($previous)) {
+                $this->violations[] = $at . 'questions answered fell from ' . $previous['questions'] . ' to ' . $s['questions'];
+            }
+            if ($s['done'] < $previous['done']) {
+                $this->violations[] = $at . 'sittings done fell from ' . $previous['done'] . ' to ' . $s['done'];
+            }
+        }
+        // Nothing reads as complete before it is: a run at 100 % of its questions has nothing open.
+        foreach ($s['runs'] as $r) {
+            $complete = $r['expected'] !== null && $r['questions'] >= $r['expected'];
+            // In flight with every question of a fixed form answered is the last submit; queued is not.
+            if ($complete && $r['ownsittings'] > $r['inflight'] + $r['tracepending']) {
+                $this->violations[] = $at . 'run ' . $r['runid'] . ': all questions counted with sittings still queued';
+            }
+        }
+        if (in_array($s['reliability'], ['estimate', 'provisional'], true) && $s['remaining'] !== $latest) {
+            $this->violations[] = $at . 'the experiment\'s remaining time is not its last run\'s';
+        }
+        // The poll, read just after: the same total, nothing behind the snapshot, no 100 % while anything is open.
+        if (isset($s['poll'])) {
+            $p = $s['poll'];
+            if ($p['total'] !== $s['total'] || $p['done'] < $s['done'] || $p['questions'] < $s['questions']) {
+                $this->violations[] = $at . 'the poll disagrees with the snapshot: ' . json_encode($p);
+            }
+            if ($open > 0 && $p['qpercent'] >= 100 && $p['done'] < $p['total']) {
+                $this->violations[] = $at . 'the poll shows 100 % of the questions with sittings open';
+            }
+            foreach ($s['runs'] as $r) {
+                $pr = $p['runs'][$r['runid']] ?? null;
+                if ($pr === null || $pr['done'] < $r['done'] || $pr['questions'] < $r['questions']) {
+                    $this->violations[] = $at . 'run ' . $r['runid'] . ': the poll is behind the snapshot';
+                }
+            }
+        }
+    }
+
+    /**
+     * Every forecast against the actual end of its run, and the summary.
+     *
+     * @param int $experimentid The experiment.
+     * @return array{snapshots: int, runs: int, parallel: int, violations: string[], lines: string[]}
+     */
+    public function finish(int $experimentid): array {
+        global $DB;
+
+        // When each run actually ended: its last collected or failed execution, where it has nothing left.
+        $ends = [];
+        $last = end($this->taken) ?: ['runs' => []];
+        foreach ($last['runs'] as $r) {
+            if ($r['ownsittings'] === 0) {
+                $ends[$r['runid']] = (int) $DB->get_field_sql(
+                    'SELECT MAX(timecreated) FROM {local_catquizlab_attemptlog} WHERE runid = ? AND outcome IN (?, ?)',
+                    [$r['runid'], \local_catquizlab\local\attempt_history::COLLECTED,
+                        \local_catquizlab\local\attempt_history::FAILED]
+                );
+            }
+        }
+        $errors = [];
+        $relative = [];
+        $inside = 0;
+        $parallel = 0;
+        $nearlydone = 0;
+        foreach ($this->taken as $s) {
+            $flying = array_filter($s['runs'], static fn(array $r): bool => $r['inflight'] > 0);
+            if (count($flying) >= 2) {
+                $parallel++;
+                foreach ($flying as $r) {
+                    $nearlydone += $r['total'] > 0 && $r['done'] >= 0.9 * $r['total'] ? 1 : 0;
+                }
+            }
+            foreach ($s['runs'] as $r) {
+                if (!isset($ends[$r['runid']]) || $r['finish'] === null || $r['ownsittings'] === 0) {
+                    continue;
+                }
+                $actual = $ends[$r['runid']] - $s['at'];
+                if ($actual <= 0) {
+                    continue;
+                }
+                $errors[] = abs($r['finish'] - $ends[$r['runid']]);
+                $relative[] = abs($r['remaining'] - $actual) / $actual;
+                $margin = (float) $r['margin'];
+                $inside += abs($r['remaining'] - $actual) <= $margin * $r['remaining'] ? 1 : 0;
+            }
+        }
+        sort($relative);
+        $n = count($errors);
+        $summary = [
+            'snapshots' => count($this->taken),
+            'runs' => count($last['runs']),
+            'parallel' => $parallel,
+            'parallelwithnearlydone' => $nearlydone,
+            'forecasts' => $n,
+            'meanabserror' => $n ? round(array_sum($errors) / $n, 1) : null,
+            'medianrelerror' => $n ? round($relative[intdiv($n, 2)], 3) : null,
+            'p90relerror' => $n ? round($relative[min($n - 1, (int) floor(0.9 * $n))], 3) : null,
+            'withinrange' => $n ? round($inside / $n, 3) : null,
+            'violations' => $this->violations,
+        ];
+        file_put_contents($this->file . '.summary.json', json_encode($summary, JSON_PRETTY_PRINT));
+
+        return $summary + ['lines' => [
+            'ETA forecasts checked against actual ends: ' . $n . ' (from ' . count($this->taken) . ' snapshots)',
+            'mean absolute error of the finish: ' . ($summary['meanabserror'] ?? '–') . ' s; median relative error '
+                . ($summary['medianrelerror'] ?? '–') . ', 90th percentile ' . ($summary['p90relerror'] ?? '–')
+                . '; actual end within the range: ' . ($summary['withinrange'] ?? '–'),
+            'snapshots with two or more runs in flight: ' . $parallel . ' (of those runs ≥ 90 % done: ' . $nearlydone . ')',
+        ]];
     }
 }

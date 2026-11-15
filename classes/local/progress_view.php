@@ -66,12 +66,20 @@ class progress_view {
         }
 
         $runs = [];
-        foreach ($DB->get_records_select('local_catquizlab_run', $where, $params, 'id DESC', '*', 0, 25) as $run) {
-            $counts = run_lifecycle::attempt_counts((int) $run->id);
+        $records = $DB->get_records_select('local_catquizlab_run', $where, $params, 'id DESC', '*', 0, 25);
+        $figures = run_figures::read(array_keys($records), time());
+        // Experiment, run and strategy together on every row (#150): runs of two experiments look alike otherwise.
+        $labels = run_labels::for_runs(array_keys($records));
+        // The site's queue once for every card, not once per run (#160 AK12).
+        $sitequeue = attempt_scheduler::queue_breakdown();
+        foreach ($records as $run) {
+            $f = $figures['runs'][(int) $run->id];
+            $counts = ['collected' => (int) $f['collected'], 'total' => (int) $f['total']];
             $runs[] = [
                 'id'       => (int) $run->id,
                 'cellkey'  => $run->cellkey,
-                'status'   => status_report::run($run),
+                'label'    => $labels[(int) $run->id] ?? null,
+                'status'   => status_report::run($run, $f, $figures['workers'], $sitequeue),
                 'progress' => get_string('report:progress', $component, (object) [
                     'done'  => $counts['collected'],
                     'total' => $counts['total'],
@@ -87,7 +95,12 @@ class progress_view {
         // its slot, what it is playing, when it last reported, how much it has
         // done, how long it has been at it, and why it stopped.
         $workers = [];
-        foreach (worker_registry::recent() as $worker) {
+        $recent = worker_registry::recent();
+        // The runs the workers are playing, in one query each for sittings and labels (#150 AK5).
+        $playing = array_filter(array_map(static fn(\stdClass $w): int => (int) $w->currentattempt, $recent));
+        $playingruns = $playing === [] ? [] : $DB->get_records_list('local_catquizlab_attempt', 'id', $playing, '', 'id, runid');
+        $workerlabels = run_labels::for_runs(array_map(static fn(\stdClass $a): int => (int) $a->runid, $playingruns));
+        foreach ($recent as $worker) {
             $state = (int) $worker->status;
             $stale = $state === worker_registry::STATUS_RUNNING
                 && (int) $worker->heartbeat < time() - worker_registry::HEARTBEAT_TIMEOUT;
@@ -114,9 +127,8 @@ class progress_view {
                 'waiting'    => $waiting,
                 'stale'      => $stale,
                 'attemptid'  => (int) $worker->currentattempt,
-                'runid'      => (int) $worker->currentattempt > 0
-                    ? (int) $DB->get_field('local_catquizlab_attempt', 'runid', ['id' => $worker->currentattempt])
-                    : 0,
+                'runid'      => (int) ($playingruns[(int) $worker->currentattempt]->runid ?? 0),
+                'runlabel'   => $workerlabels[(int) ($playingruns[(int) $worker->currentattempt]->runid ?? 0)] ?? null,
                 'jobsdone'   => (int) $worker->jobsdone,
                 'heartbeat'  => (int) $worker->heartbeat > 0 ? userdate((int) $worker->heartbeat) : '-',
                 'heartbeatago' => (int) $worker->heartbeat > 0
@@ -140,10 +152,14 @@ class progress_view {
         // state, so it is shown where somebody is already asking why nothing
         // works, with the count that makes it concrete.
         $ambiguous = [];
-        foreach (scale_inventory::affected_runs() as $affected) {
+        $affectedruns = scale_inventory::affected_runs();
+        // Runs of any experiment: each with its experiment and strategy, read for all of them at once (#150 AK2).
+        $ambiguouslabels = run_labels::for_runs(array_column($affectedruns, 'runid'));
+        foreach ($affectedruns as $affected) {
             $affected['url'] = (new \moodle_url('/local/catquizlab/runs.php', [
                 'runid' => $affected['runid'],
             ]))->out(false);
+            $affected['runlabel'] = $ambiguouslabels[(int) $affected['runid']] ?? null;
             $ambiguous[] = $affected;
         }
 
@@ -156,6 +172,8 @@ class progress_view {
         $population = $experimentid > 0 ? population_plan::describe($experimentid) : null;
 
         return [
+            // All experiments at once (#158): the population, each experiment, each run.
+            'overview'    => $experimentid === 0 ? progress_overview::build(optional_param('xpage', 0, PARAM_INT)) : null,
             'population'  => $population,
             // The two actions the whole interface reduces to, and the line of
             // experiments waiting their turn.

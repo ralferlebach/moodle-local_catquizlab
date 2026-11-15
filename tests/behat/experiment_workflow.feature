@@ -168,7 +168,7 @@ Feature: Defining and running CAT experiments from the web interface
     And the experiment "Behat locked" has been expanded into runs
     And I navigate to "Reports > CAT experiment suite" in site administration
     When I follow "Behat locked"
-    Then I should see "cannot be changed here"
+    Then I should see "experimental design documents what those runs did and is locked"
 
   Scenario: The results page offers the filter bar and the tabs
     Given the following "local_catquizlab > experiment" exists:
@@ -443,10 +443,13 @@ Feature: Defining and running CAT experiments from the web interface
     And the experiment "Behat frozen" has been expanded into runs
     And I navigate to "Reports > CAT experiment suite" in site administration
     When I follow "Behat frozen"
-    Then I should see "cannot be changed here"
+    Then I should see "experimental design documents what those runs did and is locked"
     And "Save experiment" "button" should not exist
     # Frozen fields are shown read-only, not removed: visible, not editable.
-    And the "name" "field" should be disabled
+    And the "id_name" "field" should be disabled
+    # Name and description stay editable in their own form (#152).
+    And the "metadataname" "field" should be enabled
+    And "Save name and description" "button" should exist
     When I press "Duplicate and change settings"
     Then "Save experiment" "button" should exist
     And the "name" "field" should be enabled

@@ -111,10 +111,16 @@ class status_report {
     /**
      * The state of one run, with what it is waiting for.
      *
+     * A page with many runs passes each run's figures from one run_figures::read() and the worker summary once:
+     * the card then asks the database nothing per run for them (#160 AK12, #158 AK6).
+     *
      * @param int|\stdClass $run The run or its id.
+     * @param array|null $figures Its entry of run_figures::read(), or null to count here.
+     * @param array|null $fleet worker_registry::summary(), or null to read it here.
+     * @param array|null $breakdown attempt_scheduler::queue_breakdown() of the site, or null to read it here.
      * @return array
      */
-    public static function run($run): array {
+    public static function run($run, ?array $figures = null, ?array $fleet = null, ?array $breakdown = null): array {
         global $DB;
 
         $component = 'local_catquizlab';
@@ -125,7 +131,10 @@ class status_report {
 
         $runid = (int) $run->id;
         $status = (int) $run->status;
-        $counts = run_lifecycle::attempt_counts($runid);
+        $counts = $figures !== null
+            ? ['total' => (int) $figures['total'], 'open' => (int) $figures['open'],
+                'collected' => (int) $figures['collected'], 'failed' => (int) $figures['failed']]
+            : run_lifecycle::attempt_counts($runid);
 
         if ($status === registry::STATUS_SCHEDULED) {
             // The word "scheduled" says nothing about whether anything is happening.
@@ -187,7 +196,7 @@ class status_report {
 
         if ($status === registry::STATUS_READY || $status === registry::STATUS_RUNNING) {
             $breakdown = $breakdown ?? attempt_scheduler::queue_breakdown();
-            $workers = worker_registry::summary();
+            $workers = $fleet ?? worker_registry::summary();
 
             // Ready with work and nobody to do it is the state that never
             // resolves itself, and it reads as "running" without this.
@@ -212,7 +221,7 @@ class status_report {
             // thing, so a run could show "running, 0%" beside "250 claimable, 0
             // in progress" — which cannot both be true, and the one a person
             // acts on is the second.
-            $inflight = self::attempts_in_flight((int) $run->id);
+            $inflight = $figures !== null ? (int) $figures['inflight'] : self::attempts_in_flight((int) $run->id);
 
             if ($inflight > 0) {
                 return self::card(
@@ -227,7 +236,7 @@ class status_report {
             // in flight. That is planned replacement, not a stall, and calling
             // it "waiting for a worker" would have somebody investigating a
             // resource setting working exactly as configured.
-            $fleet = worker_registry::summary();
+            $fleet = $fleet ?? worker_registry::summary();
             $rotating = $fleet['starting'] > 0;
 
             // Up, and waiting for their turn (#120): nothing is in flight yet,
@@ -270,7 +279,9 @@ class status_report {
             // the only way back to the planned number is another try.
             return self::card(
                 // Complete by the one rule, not merely finished (#98).
-                run_lifecycle::is_complete($runid) ? self::GOOD : self::WATCH,
+                ($figures !== null ? $counts['total'] > 0 && $counts['collected'] === $counts['total']
+                    && $counts['failed'] === 0 && $counts['open'] === 0 : run_lifecycle::is_complete($runid))
+                    ? self::GOOD : self::WATCH,
                 get_string('report:runfinished', $component),
                 self::progress_line($counts, $component),
                 (int) ($counts['failed'] ?? 0) > 0 ? [

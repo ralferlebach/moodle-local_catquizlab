@@ -16,7 +16,7 @@
 /**
  * Started, elapsed, finish and remaining in each state of an execution (#125).
  *
- * Data from cli/seed_progress.php --state=running|calculating|blocked|finished|empty,
+ * Data from cli/seed_progress.php --state=running|calculating|blocked|finished|empty|parallel,
  * whose ids arrive as PROGRESS_<STATE>_EXPERIMENTID.
  */
 
@@ -70,12 +70,13 @@ const value = (page, name) => page.locator(`[data-region="catquizlab-eta-${name}
 
 test('running: all four values, a range, the method, and a start that does not move with the polls', async({page}) => {
     const box = await open(page, 'running');
-    await expect(box).toHaveAttribute('data-reliability', 'estimate');
+    // Provisional where work of other runs ahead in the claim order rests on a borrowed duration (#160).
+    await expect(box).toHaveAttribute('data-reliability', /^(estimate|provisional)$/);
     await expect(value(page, 'started')).toContainText('(');
     await expect(value(page, 'elapsed')).not.toHaveText('—');
     await expect(value(page, 'finish')).toContainText('≈');
     await expect(value(page, 'remaining')).toContainText('between');
-    await expect(value(page, 'method')).toContainText('queue order');
+    await expect(value(page, 'method')).toContainText('claim');
 
     // Two polls later (2 s each), the start is the same and the snapshot time has advanced or stayed.
     const started = await value(page, 'started').textContent();
@@ -92,9 +93,12 @@ test('running: all four values, a range, the method, and a start that does not m
     await expect(runs).toHaveCount(2);
     await expect(runs.nth(0)).toContainText('Nothing left');
     await expect(runs.nth(1)).toContainText('≈');
+    // Own work and completion are two columns (#160).
+    await expect(page.locator('[data-region="catquizlab-run-times"] thead')).toContainText('Own remaining work');
+    await expect(page.locator('[data-region="catquizlab-run-times"] thead')).toContainText('Done by (incl. waiting)');
 
     // Keyboard: the method and the run table open from the keyboard.
-    await page.locator('[data-region="catquizlab-eta"] details summary').focus();
+    await page.locator('[data-region="catquizlab-eta"] details:not([data-region="catquizlab-eta-terms"]) summary').focus();
     await page.keyboard.press('Enter');
     await expect(value(page, 'method')).toBeVisible();
 });
@@ -161,3 +165,64 @@ test('workers: configured and in force named, technical details folded (#124)', 
     }
 });
 
+/**
+ * The live poll as the page makes it: the server's JSON for the experiment.
+ *
+ * @param {import('@playwright/test').Page} page The page, logged in.
+ * @param {string} id The experiment id.
+ * @returns {Promise<Object>} The progress part of the answer.
+ */
+const poll = (page, id) => page.evaluate(async(experimentid) => {
+    const response = await fetch(M.cfg.wwwroot + '/lib/ajax/service.php?sesskey=' + M.cfg.sesskey, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify([{index: 0, methodname: 'local_catquizlab_live_status', args: {experimentid}}]),
+    });
+    const answer = await response.json();
+    return answer[0].data.progress;
+}, Number(id));
+
+test('#160: a nearly finished run shows its own small work apart from when it will be done', async({page}) => {
+    const id = seeded('parallel');
+    needs(!id, 'No experiment in state parallel: set PROGRESS_PARALLEL_EXPERIMENTID or allow php here.');
+    await login(page);
+    await page.goto('/local/catquizlab/runs.php?experimentid=' + id, {waitUntil: 'networkidle'});
+    const rows = page.locator('[data-region="catquizlab-run-times"] tbody tr');
+    await expect(rows).toHaveCount(2);
+
+    // The first run: 17 of 20, its own work is its three sittings, from its own durations.
+    const first = rows.nth(0);
+    const runid = (await first.locator('th').textContent()).replace('#', '').trim();
+    const own = page.locator(`[data-region="catquizlab-run-${runid}-own"]`);
+    await expect(own).toContainText('3 sittings');
+    await expect(own).toContainText('worker time');
+    // When it is done is its own column, with the time it waits for its sittings to fall due.
+    await expect(page.locator(`[data-region="catquizlab-run-${runid}-remaining"]`)).toContainText('≈');
+
+    // Server JSON, the live poll and the page say the same.
+    const progress = await poll(page, id);
+    const fromserver = progress.time.runs.find((r) => String(r.runid) === runid);
+    expect(fromserver.own.sittings).toBe(3);
+    expect(fromserver.own.basis).toBe('run');
+    await page.waitForTimeout(4500);
+    await expect(own).toHaveText(fromserver.text.own);
+    await expect(page.locator('[data-region="catquizlab-eta-own"]')).not.toHaveText('—');
+
+    // Both runs' own work adds up to the experiment's, in sittings.
+    const sittings = progress.time.runs.reduce((sum, r) => sum + r.own.sittings, 0);
+    expect(sittings).toBe(progress.total - progress.done - progress.runs.reduce((s, r) => s + r.failed, 0));
+});
+
+test('#160: the terms are explained, by keyboard, and readable on a small screen', async({page}) => {
+    await page.setViewportSize({width: 390, height: 844});
+    await open(page, 'parallel');
+    const terms = page.locator('[data-region="catquizlab-eta-terms"]');
+    await terms.locator('summary').focus();
+    await page.keyboard.press('Enter');
+    await expect(terms).toContainText('Own remaining work');
+    await expect(terms).toContainText('Done by (incl. waiting)');
+    await expect(terms).toContainText('Other runs do not change it');
+    const overflow = await page.evaluate(() => document.querySelector('[data-region="catquizlab-eta"]').scrollWidth
+        - document.querySelector('[data-region="catquizlab-eta"]').clientWidth);
+    expect(overflow).toBeLessThanOrEqual(1);
+});

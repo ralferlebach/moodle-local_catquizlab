@@ -71,8 +71,6 @@ class live_progress {
     public static function snapshot(int $experimentid): array {
         global $DB;
 
-        $component = 'local_catquizlab';
-
         $runs = $experimentid > 0
             ? $DB->get_records('local_catquizlab_run', ['experimentid' => $experimentid], 'id ASC')
             : [];
@@ -81,51 +79,81 @@ class live_progress {
             return self::empty_snapshot($experimentid);
         }
 
+        // Every count from one reading, the same the forecast reads (#160 AK09): no query per run (#160 AK12).
+        $now = time();
+        $runids = array_map('intval', array_keys($runs));
+        $figures = run_figures::read($runids, $now);
+        $forecast = eta::forecast($runids, $now, $figures);
+
+        return self::build($experimentid, $runs, $figures, $forecast, $now);
+    }
+
+    /**
+     * An experiment's snapshot from a reading taken for many: the overview of all experiments builds each of them
+     * from one run_figures::read() and one forecast, so that no figure costs a query per run or per experiment
+     * (#158 AK6) and every experiment says what its own page says (#158 AK8).
+     *
+     * @param int $experimentid The experiment.
+     * @param \stdClass[] $runs Its run records, by id.
+     * @param array $figures run_figures::read() covering them.
+     * @param array $forecast eta::forecast() from that reading.
+     * @param int $now The clock of the reading.
+     * @return array
+     */
+    public static function build(int $experimentid, array $runs, array $figures, array $forecast, int $now): array {
+        $component = 'local_catquizlab';
+        if ($runs === []) {
+            return self::empty_snapshot($experimentid);
+        }
         $rows = [];
         $totals = ['done' => 0, 'total' => 0, 'running' => 0, 'queued' => 0, 'failed' => 0];
 
         foreach ($runs as $run) {
-            $counts = run_lifecycle::attempt_counts((int) $run->id);
-            $inflight = self::attempts_in_flight((int) $run->id);
-
-            $done = (int) ($counts['collected'] ?? 0);
-            $total = (int) ($counts['total'] ?? 0);
-            $failed = (int) ($counts['failed'] ?? 0);
+            $f = $figures['runs'][(int) $run->id];
+            $inflight = (int) $f['inflight'];
+            $done = (int) $f['collected'];
+            $total = (int) $f['total'];
+            $failed = (int) $f['failed'];
 
             $totals['done'] += $done;
             $totals['total'] += $total;
             $totals['failed'] += $failed;
             $totals['running'] += $inflight;
-            $totals['queued'] += max(0, (int) ($counts['open'] ?? 0) - $inflight);
+            $totals['queued'] += max(0, (int) $f['open'] - $inflight);
 
             $rows[] = [
                 'runid'    => (int) $run->id,
                 'cellkey'  => (string) $run->cellkey,
+                'strategy' => (string) $f['strategy'],
+                'strategylabel' => $f['strategy'] !== '' ? strategy_catalog::display_label((string) $f['strategy']) : '',
+                'status'   => (int) $f['status'],
+                'statuslabel' => run_registry::status_label((int) $f['status'])
+                    . ($f['paused'] && !$f['held'] ? ' · ' . get_string('progress:statepaused', $component) : ''),
+                'url'      => (new \moodle_url('/local/catquizlab/runs.php', ['runid' => (int) $run->id]))->out(false),
                 'done'     => $done,
                 'total'    => $total,
                 'percent'  => self::percent($done, $total),
                 'inflight' => $inflight,
+                'tracepending' => (int) $f['tracepending'],
                 'failed'   => $failed,
                 'complete' => $total > 0 && $done >= $total,
-                'held'     => circuit_breaker::is_held($run),
+                // What a screen reader says for the bar: the unit, not a bare percentage (#141 AK8).
+                'sittingstext' => get_string('progress:sittingsvalue', $component, (object) ['done' => $done, 'total' => $total]),
+                'held'     => (bool) $f['held'],
+                'paused'   => (bool) $f['paused'],
             ];
         }
 
-        // Questions, not only sittings: a sitting of 625 questions moves the bar while it is played (#141).
-        $sittings = [];
-        foreach ($rows as $row) {
-            $left = max(0, $row['total'] - $row['done'] - $row['failed']);
-            $sittings[$row['runid']] = ['inflight' => min($left, $row['inflight']),
-                'queued' => max(0, $left - $row['inflight'])];
-        }
-        $questions = question_progress::for_runs($sittings);
+        // Questions, not only sittings: a sitting of 625 questions moves the bar while it is played (#141). From the
+        // forecast's own reading, so the counter and the times rest on the same figures (#160 AK09).
+        $questions = array_intersect_key($forecast['questions'], array_flip(array_column($rows, 'runid')));
         foreach ($rows as $i => $row) {
             $rows[$i]['questions'] = self::question_text($questions[$row['runid']]);
         }
         $questiontotal = self::question_text(question_progress::total($questions));
 
-        $workers = worker_registry::summary();
-        $state = self::derive($runs, $totals, $workers, $experimentid);
+        $workers = $figures['workers'];
+        $state = self::derive($runs, $totals, $workers, $experimentid, $rows);
 
         $snapshot = [
             'experimentid' => $experimentid,
@@ -135,6 +163,11 @@ class live_progress {
             'done'         => $totals['done'],
             'total'        => $totals['total'],
             'percent'      => self::percent($totals['done'], $totals['total']),
+            'sittingstext' => get_string(
+                'progress:sittingsvalue',
+                $component,
+                (object) ['done' => $totals['done'], 'total' => $totals['total']]
+            ),
             'questions'    => $questiontotal,
             'runs'         => $rows,
             // What is happening this second, which is the part somebody watches
@@ -149,7 +182,7 @@ class live_progress {
             ],
         ];
         // The times rest on the same counts the bar shows (#125).
-        $snapshot['time'] = eta::estimate($experimentid, $snapshot);
+        $snapshot['time'] = eta::estimate($experimentid, ['forecast' => $forecast] + $snapshot, $now);
         $times = array_column($snapshot['time']['runs'], 'text', 'runid');
         foreach ($snapshot['runs'] as $i => $row) {
             $snapshot['runs'][$i]['time'] = $times[$row['runid']] ?? null;
@@ -169,9 +202,10 @@ class live_progress {
      * @param array $totals Attempt totals across them.
      * @param array $workers The worker summary.
      * @param int $experimentid The experiment.
+     * @param array $rows The progress rows, with held and paused from the run records.
      * @return array{state: string, reason: string}
      */
-    protected static function derive(array $runs, array $totals, array $workers, int $experimentid): array {
+    protected static function derive(array $runs, array $totals, array $workers, int $experimentid, array $rows): array {
         $component = 'local_catquizlab';
 
         $statuses = array_map(static function (\stdClass $run): int {
@@ -179,10 +213,10 @@ class live_progress {
         }, $runs);
 
         $held = 0;
-        foreach ($runs as $run) {
+        foreach ($rows as $row) {
             // Failed, or paused by the circuit breaker (#133).
-            if (circuit_breaker::is_held($run)) {
-                $held = (int) $run->id;
+            if ($row['held']) {
+                $held = (int) $row['runid'];
                 break;
             }
         }
@@ -216,8 +250,8 @@ class live_progress {
         }
 
         // Paused by a person: per run, which is where the pause lives.
-        foreach ($runs as $run) {
-            if (run_lifecycle::is_paused((int) $run->id)) {
+        foreach ($rows as $row) {
+            if ($row['paused']) {
                 return [
                     'state'  => self::PAUSED,
                     'reason' => get_string('progress:reasonpaused', $component),
@@ -252,26 +286,13 @@ class live_progress {
             ? get_string('questions:doneunknown', $component, $a)
             : get_string('questions:done' . $q['kind'], $component, $a);
         $q['kindlabel'] = get_string('questions:kind' . $q['kind'], $component);
+        // Work done that does not count, said apart (#141 AK5): never part of done or of the bar.
+        $q['discarded'] = (int) ($q['discarded'] ?? 0);
+        $q['discardedtext'] = $q['discarded'] > 0 ? get_string('questions:discarded', $component, $q['discarded']) : '';
         $q['hasexpected'] = $q['expected'] !== null;
         $q['percent'] = $q['percent'] ?? 0;
 
         return $q;
-    }
-
-    /**
-     * How many of a run's attempts a worker is holding right now.
-     *
-     * @param int $runid The run.
-     * @return int
-     */
-    protected static function attempts_in_flight(int $runid): int {
-        global $DB;
-
-        return (int) $DB->count_records_select(
-            'local_catquizlab_attempt',
-            'runid = :runid AND status = :running AND leaseexpires > :now',
-            ['runid' => $runid, 'running' => attempt_scheduler::STATUS_RUNNING, 'now' => time()]
-        );
     }
 
     /**
@@ -308,6 +329,7 @@ class live_progress {
             'done'         => 0,
             'total'        => 0,
             'percent'      => 0,
+            'sittingstext' => get_string('progress:sittingsvalue', 'local_catquizlab', (object) ['done' => 0, 'total' => 0]),
             'questions'    => self::question_text(question_progress::total([])),
             'runs'         => [],
             'now'          => [

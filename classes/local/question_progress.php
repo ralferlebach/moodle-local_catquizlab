@@ -58,7 +58,8 @@ class question_progress {
      * @return array<int, array> Run id => answered (in collected sittings), inflight (answered so far in the sittings
      *      being played), done (both), persitting (questions a sitting has, or is expected to have), kind (EXACT,
      *      ESTIMATE, BOUND, UNKNOWN), expected (total questions of the run, null where UNKNOWN), remaining (null
-     *      where UNKNOWN), secondsperquestion (from the collected sittings, null without them), percent.
+     *      where UNKNOWN), secondsperquestion (from the collected sittings, null without them), percent, discarded
+     *      (questions answered in executions that do not count: abandoned, or superseded by a retry).
      */
     public static function for_runs(array $runs): array {
         global $DB;
@@ -75,8 +76,10 @@ class question_progress {
         $inflight = [];
         if ($available) {
             [$insql, $params] = $DB->get_in_or_equal($runids, SQL_PARAMS_NAMED, 'r');
+            // Waiting for its trace is finished playing: its answers are confirmed. Leaving them out between "in
+            // flight" and "collected" made the count fall for a moment with every sitting that ended (#141).
             [$stsql, $stparams] = $DB->get_in_or_equal(
-                [attempt_scheduler::STATUS_COLLECTED, attempt_scheduler::STATUS_VALIDATED],
+                [attempt_scheduler::STATUS_COLLECTED, attempt_scheduler::STATUS_VALIDATED, attempt_scheduler::STATUS_TRACEPENDING],
                 SQL_PARAMS_NAMED,
                 'st'
             );
@@ -89,7 +92,7 @@ class question_progress {
                GROUP BY a.runid",
                 $params + $stparams
             );
-            // Sittings being played: the newest engine attempt of the person on the run's test, in progress.
+            // Sittings being played: the newest engine attempt of the person on the run's test.
             [$insql2, $params2] = $DB->get_in_or_equal($runids, SQL_PARAMS_NAMED, 'q');
             $inflight = $DB->get_records_sql_menu(
                 "SELECT a.runid, SUM(aa.questionsattempted)
@@ -98,11 +101,30 @@ class question_progress {
                    JOIN {local_catquizlab_run} r ON r.id = a.runid
                    JOIN {course_modules} cm ON cm.id = r.testcmid
                    JOIN {adaptivequiz_attempt} aa ON aa.userid = p.moodleuserid AND aa.instance = cm.instance
-                  WHERE a.runid {$insql2} AND a.status = :running AND aa.attemptstate = :inprogress
+                  WHERE a.runid {$insql2} AND a.status = :running
                         AND aa.id = (SELECT MAX(n.id) FROM {adaptivequiz_attempt} n
                                       WHERE n.userid = aa.userid AND n.instance = aa.instance)
                GROUP BY a.runid",
-                $params2 + ['running' => attempt_scheduler::STATUS_RUNNING, 'inprogress' => 'inprogress']
+                // Whatever its engine state: a sitting the engine has just finished is still being played until the
+                // worker reports it, and dropping its answers in between made the count fall for a moment (#141).
+                $params2 + ['running' => attempt_scheduler::STATUS_RUNNING]
+            );
+        }
+
+        // Questions answered in executions that do not count: an abandoned try, a retry's earlier engine attempt
+        // (#141 AK5). Shown apart as work done and not counted, never added to the progress.
+        $engineall = [];
+        if ($available) {
+            [$insql3, $params3] = $DB->get_in_or_equal($runids, SQL_PARAMS_NAMED, 'd');
+            $engineall = $DB->get_records_sql_menu(
+                "SELECT r.id, SUM(aa.questionsattempted)
+                   FROM {local_catquizlab_run} r
+                   JOIN {course_modules} cm ON cm.id = r.testcmid
+                   JOIN {local_catquizlab_person} p ON p.runid = r.id
+                   JOIN {adaptivequiz_attempt} aa ON aa.instance = cm.instance AND aa.userid = p.moodleuserid
+                  WHERE r.id {$insql3}
+               GROUP BY r.id",
+                $params3
             );
         }
 
@@ -132,6 +154,11 @@ class question_progress {
             if ($persitting !== null) {
                 // A sitting in flight still has its expected share minus what it has already answered, never less.
                 $remaining = (int) round(max(0.0, $nin * $persitting - $now) + $nqueued * $persitting);
+                // Past its estimate a sitting in flight still has at least one question ahead: it is not done
+                // until it is collected, and 100 % before that would be a completion that has not happened (#141).
+                if ($kind !== self::EXACT) {
+                    $remaining = max($remaining, $nin);
+                }
                 $expected = $answered + $now + $remaining;
             }
             $out[$runid] = [
@@ -145,6 +172,8 @@ class question_progress {
                 'secondsperquestion' => ($c && $answered > 0 && (int) $c->runtimems > 0)
                     ? round(((int) $c->runtimems / 1000) / $answered, 3) : null,
                 'percent' => $expected ? self::percent($answered + $now, $expected) : null,
+                // Answered in executions that do not count (abandoned, superseded by a retry); never in done.
+                'discarded' => max(0, (int) ($engineall[$runid] ?? 0) - $answered - $now),
             ];
         }
 
@@ -155,7 +184,7 @@ class question_progress {
      * Sum per-run figures to an experiment's: the kind is the least certain of its runs.
      *
      * @param array $perrun From for_runs().
-     * @return array done, expected (null where any run is UNKNOWN), remaining, kind, percent.
+     * @return array done, expected (null where any run is UNKNOWN), remaining, kind, percent, discarded.
      */
     public static function total(array $perrun): array {
         $rank = [self::EXACT => 0, self::ESTIMATE => 1, self::BOUND => 2, self::UNKNOWN => 3];
@@ -163,9 +192,11 @@ class question_progress {
         $done = 0;
         $expected = 0;
         $remaining = 0;
+        $discarded = 0;
         $unknown = false;
         foreach ($perrun as $run) {
             $done += (int) $run['done'];
+            $discarded += (int) ($run['discarded'] ?? 0);
             if ($run['expected'] === null) {
                 $unknown = true;
             } else {
@@ -183,6 +214,7 @@ class question_progress {
             'remaining' => $unknown || $perrun === [] ? null : $remaining,
             'kind' => $perrun === [] ? self::UNKNOWN : $kind,
             'percent' => !$unknown && $expected > 0 ? self::percent($done, $expected) : null,
+            'discarded' => $discarded,
         ];
     }
 
@@ -205,10 +237,32 @@ class question_progress {
             "SELECT runid, COUNT(1) FROM {local_catquizlab_item} WHERE runid {$insql} GROUP BY runid",
             $params
         );
+        // Runs from before manifests carried their definition fall back to their experiment's: read once for all
+        // of them, not once per run (#158 AK6).
+        $fallback = [];
+        foreach ($records as $record) {
+            $manifest = json_decode((string) $record->manifestjson, true) ?: [];
+            if (!isset($manifest['config']['definition'])) {
+                $fallback[(int) $record->experimentid] = true;
+            }
+        }
+        $configs = $fallback === [] ? [] : $DB->get_records_list(
+            'local_catquizlab_experiment',
+            'id',
+            array_keys($fallback),
+            '',
+            'id, configjson'
+        );
         foreach ($missing as $runid) {
             $out = ['fixedform' => false, 'poolsize' => (int) ($pools[$runid] ?? 0), 'maxquestions' => 0];
             try {
-                $definition = isset($records[$runid]) ? run_registry::definition_for($records[$runid]) : [];
+                $definition = [];
+                if (isset($records[$runid])) {
+                    $manifest = json_decode((string) $records[$runid]->manifestjson, true) ?: [];
+                    $config = $configs[(int) $records[$runid]->experimentid]->configjson ?? '';
+                    $definition = $manifest['config']['definition']
+                        ?? ((string) $config !== '' ? experiment_definition::from_json((string) $config)->get_normalised() : []);
+                }
             } catch (\Throwable $e) {
                 $definition = [];
             }

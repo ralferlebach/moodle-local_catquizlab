@@ -186,6 +186,9 @@ class attempt_scheduler {
             ['now' => $now, 'queued' => self::STATUS_QUEUED] + $scopeparams
         );
 
+        // Which runs cannot hand out work for want of a single scale generation: one query for all of them, not
+        // one per run (the poll of "All experiments" asked twice per run, #160 AK12).
+        $recovery = scale_inventory::recovery_required_many(array_keys($rows));
         foreach ($rows as $row) {
             $total = (int) $row->total;
             $due = (int) $row->due;
@@ -207,7 +210,10 @@ class attempt_scheduler {
                 continue;
             }
 
-            if (!run_lifecycle::is_runnable((int) $row->runid)) {
+            // The same as run_lifecycle::is_runnable(), from what this query already read.
+            $runnable = in_array((int) $row->runstatus, [registry::STATUS_READY, registry::STATUS_RUNNING], true)
+                && !isset($recovery[(int) $row->runid]);
+            if (!$runnable) {
                 // Queued against a run that cannot hand out work: scheduled,
                 // failed, finished. The attempts are real and unreachable, and
                 // showing them as waiting invites waiting for them.

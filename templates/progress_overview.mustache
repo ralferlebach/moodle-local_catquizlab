@@ -1,0 +1,164 @@
+{{!
+    This file is part of Moodle - https://moodle.org/
+
+    Moodle is free software: you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+    the Free Software Foundation, either version 3 of the License, or
+    (at your option) any later version.
+
+    Moodle is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+    GNU General Public License for more details.
+
+    You should have received a copy of the GNU General Public License
+    along with Moodle.  If not, see <https://www.gnu.org/licenses/>.
+}}
+{{!
+    @template local_catquizlab/progress_overview
+
+    "All experiments" (#158): the whole population on top — experiments by state, sittings and questions with exact
+    denominators, when everything open will be done — and below it every experiment, A–Z, as a section that opens
+    to its runs. Each section shows what the experiment's own page shows, from the same reading.
+
+    Context variables required for this template:
+    * totals - The population added up.
+    * time - When everything open will be done.
+    * experiments - This page's experiments, each a progress snapshot with name, url, open.
+    * pages, page - Paging of the sections.
+
+    Example context (json):
+    {
+        "totals": {"text": "3 experiments, 30 runs, 120 of 300 sittings done", "percent": 40, "done": 120,
+            "total": 300, "questions": {"text": "2400 of about 6000 (40 %)", "kindlabel": "Estimated", "percent": 40,
+            "kind": "estimate"}, "states": [{"state": "running", "count": 1, "label": "Running"}]},
+        "sittingstext": "120 of 300 sittings",
+        "time": {"reliability": "estimate", "text": {"status": "Estimate", "remaining": "≈ 2 hours",
+            "finish": "≈ 14/11/26, 23:00", "reason": ""} },
+        "computedtext": "21:00",
+        "experiments": [{"experimentid": 1, "name": "Pilot", "url": "#", "label": "Running", "reason": "",
+            "state": "running", "open": true, "percent": 40, "done": 40, "total": 100,
+            "sittingstext": "40 of 100 sittings", "runcount": 2,
+            "questions": {"text": "800 of 2000", "percent": 40},
+            "time": {"reliability": "estimate", "text": {"started": "14/11/26, 20:00", "elapsed": "1 hour",
+                "finish": "≈ 14/11/26, 22:00", "remaining": "≈ 1 hour", "own": "60 sittings"} },
+            "hasruns": false, "runs": []}],
+        "hasexperiments": true,
+        "pages": 1,
+        "page": 0
+    }
+}}
+<div class="card mb-3" data-region="catquizlab-overview">
+    <div class="card-body">
+        <h3 class="h5">{{#str}}overview:heading, local_catquizlab{{/str}}</h3>
+        <p class="small mb-2" data-region="catquizlab-overview-population">{{totals.text}}</p>
+        <ul class="list-inline small mb-2" data-region="catquizlab-overview-states">
+            {{#totals.states}}
+                <li class="list-inline-item" data-state="{{state}}">
+                    <span class="badge badge-light">{{label}}: <span data-region="catquizlab-overview-state-{{state}}">{{count}}</span></span>
+                </li>
+            {{/totals.states}}
+        </ul>
+
+        <div class="d-flex justify-content-between align-items-baseline small">
+            <span>{{#str}}progress:overall, local_catquizlab{{/str}}</span>
+            <span data-region="catquizlab-overview-count">{{totals.done}} / {{totals.total}}</span>
+        </div>
+        <div class="progress mb-2" style="height: 0.6rem;">
+            <div class="progress-bar" role="progressbar" data-region="catquizlab-overview-bar"
+                 style="width: {{totals.percent}}%;"
+                 aria-valuenow="{{totals.percent}}" aria-valuemin="0" aria-valuemax="100"
+                 aria-valuetext="{{sittingstext}}"
+                 aria-label="{{#str}}progress:overall, local_catquizlab{{/str}}"></div>
+        </div>
+        <div class="d-flex justify-content-between align-items-baseline small">
+            <span>{{#str}}questions:heading, local_catquizlab{{/str}}</span>
+            <span data-region="catquizlab-overview-questions">{{totals.questions.text}}</span>
+        </div>
+        <div class="progress mb-1" style="height: 0.4rem;">
+            <div class="progress-bar bg-info" role="progressbar" data-region="catquizlab-overview-questions-bar"
+                 style="width: {{totals.questions.percent}}%;"
+                 aria-valuenow="{{totals.questions.percent}}" aria-valuemin="0" aria-valuemax="100"
+                 aria-valuetext="{{totals.questions.text}}"
+                 aria-label="{{#str}}questions:bar, local_catquizlab{{/str}}"></div>
+        </div>
+        <p class="small text-muted mb-2">{{totals.questions.kindlabel}}</p>
+
+        <dl class="row mx-0 small mb-1" data-region="catquizlab-overview-eta" data-reliability="{{time.reliability}}">
+            <dt class="col-6 col-md-3 mb-0">{{#str}}overview:finish, local_catquizlab{{/str}}</dt>
+            <dd class="col-6 col-md-3" data-region="catquizlab-overview-finish">{{time.text.finish}}</dd>
+            <dt class="col-6 col-md-3 mb-0">{{#str}}overview:remaining, local_catquizlab{{/str}}</dt>
+            <dd class="col-6 col-md-3" data-region="catquizlab-overview-remaining">{{time.text.remaining}}</dd>
+        </dl>
+        <p class="small text-muted mb-0">
+            <span class="badge badge-light" data-region="catquizlab-overview-status">{{time.text.status}}</span>
+            <span data-region="catquizlab-overview-reason">{{time.text.reason}}</span>
+            <span>{{#str}}eta:asof, local_catquizlab, {{computedtext}}{{/str}}</span>
+        </p>
+        <p class="small text-muted mb-0">{{#str}}overview:method, local_catquizlab{{/str}}</p>
+    </div>
+</div>
+
+{{#hasexperiments}}
+    {{#experiments}}
+        <details class="card mb-2" data-region="catquizlab-exp-{{experimentid}}" data-experimentid="{{experimentid}}"
+                 data-state="{{state}}" {{#open}}open{{/open}}>
+            <summary class="card-header">
+                <span class="h6 mb-0">{{name}}</span>
+                <span class="badge badge-light ml-1" data-region="catquizlab-exp-{{experimentid}}-label">{{label}}</span>
+                <span class="small text-muted ml-1" data-region="catquizlab-exp-{{experimentid}}-count">{{done}} / {{total}}</span>
+                <span class="small text-muted ml-1">{{#str}}overview:runs, local_catquizlab, {{runcount}}{{/str}}</span>
+            </summary>
+            <div class="card-body">
+                <p class="small mb-2"><a href="{{url}}">{{#str}}overview:openexperiment, local_catquizlab{{/str}}</a></p>
+                <p class="small text-muted" data-region="catquizlab-exp-{{experimentid}}-reason">{{reason}}</p>
+                <div class="progress mb-1" style="height: 0.5rem;">
+                    <div class="progress-bar" role="progressbar" data-region="catquizlab-exp-{{experimentid}}-bar"
+                         style="width: {{percent}}%;"
+                         aria-valuenow="{{percent}}" aria-valuemin="0" aria-valuemax="100"
+                         aria-valuetext="{{sittingstext}}"
+                         aria-label="{{#str}}overview:expbar, local_catquizlab, {{name}}{{/str}}"></div>
+                </div>
+                <div class="progress mb-1" style="height: 0.35rem;">
+                    <div class="progress-bar bg-info" role="progressbar"
+                         data-region="catquizlab-exp-{{experimentid}}-questions-bar"
+                         style="width: {{questions.percent}}%;"
+                         aria-valuenow="{{questions.percent}}" aria-valuemin="0" aria-valuemax="100"
+                         aria-valuetext="{{questions.text}}"
+                         aria-label="{{#str}}overview:expquestionsbar, local_catquizlab, {{name}}{{/str}}"></div>
+                </div>
+                <p class="small text-muted mb-2" data-region="catquizlab-exp-{{experimentid}}-questions">{{questions.text}}</p>
+                {{#time}}
+                    <dl class="row mx-0 small mb-2" data-region="catquizlab-exp-{{experimentid}}-eta"
+                        data-reliability="{{reliability}}">
+                        <dt class="col-6 col-md-3 mb-0">{{#str}}eta:started, local_catquizlab{{/str}}</dt>
+                        <dd class="col-6 col-md-3" data-region="catquizlab-exp-{{experimentid}}-started">{{text.started}}</dd>
+                        <dt class="col-6 col-md-3 mb-0">{{#str}}eta:elapsed, local_catquizlab{{/str}}</dt>
+                        <dd class="col-6 col-md-3" data-region="catquizlab-exp-{{experimentid}}-elapsed">{{text.elapsed}}</dd>
+                        <dt class="col-6 col-md-3 mb-0">{{#str}}eta:finish, local_catquizlab{{/str}}</dt>
+                        <dd class="col-6 col-md-3" data-region="catquizlab-exp-{{experimentid}}-finish">{{text.finish}}</dd>
+                        <dt class="col-6 col-md-3 mb-0">{{#str}}eta:remaining, local_catquizlab{{/str}}</dt>
+                        <dd class="col-6 col-md-3" data-region="catquizlab-exp-{{experimentid}}-remaining">{{text.remaining}}</dd>
+                        <dt class="col-12 col-md-3 mb-0">{{#str}}eta:own, local_catquizlab{{/str}}</dt>
+                        <dd class="col-12 col-md-9" data-region="catquizlab-exp-{{experimentid}}-own">{{text.own}}</dd>
+                    </dl>
+                {{/time}}
+                {{> local_catquizlab/progress_runs }}
+            </div>
+        </details>
+    {{/experiments}}
+    {{#pager}}
+        <nav aria-label="{{#str}}overview:pages, local_catquizlab{{/str}}">
+            <ul class="pagination pagination-sm flex-wrap">
+                {{#links}}
+                    <li class="page-item{{#current}} active{{/current}}">
+                        <a class="page-link" href="{{url}}" {{#current}}aria-current="page"{{/current}}>{{label}}</a>
+                    </li>
+                {{/links}}
+            </ul>
+        </nav>
+    {{/pager}}
+{{/hasexperiments}}
+{{^hasexperiments}}
+    <p class="text-muted">{{#str}}overview:none, local_catquizlab{{/str}}</p>
+{{/hasexperiments}}

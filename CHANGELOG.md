@@ -6,6 +6,162 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.7.60] — 2026-11-15 — Re-audit 14.11.2026, blocks A and B: a run's own work apart from when it is done (#160), the claim order instead of the run id, a calibrated range, all experiments at once (#158), questions that do not count said apart (#141); experiments A–Z (#153), runs named with their experiment and strategy (#150), renaming without touching the design (#152), log-normal discrimination as three coupled inputs (#159)
+
+No database change.
+
+- **A run's own remaining work and its completion are two figures (#160).** Until 0.7.59 a run's "Remaining" was the
+  work of every run with a smaller id plus its own, over the capacity: run #86 at 997 of 1 000 sittings showed
+  2 h 35 min, the time of #84 and #85 before it (screenshot 14.11.2026).
+  - **Own remaining work** (new column): the run's open sittings and questions (exact, estimated, at most, unknown)
+    and how long one worker needs for them, from its own duration (its strategy's or its experiment's while it has
+    none). Other runs never change it. Below it the **own processing time** at the workers the run has right now, or
+    "no worker on it".
+  - **Done by (incl. waiting)**: the site's queue played through in the order `job_claim` hands out sittings
+    (`nextruntime`, `timecreated`, `id`), across every claimable run of every experiment. Work in flight first, then
+    each group of queued sittings; a retry waiting for its backoff at the end of the line; the last sitting of a run
+    taking a whole sitting. "Waits behind ≈ …" names the other runs' work ahead.
+  - The experiment's **Remaining** and **Estimated finish** are its last run's; its own work is shown beside them. A
+    help section explains the four terms (EN/DE, keyboard, screen reader).
+  - `eta_test::test_the_screenshot_86_no_longer_inherits_84_and_85`: the screenshot as data.
+    - **Old method:** over two hours for #86.
+    - **New:** 3 sittings, ≈ 75 questions, 3 min of worker time, done in about a minute.
+- **Capacity measured honestly (#160 AK07).**
+  - **Window:** only the part of a sitting inside the measuring window counts, over the part of the window that had
+    any work. The window is sized by the sittings being played now, not by an old experiment's hour-long ones.
+  - **Bounds:** at least the sittings in flight, at most the workers there are. Before, a long sitting that ended in
+    the window counted whole and made slots no worker had.
+  - **No capacity:** no forecast and no countdown.
+- **One reading per poll, no query per run (#160 AK12, #141 AK6).** New `run_figures`: counts, durations, starts, busy
+  time and the queue groups of all runs in a fixed number of GROUP BY queries.
+  - **Shared by:** the progress card, the run table, the poll's run cards (`status_report::run()` takes the figures)
+    and step 3's run list.
+  - **Before:** `live_progress` and the poll asked twice per run.
+  - **Test:** `eta_test::test_the_query_count_does_not_grow_with_runs` (1/10/40 runs).
+  - **The whole poll, too:** the queue breakdown checked each queued run's scale generations with two queries per
+    run, and each run card read the site's queue again. `cli/bench_progress.php` showed the poll of "All
+    experiments" at 4625 queries for 1000 runs and one experiment's poll growing three per run. Now one grouped
+    query (`scale_inventory::recovery_required_many()`) and the site's queue once per poll
+    (`status_report::run(…, $breakdown)`): 93 and 124–128 queries at 1, 10, 100 and 1000 runs.
+    `progress_overview_test::test_the_query_count_does_not_grow_with_runs` covers both polls.
+- **All experiments at once (#158).** "3. Progress → All experiments" showed the last 25 unfinished runs. Now:
+  - **On top:** the population. Experiments by state, runs, sittings and questions summed with exact denominators
+    (never an average of percentages), and when everything open will be done: the open experiments' forecasts, then
+    the experiments waiting in the execution queue one after the other. Without a duration for one of them: no
+    time, "at least until …".
+  - **Below, A–Z:** every experiment, finished ones included, as a section that opens to all its runs (run id with
+    link, strategy, design cell, status, sittings, questions, own work, done by). Each section is what the
+    experiment's own page shows, built from the same reading (`live_progress::build`).
+  - **Paging and live updates:** sections are paged by 20, the totals cover all. The live poll updates totals,
+    sections and runs in place. A section somebody opened or closed stays that way, also across a reload.
+  - **Test:** `progress_overview_test`. 3 experiments with 32 runs including a paused and a held one add up exactly,
+    and each section equals its experiment's page. Waiting experiments come after the running one. The query count
+    is the same for 10 and 110 runs. Paging.
+- **Questions that do not count, said apart (#141 AK5).** Questions answered in an abandoned execution or in a try
+  a retry replaced are shown beside the run's count ("… answered in executions that do not count"), never added to it.
+  - A sitting waiting for its trace now counts with its answers. Before, the count fell for a moment with every
+    sitting that ended (found by the new probe, below).
+  - An adaptive sitting still in flight past its estimated length keeps at least one question open: no 100 % of
+    questions before it is collected.
+- **Every progress bar says its unit to a screen reader (#141 AK8):** sittings ("… of … sittings") or questions (the
+  question text, including "total not determinable"). The labels name the unit, and the poll updates the values.
+- **Run lists name the strategy and link the run (#158 AK5).**
+- **`cli/smoke.php --strategies=a,b --eta-probe=FILE` (#160 DoD04/05, #141/#142 DoD2).** A sweep over several
+  strategies played by the same workers.
+  - **Every 5 s:** a progress snapshot, checked for contradictions. Runs adding up to the experiment, own sittings =
+    open sittings, nothing left yet not final, the experiment's remaining = its last run's, the question count never
+    falling without a failure, no 100 % of questions with sittings still queued.
+  - **At the end:** every forecast against the run's actual end (mean absolute error, median and 90th percentile of
+    the relative error, share of ends inside the range).
+  - **The poll beside it:** each snapshot is followed by the poll the page makes (`live_status`): same total,
+    never behind.
+  - **The page itself (`--watch-page`, #141 DoD 2):** a browser signed in as a temporary manager
+    (`worker/watch_progress.js`, Puppeteer from the worker toolchain) reads the progress page every 5 s while the
+    run is played: the header's question count, bar and sittings, and each run row's question count, as the page's
+    poll left them, every sixth time freshly loaded. Each reading must never fall, never lag the server by more than
+    ten seconds, never be ahead of it, and never show 100 % with sittings queued. The page and the poll now carry the
+    counts as `data-done` attributes, so nothing parses translated text. The temporary user is deleted afterwards.
+  - **Fails:** on any contradiction, or when no snapshot had two runs in flight.
+  - **Worker CI:** new step, with `--watch-page`; snapshots, page readings and summary kept as evidence.
+- **The forecast's range is honest about borrowed durations (#160 DoD05).**
+  - **Borrowed:** a duration borrowed from another strategy counts with the spread of single sittings, a pace of
+    the first questions with half a sitting either way.
+  - **Last sitting:** every completion carries the spread of its run's last sitting.
+- `cli/seed_progress.php --state=parallel` and two Playwright tests (#160):
+  - a run at 17 of 20 shows its own three sittings apart from when it is done;
+  - server JSON, poll and page agree;
+  - the terms open by keyboard; no horizontal scrolling at 390 px.
+- **Docs:** `docs/dev/eta-methode.md` rewritten for the two figures, the claim order, the capacity and the tests. The
+  comments about a serial run-id queue are gone.
+- **The range calibrated against measured ends (#160 DoD05).** The probe above, run on this installation, showed
+  where forecasts missed; four changes, each with a test in `eta_test`:
+  - **The last sitting begun:** a run with only sittings in flight is done when the one begun last is, not when their
+    average would be. Near the end of a run the forecast came out too early by half.
+  - **Its own pace first:** a run with nothing of its own or its strategy's finished takes the pace of its own
+    questions before the experiment's mean. A FASTEST run borrowed CLASSIC's 120-question sittings and was forecast
+    five times too long. Where only an upper bound of its questions is known, the borrowed duration stays, at most
+    pace × bound.
+  - **Few sittings:** Student's t for n − 1 degrees of freedom instead of 1.96 (4.303 at three sittings).
+  - **Drift:** the gap between the mean of the last five finished executions and all of them widens the range.
+  - **Only in flight borrows nothing:** such a run is an estimate on its own duration, no longer provisional because
+    of other runs' queued work.
+  - **Measured** on this machine (two real runs, CLASSIC and FASTEST, four workers):
+    - three sittings per run, as in the worker CI: 96 and 100 % of the actual ends inside the range (66 and 63
+      forecasts);
+    - twelve sittings per run: 80 % inside (238 forecasts, before 59 %), median relative error 0.18 (before 0.33).
+
+    The misses are the FASTEST run running out alone after CLASSIC, forecast up to twice too late, never too
+    early. Its first sittings, played beside CLASSIC's, took longer than its later ones. Recorded in
+    `docs/dev/eta-methode.md` as a known limit.
+- **Experiments A–Z everywhere (#153).**
+  - **Library:** sorted by name by default (the language's collation: case ignored, umlauts beside their letter,
+    numbers by value, equal names by id). "Last change" and "state" stay on offer and end A–Z too, so no two rows
+    swap places between two loads. The sort is kept as a preference, the search for the session.
+  - **Reset:** "Reset" under "No experiment matches" now clears the kept search; with the search kept for the
+    session it left the search in place (found by `library.spec.js`).
+  - **Selector on every tab:** every experiment, A–Z; it was the last 50 changed, so older ones vanished from it.
+  - **"All experiments":** the same order (`experiment_order`).
+  - **Tests:** `experiment_order_test` (67 experiments with umlauts, case, numbers and equal names; changed
+    timestamps and states; rename), Playwright `names_order.spec.js` (55 seeded experiments: library, selector,
+    reload, poll, search and sort kept, "All experiments" across its pages).
+- **Every run named with its experiment and strategy (#150).** The run list of step 3, the worker list and the list
+  of runs with ambiguous scales show experiment (linked, shortened at 40 characters with the full name for screen
+  readers), run id (linked) and strategy, read for all runs in one query (`run_labels`). A rename shows everywhere at
+  once. Tests: `run_labels_test` (two experiments with the same strategies, rename, orphaned run, one query for
+  300 runs), `names_order.spec.js` (links, one experiment only, 320 px). At 320 px the run list and the task table
+  of step 3 widened the page; both now scroll inside their own box.
+- **Rename an experiment whose runs lock its design (#152).** Name and description have their own form on the
+  experiment page, in every state, beside the locked design.
+  - **Only those two:** `experiment_metadata::update()` changes name and description and nothing else; the design
+    hash (`designhash` in the reproducibility package) is the same before and after. Runs keep the name they were
+    created under (`experimentnameatrun`).
+  - **Safe:** POST with sesskey, `local/catquizlab:edit`, validated (not empty, 255/4000 characters), under a lock.
+    An editor opened before somebody else saved is refused with the current values shown, not overwritten.
+  - **Audit:** each change is the event `experiment_metadata_updated` (who, when, old and new name) in the standard
+    log; the page lists the last changes. The event stores names an author typed, no personal data beyond the
+    acting user's id, which the log store's own privacy provider covers.
+  - **Found by the new browser test and fixed:** the form's fields had the ids of the locked experiment form on the
+    same page (`id_name`, `id_description` twice), which broke their labels for screen readers; they are now
+    `metadataname` and `metadatadescription`. Experiment names were escaped twice in the selector, the run lists and
+    "All experiments" ("&" showed as "&amp;"): names now reach the templates as filtered plain text and are escaped
+    there, once.
+  - **Tests:** `experiment_metadata_test` (every state, concurrent edit, validation, capability, log),
+    `names_order.spec.js` (rename of a running experiment: refused empty name, lost update refused, library,
+    selector, run list, package with unchanged design hash).
+- **Log-normal discrimination as three coupled inputs (#159).** μlog, σlog and E(a), any two giving the third: the
+  two typed last decide, the computed one follows without taking the focus. New experiments start at 0 / 0.3
+  (E(a) ≈ 1.046028).
+  - **Sketch:** a live density of a with the central 90 % interval and E(a) as a labelled line, a constant for
+    σlog = 0, nothing stale for an invalid pair; a text alternative with the key figures.
+  - **Phone width:** the editor's three-column row had Bootstrap's negative gutters, which pushed the form 15 px
+    past a 320 px screen; it has none now.
+  - **Stored:** only `meanlog` and `sdlog`, as before; no third value. Pairs with no solution (E(a) ≤ 0, σlog < 0,
+    ln(E(a)) < μlog, not finite) are refused on the field they concern, never corrected silently.
+  - **Tests:** `lognormal_test` (the three reference cases, every direction and back, quantiles against tables, the
+    density integrating to 1, the form storing two and showing three), Playwright: coupled input, sketch, invalid and
+    half-typed values, save and reload; keyboard, decimal comma, 320 px, 1PL; screenshots of the three reference
+    cases.
+
 ## [0.7.59] — 2026-11-12 — Audit 11.11.2026: counts the downloads have (#115), three levels of an end (#134), a test's queue given back exactly (#120), web memory limit in the traces (#132), a hung page ends its sitting after one timeout
 
 No database change.

@@ -163,6 +163,8 @@ final class reproducibility_test extends \advanced_testcase {
         // different case: the plugin fills its own defaults, and those defaults
         // are what ran.
         $this->assertArrayHasKey('error', $package['experiment']['normalised']);
+        // No design hash either: it would be a hash of nothing that ran (#152).
+        $this->assertNull($package['experiment']['designhash']);
         // The analysis basis cannot be computed either, and says why — the package is still delivered (#115).
         $this->assertArrayHasKey('populationerror', $package['analysis']);
         $this->assertArrayNotHasKey('population', $package['analysis']);

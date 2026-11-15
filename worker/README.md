@@ -44,6 +44,13 @@ attempt's artefacts as `diagnosis-full.json`
 (`<artefact-dir>/experiment-…/run-…/attempt-…/execution-…/`), and its path is
 sent in `truncated.full`. Nothing is cut silently.
 
+## Reading the progress page in tests (#141)
+
+`watch_progress.js` is not a worker. `cli/smoke.php --watch-page=FILE` starts it beside the workers: it signs in
+as a temporary manager (credentials in `CATQUIZLAB_WATCH_USER` / `CATQUIZLAB_WATCH_PASSWORD`, never on the command
+line), opens step 3 for the experiment and writes what the page shows every 5 s, one JSON line each. The smoke test
+checks those readings against its own snapshots and deletes the user afterwards.
+
 ## Roadmap
 
 See `../docs/design/backlog.md`, epic E3.

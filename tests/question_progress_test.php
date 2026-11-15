@@ -21,6 +21,8 @@ use local_catquizlab\local\attempt_scheduler;
 use local_catquizlab\local\eta;
 use local_catquizlab\local\live_progress;
 use local_catquizlab\local\question_progress;
+use local_catquizlab\local\registry;
+use local_catquizlab\local\worker_registry;
 
 /**
  * Progress and ETA in questions, on a fake clock (#141, #142).
@@ -59,6 +61,10 @@ final class question_progress_test extends \advanced_testcase {
         /** @var \local_catquizlab_generator $generator */
         $generator = $this->getDataGenerator()->get_plugin_generator('local_catquizlab');
         $this->experimentid = (int) $generator->create_experiment()->id;
+        // One worker up: the slot the sittings are played on.
+        $DB->insert_record('local_catquizlab_worker', (object) ['workerid' => 'w-1', 'slot' => 1,
+            'status' => worker_registry::STATUS_RUNNING, 'heartbeat' => time(), 'timecreated' => time(),
+            'timemodified' => time()]);
     }
 
     /**
@@ -76,7 +82,8 @@ final class question_progress_test extends \advanced_testcase {
         $generator = $this->getDataGenerator()->get_plugin_generator('local_catquizlab');
         $definition = ['strategy' => $strategy, 'budgets' => ['global' => $maxitems === null ? []
             : ['maxitems' => $maxitems === -1 ? 'unlimited' : $maxitems]]];
-        $run = $generator->create_run(['experimentid' => $this->experimentid, 'manifestjson' => json_encode(['config' => [
+        $run = $generator->create_run(['experimentid' => $this->experimentid, 'status' => registry::STATUS_RUNNING,
+            'manifestjson' => json_encode(['config' => [
             'strategy' => ['key' => $strategy], 'definition' => $definition]])]);
         $instance = $this->instance++;
         $course = $this->getDataGenerator()->create_course();
@@ -125,7 +132,8 @@ final class question_progress_test extends \advanced_testcase {
             'engineattemptid' => $engine ?: null,
             'runtimems' => $runtime > 0 ? $runtime * 1000 : null,
             'leaseowner' => $status === attempt_scheduler::STATUS_RUNNING ? 'w-1' : null,
-            'leaseexpires' => $status === attempt_scheduler::STATUS_RUNNING ? time() + 3600 : 0,
+            // Held well past the fake clock: in flight on it (#160 reads leases at the clock it is given).
+            'leaseexpires' => $status === attempt_scheduler::STATUS_RUNNING ? self::T0 + 100000 : 0,
             'timecreated' => time(), 'timemodified' => time()]);
         if ($status !== attempt_scheduler::STATUS_QUEUED) {
             $DB->insert_record('local_catquizlab_attemptlog', (object) ['attemptid' => $attemptid,
@@ -240,6 +248,10 @@ final class question_progress_test extends \advanced_testcase {
         $snapshot = $this->snapshot(0);
         $this->assertSame(40, $snapshot['questions']['done']);
         $this->assertSame(625, $snapshot['questions']['expected']);
+        // The 300 of the abandoned try: work done, said apart, never counted (#141 AK5).
+        $this->assertSame(300, $snapshot['questions']['discarded']);
+        $this->assertStringContainsString('300', $snapshot['questions']['discardedtext']);
+        $this->assertSame(300, $snapshot['runs'][0]['questions']['discarded']);
     }
 
     /**

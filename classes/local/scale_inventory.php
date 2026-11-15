@@ -134,6 +134,32 @@ class scale_inventory {
     }
 
     /**
+     * Which of these runs own more than one scale generation, in one query (#160 AK12: the poll asked per run).
+     *
+     * @param int[] $runids The runs.
+     * @return array<int, true> Run id => true for each that needs recovery.
+     */
+    public static function recovery_required_many(array $runids): array {
+        global $DB;
+
+        $runids = array_values(array_unique(array_map('intval', $runids)));
+        if ($runids === []) {
+            return [];
+        }
+        [$insql, $params] = $DB->get_in_or_equal($runids, SQL_PARAMS_NAMED, 'rr');
+        $rows = $DB->get_fieldset_sql(
+            "SELECT runid
+               FROM {local_catquizlab_scalemap}
+              WHERE level = :level AND runid {$insql}
+           GROUP BY runid
+             HAVING COUNT(1) > 1",
+            $params + ['level' => scale_provisioner::LEVEL_ROOT]
+        );
+
+        return array_fill_keys(array_map('intval', $rows), true);
+    }
+
+    /**
      * What cleaning up would remove, before it removes it.
      *
      * @param int $runid The run.

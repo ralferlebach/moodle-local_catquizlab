@@ -214,3 +214,196 @@ test('the runs the preview announces are the runs that are created (#126, 0.7.50
     const row = page.locator('[data-region="catquizlab-library"] tbody tr', {hasText: name});
     await expect(row).toContainText(new RegExp(`${announced} run\\(s\\)`));
 });
+
+/**
+ * Fill an input as a person does: select its text, type, and let the input events fire.
+ *
+ * @param {object} page The page.
+ * @param {string} selector The input.
+ * @param {string} text What to type.
+ */
+async function type(page, selector, text) {
+    await page.locator(selector).click();
+    await page.locator(selector).fill('');
+    await page.locator(selector).pressSequentially(text);
+}
+
+test('#159: log-normal discrimination as three coupled inputs with a live density sketch', async({page}) => {
+    needs(!PASSWORD, 'MOODLE_ADMIN_PASSWORD not set.');
+
+    await page.goto('/login/index.php', {waitUntil: 'networkidle'});
+    await page.fill('#username', ADMIN);
+    await page.fill('#password', PASSWORD);
+    await page.click('#loginbtn');
+    await page.waitForLoadState('networkidle');
+    await page.goto('/local/catquizlab/experiment.php', {waitUntil: 'networkidle'});
+
+    const mu = '#id_lognormalmu';
+    const sigma = '#id_lognormalsigma';
+    const mean = '#id_lognormalmean';
+    const svg = page.locator('[data-region="catquizlab-lognormal-svg"]');
+    const text = page.locator('[data-region="catquizlab-lognormal-text"]');
+    const num = async(selector) => Number((await page.inputValue(selector)).replace(',', '.'));
+
+    // A new experiment: μlog 0, σlog 0.3, E(a) ≈ 1.046028, the curve drawn with its text alternative.
+    await page.selectOption('#id_discriminationdist', 'lognormal');
+    expect(await num(mu)).toBe(0);
+    expect(await num(sigma)).toBeCloseTo(0.3, 9);
+    expect(await num(mean)).toBeCloseTo(1.046028, 6);
+    await expect(svg).toHaveAttribute('data-state', 'curve');
+    await expect(text).toContainText('E(a) = 1.046028');
+    await expect(svg.locator('[data-role="mean"]')).toHaveCount(1);
+    await expect(svg.locator('[data-role="interval"]')).toHaveCount(1);
+    await expect(svg).toContainText('Item discrimination a');
+    await expect(svg).toContainText('Probability density');
+    // Only the inputs of this family: the generic value fields are hidden.
+    await expect(page.locator('#id_discriminationa')).toBeHidden();
+    await expect(page.locator('#id_discriminationb')).toBeHidden();
+
+    // μlog and σlog given: E(a) follows (μlog 0.25 → 1.343126).
+    await type(page, mu, '0.25');
+    expect(await num(mean)).toBeCloseTo(1.343126, 6);
+    // σlog and E(a) given: μlog follows (E(a) 1.5 → 0.360465).
+    await type(page, sigma, '0.3');
+    await type(page, mean, '1.5');
+    expect(await num(mu)).toBeCloseTo(0.360465, 6);
+    const line = Number(await svg.locator('[data-role="mean"]').getAttribute('data-value'));
+    expect(line).toBeCloseTo(1.5, 9);
+    // E(a) and μlog given: σlog follows; a pair with no solution is said, no stale curve.
+    await type(page, mu, '0.5');
+    await type(page, mean, '1.0');
+    await expect(page.locator(sigma)).toHaveValue('');
+    await expect(page.locator(sigma)).toHaveAttribute('aria-invalid', 'true');
+    await expect(svg).toHaveAttribute('data-state', 'invalid');
+    await expect(text).toContainText('ln(E(a))');
+    // Typing half a number does not throw or freeze.
+    await type(page, mean, '1.');
+    // σlog 0: one value, not a density.
+    await type(page, mu, '0.2');
+    await type(page, sigma, '0');
+    await expect(svg).toHaveAttribute('data-state', 'constant');
+
+    // Save and open again: the pair typed last decides, the stored μlog/σlog come back with their E(a).
+    const name = 'Lognormal 159 ' + Date.now();
+    await page.fill('#id_name', name);
+    await type(page, sigma, '0.3');
+    await type(page, mean, '1.5');
+    await page.locator('#id_submitbutton').click();
+    await page.waitForLoadState('networkidle');
+    const invalid = page.locator('.error, .invalid-feedback, [data-fieldtype] .form-control-feedback');
+    const problems = (await invalid.allInnerTexts()).filter((t) => t.trim() !== '');
+    expect(problems, 'the experiment form rejected the values').toEqual([]);
+    // Find it in the library by its name, and open its editor.
+    await page.goto('/local/catquizlab/index.php?q=' + encodeURIComponent(name), {waitUntil: 'networkidle'});
+    const id = await page.evaluate(() => {
+        const link = [...document.querySelectorAll('a[href*="experiment.php?id="]')][0];
+        return link ? new URL(link.href).searchParams.get('id') : '';
+    });
+    expect(id, 'the saved experiment is in the library').not.toBe('');
+    await page.goto('/local/catquizlab/experiment.php?id=' + id, {waitUntil: 'networkidle'});
+    // The search is kept for the session (#153): clear it for the tests after this one.
+    await page.goto('/local/catquizlab/index.php?q=', {waitUntil: 'networkidle'});
+    await page.goto('/local/catquizlab/experiment.php?id=' + id, {waitUntil: 'networkidle'});
+    await page.waitForLoadState('networkidle');
+    expect(await num(mu)).toBeCloseTo(0.360465, 6);
+    expect(await num(sigma)).toBeCloseTo(0.3, 9);
+    expect(await num(mean)).toBeCloseTo(1.5, 6);
+    await expect(svg).toHaveAttribute('data-state', 'curve');
+
+    // Constant: the log-normal inputs and the sketch are gone.
+    await page.selectOption('#id_discriminationdist', 'constant');
+    await expect(page.locator('#id_lognormalmu')).toBeHidden();
+    await expect(page.locator('[data-region="catquizlab-lognormal-svg"]')).toBeHidden();
+    await expect(page.locator('#id_discriminationa')).toBeVisible();
+});
+
+test('#159: keyboard, decimal comma, a phone, 1PL, and the three reference cases on record', async({page}, testInfo) => {
+    needs(!PASSWORD, 'MOODLE_ADMIN_PASSWORD not set.');
+
+    await page.goto('/login/index.php', {waitUntil: 'networkidle'});
+    await page.fill('#username', ADMIN);
+    await page.fill('#password', PASSWORD);
+    await page.click('#loginbtn');
+    await page.waitForLoadState('networkidle');
+    await page.goto('/local/catquizlab/experiment.php', {waitUntil: 'networkidle'});
+    await page.selectOption('#id_discriminationdist', 'lognormal');
+
+    const svg = page.locator('[data-region="catquizlab-lognormal-svg"]');
+    const text = page.locator('[data-region="catquizlab-lognormal-text"]');
+    const block = page.locator('#fitem_id_lognormalmu').locator('xpath=..');
+    const num = async(selector) => Number((await page.inputValue(selector)).replace(',', '.'));
+    const record = async(name) => {
+        // The visual acceptance (DoD-07): the inputs and the sketch as the author sees them, no help popup over it.
+        await page.evaluate(() => document.activeElement && document.activeElement.blur());
+        await svg.scrollIntoViewIfNeeded();
+        await page.screenshot({path: testInfo.outputPath(name + '.png'), fullPage: false});
+        await testInfo.attach(name, {path: testInfo.outputPath(name + '.png'), contentType: 'image/png'});
+    };
+    await record('159-default-mu0-sigma0.3');
+
+    // Keyboard only: into μlog, type; E(a) follows while typing and the focus stays in μlog; Tab moves on
+    // (past the help icon) to σlog.
+    await page.locator('#id_lognormalmu').focus();
+    await page.keyboard.press('Control+A');
+    await page.keyboard.type('0.25');
+    await expect(page.locator('#id_lognormalmu')).toBeFocused();
+    expect(await num('#id_lognormalmean')).toBeCloseTo(1.343126, 6);
+    const sigmafield = page.locator('#id_lognormalsigma');
+    for (let i = 0; i < 4 && !(await sigmafield.evaluate((el) => el === document.activeElement)); i++) {
+        await page.keyboard.press('Tab');
+    }
+    await expect(sigmafield).toBeFocused();
+    await expect(text).toContainText('1.343126');
+    await record('159-mu0.25-sigma0.3');
+    // σlog and then E(a) typed: these two decide, μlog follows.
+    await sigmafield.focus();
+    await page.keyboard.press('Control+A');
+    await page.keyboard.type('0.3');
+    await page.locator('#id_lognormalmean').focus();
+    await page.keyboard.press('Control+A');
+    await page.keyboard.type('1.5');
+    await page.keyboard.press('Tab');
+    expect(await num('#id_lognormalmu')).toBeCloseTo(0.360465, 6);
+    await record('159-mean1.5-sigma0.3');
+
+    // A German author writes 0,25 and reads 1,343126: the module's own reading and writing of numbers.
+    const comma = await page.evaluate(() => new Promise((resolve) => {
+        window.require(['local_catquizlab/lognormal'], (m) => resolve({
+            parsed: m.parse('0,25', ','),
+            half: Number.isNaN(m.parse('0,', ',')) ? 'NaN' : m.parse('0,', ','),
+            empty: Number.isNaN(m.parse('', ',')) ? 'NaN' : 'number',
+            shown: m.format(Math.exp(0.25 + 0.045), ','),
+            point: m.parse('0.25', ','),
+        }));
+    }));
+    expect(comma.parsed).toBe(0.25);
+    expect(comma.half).toBe(0);
+    expect(comma.empty).toBe('NaN');
+    expect(comma.shown).toBe('1,343126');
+    // A point is read as a decimal point too, as the server's unformat_float() reads it: no different value saved.
+    expect(comma.point).toBe(0.25);
+
+    // A phone: the sketch shrinks with the column, the form's content no wider than the screen. (Moodle's own
+    // navigation bar is wider than 320 px in Boost; that is the theme's, not measured here.)
+    await page.setViewportSize({width: 320, height: 800});
+    await svg.scrollIntoViewIfNeeded();
+    const widths = await page.evaluate(() => {
+        const main = document.querySelector('#region-main') || document.querySelector('[role="main"]');
+        return {
+            main: main.scrollWidth - main.clientWidth,
+            svg: document.querySelector('[data-region="catquizlab-lognormal-svg"]').getBoundingClientRect().width,
+            room: main.clientWidth,
+        };
+    });
+    expect(widths.main, 'no horizontal scrolling of the form at 320 px').toBeLessThanOrEqual(1);
+    expect(widths.svg).toBeLessThanOrEqual(widths.room);
+    await expect(block).toBeVisible();
+    await page.setViewportSize({width: 1440, height: 900});
+
+    // 1PL: no discrimination to set, no inputs and no sketch.
+    await page.selectOption('#id_model', '1pl');
+    await expect(page.locator('#id_lognormalmu')).toBeHidden();
+    await expect(svg).toBeHidden();
+    await page.selectOption('#id_model', '2pl');
+    await expect(page.locator('#id_lognormalmu')).toBeVisible();
+});
