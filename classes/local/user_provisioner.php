@@ -107,7 +107,7 @@ class user_provisioner {
             'email'     => $username . '@' . $domain,
         ];
 
-        $userid = user_create_user($user, false, false);
+        $userid = core_compat::create_user($user, false, false);
 
         // A simulated person has to be able to log in, or the worker cannot
         // play its attempt. Without a password the account was unusable, and

@@ -55,7 +55,7 @@ final class acceptance_client {
         $user = (object) ['username' => 'cqlaccept_' . $kind . '_' . strtolower(random_string(6)), 'password' => $password,
             'firstname' => 'Acceptance', 'lastname' => ucfirst($kind), 'email' => 'cqlaccept@example.invalid',
             'auth' => 'manual', 'confirmed' => 1, 'mnethostid' => $CFG->mnet_localhost_id];
-        $user->id = user_create_user($user, true, false);
+        $user->id = core_compat::create_user($user, true, false);
         if ($manager) {
             $roles = get_archetype_roles('manager');
             role_assign((int) $roles[array_key_first($roles)]->id, $user->id, \context_system::instance()->id);

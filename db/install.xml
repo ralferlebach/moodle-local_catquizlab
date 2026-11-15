@@ -68,6 +68,7 @@
         <FIELD NAME="recipejson" TYPE="text" NOTNULL="false" SEQUENCE="false" COMMENT="Deterministic mutation recipe (JSON): parameters and seed used to derive this variant from the ideal pool."/>
         <FIELD NAME="scaleid" TYPE="int" LENGTH="10" NOTNULL="false" SEQUENCE="false" COMMENT="Root item scale (local_catquiz catscale) of this variant. Variants differ by their items and scales, not by CAT context. Null until provisioned (E2)."/>
         <FIELD NAME="questioncategoryid" TYPE="int" LENGTH="10" NOTNULL="false" SEQUENCE="false" COMMENT="Question-bank category holding this variant's generated question objects. Null until provisioned (E2)."/>
+        <FIELD NAME="fingerprint" TYPE="char" LENGTH="64" NOTNULL="false" SEQUENCE="false" COMMENT="SHA-256 over the sorted item keys and item fingerprints of the realised pool (#154). Null for pools materialised before 0.7.61."/>
         <FIELD NAME="timecreated" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
         <FIELD NAME="timemodified" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
       </FIELDS>
@@ -99,6 +100,9 @@
         <FIELD NAME="truesubscale" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false" COMMENT="True subscale index in the blueprint."/>
         <FIELD NAME="miscalibrated" TYPE="int" LENGTH="1" NOTNULL="true" DEFAULT="0" SEQUENCE="false" COMMENT="Whether a calibration error was injected for this item."/>
         <FIELD NAME="mistagged" TYPE="int" LENGTH="1" NOTNULL="true" DEFAULT="0" SEQUENCE="false" COMMENT="Whether a tagging error was injected for this item."/>
+        <FIELD NAME="itemkey" TYPE="char" LENGTH="64" NOTNULL="false" SEQUENCE="false" COMMENT="Canonical item across runs (#154): replication, pool condition (model), true category, true subscale and index in the blueprint. The same logical item has the same key in every run of a replication; the question id does not. Null for items materialised before 0.7.61."/>
+        <FIELD NAME="contentfp" TYPE="char" LENGTH="64" NOTNULL="false" SEQUENCE="false" COMMENT="SHA-256 of the item as generated: key, text, options, model and true parameters (#154)."/>
+        <FIELD NAME="fingerprint" TYPE="char" LENGTH="64" NOTNULL="false" SEQUENCE="false" COMMENT="SHA-256 of the item as realised: the content plus what the engine was told (stored difficulty, assigned scale) and the injected errors (#154)."/>
         <FIELD NAME="timecreated" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
       </FIELDS>
       <KEYS>
@@ -107,6 +111,7 @@
       </KEYS>
       <INDEXES>
         <INDEX NAME="runid-questionid" UNIQUE="false" FIELDS="runid, questionid"/>
+        <INDEX NAME="runid-itemkey" UNIQUE="false" FIELDS="runid, itemkey"/>
       </INDEXES>
     </TABLE>
 

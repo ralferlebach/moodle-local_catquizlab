@@ -72,12 +72,13 @@ class run_cleanup {
             'run'      => false,
         ];
 
+        // Engine-side artefacts materialised for this run, first and checked (#161 AK3): the lab rows below are what
+        // leads to them, so a failing or incomplete engine deletion throws purge_incomplete before any of them goes.
+        $counts['items'] = self::teardown_engine_artifacts($runid);
+
         $DB->delete_records('local_catquizlab_attempt', ['runid' => $runid]);
         $DB->delete_records('local_catquizlab_result', ['runid' => $runid]);
         $DB->delete_records('local_catquizlab_person', ['runid' => $runid]);
-
-        // Engine-side artefacts materialised for this run (guarded; no-op without engine).
-        $counts['items'] = self::teardown_engine_artifacts($runid);
         // The scale map is a lab-store table and is always safe to remove.
         $DB->delete_records('local_catquizlab_scalemap', ['runid' => $runid]);
 
@@ -99,87 +100,28 @@ class run_cleanup {
     }
 
     /**
-     * Remove the engine-side artefacts a run materialised: the delete-adaptivequiz
-     * instance, then the run's items, item parameters and scale tree/context.
+     * Remove the engine-side artefacts a run materialised, as a deep deletion and a reset do (#161 AK3).
      *
-     * Recognised from the run's scale map. Guarded by the engine environment, so it
-     * is a no-op (returning 0) when the engine is absent or the run materialised
-     * nothing.
+     * The same steps and the same check: the run's footprint in the engine, its activity and Moodle is taken first;
+     * purger::delete_engine_objects() deletes the activity through Moodle's own module deletion
+     * (core_compat::delete_module(): course_delete_module(), from 5.2 the course format's action; stopping at once
+     * if that fails), the items' parameters, the items, the scales, the questions, the abilities of the run's own
+     * accounts and its emptied engine contexts; then nothing of the footprint may be left and no row of others
+     * lost. Until 0.7.62 this path caught a failing activity deletion and went on, and left questions and abilities
+     * behind.
      *
      * @param int $runid The run.
      * @return int The number of engine items removed.
+     * @throws purge_incomplete When the activity could not be deleted, or something is left or lost.
      */
     protected static function teardown_engine_artifacts(int $runid): int {
-        global $DB;
-
-        if (!environment::engine_available()) {
-            return 0;
+        $before = engine_footprint::of_run($runid);
+        $removed = purger::delete_engine_objects($runid);
+        $check = engine_footprint::check($before);
+        if (!$check['ok']) {
+            throw new purge_incomplete($runid, $check);
         }
-
-        $map = $DB->get_records('local_catquizlab_scalemap', ['runid' => $runid]);
-        if (!$map) {
-            return 0;
-        }
-        // Delete the adaptivequiz test instance created for this run, if any.
-        self::delete_test_module($runid);
-
-        // Remove the run's items and item parameters, then the scale tree/context.
-        $contextids = [];
-        $items = 0;
-        foreach ($map as $node) {
-            $contextids[(int) $node->contextid] = true;
-            $items += self::delete_scale_items((int) $node->catscaleid, (int) $node->contextid);
-            $DB->delete_records('local_catquiz_catscales', ['id' => (int) $node->catscaleid]);
-        }
-        foreach (array_keys($contextids) as $contextid) {
-            if ($contextid > 0 && !$DB->record_exists('local_catquiz_catscales', ['contextid' => $contextid])) {
-                $DB->delete_records('local_catquiz_catcontext', ['id' => $contextid]);
-            }
-        }
-
-        return $items;
-    }
-
-    /**
-     * Delete the adaptivequiz test module a run created, if present.
-     *
-     * @param int $runid The run.
-     * @return void
-     */
-    protected static function delete_test_module(int $runid): void {
-        global $DB, $CFG;
-
-        $testcmid = (int) $DB->get_field('local_catquizlab_run', 'testcmid', ['id' => $runid]);
-        if ($testcmid <= 0 || !environment::adaptivequiz_available()) {
-            return;
-        }
-        require_once($CFG->dirroot . '/course/lib.php');
-        try {
-            course_delete_module($testcmid);
-        } catch (\Throwable $e) {
-            debugging('local_catquizlab: could not delete test module: ' . $e->getMessage());
-        }
-    }
-
-    /**
-     * Delete the items and item parameters of a scale within a context.
-     *
-     * @param int $catscaleid The scale.
-     * @param int $contextid The context.
-     * @return int The number of item rows removed.
-     */
-    protected static function delete_scale_items(int $catscaleid, int $contextid): int {
-        global $DB;
-
-        $items = $DB->get_records('local_catquiz_items', ['catscaleid' => $catscaleid, 'contextid' => $contextid]);
-        foreach ($items as $item) {
-            $DB->delete_records(
-                'local_catquiz_itemparams',
-                ['componentid' => $item->componentid, 'contextid' => $contextid]
-            );
-        }
-        $DB->delete_records('local_catquiz_items', ['catscaleid' => $catscaleid, 'contextid' => $contextid]);
-        return count($items);
+        return (int) ($removed['engineitems'] ?? 0);
     }
 
     /**

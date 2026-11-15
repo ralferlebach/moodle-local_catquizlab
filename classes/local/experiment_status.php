@@ -96,7 +96,7 @@ class experiment_status {
             'problemtext'  => $failed + $held > 0
                 ? get_string('status:problems', $component, (object) ['failed' => $failed, 'held' => $held])
                 : get_string('status:noproblems', $component),
-            'next'         => self::next($phase, $experimentid, $runner),
+            'next'         => self::next($phase, $experimentid, $runner, $queued),
             'technical'    => get_string('status:technical', $component, (object) [
                 'workers' => $progress['now']['workers'], 'inflight' => $progress['now']['inflight'],
                 'queued' => $progress['now']['queued'],
@@ -150,6 +150,12 @@ class experiment_status {
               WHERE experimentid {$insql} AND {$heldsql} GROUP BY experimentid",
             $params + $heldparams
         );
+        // Where each stands in the execution line (#151): one query for the list.
+        $inline = $DB->get_manager()->table_exists('local_catquizlab_execqueue') ? $DB->get_records_sql_menu(
+            "SELECT experimentid, MAX(state) FROM {local_catquizlab_execqueue}
+              WHERE experimentid {$insql} AND state IN (:qwaiting, :qrunning) GROUP BY experimentid",
+            $params + ['qwaiting' => execution_queue::WAITING, 'qrunning' => execution_queue::RUNNING]
+        ) : [];
         $sittings = [];
         $rows = $DB->get_recordset_sql(
             "SELECT r.experimentid, a.status, COUNT(1) AS n
@@ -176,8 +182,10 @@ class experiment_status {
         foreach ($experimentids as $id) {
             $run = $runs[$id] ?? null;
             $count = $sittings[$id] ?? ['total' => 0, 'done' => 0, 'failed' => 0, 'inflight' => 0];
+            $line = $inline[$id] ?? null;
             if ($run === null || (int) $run->n === 0) {
-                $phase = 'planned';
+                $phase = $line === execution_queue::WAITING ? 'queued' : ($line === execution_queue::RUNNING ? 'preparing'
+                    : 'planned');
             } else if (!empty($held[$id])) {
                 $phase = 'blocked';
             } else if ((int) $run->cancelled > 0 && (int) $run->cancelled + (int) $run->finished === (int) $run->n) {
@@ -187,9 +195,11 @@ class experiment_status {
                 $phase = $count['failed'] > 0 ? 'completefailures' : 'complete';
             } else if ($count['inflight'] > 0 || (int) $run->active > 0) {
                 $phase = $count['done'] + $count['inflight'] > 0 ? 'collecting' : 'starting';
+            } else if ($line === execution_queue::WAITING && $count['done'] + $count['inflight'] === 0) {
+                $phase = 'queued';
             } else if ((int) $run->ready === (int) $run->n && $count['done'] === 0) {
-                $phase = 'ready';
-            } else if ((int) $run->draft > 0 && (int) $run->scheduled === 0) {
+                $phase = $line === execution_queue::RUNNING ? 'starting' : 'ready';
+            } else if ((int) $run->draft > 0 && (int) $run->scheduled === 0 && $line === null) {
                 $phase = 'created';
             } else {
                 $phase = 'preparing';
@@ -228,8 +238,12 @@ class experiment_status {
      */
     public static function phase(array $progress, array $runner, ?string $queued, int $held): string {
         $state = (string) $progress['state'];
+        // In the line (#151): waiting for its turn, or being prepared by the line — said as such, not as "planned"
+        // or "runs created", which would read as if nobody had started it.
+        $preparing = $queued === execution_queue::RUNNING && in_array((string) $runner['state'], [
+            experiment_runner::STATE_DRAFT, experiment_runner::STATE_CREATED, experiment_runner::STATE_PREPARING], true);
         if ((int) ($runner['runs']['total'] ?? 0) === 0) {
-            return 'planned';
+            return $queued === execution_queue::WAITING ? 'queued' : ($preparing ? 'preparing' : 'planned');
         }
         if ($runner['state'] === experiment_runner::STATE_STOPPED) {
             return 'stopped';
@@ -245,8 +259,15 @@ class experiment_status {
         }
         $untouched = (int) $progress['done'] === 0 && (int) $progress['now']['inflight'] === 0
             && ($progress['time']['started'] ?? null) === null;
-        if ($untouched && $queued !== null) {
+        if ($untouched && $queued === execution_queue::WAITING) {
             return 'queued';
+        }
+        if ($preparing) {
+            return 'preparing';
+        }
+        // Its turn, prepared, nothing played yet: the workers are being started (#151 AK9).
+        if ($untouched && $queued === execution_queue::RUNNING && $runner['state'] === experiment_runner::STATE_READY) {
+            return 'starting';
         }
         if ($runner['state'] === experiment_runner::STATE_CREATED) {
             return 'created';
@@ -271,9 +292,10 @@ class experiment_status {
      * @param string $phase The phase.
      * @param int $experimentid The experiment.
      * @param array $runner experiment_runner::state().
+     * @param string|null $queued The execution queue state, or null when it is not in the line.
      * @return array{kind: string, label: string, url: string, post: bool, action: string, step: string}
      */
-    public static function next(string $phase, int $experimentid, array $runner): array {
+    public static function next(string $phase, int $experimentid, array $runner, ?string $queued = null): array {
         $component = 'local_catquizlab';
         $runs = new \moodle_url('/local/catquizlab/runs.php', ['experimentid' => $experimentid]);
         $make = static fn(string $kind, \moodle_url $url, string $step, string $action = ''): array => [
@@ -287,17 +309,16 @@ class experiment_status {
             'sesskey' => sesskey(),
         ];
 
-        if ($phase === 'planned') {
-            return !empty($runner['canprepare'])
-                ? $make('create', new \moodle_url('/local/catquizlab/runs.php'), 'progress', 'prepareexperiment')
-                : $make('plan', new \moodle_url('/local/catquizlab/index.php', ['tab' => 'experiments',
-                    'experimentid' => $experimentid]), 'plan');
-        }
-        if ($phase === 'created' && !empty($runner['canstartruns'])) {
-            return $make('startruns', new \moodle_url('/local/catquizlab/runs.php'), 'progress', 'startruns');
-        }
-        if ($phase === 'ready' && !empty($runner['canstart'])) {
+        // One start (#151): from a saved definition, whatever is prepared already, "Start experiment" — once. Creating
+        // runs, starting them, preparing and running are what follows by itself; they are no longer steps of their
+        // own. Not offered again while the experiment is in the line.
+        $startable = in_array((string) ($runner['state'] ?? ''), experiment_runner::STARTABLE, true);
+        if ($queued === null && $startable && in_array($phase, ['planned', 'created', 'preparing', 'ready'], true)) {
             return $make('start', new \moodle_url('/local/catquizlab/runs.php'), 'progress', 'startexperiment');
+        }
+        if ($phase === 'planned') {
+            return $make('plan', new \moodle_url('/local/catquizlab/index.php', ['tab' => 'experiments',
+                'experimentid' => $experimentid]), 'plan');
         }
         if ($phase === 'blocked') {
             return $make('problems', new \moodle_url(

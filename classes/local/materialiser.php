@@ -53,12 +53,14 @@ class materialiser {
      *
      * @param array $blueprint The pool blueprint (from {@see pool_planner::plan()}).
      * @param array $scalemap The run's scale map rows (from {@see scale_provisioner}).
-     * @param array $options 'model': the public model key driving the item parameters.
+     * @param array $options 'model': the public model key driving the item parameters; 'replication': for the
+     *      canonical item key (#154), 1 when not given.
      * @return array[] Item specs ready for the template and the registrar.
      */
     public static function plan_items(array $blueprint, array $scalemap, array $options = []): array {
         $index = self::index_scalemap($scalemap);
         $model = model_catalog::normalise((string) ($options['model'] ?? '2pl')) ?? '2pl';
+        $replication = max(1, (int) ($options['replication'] ?? 1));
         $enginemodel = model_catalog::engine_key($model);
         $polytomous = model_catalog::is_polytomous($model);
 
@@ -94,6 +96,20 @@ class materialiser {
                         'mistagged'          => !empty($item['mistagged']),
                         'itemname'           => $item['name'],
                         'itemnumber'         => $item['index'],
+                        // The same logical item in every run of this replication and pool condition (#154): from
+                        // the blueprint, never from an id a run's provisioning hands out.
+                        'itemkey'            => item_identity::key(
+                            $replication,
+                            $model,
+                            (int) ($item['truecategory'] ?? $category['index']),
+                            (int) ($item['truesubscale'] ?? $subscale['index']),
+                            (int) $item['index']
+                        ),
+                        'assignedcategory'   => $item['assignedcategory'] ?? $category['index'],
+                        // The scale as the blueprint calls it, the same in every run (the engine scale's own name
+                        // carries the run, #154).
+                        'scalelabel'         => 'K' . ($item['assignedcategory'] ?? $category['index'])
+                            . '.' . ($item['assignedsubscale'] ?? $subscale['index']),
                         'model'              => $enginemodel,
                         'publicmodel'        => $model,
                         // The difficulty is the ground truth; storeddifficulty is
@@ -150,7 +166,9 @@ class materialiser {
         $blueprint = pool_planner::plan($definition, $poolseed);
         $blueprint = pool_mutator::mutate($blueprint, $variant, $recipe, $mutationseed);
 
-        $specs = self::plan_items($blueprint, $scalemap, ['model' => $model]);
+        $replication = (int) ($options['replication']
+            ?? $DB->get_field('local_catquizlab_run', 'replication', ['id' => $runid]) ?: 1);
+        $specs = self::plan_items($blueprint, $scalemap, ['model' => $model, 'replication' => $replication]);
 
         // An empty plan is a failure whatever the variant. The ideal pool used
         // to be exempt, which meant a run whose blueprint or scale map produced
@@ -198,6 +216,8 @@ class materialiser {
             'faileditems'          => 0,
         ];
         $errors = [];
+        // Key => fingerprint of every item that made it into the pool, for the pool's fingerprint (#154).
+        $poolitems = [];
 
         foreach ($specs as $spec) {
             // The run travels with the spec so the question can carry an ID
@@ -206,6 +226,7 @@ class materialiser {
                 $spec + ['polytomous' => $polytomous, 'runid' => $runid],
                 $template
             );
+            $spec += item_identity::fingerprints($spec, $rendered);
             $questionid = self::create_question($categoryid, $rendered);
             if ($questionid <= 0) {
                 $counts['faileditems']++;
@@ -259,6 +280,7 @@ class materialiser {
             // retrieve, so an audit row never describes an item that is not
             // part of the realised pool.
             self::record_ground_truth($runid, $poolid, $questionid, $spec);
+            $poolitems[$spec['itemkey']] = $spec['fingerprint'];
         }
 
         // The labels, written together now that every question exists.
@@ -303,6 +325,12 @@ class materialiser {
         if ($poolid > 0) {
             $DB->set_field('local_catquizlab_pool', 'itemcount', $counts['enginevisible'], ['id' => $poolid]);
             $DB->set_field('local_catquizlab_pool', 'questioncategoryid', $categoryid, ['id' => $poolid]);
+            $DB->set_field(
+                'local_catquizlab_pool',
+                'fingerprint',
+                item_identity::pool_fingerprint($poolitems),
+                ['id' => $poolid]
+            );
         }
 
         $failed = $counts['faileditems'] > 0 || $counts['enginevisible'] !== $counts['planned'];
@@ -569,6 +597,9 @@ class materialiser {
             'truesubscale'       => (int) $spec['truesubscale'],
             'miscalibrated'      => !empty($spec['miscalibrated']) ? 1 : 0,
             'mistagged'          => !empty($spec['mistagged']) ? 1 : 0,
+            'itemkey'            => $spec['itemkey'] ?? null,
+            'contentfp'          => $spec['contentfp'] ?? null,
+            'fingerprint'        => $spec['fingerprint'] ?? null,
             'timecreated'        => time(),
         ]);
     }

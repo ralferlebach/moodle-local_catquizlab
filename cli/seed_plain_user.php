@@ -31,7 +31,6 @@ define('CLI_SCRIPT', true);
 
 require(__DIR__ . '/../../../config.php');
 require_once($CFG->libdir . '/clilib.php');
-require_once($CFG->dirroot . '/user/lib.php');
 
 global $DB;
 
@@ -44,7 +43,7 @@ if (!$user) {
         'username' => $username, 'auth' => 'manual', 'confirmed' => 1, 'mnethostid' => $CFG->mnet_localhost_id,
         'firstname' => 'Plain', 'lastname' => 'User', 'email' => 'plain@example.com',
     ];
-    $user->id = user_create_user($user, false, false);
+    $user->id = \local_catquizlab\local\core_compat::create_user($user, false, false);
 }
 update_internal_user_password($DB->get_record('user', ['id' => $user->id]), $password);
 

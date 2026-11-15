@@ -66,13 +66,13 @@ final class log_redactor_test extends \advanced_testcase {
             '/a.php?ses%73key=TESTSECRET&sesskey=TESTSECRET2&SESSKEY=TESTSECRET3'
                 => '/a.php?ses%73key=[redacted]&sesskey=[redacted]&SESSKEY=[redacted]',
             '/a.php?wstoken[]=TESTSECRET&wstoken[]=TESTSECRET2&x=1'
-                => '/a.php?wstoken[]=[redacted]&wstoken[]=[redacted]&x=1',
+                => '/a.php?wstoken[]=[redacted]&wstoken[]=[redacted]&x=[omitted]',
             '/a.php?q=probe%40example.org&key=TESTSECRET&authorization=Bearer%20TESTSECRET'
                 => '/a.php?q=[redacted]&key=[redacted]&authorization=[redacted]',
             '/a.php?password=TESTSECRET;secret=TESTSECRET#token=TESTSECRET'
                 => '/a.php?password=[redacted]&secret=[redacted]',
             "/a.php?x=1\r\nInjected: yes&token=TESTSECRET"
-                => '/a.php?x=1Injected: yes&token=[redacted]',
+                => '/a.php?x=[omitted]&token=[redacted]',
             '/tokenpluginfile.php/TESTSECRET/12/mod_page/content/0/a.png'
                 => '/tokenpluginfile.php/[redacted]/12/mod_page/content/0/a.png',
             '/webservice/pluginfile.php/TESTSECRET/12/a.png?token=TESTSECRET'
@@ -85,6 +85,11 @@ final class log_redactor_test extends \advanced_testcase {
         $long = log_redactor::redact_uri('/a.php?x=' . str_repeat('y', 5000) . '&token=TESTSECRET');
         $this->assertLessThanOrEqual(512 + 20, strlen($long));
         $this->assertStringNotContainsString('TESTSECRET', $long);
+        // A long query is cut between pairs, never inside a marker or a value.
+        $many = log_redactor::redact_uri('/a.php?cmid=4&' . implode('&', array_fill(0, 200, 'token=TESTSECRET')));
+        $this->assertLessThanOrEqual(512, strlen($many));
+        $this->assertMatchesRegularExpression('#^/a\.php\?cmid=4(&token=\[redacted\])+&~cut\d+$#', $many);
+        $this->assertSame([], \local_catquizlab\local\log_scan::secret_names($many));
     }
 
     /**
@@ -148,5 +153,69 @@ final class log_redactor_test extends \advanced_testcase {
         $this->assertLessThanOrEqual(50 + 8, strlen($cut));
         $this->assertMatchesRegularExpression('/^x+~cut\d+$/', $cut);
         $this->assertSame("ab", log_redactor::strip_controls("a\x00\x1b\x7f\xc2\x85\xe2\x80\xa8b"));
+    }
+
+    /**
+     * AK2: a logged URI keeps the values of routing parameters only — every listed secret name in every spelling loses
+     * its value, and so does any parameter nobody listed.
+     *
+     * @return void
+     */
+    public function test_only_routing_values_stay_in_a_logged_uri(): void {
+        $secret = 'S3CR3TPR0BE';
+        $names = ['sesskey', 'token', 'key', 'password', 'secret', 'authorization', 'email', 'wstoken', 'logintoken',
+            'MoodleSession', 'client_secret'];
+        $spellings = static fn(string $name): array => [$name, strtoupper($name), ucfirst($name),
+            rawurlencode($name), str_replace('%', '%25', implode('', array_map(static fn(string $c): string =>
+                '%' . strtoupper(bin2hex($c)), str_split($name)))), $name . '[]', $name . '[0]'];
+        $query = [];
+        foreach ($names as $name) {
+            foreach ($spellings($name) as $spelled) {
+                // Twice each: a repeated name is caught every time, not only the first.
+                $query[] = $spelled . '=' . $secret;
+                $query[] = $spelled . '=' . rawurlencode($secret . '/x');
+            }
+        }
+        // Unknown parameters, an e-mail address under a harmless name, a value smuggled after a line break.
+        $query[] = 'unknownfilter=' . $secret;
+        $query[] = 'note=' . rawurlencode('mail me at probe@example.org');
+        $query[] = 'id=' . rawurlencode('probe@example.org');
+        $query[] = "x=1\r\nsesskey=" . $secret;
+        $uri = '/local/catquizlab/results.php?experimentid=16&tab=overview&cmid=47&' . implode('&', $query)
+            . '#token=' . $secret;
+        $out = log_redactor::redact_uri($uri, 100000);
+
+        $this->assertStringNotContainsString('S3CR3T', $out);
+        $this->assertStringNotContainsString('probe', $out);
+        $this->assertStringNotContainsString('%40', $out);
+        $this->assertStringStartsWith('/local/catquizlab/results.php?experimentid=16&tab=overview&cmid=47&', $out);
+        $this->assertStringContainsString('unknownfilter=[omitted]', $out);
+        $this->assertStringContainsString('note=[redacted]', $out);
+        $this->assertStringContainsString('id=[redacted]', $out);
+        $this->assertSame(0, preg_match('/[\r\n]/', $out));
+        // Every pair of the query is either a routing value, [redacted] or [omitted].
+        foreach (explode('&', substr($out, strpos($out, '?') + 1)) as $pair) {
+            [$name, $value] = array_pad(explode('=', $pair, 2), 2, null);
+            $this->assertTrue(
+                $value === null || $value === '' || $value === log_redactor::REDACTED || $value === log_redactor::OMITTED
+                    || log_redactor::is_routing_name($name),
+                $pair
+            );
+        }
+    }
+
+    /**
+     * The worker keeps the same routing names for its own logs (worker/log_params.json).
+     *
+     * @return void
+     */
+    public function test_the_worker_keeps_the_same_routing_names(): void {
+        global $CFG;
+        $json = json_decode((string) file_get_contents($CFG->dirroot . '/local/catquizlab/worker/log_params.json'), true);
+        $this->assertSame(log_redactor::ROUTING_NAMES, $json['names']);
+        foreach (log_redactor::ROUTING_NAMES as $name) {
+            $this->assertFalse(log_redactor::is_secret_name($name), $name . ' is a routing name and not secret');
+            $this->assertSame($name, log_redactor::normalise_name($name), $name . ' is listed as it is compared');
+        }
     }
 }

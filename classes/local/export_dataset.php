@@ -45,6 +45,8 @@ class export_dataset {
         'runid', 'questionid', 'itemname', 'model', 'truedifficulty', 'storeddifficulty',
         'discrimination', 'guessing', 'truecategory', 'truesubscale',
         'truecatscaleid', 'assignedcatscaleid', 'miscalibrated', 'mistagged',
+        // The same item across runs (#154): runid + questionid joins to the canonical key without the database.
+        'replication', 'poolvariant', 'itemkey', 'contentfp', 'fingerprint',
     ];
 
     /** @var string[] Metric long-format columns. */
@@ -128,7 +130,15 @@ class export_dataset {
         }
 
         [$insql, $params] = $DB->get_in_or_equal($runids, SQL_PARAMS_NAMED, 'run');
-        $records = $DB->get_records_select('local_catquizlab_item', 'runid ' . $insql, $params, 'runid, id');
+        $records = $DB->get_records_sql(
+            "SELECT i.*, r.replication, p.variant AS poolvariant
+               FROM {local_catquizlab_item} i
+               JOIN {local_catquizlab_run} r ON r.id = i.runid
+          LEFT JOIN {local_catquizlab_pool} p ON p.id = i.poolid
+              WHERE i.runid {$insql}
+           ORDER BY i.runid, i.id",
+            $params
+        );
 
         $rows = [];
         foreach ($records as $record) {
@@ -147,6 +157,12 @@ class export_dataset {
                 'assignedcatscaleid' => (int) $record->assignedcatscaleid,
                 'miscalibrated'      => (int) $record->miscalibrated,
                 'mistagged'          => (int) $record->mistagged,
+                'replication'        => (int) $record->replication,
+                'poolvariant'        => (string) ($record->poolvariant ?? ''),
+                // Empty for items materialised before 0.7.61: never guessed.
+                'itemkey'            => (string) ($record->itemkey ?? ''),
+                'contentfp'          => (string) ($record->contentfp ?? ''),
+                'fingerprint'        => (string) ($record->fingerprint ?? ''),
             ];
         }
 

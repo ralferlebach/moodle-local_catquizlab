@@ -41,10 +41,19 @@ namespace local_catquizlab\local;
  *     ├── person deviation  (replication, twin index, stratum, severity)
  *     ├── pool              (replication, pool condition)
  *     ├── mutation          (replication, pool condition, variant)
- *     └── response          (run, person, question, attempt)
+ *     ├── response          (run, person, question, attempt)            RNG schema 1, runs before 0.7.61
+ *     └── response-crn      (replication, twin, canonical item, presentation)  RNG schema 2 (#155)
  *
  * Strategy and budget appear in none of them, which is exactly what makes them
  * nuisance factors for the person: two strategy cells share their twins.
+ *
+ * Since 0.7.61 (#155) the same holds for the answers. Schema 1 drew each answer from the run, the person row and
+ * the question id — all three local to a run, so the same twin answering the same item in two strategy cells drew
+ * two different random numbers. Schema 2 draws from replication, twin and canonical item key (item_identity): one
+ * common random number per twin and item, whatever the strategy, the ids or the order of play. Where the twin's
+ * ability or the item's true parameters differ (stratum, severity, a pool variant), the same number goes through a
+ * different probability, so the answers differ only as much as the condition makes them. Runs keep the schema they
+ * were created with: it is recorded in their manifest, and a run without it is schema 1.
  *
  * Derivation is a stable hash of the domain and its parts, so it does not
  * depend on ordering or on the platform's random generator. Only the low 31
@@ -64,8 +73,14 @@ class seed_domains {
     /** @var string The pool mutation applied on top of the ideal blueprint. */
     public const DOMAIN_MUTATION = 'mutation';
 
-    /** @var string The simulated response process. */
+    /** @var string The simulated response process, schema 1: local to a run. */
     public const DOMAIN_RESPONSE = 'response';
+
+    /** @var string The simulated response process, schema 2: common random numbers per twin and item (#155). */
+    public const DOMAIN_RESPONSE_CRN = 'response-crn';
+
+    /** @var int The RNG schema new runs are created with. */
+    public const RNG_SCHEMA = 2;
 
     /**
      * Derive a seed for one domain from the master seed and the domain's parts.
@@ -197,6 +212,48 @@ class seed_domains {
     }
 
     /**
+     * The seed for one simulated response under RNG schema 2: one per twin and canonical item (#155).
+     *
+     * A presentation number other than 1 is for an item shown to the same person again; a repeated presentation
+     * with the same number gets the same answer, which is the documented rule: a twin who meets an item twice answers
+     * it the same way, however often the server is asked.
+     *
+     * @param int $master The master seed.
+     * @param int $replication The replication.
+     * @param string $twinid The twin (person_generator::twin_id()).
+     * @param string $itemkey The canonical item key (item_identity::key()).
+     * @param int $presentation Which presentation of the item to this person, from 1.
+     * @return int
+     */
+    public static function response_crn(
+        int $master,
+        int $replication,
+        string $twinid,
+        string $itemkey,
+        int $presentation = 1
+    ): int {
+        return self::derive($master, self::DOMAIN_RESPONSE_CRN, [
+            'rep'          => $replication,
+            'twin'         => $twinid,
+            'item'         => $itemkey,
+            'presentation' => $presentation,
+        ]);
+    }
+
+    /**
+     * The RNG schema a run was created with, from its manifest: 2 where it names the common-random-number response
+     * domain, else 1.
+     *
+     * @param array $manifest The run's manifest.
+     * @return int
+     */
+    public static function rng_schema(array $manifest): int {
+        $crn = $manifest['config']['seeds'][self::DOMAIN_RESPONSE_CRN] ?? null;
+
+        return is_array($crn) ? (int) ($crn['schema'] ?? self::RNG_SCHEMA) : 1;
+    }
+
+    /**
      * All seeds of a run, for the manifest.
      *
      * Records which factors each source depends on, so a reader can tell from
@@ -234,6 +291,12 @@ class seed_domains {
             self::DOMAIN_MUTATION         => [
                 'seed'      => self::mutation($master, $replication, $variant, $poolcondition),
                 'dependson' => ['replication', 'poolcondition', 'variant'],
+            ],
+            // Not one seed but one per twin and item; this one fingerprints the domain for the replication.
+            self::DOMAIN_RESPONSE_CRN     => [
+                'seed'      => self::derive($master, self::DOMAIN_RESPONSE_CRN, ['rep' => $replication]),
+                'dependson' => ['replication', 'twinid', 'itemkey', 'presentation'],
+                'schema'    => self::RNG_SCHEMA,
             ],
         ];
     }

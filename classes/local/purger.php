@@ -42,6 +42,30 @@ namespace local_catquizlab\local;
  */
 class purger {
     /**
+     * @var array<string, callable> Faults a test injects (#161 DoD3): 'activity' runs instead of deleting the activity
+     *     (and may throw), 'afterengine' runs once the engine objects are gone (a host callback that took more).
+     */
+    protected static array $faults = [];
+
+    /**
+     * Inject a fault into deleting, for a test (#161 DoD3). Refused outside PHPUnit and Behat.
+     *
+     * @param string $fault 'activity' or 'afterengine'.
+     * @param callable|null $fn What happens there; null takes the fault away.
+     * @return void
+     */
+    public static function simulate(string $fault, ?callable $fn): void {
+        if (!(defined('PHPUNIT_TEST') && PHPUNIT_TEST) && !(defined('BEHAT_SITE_RUNNING') && BEHAT_SITE_RUNNING)) {
+            throw new \coding_exception('purger::simulate() is for tests only.');
+        }
+        if ($fn === null) {
+            unset(self::$faults[$fault]);
+        } else {
+            self::$faults[$fault] = $fn;
+        }
+    }
+
+    /**
      * The lab's own tables that hold rows of a run, with the name each count goes by.
      *
      * One list for the preview and the delete (0.7.50): the delete had five tables and left the history of every
@@ -59,6 +83,23 @@ class purger {
         'local_catquizlab_result'     => 'results',
         'local_catquizlab_exportlog'  => 'exports',
         'local_catquizlab_transfer'   => 'transfers',
+    ];
+
+    /** @var array<string, string> The tables of a run's engine footprint, with the name each count goes by (#161). */
+    public const FOOTPRINT_LABELS = [
+        'course_modules'             => 'activities',
+        'adaptivequiz_attempt'       => 'hostattempts',
+        'question_usages'            => 'usages',
+        'local_catquiz_attempts'     => 'catattempts',
+        'local_catquiz_progress'     => 'progress',
+        'local_catquiz_personparams' => 'abilities',
+        'local_catquiz_trace'        => 'enginetraces',
+        'local_catquiz_tests'        => 'enginetests',
+        'local_catquiz_catcontext'   => 'contexts',
+        'local_catquiz_catscales'    => 'enginescales',
+        'local_catquiz_items'        => 'engineitems',
+        'local_catquiz_itemparams'   => 'itemparams',
+        'question'                   => 'questions',
     ];
 
     /**
@@ -135,7 +176,7 @@ class purger {
 
         if ($runids === []) {
             return ['ok' => true, 'name' => format_string($experiment->name), 'rawname' => (string) $experiment->name,
-                'counts' => $counts, 'blockers' => [], 'stopping' => []];
+                'counts' => $counts, 'blockers' => [], 'stopping' => [], 'kept' => [], 'atrisk' => 0, 'warnings' => []];
         }
 
         [$insql, $params] = $DB->get_in_or_equal($runids, SQL_PARAMS_NAMED, 'r');
@@ -157,19 +198,21 @@ class purger {
             }
         }
 
-        if ($deep) {
-            $counts['activities'] = $DB->count_records_select(
-                'local_catquizlab_run',
-                'id ' . $insql . ' AND testcmid > 0',
-                $params
-            );
-            if ($DB->get_manager()->table_exists('local_catquizlab_item')) {
-                $counts['questions'] = $DB->count_records_select(
-                    'local_catquizlab_item',
-                    'runid ' . $insql . ' AND questionid > 0',
-                    $params
-                );
+        // What of the engine, its activity and Moodle belongs to these runs alone (#161 AK1), from each run's footprint:
+        // deleted with a deep deletion, kept without. Rows of others that share an attempt number are named apart:
+        // they are not deleted, and are checked to be all there afterwards.
+        $engine = [];
+        $atrisk = 0;
+        foreach ($runids as $runid) {
+            $footprint = engine_footprint::of_run($runid);
+            foreach (self::FOOTPRINT_LABELS as $table => $label) {
+                $engine[$label] = ($engine[$label] ?? 0) + count($footprint['owned'][$table] ?? []);
             }
+            $atrisk += array_sum(array_map('count', $footprint['atrisk']));
+        }
+        $engine = array_filter($engine);
+        if ($deep) {
+            $counts += $engine;
         }
 
         // The log is the one thing deliberately not counted as a loss: it goes
@@ -184,7 +227,33 @@ class purger {
             'counts'   => array_filter($counts),
             'blockers' => $blockers,
             'stopping' => $stopping,
+            // Not a deep deletion: what stays in the engine, said as staying (#161 AK5).
+            'kept'     => $deep ? [] : $engine,
+            'atrisk'   => $deep ? $atrisk : 0,
+            'warnings' => $deep ? self::engine_warnings() : [],
         ];
+    }
+
+    /** @var int The first adaptivequizcatmodel_catquiz that deletes CAT progress by the CAT attempt (#161 AK7, its #11). */
+    public const CATMODEL_FIXED = 2026101701;
+
+    /**
+     * What a deep deletion should know about the installed engine before it starts (#161 AK7).
+     *
+     * An older adaptivequizcatmodel_catquiz deletes local_catquiz_progress by the activity's attempt numbers
+     * (adaptivequizcatmodel_catquiz #11): it leaves the run's own progress and takes others' with the same numbers. The
+     * lab does not repair that callback; its check after the deletion stops it and keeps the run.
+     *
+     * @return string[]
+     */
+    public static function engine_warnings(): array {
+        $installed = (int) (\core_plugin_manager::instance()->get_plugin_info('adaptivequizcatmodel_catquiz')->versiondb ?? 0);
+        if ($installed > 0 && $installed < self::CATMODEL_FIXED) {
+            return [get_string('purge:catmodelold', 'local_catquizlab', (object) ['installed' => $installed,
+                'fixed' => self::CATMODEL_FIXED])];
+        }
+
+        return [];
     }
 
     /**
@@ -270,11 +339,26 @@ class purger {
         $removed = [];
 
         if ($deep) {
+            // What the run has in the engine, its activity and Moodle, and the rows of others that share a number with
+            // it (#161): taken before anything goes, checked after. The run, its lab rows and its ids stay until the
+            // check passes — they are what a retry and the operator need to find what was left.
+            $before = engine_footprint::of_run($runid);
+            deletion_log::event((int) $run->experimentid, 'engine-before', ['runid' => $runid,
+                'owned' => engine_footprint::counts($before['owned']), 'atrisk' => engine_footprint::counts($before['atrisk'])]);
             $removed += self::delete_engine_objects($runid);
+            if (isset(self::$faults['afterengine'])) {
+                (self::$faults['afterengine'])($before);
+            }
             // The accounts and enrolments this run created. Deep deletion is the
             // one that promises to leave nothing, and leaving a hundred
             // simulated students in the user list is leaving something.
             $removed += self::delete_simulated_people($runid);
+            $check = engine_footprint::check($before);
+            deletion_log::event((int) $run->experimentid, 'engine-after', ['runid' => $runid, 'ok' => $check['ok'],
+                'left' => engine_footprint::counts($check['left']), 'lost' => engine_footprint::counts($check['lost'])]);
+            if (!$check['ok']) {
+                throw new purge_incomplete($runid, $check);
+            }
         }
 
         $removed += self::delete_lab_rows($runid);
@@ -373,6 +457,8 @@ class purger {
         }
         $DB->delete_records('local_catquizlab_experiment', ['id' => $experimentid]);
         $totals['experiment'] = 1;
+        deletion_log::event($experimentid, 'finished', ['deep' => $deep, 'runs' => count($runids), 'left' => $left,
+            'removed' => array_filter($totals)]);
 
         return ['ok' => true, 'removed' => array_filter($totals), 'reason' => '', 'stopped' => $stopped];
     }
@@ -658,34 +744,107 @@ class purger {
         if ($run && (int) $run->testcmid > 0) {
             $cm = get_coursemodule_from_id('adaptivequiz', (int) $run->testcmid, 0, false, IGNORE_MISSING);
             if ($cm) {
+                // The question usages of the activity's attempts: the run's own, read before the activity goes.
+                $usages = array_values(array_filter(array_map('intval', $DB->get_fieldset_select(
+                    'adaptivequiz_attempt',
+                    'uniqueid',
+                    'instance = ?',
+                    [(int) $cm->instance]
+                ))));
                 try {
-                    course_delete_module($cm->id);
+                    if (isset(self::$faults['activity'])) {
+                        (self::$faults['activity'])($cm);
+                    } else {
+                        core_compat::delete_module((int) $cm->id);
+                    }
                     $removed['activity'] = 1;
+                    // Moodle's question engine deletes a usage on MySQL and MariaDB only together with its question
+                    // attempts (question_engine_data_mapper::delete_usage_records_for_mysql(), an inner join): the
+                    // usage of an attempt that never got its first question stays. These are the run's own, of its
+                    // activity's attempts, and empty; they go here (#161, seen on the MariaDB mirror).
+                    $empty = [];
+                    foreach (array_chunk($usages, 500) as $chunk) {
+                        [$usql, $uparams] = $DB->get_in_or_equal($chunk, SQL_PARAMS_NAMED, 'qu');
+                        $empty = array_merge($empty, $DB->get_fieldset_select(
+                            'question_usages',
+                            'id',
+                            "id {$usql} AND NOT EXISTS (SELECT 1 FROM {question_attempts} qa WHERE qa.questionusageid = "
+                                . "{question_usages}.id)",
+                            $uparams
+                        ));
+                    }
+                    if ($empty !== []) {
+                        $DB->delete_records_list('question_usages', 'id', array_map('intval', $empty));
+                        $removed['usages'] = count($empty);
+                    }
                 } catch (\Throwable $e) {
-                    // Reported by its absence from the tally rather than by
-                    // failing the whole delete: the lab rows still have to go.
-                    $removed['activityfailed'] = 1;
+                    // Nothing else goes (#161 AK2): the questions, scales and lab rows are what leads to the activity's
+                    // attempts and to whatever its deletion left. Deleting them anyway counted an "adaptive quiz that
+                    // could not be deleted" and reported the rest deleted. The run stays as it is; a retry starts over.
+                    throw new purge_incomplete($runid, ['left' => ['course_modules' => [(int) $cm->id]], 'lost' => [],
+                        'ok' => false], $e->getMessage());
                 }
             }
         }
 
-        // The questions this run generated, through the lab's own item record.
+        // Engine items and their parameters, for the scales this run owns.
+        $dbman = $DB->get_manager();
+        $map = $DB->get_records('local_catquizlab_scalemap', ['runid' => $runid], '', 'id, catscaleid, contextid');
+        $scaleids = array_values(array_unique(array_filter(array_map(static fn($m): int => (int) $m->catscaleid, $map))));
+        $contextids = array_values(array_unique(array_filter(array_map(static fn($m): int => (int) $m->contextid, $map))));
+        if ($scaleids !== [] && $dbman->table_exists('local_catquiz_items')) {
+            [$insql, $params] = $DB->get_in_or_equal($scaleids, SQL_PARAMS_NAMED, 'sc');
+            // The items' parameters first (#161): deleting only the items left every parameter row behind, pointing at
+            // an item that no longer existed.
+            $items = engine_footprint::ids_in('local_catquiz_items', 'catscaleid', $scaleids);
+            if ($items !== [] && $dbman->table_exists('local_catquiz_itemparams')) {
+                foreach (array_chunk($items, 500) as $chunk) {
+                    [$itemsql, $itemparams] = $DB->get_in_or_equal($chunk, SQL_PARAMS_NAMED, 'it');
+                    $removed['itemparams'] = ($removed['itemparams'] ?? 0)
+                        + $DB->count_records_select('local_catquiz_itemparams', 'itemid ' . $itemsql, $itemparams);
+                    $DB->delete_records_select('local_catquiz_itemparams', 'itemid ' . $itemsql, $itemparams);
+                }
+            }
+            $removed['engineitems'] = $DB->count_records_select('local_catquiz_items', 'catscaleid ' . $insql, $params);
+            $DB->delete_records_select('local_catquiz_items', 'catscaleid ' . $insql, $params);
+
+            if ($dbman->table_exists('local_catquiz_catscales')) {
+                $DB->delete_records_select('local_catquiz_catscales', 'id ' . $insql, $params);
+                $removed['enginescales'] = count($scaleids);
+            }
+        }
+
+        // The questions this run generated, through the lab's own item record — after the engine's items and their
+        // parameters (#161): deleting a question makes the engine drop its item and leave the item's parameters.
         if ($DB->get_manager()->table_exists('local_catquizlab_item')) {
             $questionids = $DB->get_fieldset_select('local_catquizlab_item', 'questionid', 'runid = ?', [$runid]);
             $removed['questions'] = self::delete_questions(array_filter(array_map('intval', $questionids)));
         }
 
-        // Engine items and their parameters, for the scales this run owns.
-        $scaleids = $DB->get_fieldset_select('local_catquizlab_scalemap', 'catscaleid', 'runid = ?', [$runid]);
-        $scaleids = array_values(array_filter(array_map('intval', $scaleids)));
-        if ($scaleids !== [] && $DB->get_manager()->table_exists('local_catquiz_items')) {
-            [$insql, $params] = $DB->get_in_or_equal($scaleids, SQL_PARAMS_NAMED, 'sc');
-            $removed['engineitems'] = $DB->count_records_select('local_catquiz_items', 'catscaleid ' . $insql, $params);
-            $DB->delete_records_select('local_catquiz_items', 'catscaleid ' . $insql, $params);
+        // The abilities the engine still holds for the run's own simulated accounts (#161): the activity's deletion
+        // takes those of its attempts; any others of these accounts are the lab's alone. Found by account, never by an
+        // attempt number.
+        $users = engine_footprint::users($runid);
+        if ($users !== [] && $dbman->table_exists('local_catquiz_personparams')) {
+            $ids = engine_footprint::ids_in('local_catquiz_personparams', 'userid', $users);
+            foreach (array_chunk($ids, 500) as $chunk) {
+                $DB->delete_records_list('local_catquiz_personparams', 'id', $chunk);
+            }
+            if ($ids !== []) {
+                $removed['abilities'] = count($ids);
+            }
+        }
 
-            if ($DB->get_manager()->table_exists('local_catquiz_catscales')) {
-                $DB->delete_records_select('local_catquiz_catscales', 'id ' . $insql, $params);
-                $removed['enginescales'] = count($scaleids);
+        // The run's engine contexts, once no scale is left in them (#161): a reset or a deep deletion left them.
+        if ($contextids !== [] && $dbman->table_exists('local_catquiz_catcontext')) {
+            foreach ($contextids as $contextid) {
+                if (
+                    !$DB->record_exists('local_catquiz_catscales', ['contextid' => $contextid])
+                        && $DB->record_exists('local_catquiz_catcontext', ['id' => $contextid])
+                ) {
+                    $DB->delete_records('local_catquiz_catcontext', ['id' => $contextid]);
+                    $removed['contexts'] = ($removed['contexts'] ?? 0) + 1;
+                }
             }
         }
 

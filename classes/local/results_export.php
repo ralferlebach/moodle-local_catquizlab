@@ -178,6 +178,17 @@ class results_export {
         'esttheta', 'se', 'ti_played', 'ti_at_n', 'ti_remaining_min', 'ti_remaining_max', 'scales_estimated',
         // After the step, from the engine's record of every change (#106): empty where it kept none.
         'scales_active', 'scales_locked', 'scales_dropped',
+        // The pairing keys (#155 AK5): the same twin and the same canonical item in every strategy cell of a
+        // replication, and the RNG schema the answer was drawn under (1: per run; 2: common per twin and item).
+        'replication', 'twinid', 'itemkey', 'rngschema',
+        // How the answer was drawn, for runs under RNG schema 2 (#155 AK5), empty for runs before: the seed, the
+        // common random number u from it, the true ability the item asked for, the true category probabilities
+        // ("p0;p1;…"), the category drawn and its score fraction. Dichotomous: correct when u < p1; polytomous:
+        // the smallest k with u < p0 + … + pk. score is what the engine recorded; oraclefraction what was drawn.
+        'rngseed', 'uniform', 'trueability', 'trueprobs', 'responsecategory', 'oraclefraction',
+        // The engine's record of the answer (#156 AK4), empty where it kept none: the question's slot in the
+        // sitting, when the answer was stored (Unix time), the question state after it, and what was answered.
+        'slot', 'steptime', 'responsestate', 'responsesummary',
     ];
 
     /**
@@ -383,8 +394,29 @@ class results_export {
         'terminalreasoncode', 'transportevents', 'recoveredevents', 'executions',
     ];
 
+    /** @var string[] One row per subscale of a sitting. */
+    public const SUBSCALE_COLUMNS = [
+        'attemptid', 'runid', 'personid', 'twinid', 'strategy', 'variant',
+        'stratum', 'severity', 'category', 'subscale',
+        'truetheta', 'esttheta', 'truedelta', 'estdelta', 'error',
+        'localse', 'items', 'within1se', 'within2se',
+        // Validity per scale (#112): by the engine's definitions, why not,
+        // and the engine's own verdict.
+        'fraction', 'scalevalid', 'scalereasons', 'enginescalevalid',
+        // The column 'items' is what was administered on the scale, from the
+        // sitting's own steps (#113): empty where that is not known, 0 only where it
+        // is certain. Where it is from, why it is not known, its diagnostic
+        // class, and the engine's count of answered items beside it.
+        'itemssource', 'itemsreason', 'itemclass', 'itemsanswered',
+        // In the figures or not (#115): a valid scale result of a valid sitting.
+        'valid',
+    ];
+
     /** @var array<int, array> Ability distribution and range by run, for this request. */
     protected static array $abilities = [];
+
+    /** @var array<int, array> The run in hand: replication, RNG schema, its items' keys and ground truth by question. */
+    protected static array $pairing = [];
 
     /**
      * TI@n at the end of a sitting, from the engine; null where its pool is not there.
@@ -430,6 +462,8 @@ class results_export {
     public static function reset_caches(): void {
         self::$abilities = [];
         self::$finalpools = [];
+        self::$pairing = [];
+        test_flow::reset_caches();
     }
 
     /**
@@ -479,7 +513,12 @@ class results_export {
                     results_query::run_maxitems((int) $observation['runid'])
                 );
             }
+            $pairing = self::run_pairing((int) $observation['runid']);
+            $person = (object) ['id' => (int) ($observation['personid'] ?? 0),
+                'twinid' => (string) ($observation['twinid'] ?? '')];
             foreach ($flow['steps'] as $step) {
+                $questionid = (int) $step['questionid'];
+                $drawn = self::drawn($pairing, $person, (array) ($detail['profile'] ?? []), $questionid);
                 yield [
                     'attemptid'        => (int) $observation['attemptid'],
                     'runid'            => (int) $observation['runid'],
@@ -500,9 +539,86 @@ class results_export {
                     'scales_active'    => $step['activescales'] ?? null,
                     'scales_locked'    => $step['lockedscales'] ?? null,
                     'scales_dropped'   => $step['droppedscales'] ?? null,
+                    'replication'      => $pairing['replication'],
+                    'twinid'           => (string) ($observation['twinid'] ?? ''),
+                    'itemkey'          => (string) ($pairing['items'][$questionid]['itemkey'] ?? ''),
+                    'rngschema'        => $pairing['rngschema'],
+                ] + $drawn + [
+                    'slot'             => $step['slot'] ?? null,
+                    'steptime'         => $step['time'] ?? null,
+                    'responsestate'    => $step['state'] ?? null,
+                    'responsesummary'  => $step['responsesummary'] ?? null,
                 ];
             }
         }
+    }
+
+    /**
+     * The run in hand's replication, RNG schema, item keys and, under schema 2, its items' ground truth.
+     *
+     * One run at a time: the observations come run by run, and every run's pool held at once would grow with the
+     * experiment.
+     *
+     * @param int $runid The run.
+     * @return array{replication: int, rngschema: int, items: array, run: ?\stdClass, truth: array<int, \stdClass>}
+     */
+    protected static function run_pairing(int $runid): array {
+        global $DB;
+
+        if (!isset(self::$pairing[$runid])) {
+            $run = $DB->get_record('local_catquizlab_run', ['id' => $runid], 'id, masterseed, replication, manifestjson');
+            $schema = $run ? seed_domains::rng_schema(json_decode((string) $run->manifestjson, true) ?: []) : 1;
+            $truth = [];
+            if ($schema >= 2) {
+                $rows = $DB->get_recordset('local_catquizlab_item', ['runid' => $runid], '', 'id, questionid, itemkey, '
+                    . 'model, truedifficulty, discrimination, guessing, stepsjson, truecategory, truesubscale');
+                foreach ($rows as $row) {
+                    $truth[(int) $row->questionid] = $row;
+                }
+                $rows->close();
+            }
+            self::$pairing = [$runid => [
+                'replication' => $run ? (int) $run->replication : 0,
+                'rngschema' => $schema,
+                'items' => item_identity::for_runs([$runid])[$runid] ?? [],
+                'run' => $run ?: null,
+                'truth' => $truth,
+            ]];
+        }
+
+        return self::$pairing[$runid];
+    }
+
+    /**
+     * How a step's answer was drawn (#155 AK5), recomputed by the function that drew it: only under RNG schema 2 and
+     * for items with their ground truth. Runs from before keep empty cells — their answers are not reconstructed.
+     *
+     * @param array $pairing From run_pairing().
+     * @param \stdClass $person The person (id, twinid).
+     * @param array $profile The person's profile.
+     * @param int $questionid The question.
+     * @return array rngseed, uniform, trueability, trueprobs, responsecategory, oraclefraction.
+     */
+    protected static function drawn(array $pairing, \stdClass $person, array $profile, int $questionid): array {
+        $truth = $pairing['truth'][$questionid] ?? null;
+        // Lab items always know their true category; without it the oracle would look the scale up, a query a step.
+        if (
+            $pairing['rngschema'] < 2 || $truth === null || $pairing['run'] === null || (string) $truth->itemkey === ''
+                || (int) $truth->truecategory <= 0 || $person->twinid === '' || $profile === []
+        ) {
+            return ['rngseed' => '', 'uniform' => '', 'trueability' => '', 'trueprobs' => '', 'responsecategory' => '',
+                'oraclefraction' => ''];
+        }
+        $draw = twin_response::draw($pairing['run'], $person, $profile, $truth, [], $questionid);
+
+        return [
+            'rngseed' => $draw['seed'],
+            'uniform' => round($draw['uniform'], 9),
+            'trueability' => round($draw['ability'], 6),
+            'trueprobs' => implode(';', array_map(static fn(float $p): string => sprintf('%.6f', $p), $draw['probabilities'])),
+            'responsecategory' => $draw['category'],
+            'oraclefraction' => $draw['fraction'],
+        ];
     }
 
     /**
@@ -660,22 +776,7 @@ class results_export {
      * @return array{columns: string[], rows: array[]}
      */
     protected static function subscales(results_query $query, bool $stream = false): array {
-        $columns = [
-            'attemptid', 'runid', 'personid', 'twinid', 'strategy', 'variant',
-            'stratum', 'severity', 'category', 'subscale',
-            'truetheta', 'esttheta', 'truedelta', 'estdelta', 'error',
-            'localse', 'items', 'within1se', 'within2se',
-            // Validity per scale (#112): by the engine's definitions, why not,
-            // and the engine's own verdict.
-            'fraction', 'scalevalid', 'scalereasons', 'enginescalevalid',
-            // The column 'items' is what was administered on the scale, from the
-            // sitting's own steps (#113): empty where that is not known, 0 only where it
-            // is certain. Where it is from, why it is not known, its diagnostic
-            // class, and the engine's count of answered items beside it.
-            'itemssource', 'itemsreason', 'itemclass', 'itemsanswered',
-            // In the figures or not (#115): a valid scale result of a valid sitting.
-            'valid',
-        ];
+        $columns = self::SUBSCALE_COLUMNS;
 
         // The rows of the analysis itself, by its rule (#115): a valid scale
         // result of a valid sitting, unless the invalid ones or all are asked

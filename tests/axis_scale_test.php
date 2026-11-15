@@ -149,7 +149,8 @@ final class axis_scale_test extends \advanced_testcase {
 
         $this->assertStringContainsString('data-region="trajectory"', $svg);
         $this->assertStringContainsString('data-region="band"', $svg);
-        $this->assertStringContainsString('<title>step 2</title>', $svg);
+        // The step's own label, with where it is (#143 AK4).
+        $this->assertStringContainsString('<title>One point at (2; -0.1) — step 2</title>', $svg);
         $this->assertStringContainsString('Data: an experiment', $svg);
     }
 }

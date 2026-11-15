@@ -156,7 +156,10 @@ class robustness_analysis {
         $errors = [];
         $stopped = 0;
         foreach ($members as $member) {
-            $errors[] = (float) $member['error'];
+            // No estimate, no error (#156 AK7): never an error of minus the true ability.
+            if (isset($member['error']) && is_numeric($member['error'])) {
+                $errors[] = (float) $member['error'];
+            }
             $stopped += $member['stopreached'] ? 1 : 0;
         }
         $n = max(1, count($members));

@@ -39,6 +39,30 @@ class log_redactor {
     /** @var string What a secret value is replaced with. */
     public const REDACTED = '[redacted]';
 
+    /** @var string What the value of a parameter nobody listed is replaced with (#149 AK2). */
+    public const OMITTED = '[omitted]';
+
+    /**
+     * @var string[] Parameters whose values a request's URI keeps in a log, after normalising (see
+     * {@see normalise_name()}): what says which page, which object and which step — numbers, tabs, filters. Every
+     * other parameter keeps its name and loses its value (#149 AK2: unknown parameters are not logged). The same list
+     * is in worker/log_params.json for the worker's own logs; log_redactor_test checks that they agree.
+     */
+    public const ROUTING_NAMES = [
+        // Moodle and the activity the twins answer.
+        'id', 'cmid', 'courseid', 'contextid', 'attempt', 'attemptid', 'page', 'slot', 'slots', 'qid', 'questionid',
+        'uniqueid', 'thispage', 'nextpage', 'finishattempt', 'timeup', 'scrollpos', 'n', 'wsfunction', 'errorcode',
+        'lang', 'forceview', 'mode', 'section',
+        // The plugin's own pages.
+        'action', 'tab', 'experimentid', 'runid', 'personid', 'replication', 'tier', 'model', 'strategy', 'variant',
+        'stratum', 'severity', 'validity', 'validityrule', 'hours', 'from', 'to', 'level', 'lines', 'limit', 'offset',
+        'perpage', 'sort', 'dir', 'format', 'filter', 'profile', 'cellkey', 'state', 'status', 'kind', 'scope', 'view',
+        'xpage', 'step', 'stage', 'workerid', 'after', 'attemptno', 'channel', 'correlationid', 'deep', 'download',
+        'downloadjson', 'engineinfo', 'force', 'fromexperiment', 'groupby', 'logaction', 'metric', 'newestfirst',
+        'rawpage', 'show', 'tail', 'taskid', 'classname', 'cmpattempts', 'cmpgroup', 'cmplayout', 'cmpmetric',
+        'cmpscale', 'cmptemplate', 'cmptwin',
+    ];
+
     /** @var string[] Parameter names that are secret as they stand, after normalising (see {@see normalise_name()}). */
     protected const SECRET_NAMES = [
         'key', 'apikey', 'privatekey', 'secretkey', 'accesskey', 'enrolkey', 'enrolmentkey', 'wskey',
@@ -118,11 +142,24 @@ class log_redactor {
     }
 
     /**
-     * A URI without the values of its secret parameters and without its fragment.
+     * Whether a parameter's value may stand in a logged URI: its name is a routing name (#149 AK2).
+     *
+     * @param string $name The name as it was sent.
+     * @return bool
+     */
+    public static function is_routing_name(string $name): bool {
+        return in_array(self::normalise_name($name), self::ROUTING_NAMES, true);
+    }
+
+    /**
+     * A URI with only the values a diagnosis needs, without its fragment.
      *
      * Every pair of the query is looked at, by its decoded name: encoded names, repeated names and array names
-     * are caught as well as the plain ones. A token in the path itself (tokenpluginfile.php, webservice/pluginfile.php)
-     * goes too. Control characters are removed and the result is at most $max bytes long.
+     * are caught as well as the plain ones. A secret parameter's value becomes [redacted]; the value of any parameter
+     * that is not a routing name becomes [omitted] (#149 AK2: unknown parameters are not logged); a routing
+     * parameter whose value is an e-mail address loses it too. A token in the path itself (tokenpluginfile.php,
+     * webservice/pluginfile.php) goes as well. Control characters are removed and the result is at most $max bytes
+     * long.
      *
      * @param string $uri The URI.
      * @param int $max The longest result, in bytes.
@@ -155,11 +192,32 @@ class log_redactor {
             $value = $eq === false ? null : substr($pair, $eq + 1);
             if ($value !== null && (self::is_secret_name($name) || self::looks_like_email($value))) {
                 $value = self::REDACTED;
+            } else if ($value !== null && $value !== '' && !self::is_routing_name($name)) {
+                $value = self::OMITTED;
             }
             $pairs[] = $value === null ? $name : $name . '=' . $value;
         }
 
-        return self::cut($path . '?' . implode('&', $pairs), $max);
+        // Too long: whole pairs are dropped from the end, never one cut in two — "[redac~cut" would read as a value
+        // that escaped redaction, and half a value as a value.
+        $whole = $path . '?' . implode('&', $pairs);
+        if (strlen($whole) <= $max) {
+            return $whole;
+        }
+        $kept = $path . '?';
+        $room = $max - 16;
+        foreach ($pairs as $i => $pair) {
+            $next = $kept . ($i > 0 ? '&' : '') . $pair;
+            if (strlen($next) > $room) {
+                break;
+            }
+            $kept = $next;
+        }
+        if (strlen($kept) > $room) {
+            return self::cut($whole, $max);
+        }
+
+        return $kept . '&~cut' . (strlen($whole) - strlen($kept));
     }
 
     /**

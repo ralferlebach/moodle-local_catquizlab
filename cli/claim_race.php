@@ -43,6 +43,8 @@ require_once($CFG->libdir . '/clilib.php');
 [$options] = cli_get_params([
     'runid' => 0, 'processes' => 8, 'claims' => 25,
     'child' => false, 'workerid' => '', 'start' => 0,
+    // How often a claim that found the queue held is asked again, as a worker does, before it counts as not served.
+    'retries' => 100,
 ]);
 
 \core\session\manager::set_user(get_admin());
@@ -53,9 +55,20 @@ if (!empty($options['child'])) {
         usleep(1000);
     }
     for ($i = 0; $i < (int) $options['claims']; $i++) {
-        $claim = \local_catquizlab\external\job_claim::execute((string) $options['workerid']);
+        // Asked again while the queue is held by another claim — as a worker does, but a bounded number of times:
+        // a claim still not served after that is reported, never waited for without end (#133 re-audit).
+        $tries = 0;
+        do {
+            $claim = \local_catquizlab\external\job_claim::execute((string) $options['workerid']);
+            $busy = empty($claim['hasjob']) && !empty($claim['retry']);
+            if ($busy) {
+                usleep(20000);
+            }
+        } while ($busy && ++$tries <= (int) $options['retries']);
         if (!empty($claim['hasjob'])) {
             echo (int) $claim['attemptid'], "\n";
+        } else {
+            echo 'none:', $busy ? 'busy' : (!empty($claim['nextdue']) ? 'notdue' : 'empty'), "\n";
         }
     }
     exit(0);
@@ -74,7 +87,8 @@ $queued = $DB->count_records('local_catquizlab_attempt', [
 $start = microtime(true) + 2.0;
 $children = [];
 for ($p = 1; $p <= $processes; $p++) {
-    $command = [PHP_BINARY, __FILE__, '--child', '--workerid=claimrace-' . $p, '--claims=' . $claims, '--start=' . $start];
+    $command = [PHP_BINARY, __FILE__, '--child', '--workerid=claimrace-' . $p, '--claims=' . $claims, '--start=' . $start,
+        '--retries=' . (int) $options['retries']];
     $handle = proc_open($command, [1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes);
     if (!is_resource($handle)) {
         cli_error('Could not start claimer ' . $p);
@@ -82,10 +96,16 @@ for ($p = 1; $p <= $processes; $p++) {
     $children[] = [$handle, $pipes];
 }
 $handedout = [];
+$unserved = [];
 $errors = [];
 foreach ($children as [$handle, $pipes]) {
-    foreach (preg_split('/\R/', (string) stream_get_contents($pipes[1]), -1, PREG_SPLIT_NO_EMPTY) as $id) {
-        $handedout[] = (int) $id;
+    foreach (preg_split('/\R/', (string) stream_get_contents($pipes[1]), -1, PREG_SPLIT_NO_EMPTY) as $line) {
+        if (str_starts_with($line, 'none:')) {
+            $reason = substr($line, 5);
+            $unserved[$reason] = ($unserved[$reason] ?? 0) + 1;
+        } else {
+            $handedout[] = (int) $line;
+        }
     }
     $error = trim((string) stream_get_contents($pipes[2]));
     if ($error !== '') {
@@ -97,19 +117,40 @@ foreach ($children as [$handle, $pipes]) {
 }
 
 $counts = array_count_values($handedout);
+// Which runs the sittings came from: the claim takes the site's oldest due sitting, so on a site with other queued work
+// some may be another run's.
+$fromrun = $handedout === [] ? 0 : $DB->count_records_select(
+    'local_catquizlab_attempt',
+    'runid = :runid AND id IN (' . implode(',', array_map('intval', array_unique($handedout))) . ')',
+    ['runid' => $runid]
+);
 $twice = array_filter($counts, static fn(int $n): bool => $n > 1);
 // What the claimers took is not for a real worker to play.
 \local_catquizlab\local\attempt_scheduler::abort($runid);
 
+// Every claim must be served while sittings are queued: as many of this run's sittings handed out as asked for, up to
+// what it had queued; a claim not served must have found the queue empty or not due, never held to the end of its
+// retries. A run where most claims found the queue held and gave up is not a pass because the few it got were distinct
+// (#133 re-audit, 18.10.2026).
+$expected = min($queued, $processes * $claims);
 cli_writeln(sprintf(
-    'Run %d: %d queued; %d claimers × %d claims at once: %d handed out, %d distinct, %d handed out more than once.',
+    'Run %d: %d queued; %d claimers × %d claims at once: %d handed out (%d of this run, %d expected), %d distinct, '
+        . '%d handed out more than once, %d not served (%s).',
     $runid,
     $queued,
     $processes,
     $claims,
     count($handedout),
+    $fromrun,
+    $expected,
     count($counts),
-    count($twice)
+    count($twice),
+    array_sum($unserved),
+    $unserved === [] ? 'none' : implode(', ', array_map(
+        static fn($r, $n) => $r . ' ' . $n,
+        array_keys($unserved),
+        $unserved
+    ))
 ));
 foreach (array_slice($twice, 0, 10, true) as $id => $n) {
     cli_writeln(sprintf('  sitting %d handed out %d times', $id, $n));
@@ -121,5 +162,20 @@ if ($handedout === []) {
     cli_writeln('FAIL: nothing was handed out, so nothing was tested.');
     exit(1);
 }
-cli_writeln($twice === [] && $errors === [] ? 'PASS' : 'FAIL');
-exit($twice === [] && $errors === [] ? 0 : 1);
+$busy = (int) ($unserved['busy'] ?? 0);
+$pass = $twice === [] && $errors === [] && $busy === 0 && $fromrun >= $expected
+    && count($handedout) + array_sum($unserved) === $processes * $claims;
+if ($fromrun < $expected) {
+    cli_writeln(sprintf(
+        '  %d claim(s) short: %d of this run\'s %d queued sittings handed out, %d expected.',
+        $expected - $fromrun,
+        $fromrun,
+        $queued,
+        $expected
+    ));
+}
+if ($busy > 0) {
+    cli_writeln(sprintf('  %d claim(s) found the queue held through %d retries.', $busy, (int) $options['retries']));
+}
+cli_writeln($pass ? 'PASS' : 'FAIL');
+exit($pass ? 0 : 1);

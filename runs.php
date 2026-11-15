@@ -178,17 +178,33 @@ if ($action === 'startexperiment') {
     require_capability('local/catquizlab:execute', $context);
 
     $target = required_param('experimentid', PARAM_INT);
-    $queued = \local_catquizlab\local\execution_queue::enqueue($target);
+    // The one start (#151): accepted and put in the line, nothing more in this request. Preparing, workers,
+    // sittings, traces and results follow by themselves; this page says how far they are.
+    $started = \local_catquizlab\local\experiment_runner::start($target);
 
     $back = new moodle_url('/local/catquizlab/runs.php', ['experimentid' => $target]);
+    if ($started['ok']) {
+        $message = get_string('runner:accepted', $component, $started['position']);
+        if ($started['warning'] !== '') {
+            $message .= ' ' . get_string('runner:acceptedwaiting', $component, s($started['warning']));
+        }
+    } else if ($started['reason'] === 'being-deleted') {
+        $message = get_string('runner:beingdeleted', $component);
+    } else if ($started['reason'] === 'invalid-definition') {
+        $message = get_string('runner:invaliddefinition', $component, s($started['detail']));
+    } else {
+        $message = get_string('runner:notstartable', $component, get_string(
+            'runner:state' . (strpos($started['reason'], 'not-startable-') === 0
+                ? substr($started['reason'], strlen('not-startable-')) : 'blocked'),
+            $component
+        ));
+    }
 
     redirect(
         $back,
-        $queued['ok']
-            ? get_string('runner:queuedat', $component, $queued['position'])
-            : get_string($queued['reason'] === 'being-deleted' ? 'runner:beingdeleted' : 'runner:notready', $component),
+        $message,
         null,
-        $queued['ok']
+        $started['ok'] && $started['warning'] === ''
             ? \core\output\notification::NOTIFY_SUCCESS
             : \core\output\notification::NOTIFY_WARNING
     );

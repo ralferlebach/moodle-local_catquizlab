@@ -130,6 +130,13 @@ class reproducibility {
         $definition = json_decode((string) $experiment->configjson, true) ?: [];
 
         $runs = [];
+        $pools = $DB->get_records_sql_menu(
+            'SELECT p.runid, p.fingerprint
+               FROM {local_catquizlab_pool} p
+               JOIN {local_catquizlab_run} r ON r.id = p.runid
+              WHERE r.experimentid = :experimentid',
+            ['experimentid' => $experimentid]
+        );
         foreach ($DB->get_records('local_catquizlab_run', ['experimentid' => $experimentid], 'id ASC') as $run) {
             $manifest = json_decode((string) $run->manifestjson, true) ?: [];
 
@@ -145,6 +152,15 @@ class reproducibility {
                 'manifest'    => $manifest,
                 // The experiment's name when this run was made (#152): the current one is the experiment's, above.
                 'experimentnameatrun' => (string) ($manifest['config']['definition']['name'] ?? ''),
+                // The realised pool (#154): its fingerprint over every item key and item fingerprint; null for a pool
+                // materialised before 0.7.61 or not yet.
+                'itempool'    => ['schema' => ($pools[(int) $run->id] ?? null) !== null ? item_identity::SCHEMA : 0,
+                    'fingerprint' => $pools[(int) $run->id] ?? null],
+                // How its answers were drawn (#155): schema 2 from replication, twin and item; 1 per run.
+                'rng'         => ['schema' => seed_domains::rng_schema($manifest),
+                    'responsedomain' => seed_domains::rng_schema($manifest) >= 2
+                        ? seed_domains::DOMAIN_RESPONSE_CRN : seed_domains::DOMAIN_RESPONSE,
+                    'seedfingerprint' => $manifest['config']['seeds'][seed_domains::DOMAIN_RESPONSE_CRN]['seed'] ?? null],
             ];
 
             // What the engine was given, not only what was asked for (#121):
@@ -181,6 +197,8 @@ class reproducibility {
             'versions'    => self::versions(),
             'moodle'      => ['release' => $CFG->release, 'version' => $CFG->version],
             'runs'        => $runs,
+            // Which runs share their item pool and whether they really do; what the variants change (#154).
+            'itemidentity' => item_identity::compare($experimentid),
             'completeness' => self::completeness($experimentid),
             // Which sittings a figure from this experiment stands on (#115): the selection, the rule that
             // decided validity, which sittings were shown, and the counting chain behind them.

@@ -237,6 +237,26 @@ class response_oracle {
      *         chosen polytomous category (or -1 for dichotomous items).
      */
     public static function respond_item(float $ability, array $item, int $seed): array {
+        $explained = self::explain_item($ability, $item, $seed);
+
+        return ['fraction' => $explained['fraction'], 'choice' => $explained['choice']];
+    }
+
+    /**
+     * The answer to a presented item and everything it was drawn from (#155 AK5).
+     *
+     * The same draw as {@see self::respond_item()}, with what makes it checkable by somebody else: the common random
+     * number u in [0, 1), the true category probabilities and the category drawn. The rule, by family:
+     * dichotomous — correct (category 1) when u < P(1), probabilities listed as [P(0), P(1)];
+     * polytomous — the smallest category k with u < p0 + … + pk.
+     *
+     * @param float $ability The person's ability on the item's scale.
+     * @param array $item The item parameters, as for respond_item().
+     * @param int $seed Deterministic seed for this presentation.
+     * @return array{fraction: float, choice: int, category: int, probabilities: float[], uniform: float,
+     *     polytomous: bool}
+     */
+    public static function explain_item(float $ability, array $item, int $seed): array {
         $steps = array_values(array_map('floatval', $item['steps'] ?? []));
         $discrimination = (float) ($item['discrimination'] ?? 1.0);
 
@@ -256,17 +276,31 @@ class response_oracle {
             $category = self::respond_polytomous($ability, $model, $discrimination, $steps, $seed);
             $maxcategory = count($steps);
             $fraction = $maxcategory > 0 ? $category / $maxcategory : 0.0;
-            return ['fraction' => round($fraction, 6), 'choice' => $category];
+            return ['fraction' => round($fraction, 6), 'choice' => $category, 'category' => $category,
+                'probabilities' => array_values($model === 'grm'
+                    ? self::grm_probabilities($ability, $discrimination, $steps)
+                    : self::gpcm_probabilities($ability, $discrimination, $steps)),
+                'uniform' => self::uniform($seed), 'polytomous' => true];
         }
 
-        $correct = self::respond(
-            $ability,
-            (float) ($item['difficulty'] ?? 0.0),
-            $seed,
-            $discrimination,
-            (float) ($item['guessing'] ?? 0.0)
-        );
-        return ['fraction' => $correct ? 1.0 : 0.0, 'choice' => -1];
+        $difficulty = (float) ($item['difficulty'] ?? 0.0);
+        $guessing = (float) ($item['guessing'] ?? 0.0);
+        $correct = self::respond($ability, $difficulty, $seed, $discrimination, $guessing);
+        $p = self::probability($ability, $difficulty, $discrimination, $guessing);
+        return ['fraction' => $correct ? 1.0 : 0.0, 'choice' => -1, 'category' => $correct ? 1 : 0,
+            'probabilities' => [1.0 - $p, $p], 'uniform' => self::uniform($seed), 'polytomous' => false];
+    }
+
+    /**
+     * The uniform random number a seed gives, as respond() and respond_polytomous() draw it.
+     *
+     * @param int $seed The seed.
+     * @return float In [0, 1).
+     */
+    public static function uniform(int $seed): float {
+        mt_srand($seed);
+
+        return mt_rand() / (mt_getrandmax() + 1.0);
     }
 
     /**

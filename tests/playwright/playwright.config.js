@@ -18,8 +18,16 @@
  * still does what it is supposed to — and a recording that only exists after a
  * failure cannot answer that.
  */
+// The deep deletion of the experiment the run played (#161 DoD2, deep_delete.spec.js) runs on its own, after every
+// other spec, with CATQUIZLAB_DEEP_DELETE=<experiment id>: only that spec then, into folders of its own, so that the
+// recordings and the report of the main run stay as they are.
+const DEEP = Boolean(process.env.CATQUIZLAB_DEEP_DELETE);
+const REPORT = DEEP ? 'report-deep-delete' : 'report';
+
 module.exports = {
     testDir: '.',
+    testMatch: DEEP ? 'deep_delete.spec.js' : '**/*.spec.js',
+    testIgnore: DEEP ? [] : ['deep_delete.spec.js'],
     // An experiment takes minutes: it provisions a course, questions and
     // people, then plays five sittings through a real browser.
     timeout: 30 * 60 * 1000,
@@ -30,8 +38,8 @@ module.exports = {
     retries: 0,
     reporter: [
         ['list'],
-        ['html', {outputFolder: 'report', open: 'never'}],
-        ['json', {outputFile: 'report/results.json'}],
+        ['html', {outputFolder: REPORT, open: 'never'}],
+        ['json', {outputFile: REPORT + '/results.json'}],
     ],
     use: {
         baseURL: process.env.MOODLE_URL || 'http://127.0.0.1:8000',
@@ -45,5 +53,5 @@ module.exports = {
         navigationTimeout: 120 * 1000,
         viewport: {width: 1440, height: 900},
     },
-    outputDir: 'artifacts',
+    outputDir: DEEP ? 'artifacts-deep-delete' : 'artifacts',
 };

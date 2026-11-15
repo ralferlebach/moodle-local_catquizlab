@@ -35,13 +35,40 @@ namespace local_catquizlab\local;
  * Detects whether the CAT engine plugins are installed on this site.
  */
 class environment {
+    /** @var string[] Components the tests say are not installed, though they are (#140): set only by tests. */
+    protected static array $absent = [];
+
+    /**
+     * Tests: behave as if these components were not installed, so that the guards against a missing engine are run
+     * where the engine is installed (as in CI) instead of being skipped (#140). Never called by the plugin itself.
+     *
+     * @param string[] $components Frankenstyle names, e.g. local_catquiz, mod_adaptivequiz.
+     * @return void
+     */
+    public static function simulate_absent(array $components): void {
+        if (!(defined('PHPUNIT_TEST') && PHPUNIT_TEST) && !(defined('BEHAT_SITE_RUNNING') && BEHAT_SITE_RUNNING)) {
+            throw new \coding_exception('environment::simulate_absent() is for tests only.');
+        }
+        self::$absent = array_values($components);
+    }
+
+    /**
+     * Tests: the components as installed again.
+     *
+     * @return void
+     */
+    public static function reset(): void {
+        self::$absent = [];
+    }
+
     /**
      * Is the CAT engine (local_catquiz) present on disk?
      *
      * @return bool
      */
     public static function catquiz_available(): bool {
-        return \core_component::get_component_directory('local_catquiz') !== null;
+        return !in_array('local_catquiz', self::$absent, true)
+            && \core_component::get_component_directory('local_catquiz') !== null;
     }
 
     /**
@@ -50,7 +77,8 @@ class environment {
      * @return bool
      */
     public static function adaptivequiz_available(): bool {
-        return \core_component::get_component_directory('mod_adaptivequiz') !== null;
+        return !in_array('mod_adaptivequiz', self::$absent, true)
+            && \core_component::get_component_directory('mod_adaptivequiz') !== null;
     }
 
     /**

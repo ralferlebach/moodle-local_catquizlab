@@ -67,6 +67,7 @@ use local_catquizlab\local\worker_registry;
     'strategies' => '',
     'eta-probe' => '',
     'watch-page' => '',
+    'pairs' => '',
 ], ['h' => 'help']);
 
 if ($options['help']) {
@@ -85,6 +86,10 @@ Options:
   --watch-page=FILE    With --eta-probe: a browser signed in as a temporary manager reads the progress page every
                        5 s while the run is played (header and run rows, as its poll left them, every sixth time
                        freshly loaded) into FILE; each reading is checked against the snapshots (#141 DoD 2).
+  --pairs=FILE         With several strategies: every played step from the step export, with its draw (seed, common
+                       random number, true probabilities, category), as CSV in FILE. Fails when a twin answers the
+                       same item differently in two runs, an answer was recorded otherwise than drawn, no item was
+                       shared, or a run is not under RNG schema 2 (#155).
   --keep               Leave the experiment behind for inspection.
   --budget=G1,G2,S1,S2,SE1,SE2
                        The run's budgets instead of the smoke defaults (#123):
@@ -855,6 +860,54 @@ if ($disagreements !== []) {
     cli_error('A sitting ends differently in different places (#123).');
 }
 
+// The same items in every strategy cell of a replication (#154 DoD4): on this real setup, its runs provisioned in
+// parallel by the workers, every pool keyed and every group of runs that must share a pool sharing it to the bit.
+$started = microtime(true);
+$identity = \local_catquizlab\local\item_identity::compare($experimentid);
+foreach ($identity['groups'] as $group) {
+    step(
+        'Item identity ' . $group['label'] . ': ' . count($group['runs']) . ' run(s), '
+        . implode('/', array_unique(array_column($group['runs'], 'items'))) . ' items, '
+        . ($group['identical'] ? 'identical, pool ' . substr((string) $group['fingerprint'], 0, 16) : 'NOT identical') . '.',
+        $started
+    );
+}
+foreach ($identity['problems'] as $line) {
+    cli_writeln('  IDENTITY: ' . $line);
+}
+if (!$identity['ok'] || $identity['legacy'] !== [] || $identity['groups'] === []) {
+    cli_error('The runs of this experiment do not have keyed, identical pools where they must (#154).');
+}
+
+// The same twin answers the same item alike in every strategy cell (#155): from the step export, as an analyst reads it.
+if ($strategies !== [] && count($strategies) > 1) {
+    $started = microtime(true);
+    $paired = smoke_paired_answers($experimentid, (string) $options['pairs']);
+    step('Paired answers: ' . $paired['steps'] . ' played step(s) in ' . $paired['runs'] . ' runs, '
+        . $paired['shared'] . ' item(s) presented to the same twin in two or more runs, '
+        . count($paired['disagree']) . ' answered differently, ' . count($paired['unfaithful'])
+        . ' recorded otherwise than drawn (RNG schema ' . implode(', ', $paired['schemas']) . ').', $started);
+    foreach (array_slice($paired['disagree'], 0, 20) as $line) {
+        cli_writeln('  DIFFERS: ' . $line);
+    }
+    foreach (array_slice($paired['unfaithful'], 0, 20) as $line) {
+        cli_writeln('  NOT AS DRAWN: ' . $line);
+    }
+    if ($paired['schemas'] !== [2]) {
+        cli_error('A run of this experiment was not drawn under RNG schema 2 (#155).');
+    }
+    if ($paired['shared'] === 0) {
+        // Nothing compared is no evidence: the strategies never presented one item to one twin twice.
+        cli_error('No item was presented to the same twin in two runs: nothing to compare (#155).');
+    }
+    if ($paired['disagree'] !== []) {
+        cli_error('A twin answered the same item differently in two strategy cells (#155).');
+    }
+    if ($paired['unfaithful'] !== []) {
+        cli_error('A played answer differs from the drawn one (#155).');
+    }
+}
+
 // Every forecast against the actual end of its run (#160 DoD04/DoD05).
 if ($probe !== null) {
     $report = $probe->finish($experimentid);
@@ -1147,6 +1200,78 @@ function smoke_release_own(array $held): void {
             [$id, attempt_scheduler::STATUS_QUEUED]
         );
     }
+}
+
+/**
+ * The same twin's answers to the same item across the runs of a replication, from the exported steps (#155 DoD3).
+ *
+ * Runs that differ only in their strategy present items in different orders and numbers, but where two of them
+ * present the same canonical item to the same twin, the answer must be the same: under RNG schema 2 it is drawn
+ * from replication, twin and item alone. Read from the step export, as an analyst would read it: the questions the
+ * engine really played, under their own ids per run, joined by twin and item key. Every played answer is also checked
+ * against the draw the export recomputes (seed, common random number, true probabilities): what the engine recorded
+ * is what the twin was told to answer, also where a response or a request was lost and recovered.
+ *
+ * @param int $experimentid The experiment.
+ * @param string $file Where to write the pairs as CSV, or '' for nowhere.
+ * @return array{shared: int, runs: int, steps: int, disagree: string[], unfaithful: string[], schemas: int[]}
+ */
+function smoke_paired_answers(int $experimentid, string $file): array {
+    $seen = [];
+    $schemas = [];
+    $runs = [];
+    $steps = 0;
+    $unfaithful = [];
+    $rows = \local_catquizlab\local\results_export::iterate(
+        new \local_catquizlab\local\results_query(['experimentid' => $experimentid, 'validity' => 'all']),
+        \local_catquizlab\local\results_export::LEVEL_STEP
+    )['rows'];
+    $columns = ['replication', 'twinid', 'itemkey', 'runid', 'strategy', 'attemptid', 'step', 'questionid', 'score',
+        'rngschema', 'rngseed', 'uniform', 'trueability', 'trueprobs', 'responsecategory', 'oraclefraction'];
+    $csv = $file !== '' ? fopen($file, 'w') : null;
+    if ($csv) {
+        fputcsv($csv, $columns);
+    }
+    foreach ($rows as $row) {
+        $schemas[(int) $row['rngschema']] = (int) $row['rngschema'];
+        if ((string) $row['itemkey'] === '' || (string) $row['twinid'] === '') {
+            continue;
+        }
+        $steps++;
+        $runs[(int) $row['runid']] = true;
+        $where = 'run ' . $row['runid'] . ' sitting ' . $row['attemptid'] . ' step ' . $row['step'] . ' ('
+            . $row['twinid'] . ' ' . $row['itemkey'] . ')';
+        if (
+            $row['score'] === null || $row['oraclefraction'] === '' || abs((float) $row['score']
+                - (float) $row['oraclefraction']) > 1e-6
+        ) {
+            $unfaithful[] = $where . ': recorded ' . json_encode($row['score']) . ', drawn '
+                . json_encode($row['oraclefraction']);
+        }
+        $seen[$row['replication'] . '|' . $row['twinid'] . '|' . $row['itemkey']][(int) $row['runid']] =
+            json_encode([$row['responsecategory'], $row['score'] === null ? null : round((float) $row['score'], 6)]);
+        if ($csv) {
+            fputcsv($csv, array_map(static fn(string $c) => $row[$c], $columns));
+        }
+    }
+    if ($csv) {
+        fclose($csv);
+    }
+    $shared = 0;
+    $disagree = [];
+    foreach ($seen as $key => $byrun) {
+        if (count($byrun) < 2) {
+            continue;
+        }
+        $shared++;
+        if (count(array_unique($byrun)) > 1) {
+            $disagree[] = $key . ': ' . json_encode($byrun);
+        }
+    }
+    ksort($schemas);
+
+    return ['shared' => $shared, 'runs' => count($runs), 'steps' => $steps, 'disagree' => $disagree,
+        'unfaithful' => $unfaithful, 'schemas' => array_values($schemas)];
 }
 
 /**

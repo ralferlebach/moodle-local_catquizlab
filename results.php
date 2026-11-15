@@ -116,9 +116,33 @@ if (optional_param('action', '', PARAM_ALPHA) === 'package') {
 
 $query = new results_query($filter);
 
+// The research data package (#156): by POST with the session key only, for whoever may export; streamed when it fits
+// a request, otherwise built in the background and kept on the export tab.
+$action = optional_param('action', '', PARAM_ALPHA);
+if (in_array($action, ['researchpackage', 'researchpackagelater'], true)) {
+    if (!data_submitted()) {
+        throw new moodle_exception('invalidrequest', 'error');
+    }
+    require_sesskey();
+    require_capability('local/catquizlab:export', $context);
+    if (empty($filter['experimentid'])) {
+        throw new moodle_exception('package:noexperiment', $component);
+    }
+    $exporturl = new moodle_url('/local/catquizlab/results.php', $filter + ['tab' => 'export']);
+    if ($action === 'researchpackagelater') {
+        \local_catquizlab\task\build_research_package::queue($filter, (int) $USER->id);
+        redirect($exporturl, get_string('package:queued', $component), null, \core\output\notification::NOTIFY_SUCCESS);
+    }
+    if (!\local_catquizlab\local\research_package::forecast($filter)['direct']) {
+        // Said, not cut off half way: a package larger than a request can carry is built in the background.
+        redirect($exporturl, get_string('package:toolarge', $component), null, \core\output\notification::NOTIFY_WARNING);
+    }
+    \local_catquizlab\local\research_package::send($filter);
+    die();
+}
+
 // Downloading takes exactly the filter that is on screen, so a reader cannot
 // look at one selection and receive another.
-$action = optional_param('action', '', PARAM_ALPHA);
 if (in_array($action, ['csv', 'json', 'meta'], true)) {
     require_capability('local/catquizlab:export', $context);
 

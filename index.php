@@ -150,7 +150,13 @@ foreach ($listed as $row) {
     if (in_array($state['phase'], ['complete', 'completefailures'], true)) {
         $main = ['label' => get_string('status:nextresults', $component),
             'url' => (new moodle_url('/local/catquizlab/results.php', ['experimentid' => $row['id']]))->out(false)];
-    } else if (in_array($state['phase'], ['collecting', 'starting', 'blocked', 'preparing', 'created', 'stopped'], true)) {
+    } else if (
+        in_array(
+            $state['phase'],
+            ['collecting', 'starting', 'blocked', 'preparing', 'created', 'stopped', 'queued'],
+            true
+        )
+    ) {
         $main = ['label' => get_string('status:nextprogress', $component),
             'url' => (new moodle_url('/local/catquizlab/runs.php', ['experimentid' => $row['id']]))->out(false)];
     } else {

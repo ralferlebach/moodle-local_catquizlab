@@ -118,6 +118,10 @@ jeden Fall aus `tests/fixtures/levels_parity.json` — dieselbe Datei prüft
 Barrierefreiheit (#126, #128, #130, #131): `tests/playwright/a11y.spec.js` prüft
 mit axe-core (WCAG 2.1 A/AA) den Hauptbereich jeder Seite des Plugins; schwere
 und kritische Befunde lassen den Test scheitern, die übrigen stehen im Bericht.
+Die Filterleiste der Ergebnisseite prüfen außerdem echte Screenreader — NVDA unter
+Windows, VoiceOver unter macOS — im Job `screen-reader` von `ui-e2e.yml`
+(`tests/screenreader/`, siehe `screenreader-ci.md`, #122 DoD 3). JAWS ist nicht
+automatisierbar und nicht abgedeckt.
 
 Selbst säende Browser-Tests (0.7.47) — sie rufen die Seed-Skripte selbst auf und
 werden übersprungen, wo `php` nicht läuft:

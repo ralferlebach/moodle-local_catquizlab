@@ -34,6 +34,16 @@ use local_catquizlab\local\environment;
  */
 final class item_repository_test extends \advanced_testcase {
     /**
+     * The components as installed again after a test that simulated their absence.
+     *
+     * @return void
+     */
+    protected function tearDown(): void {
+        \local_catquizlab\local\environment::reset();
+        parent::tearDown();
+    }
+
+    /**
      * Row shaping casts fields and applies Rasch defaults for missing columns.
      *
      * @return void
@@ -92,9 +102,8 @@ final class item_repository_test extends \advanced_testcase {
     public function test_reads_require_engine(): void {
         $this->resetAfterTest();
 
-        if (environment::engine_available()) {
-            $this->markTestSkipped('Engine present; the guard path is not exercised.');
-        }
+        // Where the engine is installed, as in CI, the guard runs against a simulated absence instead of being skipped (#140).
+        \local_catquizlab\local\environment::simulate_absent(['local_catquiz', 'mod_adaptivequiz']);
 
         $this->assertNull(item_repository::for_question(1, 100));
         $this->assertSame([], item_repository::for_scale(1, 5));

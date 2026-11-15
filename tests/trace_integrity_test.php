@@ -513,4 +513,84 @@ final class trace_integrity_test extends \advanced_testcase {
             ['id' => $second]
         ));
     }
+
+    /**
+     * Given up with its provenance, and its lookup can be opened again (#138 AK4): the lab sitting, the engine attempt
+     * and what the host holds of it, the worker's correlation id, what the trace lacked; reopened, it waits once more
+     * with the full number of looks and is collected when the trace comes — not played again.
+     *
+     * @return void
+     */
+    public function test_a_given_up_trace_says_where_it_is_and_can_be_looked_for_again(): void {
+        global $DB;
+        $this->resetAfterTest();
+        $this->setAdminUser();
+        [$attemptid, $engine, $runid] = $this->finished_without_data();
+        \local_catquizlab\local\debug_trace::continue_correlation('wkr-correlation-138');
+        job_complete::execute($attemptid, 'finished', 3000, $engine, '', '{}', 'w-1');
+
+        $none = static fn(int $id): ?array => null;
+        $clock = time();
+        for ($look = 1; $look <= attempt_scheduler::TRACE_RETRIES + 1; $look++) {
+            $clock += attempt_scheduler::TRACE_RETRY_DELAY + 1;
+            if (attempt_scheduler::retry_pending_traces($clock, $none)['givenup'] === 1) {
+                break;
+            }
+        }
+        $this->assertSame(
+            attempt_scheduler::STATUS_FAILED,
+            (int) $DB->get_field('local_catquizlab_attempt', 'status', ['id' => $attemptid])
+        );
+
+        // The history row of the end carries the engine attempt and the whole provenance.
+        $rows = $DB->get_records('local_catquizlab_attemptlog', ['attemptid' => $attemptid], 'id DESC', '*', 0, 1);
+        $abandoned = reset($rows);
+        $this->assertSame(attempt_history::ABANDONED, $abandoned->outcome);
+        $this->assertSame($engine, (int) $abandoned->engineattemptid);
+        $trace = json_decode((string) $abandoned->diagnosis, true)['trace'];
+        $this->assertSame($attemptid, $trace['labattemptid']);
+        $this->assertSame($runid, $trace['runid']);
+        $this->assertSame($engine, $trace['engineattemptid']);
+        $this->assertSame(
+            ['found' => true, 'state' => 'complete', 'questionsattempted' => 7, 'questionusage' => 0],
+            $trace['engine']
+        );
+        $this->assertContains('wkr-correlation-138', $trace['correlationids']);
+        $this->assertSame(attempt_scheduler::TRACE_RETRIES + 1, $trace['looks']);
+        $this->assertNotSame('', $trace['lookup']);
+        $this->assertNotNull($trace['firstmissing']);
+        $this->assertTrue(attempt_scheduler::gave_up_trace($attemptid));
+        $this->assertSame([$attemptid], array_keys(attempt_scheduler::given_up_traces($runid)));
+
+        // Opened again: waiting, due now, the looks counted afresh; not queued to be played.
+        $this->assertTrue(attempt_scheduler::reopen_trace_lookup($attemptid, 'test'));
+        $row = $DB->get_record('local_catquizlab_attempt', ['id' => $attemptid]);
+        $this->assertSame(attempt_scheduler::STATUS_TRACEPENDING, (int) $row->status);
+        $this->assertLessThanOrEqual(time(), (int) $row->nextruntime);
+        $this->assertSame(0, $DB->count_records('local_catquizlab_attempt', ['runid' => $runid,
+            'status' => attempt_scheduler::STATUS_QUEUED]));
+        $this->assertFalse(attempt_scheduler::reopen_trace_lookup($attemptid), 'only a given-up sitting');
+        $this->assertSame([], attempt_scheduler::given_up_traces($runid));
+        // One look does not give it up again: the count starts afresh.
+        $this->assertSame(
+            ['collected' => 0, 'waiting' => 1, 'givenup' => 0],
+            attempt_scheduler::retry_pending_traces($clock + 60, $none)
+        );
+        // The trace arrives: collected, once.
+        $late = static fn(int $id): ?array => ['finaltheta' => 0.1];
+        $this->assertSame(
+            ['collected' => 1, 'waiting' => 0, 'givenup' => 0],
+            attempt_scheduler::retry_pending_traces($clock + 3600, $late)
+        );
+        $outcomes = $this->outcomes($attemptid);
+        $this->assertSame(1, count(array_keys($outcomes, attempt_history::COLLECTED)));
+        $this->assertContains(attempt_history::REQUEUED, $outcomes);
+
+        // A sitting that failed for another reason is not reopened this way.
+        $other = (int) $DB->insert_record('local_catquizlab_attempt', (object) ['runid' => $runid, 'personid' => 0,
+            'status' => attempt_scheduler::STATUS_FAILED, 'tries' => 3, 'lasterror' => 'browser closed',
+            'timecreated' => time(), 'timemodified' => time()]);
+        attempt_history::record($other, attempt_history::ABANDONED, ['detail' => 'no tries left']);
+        $this->assertFalse(attempt_scheduler::reopen_trace_lookup($other));
+    }
 }

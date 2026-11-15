@@ -35,6 +35,7 @@ final class question_template_test extends \advanced_testcase {
     /** @var array A representative item spec. */
     private const ITEM = [
         'scalename'      => 'Algebra',
+        'scalelabel'     => 'K1.2',
         'scalenumber'    => 2,
         'itemname'       => 'AlgItem',
         'itemnumber'     => 7,
@@ -53,7 +54,9 @@ final class question_template_test extends \advanced_testcase {
         $q = question_template::render(self::ITEM);
 
         $this->assertTrue($q['single']);
-        $this->assertStringContainsString('Algebra', $q['questiontext']);
+        // The scale by its label in the blueprint, not the engine scale's name, which carries the run (#154).
+        $this->assertStringContainsString('K1.2', $q['questiontext']);
+        $this->assertStringNotContainsString('Algebra', $q['questiontext']);
         $this->assertStringContainsString('b=0.75', $q['questiontext']);
         $this->assertStringContainsString('a=1.3', $q['questiontext']);
         $this->assertCount(4, $q['answers']);

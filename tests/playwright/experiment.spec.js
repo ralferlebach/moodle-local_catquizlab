@@ -110,7 +110,17 @@ async function openStep(page, label) {
 }
 
 test.describe('CatQuizLab, through the interface', () => {
-    test('an experiment runs from definition to results', async ({page}) => {
+    /** @type {import('@playwright/test').BrowserContext|null} The session that looks again after the start (#151). */
+    let later = null;
+
+    test.afterEach(async() => {
+        if (later) {
+            await later.close().catch(() => undefined);
+            later = null;
+        }
+    });
+
+    test('an experiment runs from definition to results', async ({browser, page}) => {
         test.setTimeout(RUN_TIMEOUT);
 
         await login(page);
@@ -239,13 +249,13 @@ test.describe('CatQuizLab, through the interface', () => {
 
         await expect(page.locator('body')).toContainText(name);
 
-        // 3. Progress: prepare and run, the two actions the plugin reduces to.
+        // 3. Progress: one start (#151). Saved, then "Start experiment" once — everything after it runs by itself:
+        //    preparing the runs, the workers, the sittings, the traces, the results.
         //
         // The experiment has to be the one in context first. Step 3 shows the
-        // prepare and run buttons for the selected experiment and nothing at
-        // all for "all experiments" — so without this the test pressed a button
-        // belonging to whichever experiment happened to be selected, and the
-        // one it had just defined stayed a draft with no runs.
+        // status of the selected experiment and nothing at all for "all
+        // experiments" — so without this the test pressed a button belonging to
+        // whichever experiment happened to be selected.
         await openStep(page, /3\.\s*(Progress|Verlauf)/);
 
         const selector = page.locator('#catquizlab-experiment');
@@ -256,23 +266,52 @@ test.describe('CatQuizLab, through the interface', () => {
         // And the page now says so, before anything is pressed.
         await expect(page.locator('body')).toContainText(name);
 
-        const prepare = page.locator('button[type=submit]', {
-            hasText: /Create runs|Läufe anlegen|Prepare experiment|Experiment vorbereiten/,
-        }).first();
-        await expect(prepare).toBeVisible();
-        await prepare.click();
-        await page.waitForLoadState('networkidle');
+        // From here on, every form a person could submit to the plugin is counted, in this browser and the one that
+        // looks later: the start must be the only one until the results (#151 DoD1). The page's own polling reads
+        // (an AJAX call, not a navigation) and is not a person's input.
+        const posts = [];
+        const count = (context) => context.on('request', (request) => {
+            if (request.method() === 'POST' && request.isNavigationRequest() && /\/local\/catquizlab\//.test(request.url())) {
+                posts.push(new URLSearchParams(request.postData() || '').get('action') || request.url());
+            }
+        });
+        count(page.context());
 
-        // Preparation reports per run and stage when it refuses, and the
-        // message is the thing worth reading in a video.
-        await expect(page.locator('body')).not.toContainText(/Preparation stopped|Vorbereitung gestoppt/);
-
-        const start = page.locator('button[type=submit]', {
-            hasText: /Start experiment|Experiment starten|Run experiment|Experiment ausführen/,
-        }).first();
-        await expect(start).toBeVisible();
+        const start = page.locator('[data-region="catquizlab-status-next"] button[type=submit]', {
+            hasText: /Start experiment|Experiment starten/,
+        });
+        await expect(start, 'one start, nothing to prepare first').toHaveCount(1);
+        const experimentid = await page.locator('[data-region="catquizlab-status-next"] input[name="experimentid"]')
+            .getAttribute('value');
         await start.click();
         await page.waitForLoadState('networkidle');
+
+        // Accepted, and said as accepted — not as running (#151 AK9). No second start, no technical single step.
+        await expect(page.locator('body')).toContainText(/Start accepted|Start angenommen/);
+        expect(posts).toEqual(['startexperiment']);
+        await expect(page.locator('[data-region="catquizlab-status-next"] button', {
+            hasText: /Start experiment|Experiment starten/,
+        })).toHaveCount(0);
+        await expect(page.locator('input[name="action"][value="prepareexperiment"], input[name="action"][value="startruns"]'))
+            .toHaveCount(0);
+
+        // The person goes away (#151 AK3): signed out, the session ended on the server, the browser closed. What
+        // follows is cron's, the line's and the workers' alone. Later somebody looks again, in a new session.
+        const sesskey = await page.evaluate(() => (window.M && window.M.cfg) ? window.M.cfg.sesskey : '');
+        await page.goto('/login/logout.php?sesskey=' + encodeURIComponent(sesskey), {waitUntil: 'networkidle'});
+        await page.context().close();
+        // A context of its own, with what the configuration gives every test: the address, the size, a recording.
+        // Playwright traces it like the test's own (trace: 'on'); the afterEach below closes it, pass or fail.
+        later = await browser.newContext({
+            baseURL: test.info().project.use.baseURL,
+            viewport: test.info().project.use.viewport,
+            recordVideo: {dir: test.info().outputPath('later')},
+        });
+        count(later);
+        page = await later.newPage();
+        await login(page);
+        await page.goto('/local/catquizlab/runs.php?experimentid=' + experimentid, {waitUntil: 'networkidle'});
+        await expect(page.locator('body')).toContainText(name);
 
         // 4. Wait, by reloading the step a person would be watching.
         const deadline = Date.now() + (15 * 60 * 1000);
@@ -317,5 +356,8 @@ test.describe('CatQuizLab, through the interface', () => {
         //    above did not happen.
         await openStep(page, /5\.\s*Logs/);
         await expect(page.locator('[data-region="catquizlab-log"]')).toBeVisible();
+
+        // From definition to results, one thing posted to the plugin: the start (#151 DoD1).
+        expect(posts, 'nothing but the one start was posted').toEqual(['startexperiment']);
     });
 });

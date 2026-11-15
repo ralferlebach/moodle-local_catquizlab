@@ -103,7 +103,21 @@ if ($action === 'delete' && $id > 0) {
             'name'   => s($preview['name']),
         ]));
 
-        foreach ($preview['blockers'] as $blocker) {
+        // A deep deletion names the rows of others it will not touch and checks afterwards (#161 AK1); one that is not
+        // deep says what it keeps in the engine (#161 AK5).
+        if (!empty($preview['atrisk'])) {
+            $message .= html_writer::tag('p', get_string('purge:atrisk', $component, (int) $preview['atrisk']), [
+                'data-region' => 'catquizlab-purge-atrisk',
+            ]);
+        }
+        if (!empty($preview['kept'])) {
+            $message .= html_writer::tag('p', get_string(
+                'purge:keptengine',
+                $component,
+                \local_catquizlab\local\purger::counts_line($preview['kept'])
+            ), ['data-region' => 'catquizlab-purge-kept']);
+        }
+        foreach (array_merge($preview['warnings'] ?? [], $preview['blockers']) as $blocker) {
             $message .= html_writer::tag('p', $blocker, ['class' => 'text-danger']);
         }
         // Being played is no longer a reason to refuse (0.7.49): the experiment is stopped first.
@@ -162,7 +176,11 @@ if ($action === 'delete' && $id > 0) {
     redirect($manageurl, get_string('purge:queued', $component, (object) [
         'counts' => \local_catquizlab\local\purger::counts_line($preview['counts']) ?: '-',
         'runs' => $stopped['runs'],
-    ]));
+    ]) . (!empty($preview['kept']) ? ' ' . get_string(
+        'purge:keptengine',
+        $component,
+        \local_catquizlab\local\purger::counts_line($preview['kept'])
+    ) : ''));
 }
 
 // Reading the editor needs only view rights; every state change below asks for
@@ -442,6 +460,17 @@ if ($data = $form->get_data()) {
             \core\output\single_button::BUTTON_PRIMARY
         );
         $frozennotice .= \html_writer::div($OUTPUT->render($duplicatebutton), 'mb-3');
+        // Its data for a re-analysis, one link away (#156 AK6): the export tab of its results, at the package.
+        if (has_capability('local/catquizlab:export', $context)) {
+            $frozennotice .= \html_writer::div(\html_writer::link(
+                new moodle_url(
+                    '/local/catquizlab/results.php',
+                    ['experimentid' => $id, 'tab' => 'export'],
+                    'catquizlab-research-package'
+                ),
+                get_string('package:experimentlink', $component)
+            ), 'mb-3', ['data-region' => 'catquizlab-package-link']);
+        }
     }
     $normalisedfornotes = $validation['normalised'];
     foreach (['poolpreset' => 'preset:kindpool', 'personspreset' => 'preset:kindpersons'] as $field => $label) {

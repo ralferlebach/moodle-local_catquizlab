@@ -46,6 +46,16 @@ use local_catquizlab\local\run_verifier;
  */
 final class provisioning_test extends \advanced_testcase {
     /**
+     * The components as installed again after a test that simulated their absence.
+     *
+     * @return void
+     */
+    protected function tearDown(): void {
+        \local_catquizlab\local\environment::reset();
+        parent::tearDown();
+    }
+
+    /**
      * A materialisation result with the given counters.
      *
      * Not called result(): PHPUnit 10 and 11 declare TestCase::result() final,
@@ -161,9 +171,8 @@ final class provisioning_test extends \advanced_testcase {
     public function test_provisioning_without_engine_is_explicit(): void {
         $this->resetAfterTest();
 
-        if (environment::engine_available()) {
-            $this->markTestSkipped('Engine present; the guard path is not exercised.');
-        }
+        // Where the engine is installed, as in CI, the guard runs against a simulated absence instead of being skipped (#140).
+        \local_catquizlab\local\environment::simulate_absent(['local_catquiz', 'mod_adaptivequiz']);
 
         $outcome = cat_item_provisioner::provision(1, 2, 3, ['difficulty' => 0.0]);
 
@@ -181,9 +190,8 @@ final class provisioning_test extends \advanced_testcase {
     public function test_visibility_without_engine(): void {
         $this->resetAfterTest();
 
-        if (environment::engine_available()) {
-            $this->markTestSkipped('Engine present; the guard path is not exercised.');
-        }
+        // Where the engine is installed, as in CI, the guard runs against a simulated absence instead of being skipped (#140).
+        \local_catquizlab\local\environment::simulate_absent(['local_catquiz', 'mod_adaptivequiz']);
 
         $this->assertSame([], cat_item_provisioner::visible_items(1, 2));
         $this->assertSame(0, cat_item_provisioner::visible_count(1, 2));
@@ -223,10 +231,8 @@ final class provisioning_test extends \advanced_testcase {
         $this->resetAfterTest();
 
         // Without the engine every stage is skipped, and setup() reports that
-        // rather than scheduling a run with no pool behind it.
-        if (environment::engine_available()) {
-            $this->markTestSkipped('Engine present; the guard path is not exercised.');
-        }
+        // Where the engine is installed, as in CI, the guard runs against a simulated absence instead of being skipped (#140).
+        \local_catquizlab\local\environment::simulate_absent(['local_catquiz', 'mod_adaptivequiz']);
 
         $experimentid = (int) $DB->insert_record('local_catquizlab_experiment', (object) [
             'name'         => 'Guard',

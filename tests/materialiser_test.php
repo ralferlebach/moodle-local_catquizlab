@@ -35,6 +35,16 @@ use local_catquizlab\local\environment;
  */
 final class materialiser_test extends \advanced_testcase {
     /**
+     * The components as installed again after a test that simulated their absence.
+     *
+     * @return void
+     */
+    protected function tearDown(): void {
+        \local_catquizlab\local\environment::reset();
+        parent::tearDown();
+    }
+
+    /**
      * plan_items maps each blueprint item to its subscale's engine scale.
      *
      * @return void
@@ -88,9 +98,8 @@ final class materialiser_test extends \advanced_testcase {
     public function test_materialise_requires_engine(): void {
         $this->resetAfterTest();
 
-        if (environment::engine_available()) {
-            $this->markTestSkipped('Engine present; the guard path is not exercised.');
-        }
+        // Where the engine is installed, as in CI, the guard runs against a simulated absence instead of being skipped (#140).
+        \local_catquizlab\local\environment::simulate_absent(['local_catquiz', 'mod_adaptivequiz']);
 
         $this->assertNull(materialiser::materialise(1, [], ['questioncategoryid' => 5]));
     }

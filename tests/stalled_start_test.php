@@ -99,8 +99,9 @@ final class stalled_start_test extends \advanced_testcase {
         $status = experiment_status::snapshot($e['experimentid'], true);
         $this->assertSame('created', $status['phase']);
         $this->assertSame(get_string('status:phasecreated', 'local_catquizlab'), $status['label']);
-        $this->assertSame('startruns', $status['next']['kind']);
-        $this->assertSame('startruns', $status['next']['action']);
+        // The way on is the one start (#151): it puts the experiment in the line, and the line starts the runs.
+        $this->assertSame('start', $status['next']['kind']);
+        $this->assertSame('startexperiment', $status['next']['action']);
         $this->assertTrue($status['next']['post']);
 
         // The library says the same.
@@ -115,11 +116,11 @@ final class stalled_start_test extends \advanced_testcase {
     }
 
     /**
-     * The progress page shows the button.
+     * The progress page offers no second, technical button for created runs: the one start takes them on (#151 AK10).
      *
      * @return void
      */
-    public function test_the_progress_page_offers_to_start_the_runs(): void {
+    public function test_the_progress_page_has_no_second_start(): void {
         global $PAGE;
         $this->resetAfterTest();
         $this->setAdminUser();
@@ -128,10 +129,11 @@ final class stalled_start_test extends \advanced_testcase {
         $PAGE->set_context(\context_system::instance());
 
         $context = \local_catquizlab\local\progress_view::context($e['experimentid']);
-        $this->assertTrue($context['runner']['canstartruns']);
+        $this->assertFalse($context['runner']['canstartruns']);
         $html = $PAGE->get_renderer('core')->render_from_template('local_catquizlab/progress', $context);
-        $this->assertStringContainsString('name="action" value="startruns"', $html);
-        $this->assertStringContainsString(get_string('runner:startruns', 'local_catquizlab'), $html);
+        $this->assertStringNotContainsString('name="action" value="startruns"', $html);
+        $this->assertStringNotContainsString('name="action" value="prepareexperiment"', $html);
+        $this->assertSame('startexperiment', experiment_status::snapshot($e['experimentid'], true)['next']['action']);
     }
 
     /**

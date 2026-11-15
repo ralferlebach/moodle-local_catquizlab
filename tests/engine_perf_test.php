@@ -31,15 +31,25 @@ use local_catquizlab\output\engine_perf_view;
  */
 final class engine_perf_test extends \advanced_testcase {
     /**
+     * The components as installed again after a test that simulated their absence.
+     *
+     * @return void
+     */
+    protected function tearDown(): void {
+        \local_catquizlab\local\environment::reset();
+        parent::tearDown();
+    }
+
+    /**
      * Without the engine's trace, nothing is invented and the page says why.
      *
      * @return void
      */
     public function test_without_the_engine_trace(): void {
         $this->resetAfterTest();
-        if (engine_perf::available()) {
-            $this->markTestSkipped('The installed engine traces requests; covered by the test below.');
-        }
+        // Where the engine traces requests, as in CI, without it simulated instead of skipped (#140).
+        \local_catquizlab\local\environment::simulate_absent(['local_catquiz']);
+        $this->assertFalse(engine_perf::available());
         $this->assertNull(engine_perf::for_sitting(123));
         $this->assertSame(['sittings' => 0, 'traced' => 0, 'kinds' => []], engine_perf::for_run(999));
         $this->assertStringContainsString('does not record request timing', engine_perf_view::render(999));

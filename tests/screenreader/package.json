@@ -1,0 +1,14 @@
+{
+  "name": "catquizlab-screen-readers",
+  "private": true,
+  "description": "The results page's filter bar with real screen readers: NVDA on Windows, VoiceOver on macOS (#122 DoD 3).",
+  "scripts": {
+    "test": "playwright test"
+  },
+  "devDependencies": {
+    "@guidepup/guidepup": "0.38.0",
+    "@guidepup/playwright": "0.20.0",
+    "@guidepup/setup": "0.29.3",
+    "@playwright/test": "1.64.1"
+  }
+}

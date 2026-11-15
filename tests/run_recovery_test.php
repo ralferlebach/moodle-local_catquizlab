@@ -241,4 +241,45 @@ final class run_recovery_test extends \advanced_testcase {
             ['id' => $attemptid]
         ));
     }
+
+    /**
+     * Sittings that no run can hand out are counted with their cause, per run: the run's state, and where it failed
+     * the reason it failed with (#133 AK2).
+     *
+     * @return void
+     */
+    public function test_unclaimable_sittings_name_their_cause_per_run(): void {
+        global $DB, $PAGE;
+        $this->resetAfterTest();
+        $this->setAdminUser();
+
+        // A failed run whose sittings were left queued (as earlier versions left them), with its reason.
+        $failed = $this->run_with(7, 0);
+        $manifest = json_decode((string) $DB->get_field('local_catquizlab_run', 'manifestjson', ['id' => $failed]), true) ?: [];
+        $manifest['lifecycle']['failedreason'] = 'cat-not-ready: pool too small';
+        run_lifecycle::update_run((object) ['id' => $failed, 'status' => registry::STATUS_FAILED,
+            'manifestjson' => json_encode($manifest)], 'test');
+        $scheduled = $this->run_with(3, 0);
+        $DB->set_field('local_catquizlab_run', 'status', registry::STATUS_SCHEDULED, ['id' => $scheduled]);
+
+        $queue = attempt_scheduler::queue_breakdown();
+        $this->assertSame(10, $queue['blocked']);
+        $this->assertSame(0, $queue['claimable']);
+        $causes = array_column($queue['blockcauses'], null, 'runid');
+        $this->assertSame(7, $causes[$failed]['waiting']);
+        $this->assertStringStartsWith(get_string('status:failed', 'local_catquizlab') . ': ', $causes[$failed]['cause']);
+        $this->assertStringContainsString('pool too small', $causes[$failed]['line']);
+        $this->assertSame(get_string('status:scheduled', 'local_catquizlab'), $causes[$scheduled]['cause']);
+        $this->assertStringContainsString('3', $causes[$scheduled]['line']);
+
+        // And the progress page lists them under the unclaimable count.
+        $PAGE->set_url('/local/catquizlab/runs.php');
+        $PAGE->set_context(\context_system::instance());
+        $html = $PAGE->get_renderer('core')->render_from_template(
+            'local_catquizlab/progress',
+            \local_catquizlab\local\progress_view::context(0)
+        );
+        $this->assertStringContainsString('data-region="catquizlab-blockcauses"', $html);
+        $this->assertStringContainsString(s($causes[$failed]['line']), $html);
+    }
 }

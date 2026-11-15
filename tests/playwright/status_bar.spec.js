@@ -95,7 +95,7 @@ test('blocked: "Needs attention", the problems counted, and the way to them', as
     await expect(next).toHaveAttribute('href', /#catquizlab-recovery$/);
 });
 
-test('finished: the next step is the results; planned: create runs, by POST', async({page}) => {
+test('finished: the next step is the results; planned: the one start, by POST (#151)', async({page}) => {
     const finished = seeded('finished');
     const empty = seeded('empty');
     needs(!finished || !empty, 'No experiments could be seeded.');
@@ -107,8 +107,9 @@ test('finished: the next step is the results; planned: create runs, by POST', as
 
     await page.goto('/local/catquizlab/runs.php?experimentid=' + empty, {waitUntil: 'networkidle'});
     await expect(bar(page)).toHaveAttribute('data-phase', 'planned');
-    const create = bar(page).getByRole('button', {name: 'Create runs'});
-    await expect(create).toBeVisible();
+    const start = bar(page).getByRole('button', {name: 'Start experiment'});
+    await expect(start).toBeVisible();
+    await expect(bar(page).getByRole('button', {name: /Create runs|Start runs/})).toHaveCount(0);
     await expect(bar(page).locator('form[data-region="catquizlab-status-next"]')).toHaveAttribute('method', 'post');
 });
 

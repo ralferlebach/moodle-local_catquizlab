@@ -683,6 +683,32 @@ function xmldb_local_catquizlab_upgrade($oldversion): bool {
         upgrade_plugin_savepoint(true, 2026111101, 'local', 'catquizlab');
     }
 
+    if ($oldversion < 2026111500) {
+        // The canonical item across runs and the fingerprints of items and pools (#154). Filled in when a pool is
+        // materialised from now on; items and pools from before stay without, said as such, never guessed.
+        $table = new xmldb_table('local_catquizlab_item');
+        $fields = [
+            new xmldb_field('itemkey', XMLDB_TYPE_CHAR, '64', null, null, null, null, 'mistagged'),
+            new xmldb_field('contentfp', XMLDB_TYPE_CHAR, '64', null, null, null, null, 'itemkey'),
+            new xmldb_field('fingerprint', XMLDB_TYPE_CHAR, '64', null, null, null, null, 'contentfp'),
+        ];
+        foreach ($fields as $field) {
+            if (!$dbman->field_exists($table, $field)) {
+                $dbman->add_field($table, $field);
+            }
+        }
+        $index = new xmldb_index('runid-itemkey', XMLDB_INDEX_NOTUNIQUE, ['runid', 'itemkey']);
+        if (!$dbman->index_exists($table, $index)) {
+            $dbman->add_index($table, $index);
+        }
+        $pool = new xmldb_table('local_catquizlab_pool');
+        $field = new xmldb_field('fingerprint', XMLDB_TYPE_CHAR, '64', null, null, null, null, 'questioncategoryid');
+        if (!$dbman->field_exists($pool, $field)) {
+            $dbman->add_field($pool, $field);
+        }
+        upgrade_plugin_savepoint(true, 2026111500, 'local', 'catquizlab');
+    }
+
     return true;
 }
 

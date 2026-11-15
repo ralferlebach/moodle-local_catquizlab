@@ -219,11 +219,12 @@ final class experiment_runner_test extends \advanced_testcase {
     }
 
     /**
-     * An experiment that is not ready cannot be queued.
+     * Prepared or not, an experiment joins the line (#151); one that needs recovery does not.
      *
      * @return void
      */
-    public function test_only_a_ready_experiment_joins_the_queue(): void {
+    public function test_an_unprepared_experiment_joins_the_queue_a_blocked_one_does_not(): void {
+        global $DB;
         $this->resetAfterTest();
         $this->setAdminUser();
 
@@ -231,9 +232,15 @@ final class experiment_runner_test extends \advanced_testcase {
         $generator = $this->getDataGenerator()->get_plugin_generator('local_catquizlab');
         $experimentid = (int) $generator->create_experiment()->id;
 
-        // It would otherwise reach the front of the line and fail there, having
-        // held up everything behind it.
+        // Not prepared: it is prepared when its turn comes.
         $result = \local_catquizlab\local\execution_queue::enqueue($experimentid);
+        $this->assertTrue($result['ok']);
+
+        // A failed run needs a person: it would reach the front of the line and have nothing to do there.
+        $runid = (int) $generator->create_run()->id;
+        $blocked = (int) $DB->get_field('local_catquizlab_run', 'experimentid', ['id' => $runid]);
+        $DB->set_field('local_catquizlab_run', 'status', registry::STATUS_FAILED, ['id' => $runid]);
+        $result = \local_catquizlab\local\execution_queue::enqueue($blocked);
         $this->assertFalse($result['ok']);
         $this->assertSame('not-ready', $result['reason']);
     }

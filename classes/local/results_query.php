@@ -972,7 +972,9 @@ class results_query {
         $run = $runs[(int) $attempt->runid];
 
         $truetheta = (float) $person->abilityglobal;
-        $esttheta = (float) ($trace['finaltheta'] ?? 0.0);
+        // No final ability is a missing value, never a zero (#156 AK7): the sitting is invalid for it
+        // (NO_FINAL_THETA), and its row says so with an empty estimate and error, not with an estimate of 0.
+        $esttheta = isset($trace['finaltheta']) && is_numeric($trace['finaltheta']) ? (float) $trace['finaltheta'] : null;
         $se = isset($trace['finalse']) ? (float) $trace['finalse'] : null;
 
         // How it ended and whether its result counts, decided here for every
@@ -1088,7 +1090,7 @@ class results_query {
             'severity'    => $run['severity'],
             'truetheta'   => $truetheta,
             'esttheta'    => $esttheta,
-            'error'       => $esttheta - $truetheta,
+            'error'       => $esttheta === null ? null : $esttheta - $truetheta,
             'nitems'      => (int) ($trace['nitems'] ?? count((array) ($trace['items'] ?? []))),
             'se'          => $se,
             'stopreason'  => (string) ($trace['stopreason'] ?? ''),

@@ -42,3 +42,13 @@ behatfaildumps/
 # Local developer overrides
 .env
 .env.local
+
+# Screen reader runs (tests/screenreader): the kept page and what the reader said
+tests/screenreader/snapshot/
+tests/screenreader/artifacts/
+tests/screenreader/report/
+tests/screenreader/test-results/
+
+# The deep deletion run of the interface E2E (tests/playwright/deep_delete.spec.js)
+tests/playwright/artifacts-deep-delete/
+tests/playwright/report-deep-delete/

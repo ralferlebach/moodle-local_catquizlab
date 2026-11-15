@@ -44,6 +44,16 @@ use local_catquizlab\local\worker_registry;
  */
 final class worker_registry_test extends \advanced_testcase {
     /**
+     * The components as installed again after a test that simulated their absence.
+     *
+     * @return void
+     */
+    protected function tearDown(): void {
+        \local_catquizlab\local\environment::reset();
+        parent::tearDown();
+    }
+
+    /**
      * Add an attempt in a given state.
      *
      * @param int $status One of attempt_scheduler's status constants.
@@ -851,26 +861,35 @@ final class worker_registry_test extends \advanced_testcase {
     public function test_an_unwritable_runtime_directory_is_reported(): void {
         $this->resetAfterTest();
 
-        // A directory that exists and cannot be written: the case that used to
-        // surface later as an EACCES from inside Puppeteer, where the reader
-        // then debugs the browser instead of the file system.
-        if (function_exists('posix_geteuid') && posix_geteuid() === 0) {
-            // Root ignores the permission bits, so the case cannot be staged
-            // here. Skipping says so instead of passing on a false premise.
-            $this->markTestSkipped('Running as root; directory permissions are not enforced.');
+        // A runtime directory that cannot be made: the case that used to surface later as an EACCES from inside
+        // Puppeteer, where the reader then debugs the browser instead of the file system. Staged twice: under a
+        // regular file, which nobody can make a directory in — root included, as in CI containers, where the
+        // permission case used to be skipped (#140) — and, where permissions are enforced, in a directory without
+        // write permission.
+        $base = make_temp_directory('catquizlab_blocked_' . random_int(1000, 9999));
+        file_put_contents($base . '/file', 'not a directory');
+        $cases = [[$base . '/file/home', $base . '/file']];
+        $root = function_exists('posix_geteuid') && posix_geteuid() === 0;
+        if (!$root) {
+            $locked = make_temp_directory('catquizlab_locked_' . random_int(1000, 9999));
+            chmod($locked, 0500);
+            $cases[] = [$locked . '/home', $locked];
         }
 
-        $blocked = make_temp_directory('catquizlab_blocked_' . random_int(1000, 9999));
-        chmod($blocked, 0500);
-        set_config('worker_home', $blocked . '/home', 'local_catquizlab');
-
         try {
-            \local_catquizlab\local\worker_launcher::runtime_environment([]);
-            $this->fail('An unusable runtime directory passed silently.');
-        } catch (\moodle_exception $e) {
-            $this->assertStringContainsString($blocked, $e->getMessage() . ($e->debuginfo ?? ''));
+            foreach ($cases as [$home, $where]) {
+                set_config('worker_home', $home, 'local_catquizlab');
+                try {
+                    \local_catquizlab\local\worker_launcher::runtime_environment([]);
+                    $this->fail('An unusable runtime directory passed silently: ' . $home);
+                } catch (\moodle_exception $e) {
+                    $this->assertStringContainsString($where, $e->getMessage() . ($e->debuginfo ?? ''));
+                }
+            }
         } finally {
-            chmod($blocked, 0700);
+            if (!$root) {
+                chmod($locked, 0700);
+            }
         }
     }
 
@@ -1046,9 +1065,8 @@ final class worker_registry_test extends \advanced_testcase {
         $this->resetAfterTest();
         $this->setAdminUser();
 
-        if (\local_catquizlab\local\environment::catquiz_available()) {
-            $this->markTestSkipped('The engine is installed; this path cannot be staged.');
-        }
+        // Staged where the engine is installed, as in CI (#140), instead of being skipped.
+        \local_catquizlab\local\environment::simulate_absent(['local_catquiz']);
 
         $result = \local_catquizlab\local\setup_wizard::run(true);
 

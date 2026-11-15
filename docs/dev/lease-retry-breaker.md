@@ -22,7 +22,7 @@ zweiter Worker meldete sich als dieselbe Person im selben Versuch an. Daher die
 | Lease-Messung | Jede Meldung trägt `lease.heldseconds` (seit Abholung) und `lease.leftseconds`. |
 | Circuit Breaker | Pausiert den Lauf (Status bleibt, nicht `failed`), Grund `circuit_breaker:<Code>` nach dem häufigsten Reason-Code der Serie; Kategorie Kapazität/deterministisch im Lauf-Log. |
 | Fortsetzen | Idempotent; mit Readiness-Prüfung des bereitgestellten Tests; fehlgeschlagene Bearbeitungen zurück in die Warteschlange mit je einer Verlaufszeile; Fehlerverlauf bleibt. Gilt für „Fortsetzen“ wie für „Zurücksetzen und weiter“. |
-| Anzeige | Warteschlange: abholbar, in Arbeit, gesammelt, endgültig fehlgeschlagen, wiederholbar (wartend), zurückgehalten – mit Grund je Lauf. Laufstatus „Pausiert durch den Circuit Breaker: <Grund>“, „Beendet, N endgültig fehlgeschlagen“. |
+| Anzeige | Warteschlange: abholbar, in Arbeit, gesammelt, endgültig fehlgeschlagen, wiederholbar (wartend), zurückgehalten – mit Grund je Lauf. Seit 0.7.64 auch „nicht abholbar, weil der Lauf keine Arbeit ausgibt“ mit Zustand und Fehlergrund je Lauf. Laufstatus „Pausiert durch den Circuit Breaker: <Grund>“, „Beendet, N endgültig fehlgeschlagen“. |
 | Audit | Pause/Fortsetzen als `run_autopaused`/`run_resumed` mit Grund, Zählern, Auslöser im Lauf-Log; Statuswechsel wie bisher; Bearbeitungsverlauf append-only. |
 
 ## Migration

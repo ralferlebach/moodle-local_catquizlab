@@ -115,11 +115,20 @@ class test_flow {
         for ($index = 0; $index < $count; $index++) {
             $question = $played[$index] ?? null;
             $counts = $states === null ? null : scale_states::counts($states[$index + 1] ?? []);
+            $questionid = $question !== null
+                ? (int) ($question['id'] ?? $question['questionid'] ?? 0)
+                : (int) ($items[$index] ?? 0);
+            // The engine's record of the answer, where it kept one: slot, time, state and what was answered (#156).
+            $response = $responseindex[(string) $questionid] ?? null;
+            $response = is_array($response) ? $response : [];
             $steps[] = [
                 'step'       => $index + 1,
-                'questionid' => $question !== null
-                    ? (int) ($question['id'] ?? $question['questionid'] ?? 0)
-                    : (int) ($items[$index] ?? 0),
+                'questionid' => $questionid,
+                'slot'       => isset($response['slot']) && is_numeric($response['slot']) ? (int) $response['slot'] : null,
+                'time'       => isset($response['timecreated']) && is_numeric($response['timecreated'])
+                    ? (int) $response['timecreated'] : null,
+                'state'      => isset($response['state']) ? (string) $response['state'] : null,
+                'responsesummary' => isset($response['responsesummary']) ? (string) $response['responsesummary'] : null,
                 'scaleid'    => $question !== null ? (int) ($question['catscaleid'] ?? 0) : 0,
                 // The score is kept with the responses, not with the question:
                 // read from the question alone, it was always empty (#106).
@@ -168,6 +177,18 @@ class test_flow {
         ];
     }
 
+    /** @var array<int, int> Root engine scale by run, for this request. */
+    protected static array $roots = [];
+
+    /**
+     * Forget what this request read.
+     *
+     * @return void
+     */
+    public static function reset_caches(): void {
+        self::$roots = [];
+    }
+
     /** @var string[] The metrics a trace can be compared by (#109). */
     public const METRICS = ['ability', 'se', 'ti', 'tiatn', 'tiremainingmin', 'tiremaining', 'scales', 'activescales'];
 
@@ -193,11 +214,16 @@ class test_flow {
 
         $played = array_values((array) ($trace['progress']['playedquestions'] ?? []));
         $model = (string) ($played[0]['model'] ?? '');
-        $root = (int) $DB->get_field_sql(
-            'SELECT catscaleid FROM {local_catquizlab_scalemap} WHERE runid = ? AND parentcatscaleid = 0 ORDER BY generation DESC',
-            [$runid],
-            IGNORE_MULTIPLE
-        );
+        // Once per run, not once per sitting (#156 DoD3): an export of nine thousand sittings asked nine thousand times.
+        if (!array_key_exists($runid, self::$roots)) {
+            self::$roots[$runid] = (int) $DB->get_field_sql(
+                'SELECT catscaleid FROM {local_catquizlab_scalemap} WHERE runid = ? AND parentcatscaleid = 0
+              ORDER BY generation DESC',
+                [$runid],
+                IGNORE_MULTIPLE
+            );
+        }
+        $root = self::$roots[$runid];
         $pool = engine_information::pool($runid, $root, $model);
         $poolsize = $pool === null ? 0 : count($pool);
 

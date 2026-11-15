@@ -135,6 +135,33 @@ test('the worker hides the same names as the server logs (#149)', () => {
     assert.ok(!text.includes('TESTSECRET'), text);
 });
 
+test('a logged request URL keeps routing values only, as the server does (#149 AK2)', () => {
+    const secret = 'S3CR3TPR0BE';
+    const names = ['sesskey', 'token', 'key', 'password', 'secret', 'authorization', 'email', 'wstoken', 'MoodleSession'];
+    const query = [];
+    for (const name of names) {
+        for (const spelled of [name, name.toUpperCase(), encodeURIComponent(name), name + '[]',
+            [...name].map((c) => '%25' + c.charCodeAt(0).toString(16)).join('')]) {
+            query.push(spelled + '=' + secret, spelled + '=' + encodeURIComponent(secret + '/x'));
+        }
+    }
+    query.push('unknownfilter=' + secret, 'id=' + encodeURIComponent('probe@example.org'), 'x=1\r\nsesskey=' + secret);
+    const url = 'https://x.org/mod/adaptivequiz/attempt.php?cmid=47&page=2&' + query.join('&') + '#token=' + secret;
+    const clean = nav.sanitiseRequestUrl(url);
+    assert.ok(!clean.includes('S3CR3T'), clean);
+    assert.ok(!clean.includes('probe'), clean);
+    assert.ok(!/[\r\n#]/.test(clean), clean);
+    assert.ok(clean.startsWith('https://x.org/mod/adaptivequiz/attempt.php?cmid=47&page=2&'), clean);
+    assert.ok(clean.includes('unknownfilter=[omitted]'), clean);
+    assert.ok(clean.includes('id=[redacted]'), clean);
+    // The same names as the server's log_redactor::ROUTING_NAMES (PHPUnit compares the two lists).
+    const listed = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'log_params.json'), 'utf8')).names;
+    assert.ok(listed.includes('cmid') && listed.includes('experimentid') && !listed.includes('sesskey'));
+    assert.strictEqual(nav.sanitiseRequestUrl('https://x.org/tokenpluginfile.php/' + secret + '/12/a.png'),
+        'https://x.org/tokenpluginfile.php/[redacted]/12/a.png');
+    assert.strictEqual(nav.sanitiseRequestUrl('https://x.org/a.php?flag&tab=rawdata'), 'https://x.org/a.php?flag&tab=rawdata');
+});
+
 test('a page snapshot leaves the session key behind (#107)', () => {
     const html = '<script>M.cfg = {"wwwroot":"x","sesskey":"Ab12Cd34"};</script>'
         + '<input type="hidden" name="sesskey" value="Ab12Cd34">'

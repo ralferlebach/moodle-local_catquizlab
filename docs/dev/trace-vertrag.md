@@ -94,3 +94,33 @@ eine Sitzung als „gesammelt“ ohne Trace und nie „laufend“ mit Engine-Att
 - `tests/playwright/experiment.spec.js`: echter Lauf. Lokal am 09.11.2026: 5 von 5 Sitzungen gesammelt,
   `hostattempted = answered = presented = 20`, Stoppkriterium, Host-Stopcode und Engine-Status vorhanden
   (local_catquiz 1.2.1, Strategie aus dem Spec).
+
+## Aufgegeben, und wieder gesucht (#138 AK4, seit 0.7.62)
+
+Eine Testbearbeitung, deren Trace nach `TRACE_RETRIES` Suchen noch fehlt, wird `failed`. Ihre Historienzeile `abandoned`
+trägt den Engine-Attempt (`engineattemptid`) und in `diagnosis.trace` die Provenienz:
+
+| Feld | Inhalt |
+|---|---|
+| `labattemptid`, `runid`, `personid` | die Testbearbeitung im Lab |
+| `engineattemptid` | `adaptivequiz_attempt.id` |
+| `engine` | ob der Host den Attempt hat: `found`, `state`, `questionsattempted`, `questionusage` |
+| `lookup` | was die Engine zu ihr sagt (`engine_validity::unmeasured_reason`) |
+| `defects` | was dem Trace bei der letzten Suche fehlte (Codes des Vertrags oben) |
+| `looks` | wie oft gesucht wurde |
+| `correlationids` | Korrelations-IDs der Ausführungen (Worker), älteste zuerst |
+| `firstmissing`, `givenup` | erste Suche ohne Trace, Aufgeben |
+
+**Wiederaufnahme ohne neues Spielen:** `attempt_scheduler::reopen_trace_lookup()` bzw.
+`php local/catquizlab/cli/recover_traces.php --runid=N [--reopen]` (`--attemptid=N` für eine).
+- **Wann:** Nur für eine wegen fehlenden Traces aufgegebene Testbearbeitung, unter ihrer Sperre.
+- **Was passiert:** Sie wartet wieder (`tracepending`), mit allen Suchen und der nächsten sofort; die Historie bekommt eine Zeile `requeued`. Kommt der Trace, sammelt die Pipeline sie ein, genau einmal.
+- **Andere Fehlschläge** spielt `requeue_failed` neu.
+
+**Nebenläufigkeit im CI:** `cli/race_collect.php` im Worker-E2E (alle Stacks). Getrennte Prozesse melden, ticken,
+sammeln neu und holen Leases zurück, gleichzeitig auf echten Testbearbeitungen; ein Leser beobachtet jede Zeile; der
+Engine-Attempt kommt verspätet. Geprüft wird:
+- nie eingesammelt vor dem Engine-Attempt;
+- nie ohne Trace;
+- genau einmal, mit demselben Trace;
+- keine Verdopplung.

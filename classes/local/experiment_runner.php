@@ -71,6 +71,92 @@ class experiment_runner {
      */
     public const STATE_STOPPED = 'stopped';
 
+    /** @var string[] Where a start can be accepted: everything before running, whatever is prepared already (#151). */
+    public const STARTABLE = [self::STATE_DRAFT, self::STATE_CREATED, self::STATE_PREPARING, self::STATE_READY];
+
+    /**
+     * The one start (#151): "Start experiment", once, from a saved definition — everything after it runs by itself.
+     *
+     * Short and synchronous only in what has to be said at once: the experiment exists, is not being deleted, has a
+     * valid definition and has not been started already. Then the order is put in the execution line and that is all
+     * this request does. Preparing (runs, items, people, questions, the activity), the workers, the sittings, the
+     * traces and the aggregation follow from the pipeline tick and the tasks it queues, with no browser and no session
+     * (execution_queue::advance(), task\prepare_experiment). An installation that cannot run yet does not refuse the
+     * order: it waits in the line and says why, and goes on once that is fixed.
+     *
+     * Idempotent: a second start, from a double click or a second browser, finds the order already there.
+     *
+     * @param int $experimentid The experiment.
+     * @return array{ok: bool, reason: string, position: int, warning: string, detail: string}
+     */
+    public static function start(int $experimentid): array {
+        global $DB;
+
+        $answer = static fn(bool $ok, string $reason, int $position = 0, string $warning = '', string $detail = ''): array
+            => ['ok' => $ok, 'reason' => $reason, 'position' => $position, 'warning' => $warning, 'detail' => $detail];
+        $experiment = $DB->get_record('local_catquizlab_experiment', ['id' => $experimentid]);
+        if (!$experiment) {
+            return $answer(false, 'experiment-not-found');
+        }
+        if ((int) $experiment->timedeleting > 0) {
+            return $answer(false, 'being-deleted');
+        }
+        // A definition that is not valid blocks the start, at once and with its reasons: it is the one thing a
+        // person has to change, and the line is no place to find that out.
+        $validation = experiment_service::validate(json_decode((string) $experiment->configjson, true) ?: []);
+        if (empty($validation['valid'])) {
+            return $answer(false, 'invalid-definition', 0, '', implode('; ', (array) ($validation['errors'] ?? [])));
+        }
+        $state = self::state($experimentid)['state'];
+        if (!in_array($state, self::STARTABLE, true)) {
+            return $answer(false, 'not-startable-' . $state);
+        }
+
+        $queued = execution_queue::enqueue($experimentid);
+        debug_trace::record('ui', 'start_accepted', ['experimentid' => $experimentid, 'state' => $state] + $queued);
+        if (!empty($queued['ok'])) {
+            // The line moves at the next tick that cron runs, not at the next five-minute mark.
+            \local_catquizlab\task\kick_pipeline::queue('start-accepted');
+        }
+
+        return $answer(
+            (bool) $queued['ok'],
+            (string) $queued['reason'],
+            (int) ($queued['place'] ?? $queued['position']),
+            (string) ($queued['warning'] ?? '')
+        );
+    }
+
+    /**
+     * Prepare an experiment in the background, at its turn in the line (#151).
+     *
+     * The runs of the sweep are created when there are none; every draft run is then started, each by its own setup
+     * task (run_lifecycle::start_drafts(), the orchestrator), so that a sweep of hundreds of runs is not one long
+     * request. Runs that are ready hand out their sittings as soon as they are.
+     *
+     * Idempotent: runs are created only when the experiment has none, and only draft runs are started.
+     *
+     * @param int $experimentid The experiment.
+     * @return array{ok: bool, created: int, started: int, blocked: int, reason: string}
+     */
+    public static function prepare_in_background(int $experimentid): array {
+        global $DB;
+
+        $created = 0;
+        if (!$DB->record_exists('local_catquizlab_run', ['experimentid' => $experimentid])) {
+            $created = (int) (experiment_service::create_sweep($experimentid)['created'] ?? 0);
+        }
+        $started = run_lifecycle::start_drafts($experimentid);
+
+        return [
+            'ok'      => (int) $started['blocked'] === 0,
+            'created' => $created,
+            'started' => (int) $started['started'],
+            'blocked' => (int) $started['blocked'],
+            'reason'  => (string) $started['reason'],
+        ];
+    }
+
     /**
      * Prepare every run of an experiment, from definition to queued sittings.
      *

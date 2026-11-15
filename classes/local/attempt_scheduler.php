@@ -169,6 +169,9 @@ class attempt_scheduler {
             // Finished, waiting for its trace (#138): neither collected nor failed.
             'tracepending' => $count(self::STATUS_TRACEPENDING),
             'pausecauses' => [],
+            // Why the sittings of each run that cannot hand out work wait (#133 AK2): its state and, where it failed,
+            // the reason it failed with.
+            'blockcauses' => [],
         ];
 
         // Grouped by run so the run's state is read once rather than per
@@ -218,6 +221,21 @@ class attempt_scheduler {
                 // failed, finished. The attempts are real and unreachable, and
                 // showing them as waiting invites waiting for them.
                 $counts['blocked'] += $total;
+                if (isset($recovery[(int) $row->runid])) {
+                    $cause = get_string('queue:blockrecovery', 'local_catquizlab');
+                } else {
+                    $cause = run_registry::status_label((int) $row->runstatus);
+                    $failed = (string) ($manifest['lifecycle']['failedreason'] ?? '');
+                    if ((int) $row->runstatus === registry::STATUS_FAILED && $failed !== '') {
+                        $cause .= ': ' . reason_catalog::text($failed);
+                    }
+                }
+                $counts['blockcauses'][] = ['runid' => (int) $row->runid, 'cause' => $cause, 'waiting' => $total,
+                    'line' => get_string(
+                        'queue:blockcause',
+                        'local_catquizlab',
+                        (object) ['runid' => (int) $row->runid, 'cause' => $cause, 'waiting' => $total]
+                    )];
                 continue;
             }
 
@@ -814,8 +832,7 @@ class attempt_scheduler {
     protected static function look_for_trace(\stdClass $attempt, callable $collect, int $now): string {
         global $DB;
 
-        $looks = $DB->count_records('local_catquizlab_attemptlog', ['attemptid' => $attempt->id,
-            'outcome' => attempt_history::TRACE_PENDING]);
+        $looks = self::trace_looks((int) $attempt->id);
         attempt_collector::clear_defects();
         if ($collect((int) $attempt->id) !== null) {
             attempt_history::record((int) $attempt->id, attempt_history::COLLECTED, [
@@ -828,11 +845,17 @@ class attempt_scheduler {
         $defects = attempt_collector::last_defects();
         $lasterror = $defects !== [] ? ['lasterror' => 'trace_missing: [' . implode(',', $defects) . ']'] : [];
         if ($looks >= self::TRACE_RETRIES) {
+            // Given up with everything needed to find it again (#138 AK4): the lab sitting, the engine attempt and what
+            // the engine holds of it, the workers' correlation ids, what the trace lacked and how often it was looked
+            // for. The lookup can be opened again (reopen_trace_lookup(), cli/recover_traces.php).
+            $provenance = self::trace_provenance((int) $attempt->id, $looks + 1, $defects, $now);
             $DB->update_record('local_catquizlab_attempt', (object) (['id' => $attempt->id,
                 'status' => self::STATUS_FAILED, 'timemodified' => $now] + $lasterror));
             attempt_history::record((int) $attempt->id, attempt_history::ABANDONED, [
                 'tryno' => (int) $attempt->tries,
+                'engineattemptid' => $provenance['engineattemptid'] ?: null,
                 'detail' => get_string('history:tracegivenup', 'local_catquizlab', $looks),
+                'extra' => ['trace' => $provenance],
             ]);
             return 'givenup';
         }
@@ -845,5 +868,167 @@ class attempt_scheduler {
             ]),
         ]);
         return 'waiting';
+    }
+
+    /**
+     * How often a sitting's missing trace has been looked for since its lookup was last opened (#138).
+     *
+     * @param int $attemptid The sitting.
+     * @return int
+     */
+    protected static function trace_looks(int $attemptid): int {
+        global $DB;
+
+        $reopened = (int) $DB->get_field_sql(
+            'SELECT MAX(id) FROM {local_catquizlab_attemptlog} WHERE attemptid = ? AND outcome = ?',
+            [$attemptid, attempt_history::REQUEUED]
+        );
+
+        return $DB->count_records_select(
+            'local_catquizlab_attemptlog',
+            'attemptid = ? AND outcome = ? AND id > ?',
+            [$attemptid, attempt_history::TRACE_PENDING, $reopened]
+        );
+    }
+
+    /**
+     * Where a sitting whose trace never came can be found, and what was found of it (#138 AK4).
+     *
+     * @param int $attemptid The sitting.
+     * @param int $looks How often its trace was looked for.
+     * @param string[] $defects What the trace lacked at the last look, by the contract's codes.
+     * @param int $now The clock.
+     * @return array labattemptid, runid, personid, engineattemptid, engine (the host's attempt: found, state,
+     *     questionsattempted, questionusage), lookup (what the engine says about the sitting), defects, looks,
+     *     correlationids (the executions' ids, oldest first), firstmissing, givenup.
+     */
+    public static function trace_provenance(int $attemptid, int $looks, array $defects, int $now): array {
+        global $DB;
+
+        $sitting = $DB->get_record('local_catquizlab_attempt', ['id' => $attemptid], 'id, runid, personid, engineattemptid');
+        $engineid = (int) ($sitting->engineattemptid ?? 0);
+        $engine = ['found' => false];
+        if ($engineid > 0 && $DB->get_manager()->table_exists('adaptivequiz_attempt')) {
+            $row = $DB->get_record('adaptivequiz_attempt', ['id' => $engineid], 'id, attemptstate, questionsattempted, uniqueid');
+            if ($row) {
+                $engine = ['found' => true, 'state' => (string) $row->attemptstate,
+                    'questionsattempted' => (int) $row->questionsattempted, 'questionusage' => (int) $row->uniqueid];
+            }
+        }
+        $history = $DB->get_records(
+            'local_catquizlab_attemptlog',
+            ['attemptid' => $attemptid],
+            'id ASC',
+            'id, outcome, correlationid, timecreated'
+        );
+        $correlations = [];
+        $firstmissing = null;
+        foreach ($history as $row) {
+            if ((string) $row->correlationid !== '' && !in_array($row->correlationid, $correlations, true)) {
+                $correlations[] = (string) $row->correlationid;
+            }
+            if ($row->outcome === attempt_history::TRACE_PENDING && $firstmissing === null) {
+                $firstmissing = (int) $row->timecreated;
+            }
+        }
+
+        return [
+            'labattemptid' => $attemptid,
+            'runid' => (int) ($sitting->runid ?? 0),
+            'personid' => (int) ($sitting->personid ?? 0),
+            'engineattemptid' => $engineid,
+            'engine' => $engine,
+            'lookup' => $engineid > 0 ? engine_validity::unmeasured_reason($engineid) : 'noengineattempt',
+            'defects' => array_values($defects),
+            'looks' => $looks,
+            'correlationids' => array_slice($correlations, -10),
+            'firstmissing' => $firstmissing,
+            'givenup' => $now,
+        ];
+    }
+
+    /**
+     * Open the lookup of a sitting whose trace was given up again (#138 AK4): it waits for its trace once more, with
+     * the full number of looks, and the next look is due now. Only a sitting given up for a missing trace; one that
+     * failed otherwise is played again with run_lifecycle::requeue_failed() instead.
+     *
+     * @param int $attemptid The sitting.
+     * @param string $by Who opened it, for the history.
+     * @return bool Whether it waits for its trace now.
+     */
+    public static function reopen_trace_lookup(int $attemptid, string $by = ''): bool {
+        global $DB;
+
+        [$had, $reopened] = sitting_lock::run($attemptid, sitting_lock::COLLECT_WAIT, static function () use (
+            $DB,
+            $attemptid,
+            $by
+        ): bool {
+            $row = $DB->get_record('local_catquizlab_attempt', ['id' => $attemptid], 'id, status, lasterror, tries');
+            if (!$row || (int) $row->status !== self::STATUS_FAILED || !self::gave_up_trace($attemptid)) {
+                return false;
+            }
+            $now = time();
+            $DB->update_record('local_catquizlab_attempt', (object) ['id' => $attemptid,
+                'status' => self::STATUS_TRACEPENDING, 'nextruntime' => $now, 'leaseowner' => null, 'leaseexpires' => 0,
+                'timemodified' => $now]);
+            attempt_history::record($attemptid, attempt_history::REQUEUED, [
+                'tryno' => (int) $row->tries,
+                'detail' => get_string('history:tracereopened', 'local_catquizlab', $by !== '' ? $by : '-'),
+            ]);
+            return true;
+        });
+
+        return $had && $reopened;
+    }
+
+    /**
+     * Whether a sitting's last end was giving up its missing trace.
+     *
+     * @param int $attemptid The sitting.
+     * @return bool
+     */
+    public static function gave_up_trace(int $attemptid): bool {
+        global $DB;
+
+        $last = $DB->get_records(
+            'local_catquizlab_attemptlog',
+            ['attemptid' => $attemptid],
+            'id DESC',
+            'id, outcome, diagnosis',
+            0,
+            1
+        );
+        $last = reset($last);
+
+        return $last && $last->outcome === attempt_history::ABANDONED
+            && isset(json_decode((string) $last->diagnosis, true)['trace']);
+    }
+
+    /**
+     * The sittings of a run whose trace was given up, each with its provenance as recorded then.
+     *
+     * @param int $runid The run.
+     * @return array[] Sitting id => provenance (see trace_provenance()).
+     */
+    public static function given_up_traces(int $runid): array {
+        global $DB;
+
+        $out = [];
+        $failed = $DB->get_fieldset_select(
+            'local_catquizlab_attempt',
+            'id',
+            'runid = ? AND status = ?',
+            [$runid, self::STATUS_FAILED]
+        );
+        foreach ($failed as $id) {
+            if (!self::gave_up_trace((int) $id)) {
+                continue;
+            }
+            $last = $DB->get_records('local_catquizlab_attemptlog', ['attemptid' => $id], 'id DESC', 'id, diagnosis', 0, 1);
+            $out[(int) $id] = json_decode((string) reset($last)->diagnosis, true)['trace'];
+        }
+
+        return $out;
     }
 }

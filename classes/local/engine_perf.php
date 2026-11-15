@@ -54,7 +54,7 @@ class engine_perf {
     public static function available(): bool {
         global $DB;
 
-        return class_exists(self::REPORT) && $DB->get_manager()->table_exists(self::TABLE);
+        return environment::catquiz_available() && class_exists(self::REPORT) && $DB->get_manager()->table_exists(self::TABLE);
     }
 
     /**

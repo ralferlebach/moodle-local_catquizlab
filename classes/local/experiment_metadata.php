@@ -140,9 +140,8 @@ class experiment_metadata {
      * @return array[] when, who, oldname, newname. Empty where the standard log is off.
      */
     public static function history(int $experimentid, int $limit = 10): array {
-        global $CFG, $DB;
+        global $DB;
 
-        require_once($CFG->dirroot . '/user/lib.php');
         if (!$DB->get_manager()->table_exists('logstore_standard_log')) {
             return [];
         }
@@ -150,7 +149,7 @@ class experiment_metadata {
         $conditions = ['eventname' => $eventname, 'objectid' => $experimentid];
         $fields = 'id, userid, timecreated, other';
         $rows = $DB->get_records('logstore_standard_log', $conditions, 'timecreated DESC, id DESC', $fields, 0, $limit);
-        $users = $rows === [] ? [] : user_get_users_by_id(array_unique(array_map(static fn($r) => (int) $r->userid, $rows)));
+        $users = core_compat::users_by_id(array_values(array_unique(array_map(static fn($r) => (int) $r->userid, $rows))));
         $out = [];
         foreach ($rows as $row) {
             $other = json_decode((string) $row->other, true);

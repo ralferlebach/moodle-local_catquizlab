@@ -34,6 +34,16 @@ use local_catquizlab\local\environment;
  */
 final class run_orchestrator_test extends \advanced_testcase {
     /**
+     * The components as installed again after a test that simulated their absence.
+     *
+     * @return void
+     */
+    protected function tearDown(): void {
+        \local_catquizlab\local\environment::reset();
+        parent::tearDown();
+    }
+
+    /**
      * The pipeline lists the five setup stages in order.
      *
      * @return void
@@ -68,9 +78,8 @@ final class run_orchestrator_test extends \advanced_testcase {
         $this->resetAfterTest();
         $this->setAdminUser();
 
-        if (environment::engine_available()) {
-            $this->markTestSkipped('Engine present; the guard path is not exercised.');
-        }
+        // Where the engine is installed, as in CI, the guard runs against a simulated absence instead of being skipped (#140).
+        \local_catquizlab\local\environment::simulate_absent(['local_catquiz', 'mod_adaptivequiz']);
 
         /** @var \local_catquizlab_generator $generator */
         $generator = $this->getDataGenerator()->get_plugin_generator('local_catquizlab');

@@ -283,10 +283,11 @@ Feature: Defining and running CAT experiments from the web interface
     And I press "Create sweep"
     Then I should not see "Executed"
     And I should see "Runs created, not started"
-    # Incident 2026-11-09: runs created and not started offered no way on.
+    # Incident 2026-11-09: runs created and not started offered no way on. Since #151 the way on is the one start.
     And I follow "View progress"
     And I should see "Runs created, not started"
-    And "Start runs" "button" should exist
+    And "Start experiment" "button" should exist
+    And "Start runs" "button" should not exist
 
   Scenario: A running experiment is stopped at once and says so
     # Reported 2026-11-09: deleting did not stop an experiment, and there was no other way.

@@ -99,13 +99,13 @@ function decodeQuietly(text) {
 }
 
 /**
- * Whether a parameter of this name must never reach a log with its value — the same rule as the server's
- * log_redactor (#149): decoded (also twice), lower case, brackets and everything but letters and digits removed.
+ * A parameter name as it is compared — the server's log_redactor::normalise_name(): decoded (also when encoded
+ * twice), lower case, array brackets and everything but letters and digits removed.
  *
  * @param {string} name The name as it was sent.
- * @returns {boolean}
+ * @returns {string}
  */
-function isSecretName(name) {
+function normaliseName(name) {
     let normalised = String(name || '');
     for (let i = 0; i < 3; i++) {
         const decoded = decodeQuietly(normalised);
@@ -114,7 +114,18 @@ function isSecretName(name) {
         }
         normalised = decoded;
     }
-    normalised = normalised.toLowerCase().split('[')[0].replace(/[^a-z0-9]/g, '');
+    return normalised.toLowerCase().split('[')[0].replace(/[^a-z0-9]/g, '');
+}
+
+/**
+ * Whether a parameter of this name must never reach a log with its value — the same rule as the server's
+ * log_redactor (#149): decoded (also twice), lower case, brackets and everything but letters and digits removed.
+ *
+ * @param {string} name The name as it was sent.
+ * @returns {boolean}
+ */
+function isSecretName(name) {
+    const normalised = normaliseName(name);
     if (normalised === '') {
         return false;
     }
@@ -146,6 +157,45 @@ function sanitiseUrl(url) {
             }
             return isSecretName(name) || looksLikeEmail(value) ? `${before}${name}=[redacted]` : whole;
         });
+}
+
+/** @type {Set<string>} Parameters whose values a logged request URL keeps: the server's log_redactor::ROUTING_NAMES. */
+const ROUTING_NAMES = new Set(JSON.parse(fs.readFileSync(path.join(__dirname, 'log_params.json'), 'utf8')).names);
+
+/**
+ * A request's URL as a log keeps it (#149 AK2), the server's log_redactor::redact_uri(): a secret parameter's value
+ * becomes [redacted], the value of a parameter that is not a routing name [omitted], the fragment goes, and so does
+ * a token in the path (tokenpluginfile.php, webservice/pluginfile.php).
+ *
+ * @param {string} url The URL.
+ * @returns {string}
+ */
+function sanitiseRequestUrl(url) {
+    const text = String(url || '').replace(/[\x00-\x1F\x7F]/g, '');
+    const hash = text.indexOf('#');
+    const whole = hash < 0 ? text : text.slice(0, hash);
+    const at = whole.indexOf('?');
+    const base = (at < 0 ? whole : whole.slice(0, at))
+        .replace(/(\/(?:tokenpluginfile|webservice\/pluginfile)\.php\/)[^/?]+/i, '$1[redacted]');
+    if (at < 0) {
+        return base;
+    }
+    const pairs = whole.slice(at + 1).split(/[&;]/).filter((pair) => pair !== '').map((pair) => {
+        const eq = pair.indexOf('=');
+        if (eq < 0) {
+            return pair;
+        }
+        const name = pair.slice(0, eq);
+        const value = pair.slice(eq + 1);
+        if (isSecretName(name) || looksLikeEmail(value)) {
+            return `${name}=[redacted]`;
+        }
+        if (value !== '' && !ROUTING_NAMES.has(normaliseName(name))) {
+            return `${name}=[omitted]`;
+        }
+        return pair;
+    });
+    return base + '?' + pairs.join('&');
 }
 
 /**
@@ -225,7 +275,7 @@ async function waitForState(page, questionSelectors, {label = 'step', timeout = 
                 continue;
             }
             throw new Error(`No expected state (question, finish page or error page) within ${timeout} ms after `
-                + `${label}; url=${sanitiseUrl(page.url())}: ${error.message}`);
+                + `${label}; url=${sanitiseRequestUrl(page.url())}: ${sanitiseUrl(error.message)}`);
         }
     }
     throw new Error(`No expected state after ${label}.`);
@@ -450,14 +500,15 @@ async function clickAndSettle(page, selectors, questionSelectors,
         for (const hop of request.redirectChain()) {
             const hopResponse = hop.response();
             chain.push({method: hop.method(), status: hopResponse ? hopResponse.status() : 0,
-                url: sanitiseUrl(hop.url()), location: sanitiseUrl(hopResponse ? hopResponse.headers().location || '' : '')});
+                url: sanitiseRequestUrl(hop.url()),
+                location: sanitiseRequestUrl(hopResponse ? hopResponse.headers().location || '' : '')});
         }
-        chain.push({method: request.method(), status: response.status(), url: sanitiseUrl(response.url()), location: ''});
+        chain.push({method: request.method(), status: response.status(), url: sanitiseRequestUrl(response.url()), location: ''});
     };
     const onFailed = (request) => {
         if (request.frame() === page.mainFrame() && request.isNavigationRequest()) {
             const failure = request.failure();
-            chain.push({method: request.method(), status: 0, url: sanitiseUrl(request.url()), location: '',
+            chain.push({method: request.method(), status: 0, url: sanitiseRequestUrl(request.url()), location: '',
                 failure: failure ? failure.errorText : 'failed'});
         }
     };
@@ -589,17 +640,17 @@ class Recorder {
         page.on('pageerror', (error) => this.event('page-error', error.message));
         page.on('requestfailed', (request) => {
             const failure = request.failure();
-            this.event('request-failed', `${request.method()} ${sanitiseUrl(request.url())}: ${failure ? failure.errorText : ''}`);
+            this.event('request-failed', `${request.method()} ${sanitiseRequestUrl(request.url())}: ${failure ? failure.errorText : ''}`);
         });
         page.on('response', (response) => {
-            this.statuses.push({status: response.status(), url: sanitiseUrl(response.url()), at: Date.now() - this.started});
+            this.statuses.push({status: response.status(), url: sanitiseRequestUrl(response.url()), at: Date.now() - this.started});
             if (this.statuses.length > MAX_STATUSES) {
                 this.statuses.shift();
             }
         });
         page.on('framenavigated', (frame) => {
             if (frame === page.mainFrame()) {
-                this.event('navigated', sanitiseUrl(frame.url()));
+                this.event('navigated', sanitiseRequestUrl(frame.url()));
             }
         });
     }
@@ -719,7 +770,7 @@ class Recorder {
         write('error.json', JSON.stringify({
             ...meta,
             timestamp: new Date().toISOString(),
-            url: sanitiseUrl(this.page.url()),
+            url: sanitiseRequestUrl(this.page.url()),
             title,
             message: error ? error.message : null,
             stack: error ? error.stack : null,
@@ -729,5 +780,6 @@ class Recorder {
     }
 }
 
-module.exports = {STATE, SUBMIT, UNCERTAIN, isContextLost, isUnresponsive, isSecretName, sanitiseUrl, sanitiseHtml, stateInPage,
+module.exports = {STATE, SUBMIT, UNCERTAIN, isContextLost, isUnresponsive, isSecretName, sanitiseUrl, sanitiseRequestUrl,
+    sanitiseHtml, stateInPage,
     waitForState, clickAndSettle, safeClick, acceptDialogs, withContextRetry, classifySubmit, reconcile, describeSubmit, Recorder};

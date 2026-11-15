@@ -179,7 +179,7 @@ class mode_detection {
      * @param array $scalemapindex Engine scale id => "category:subscale".
      * @param string $rule engine_validity::RULE_UNIFORM or RULE_ENGINE.
      * @param float $threshold The threshold in logits.
-     * @return array|null role, strategy, pairkey, valid, attemptid, withitems, truth (per target: number of true
+     * @return array|null role, strategy, pairkey, valid, attemptid, twinid, withitems, truth (per target: number of true
      *      targets), scales (subscale key => [true deviation, estimated deviation]) — of valid scale results;
      *      null for a strategy without a role.
      */
@@ -225,6 +225,8 @@ class mode_detection {
             'pairkey' => self::pair_key($observation),
             'valid' => $valid,
             'attemptid' => (int) ($observation['attemptid'] ?? 0),
+            // Who the point is (#144 AK6): the simulated person, the same in both sittings of a pair.
+            'twinid' => (string) ($observation['twinid'] ?? ''),
             'withitems' => $withitems,
             'truth' => $truth,
             'included' => $included,
@@ -514,6 +516,7 @@ class mode_detection {
                         'estmode' => $ownscales[$scale][1],
                         'truebaseline' => $twinscales[$scale][0],
                         'attemptid' => $sitting['attemptid'], 'twin' => $twin['attemptid'],
+                        'twinid' => (string) ($sitting['twinid'] ?? ''),
                     ];
                 }
                 // Per person, the mean absolute error: what the table's mean difference is computed from, as before.

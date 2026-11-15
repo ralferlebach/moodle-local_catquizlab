@@ -36,35 +36,23 @@ use local_catquizlab\local\preflight;
  */
 final class preflight_test extends \advanced_testcase {
     /**
-     * Before Moodle 5 there is no transfer, so nothing is pending and nothing blocks.
+     * A queued question bank transfer blocks the start, by name, where Moodle has one (5.0 and later); before Moodle 5
+     * there is no transfer, nothing is pending and nothing blocks. One test for both, so that neither is a skip (#140).
      *
      * @return void
      */
-    public function test_before_moodle_5_nothing_is_pending(): void {
-        $this->resetAfterTest();
-        $this->setAdminUser();
-        if (class_exists('\mod_qbank\task\transfer_question_categories')) {
-            $this->markTestSkipped('Moodle 5 or later; covered by the test below.');
-        }
-
-        $this->assertFalse(environment::question_bank_transfer_pending());
-        $blocker = get_string('preflight:qbanktransfer', 'local_catquizlab');
-        $this->assertNotContains($blocker, preflight::check()['blockers']);
-    }
-
-    /**
-     * Moodle 5: a queued transfer blocks the start, by name; once it has run, it does not.
-     *
-     * @return void
-     */
-    public function test_a_queued_question_bank_transfer_blocks_the_start(): void {
+    public function test_a_queued_question_bank_transfer_blocks_the_start_where_there_is_one(): void {
         global $DB;
         $this->resetAfterTest();
         $this->setAdminUser();
-        if (!class_exists('\mod_qbank\task\transfer_question_categories')) {
-            $this->markTestSkipped('Before Moodle 5 there is no question bank transfer.');
-        }
         $blocker = get_string('preflight:qbanktransfer', 'local_catquizlab');
+
+        if (!class_exists('\mod_qbank\task\transfer_question_categories')) {
+            // Moodle 4.5: no transfer.
+            $this->assertFalse(environment::question_bank_transfer_pending());
+            $this->assertNotContains($blocker, preflight::check()['blockers']);
+            return;
+        }
 
         // Whatever the test site left queued is gone: nothing pending.
         $DB->delete_records_select('task_adhoc', $DB->sql_like('classname', ':c'), ['c' => '%transfer_question%']);

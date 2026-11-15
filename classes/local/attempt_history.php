@@ -173,7 +173,9 @@ class attempt_history {
             : [];
         $extra = (array) ($detail['extra'] ?? []);
         // The entry 'truncated' says what was cut and where the full diagnosis is (#111).
-        foreach (['browser', 'transport', 'artefacts', 'truncated', 'reconciliations', 'reconciliation', 'lease'] as $key) {
+        // 'trace': where a sitting whose trace never came can be found (#138 AK4).
+        $keys = ['browser', 'transport', 'artefacts', 'truncated', 'reconciliations', 'reconciliation', 'lease', 'trace'];
+        foreach ($keys as $key) {
             if (!empty($extra[$key])) {
                 $diagnosis[$key] = json_decode(self::redact(json_encode($extra[$key], JSON_UNESCAPED_SLASHES)), true);
             }

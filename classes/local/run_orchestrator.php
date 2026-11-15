@@ -762,6 +762,8 @@ class run_orchestrator {
             'seed'               => (int) $context['seed'],
             'poolseed'           => $seeds['pool'],
             'mutationseed'       => $seeds['mutation'],
+            // For the canonical item key (#154): the pool depends on replication and model, and so does the key.
+            'replication'        => (int) ($context['run']->replication ?? 1),
             'template'           => $options['template'] ?? null,
         ]);
     }

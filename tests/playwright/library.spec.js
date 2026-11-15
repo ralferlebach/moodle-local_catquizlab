@@ -116,6 +116,15 @@ test('create, find, open, compare, copy and delete an experiment from the librar
     execFileSync('php', [adhoc, '--execute', '--classname=\\local_catquizlab\\task\\delete_experiment'], {encoding: 'utf8'});
     await page.goto(LIBRARY + '&q=' + encodeURIComponent(name), {waitUntil: 'networkidle'});
     await expect(gone).toHaveCount(0);
+    // Gone from the list is a success only when the deletion is shown complete (#145 AK1): its record says queued,
+    // started and finished with nothing left in the lab's tables, and the experiment row is gone. Read from the record
+    // the deletion keeps beyond the experiment (cli/deletion_report.php, #145 AK6).
+    const experimentid = new URL(href, page.url()).searchParams.get('id');
+    const report = JSON.parse(execFileSync('php', [path.resolve(__dirname, '../../cli/deletion_report.php'),
+        '--experimentid=' + experimentid, '--json'], {encoding: 'utf8'}));
+    expect(report.complete, JSON.stringify(report.events)).toBe(true);
+    expect(report.events.map((e) => e.event)).toEqual(expect.arrayContaining(['queued', 'started', 'finished']));
+    expect(report.events[report.events.length - 1].left).toEqual([]);
     const left = await page.locator('[data-region="catquizlab-library"] tbody tr th').allTextContents();
     expect(left.length, 'the copy is still there').toBeGreaterThanOrEqual(1);
 });

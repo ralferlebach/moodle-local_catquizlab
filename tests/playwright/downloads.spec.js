@@ -26,6 +26,10 @@
  */
 
 const fs = require('fs');
+const crypto = require('crypto');
+const os = require('os');
+const pathlib = require('path');
+const {execFileSync} = require('child_process');
 const {test, expect} = require('@playwright/test');
 const {needs} = require('./support/needs');
 
@@ -175,6 +179,57 @@ test('every download on the results pages delivers a usable file', async({page})
     check(await download(page, page.locator('a[href*="action=export"]').first()), {minrows: 0});
 });
 
+test('the research data package downloads and holds what its manifest says (#156)', async({page}) => {
+    needs(!EXPERIMENT, 'PLOTS_EXPERIMENTID not set; run cli/seed_results.php first.');
+    await signin(page);
+    const results = '/local/catquizlab/results.php?experimentid=' + EXPERIMENT;
+
+    // From the experiment page, one link to its package (AK6).
+    await page.goto('/local/catquizlab/experiment.php?id=' + EXPERIMENT, {waitUntil: 'networkidle'});
+    const link = page.locator('[data-region="catquizlab-package-link"] a');
+    await expect(link).toHaveCount(1);
+    await link.click();
+    await page.waitForLoadState('networkidle');
+    expect(page.url()).toContain('tab=export');
+    await expect(page.locator('#catquizlab-research-package')).toBeVisible();
+    // The size before the download: a row per table and the total.
+    const forecast = page.locator('[data-region="catquizlab-package-forecast"]');
+    await expect(forecast.locator('tbody tr')).toHaveCount(12);
+
+    // Downloaded by its button (POST, session key), unpacked with the system's unzip, every table checked against
+    // the manifest: header, checksum.
+    const file = await download(page, page.locator('form:has(input[name="action"][value="researchpackage"]) '
+        + 'button[type="submit"]'));
+    check(file);
+    expect(file.name).toMatch(/^catquizlab-research-\d+-\d{8}-\d{6}\.zip$/);
+    const zip = pathlib.join(fs.mkdtempSync(pathlib.join(os.tmpdir(), 'package-')), file.name);
+    fs.writeFileSync(zip, file.body);
+    const read = (name) => execFileSync('unzip', ['-p', zip, name], {maxBuffer: 512 * 1024 * 1024});
+    const manifest = JSON.parse(read('manifest.json').toString('utf8'));
+    expect(manifest.schema).toBe('catquizlab-research-package');
+    expect(String(manifest.experimentid)).toBe(String(EXPERIMENT));
+    const codebook = JSON.parse(read('codebook.json').toString('utf8'));
+    expect(Object.keys(manifest.tables)).toEqual(Object.keys(codebook.tables));
+    for (const [table, entry] of Object.entries(manifest.tables)) {
+        const body = read(entry.file);
+        expect(crypto.createHash('sha256').update(body).digest('hex'), table + ' checksum').toBe(entry.sha256);
+        expect(body.toString('utf8').split('\n')[0], table + ' header').toBe(entry.columns.join(','));
+    }
+    expect(manifest.tables.attempts.rows, 'the seeded sittings are in it').toBeGreaterThan(0);
+    expect(manifest.tables.steps.rows).toBeGreaterThan(0);
+    expect(JSON.parse(read('reproducibility.json').toString('utf8'))).toHaveProperty('runs');
+    // The R re-analysis travels with the data (#157): its entry script, its README, the dashboard's figures to compare.
+    expect(read('reanalysis/run_all.R').toString('utf8')).toContain('Rscript reanalysis/run_all.R');
+    expect(read('reanalysis/README.md').toString('utf8')).toContain('Reanalyse in R');
+    expect(read('reference/dashboard.csv').toString('utf8').split('\n')[0]).toBe('tab,section,groupby,group,metric,stat,value');
+
+    // In the background: queued, said, and listed until it is built.
+    await page.locator('form:has(input[name="action"][value="researchpackagelater"]) button[type="submit"]').click();
+    await page.waitForLoadState('networkidle');
+    await expect(page.locator('.alert-success')).toContainText(/background|Hintergrund/);
+    await expect(page.locator('[data-region="catquizlab-package-files"]')).toContainText(/Queued|Being built|Warteschlange|Wird erstellt/);
+});
+
 test('the logs and a run\'s debug artefacts download', async({page}) => {
     needs(!RUN, 'RECOVERY_RUNID not set; run cli/seed_failed_attempt.php first.');
     await signin(page);
@@ -254,6 +309,13 @@ test('downloads refuse cleanly: no session key, an unknown experiment, a user wi
         form: {experimentid: '987654', action: 'package', sesskey: sesskey},
     }), /no experiment with the id 987654|kein Experiment mit der ID 987654/);
 
+    // The research data package (#156): not by GET, not without the session key.
+    await refused(await page.request.get('/local/catquizlab/results.php?experimentid=' + EXPERIMENT
+        + '&tab=export&action=researchpackage&sesskey=' + sesskey), /invalid request|Ungültige Anfrage|invalidrequest/i);
+    await refused(await page.request.post('/local/catquizlab/results.php', {
+        form: {experimentid: EXPERIMENT, action: 'researchpackage'},
+    }), /sesskey|session/i);
+
     // An unknown export level is refused in words, not answered with another level's file (#121).
     await refused(await page.request.get('/local/catquizlab/results.php?experimentid=' + EXPERIMENT
         + '&tab=export&level=nonsense&action=csv'), /Unknown export level|Unbekannte Exportebene/);
@@ -278,9 +340,11 @@ test('downloads refuse cleanly: no session key, an unknown experiment, a user wi
     ]) {
         await refused(await plain.request.get(url), /Access denied|Zugriff verweigert|permission|Berechtigung|not allowed/i);
     }
-    await refused(await plain.request.post('/local/catquizlab/results.php', {
-        form: {experimentid: EXPERIMENT, action: 'package', sesskey: plainkey},
-    }), /Access denied|Zugriff verweigert|permission|Berechtigung|not allowed/i);
+    for (const action of ['package', 'researchpackage', 'researchpackagelater']) {
+        await refused(await plain.request.post('/local/catquizlab/results.php', {
+            form: {experimentid: EXPERIMENT, action: action, sesskey: plainkey},
+        }), /Access denied|Zugriff verweigert|permission|Berechtigung|not allowed/i);
+    }
     // The log downloads, text and JSON, with a valid session key of their own.
     for (const kind of ['download', 'downloadjson']) {
         await refused(await plain.request.post('/local/catquizlab/logs.php', {

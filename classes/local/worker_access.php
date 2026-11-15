@@ -295,7 +295,7 @@ class worker_access {
         $new->policyagreed = 1;
         $new->description = get_string('access:userdescription', 'local_catquizlab');
 
-        $id = user_create_user($new, false, false);
+        $id = core_compat::create_user($new, false, false);
         $changed[] = 'user';
 
         return $DB->get_record('user', ['id' => $id]);

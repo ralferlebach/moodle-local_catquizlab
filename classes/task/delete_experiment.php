@@ -67,12 +67,19 @@ class delete_experiment extends \core\task\adhoc_task {
         }
 
         $started = microtime(true);
+        \local_catquizlab\local\deletion_log::event($experimentid, 'started', ['deep' => !empty($data->deep),
+            'taskid' => (int) $this->get_id()]);
         try {
             $result = purger::delete_experiment($experimentid, !empty($data->deep), true);
         } catch (\Throwable $e) {
             // Said where the experiment is listed (0.7.50): a delete that failed had left the experiment looking
             // untouched, the reason only in the task log. Moodle retries the task; the list says so meanwhile.
             self::record_error($experimentid, $e->getMessage());
+            \local_catquizlab\local\deletion_log::event($experimentid, 'failed', ['error' => \core_text::substr(
+                $e->getMessage(),
+                0,
+                1000
+            ), 'retried' => true, 'runid' => $e instanceof \local_catquizlab\local\purge_incomplete ? $e->runid : null]);
             throw $e;
         }
         if (!$result['ok']) {
@@ -99,6 +106,8 @@ class delete_experiment extends \core\task\adhoc_task {
         $DB->update_record('local_catquizlab_experiment', (object) [
             'id' => $experimentid, 'timedeleting' => time(), 'deleteerror' => null,
         ]);
+        \local_catquizlab\local\deletion_log::event($experimentid, 'queued', ['deep' => $deep,
+            'userid' => (int) ($USER->id ?? 0)]);
 
         $task = new self();
         $task->set_custom_data([

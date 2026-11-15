@@ -9,6 +9,7 @@ Stand: 0.7.41 (Re-Audit vom 16.10.2026).
 | Moodle Plugin Release CI (`moodle-release.yml`) | Lint, PHPDoc, Struktur; PHPUnit (4.5 und 5.2, MariaDB und PostgreSQL, PHP 8.2–8.3); Behat; **mit der gepinnten Engine** | ja | – | – |
 | Moodle Plugin CI (`moodle-ci.yml`) | dasselbe plus informative Linter, **mit der gepinnten Engine** | – | ja | – |
 | Interface end-to-end (`ui-e2e.yml`) | Moodle 4.5 + Engine-Set, ein Experiment über die Oberfläche, **alle** Playwright-Specs, Webserver mit `memory_limit=512M` | ja | – | ja |
+| Interface end-to-end (`ui-e2e.yml`), Job `screen-reader` | Filterleiste der Ergebnisseite je Stack mit NVDA (Windows) und VoiceOver (macOS), siehe `screenreader-ci.md` | ja | – | ja |
 | Worker CI (`worker-e2e.yml`) | Werkzeugkette und Node-Tests | ja | ja | ja |
 | Worker CI (`worker-e2e.yml`) | End-to-end je Engine-Linie (Moodle 4.5 / Legacy, Moodle 5.2 / 1.3): Sittings je Strategie, langer CLASSIC- und ALLSUBS-Lauf, verlorene Antwort/Anfrage, 300 Sittings Last, Webserver mit 512M; danach **keine** 5xx und **kein** PHP-Fatal (`cli/request_report.php --max-5xx=0 --max-fatals=0`) | ja | – | ja |
 

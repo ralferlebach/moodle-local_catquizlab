@@ -36,6 +36,16 @@ use local_catquizlab\task\collect_attempts;
  */
 final class attempt_collector_test extends \advanced_testcase {
     /**
+     * The components as installed again after a test that simulated their absence.
+     *
+     * @return void
+     */
+    protected function tearDown(): void {
+        \local_catquizlab\local\environment::reset();
+        parent::tearDown();
+    }
+
+    /**
      * collect_run counts candidates with an engine attempt id; without the engine
      * nothing is collected, but it completes cleanly and reports timing.
      *
@@ -170,10 +180,8 @@ final class attempt_collector_test extends \advanced_testcase {
         global $DB;
         $this->resetAfterTest();
 
-        // This test only asserts the guard when the engine is absent.
-        if (environment::engine_available() && environment::adaptivequiz_available()) {
-            $this->markTestSkipped('Engine present; the guard path is not exercised.');
-        }
+        // Where the engine is installed, as in CI, the guard runs against a simulated absence instead of being skipped (#140).
+        \local_catquizlab\local\environment::simulate_absent(['local_catquiz', 'mod_adaptivequiz']);
 
         /** @var \local_catquizlab_generator $generator */
         $generator = $this->getDataGenerator()->get_plugin_generator('local_catquizlab');

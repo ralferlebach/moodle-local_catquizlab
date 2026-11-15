@@ -534,6 +534,19 @@ class results_page {
                 );
             }
         }
+        // Runs that must share their item pool and do not (#154 AK4): said where the figures are, not only in the
+        // package, because every paired comparison below would stand on it.
+        if ($experimentid > 0) {
+            $identity = \local_catquizlab\local\item_identity::compare($experimentid);
+            if (!$identity['ok']) {
+                $out .= \html_writer::div(
+                    \html_writer::tag('strong', get_string('identity:problems', $component))
+                        . \html_writer::alist(array_map('s', $identity['problems']), ['class' => 'mb-0']),
+                    'alert alert-danger py-2 small mb-1',
+                    ['data-region' => 'catquizlab-basis-identity', 'role' => 'alert']
+                );
+            }
+        }
         $rule = (string) ($this->filter['validityrule'] ?? 'uniform');
         $counts = $this->query->validity_counts();
         if ($rule === 'engine' && $counts['engineunknown'] > 0 && $counts['total'] > 0) {
@@ -567,6 +580,17 @@ class results_page {
                 'small text-muted mb-2',
                 ['data-region' => 'catquizlab-completeness']
             );
+            // The item pools (#154): which runs share theirs, and whether they really do.
+            $identity = \local_catquizlab\local\item_identity::compare($experimentid);
+            $groups = array_filter($identity['groups'], static fn(array $g): bool => count($g['runs']) > 1);
+            $line = get_string('identity:summary', $component, (object) [
+                'groups' => count($groups),
+                'identical' => count(array_filter($groups, static fn(array $g): bool => $g['identical'])),
+            ]);
+            if ($identity['legacy'] !== []) {
+                $line .= ' ' . get_string('identity:legacy', $component, count($identity['legacy']));
+            }
+            $content .= \html_writer::div(s($line), 'small text-muted mb-2', ['data-region' => 'catquizlab-identity']);
             $content .= $OUTPUT->single_button(
                 new \moodle_url('/local/catquizlab/results.php', [
                     'experimentid' => $experimentid, 'action' => 'package', 'sesskey' => sesskey(),
@@ -1309,6 +1333,7 @@ class results_page {
             ];
         }
         $out .= \local_catquizlab\output\accessible_table::render($table);
+        $out .= $this->render_research_package();
 
         // What the file will say about itself, shown before it is written.
         // With the row count of the pass above: counting the rows again was a pass of its own (#147).
@@ -1331,6 +1356,95 @@ class results_page {
             ['class' => 'bg-light p-3 small', 'style' => 'max-height:20em;overflow:auto', 'tabindex' => '0',
                 'role' => 'region', 'aria-label' => get_string('export:metadata', $component)]
         );
+
+        return $out;
+    }
+
+    /**
+     * The research data package of the experiment (#156): what it holds and how large it will be, a download where it
+     * fits a request, a build in the background, and the packages built before.
+     *
+     * @return string
+     */
+    protected function render_research_package(): string {
+        global $OUTPUT;
+
+        $component = 'local_catquizlab';
+        $experimentid = (int) ($this->filter['experimentid'] ?? 0);
+        $out = \html_writer::tag(
+            'h3',
+            get_string('package:heading', $component),
+            ['class' => 'h5 mt-4', 'id' => 'catquizlab-research-package']
+        );
+        $out .= \html_writer::tag('p', get_string('package:explain', $component), ['class' => 'text-muted']);
+        if ($experimentid <= 0) {
+            return $out . \html_writer::div(get_string('package:noexperiment', $component), 'alert alert-info');
+        }
+
+        $forecast = \local_catquizlab\local\research_package::forecast($this->filter);
+        $language = current_language() === 'de' || str_starts_with(current_language(), 'de_') ? 'de' : 'en';
+        $table = new \html_table();
+        $table->attributes['class'] = 'generaltable table-sm';
+        $table->attributes['data-region'] = 'catquizlab-package-forecast';
+        $table->head = [get_string('package:table', $component), get_string('export:rowmeaning', $component),
+            get_string('package:rowsforecast', $component)];
+        foreach (\local_catquizlab\local\research_codebook::tables() as $name => $meta) {
+            // An upper bound is said to be one: steps and subscale estimates are bounded, not counted (#156 AK6).
+            $table->data[] = [\html_writer::tag('code', 'data/' . $name . '.csv'), s($meta[$language]),
+                ($forecast['exact'][$name] ? '' : get_string('package:atmost', $component) . ' ')
+                    . format_float($forecast['tables'][$name] ?? 0, 0, true)];
+        }
+        $table->data[] = [get_string('package:total', $component), '', get_string('package:atmost', $component) . ' '
+            . format_float($forecast['rows'], 0, true)];
+        $out .= \local_catquizlab\output\accessible_table::render($table);
+
+        $post = fn(string $action): \moodle_url => new \moodle_url(
+            '/local/catquizlab/results.php',
+            $this->filter + ['tab' => 'export', 'action' => $action]
+        );
+        $buttons = '';
+        if ($forecast['direct']) {
+            $buttons .= $OUTPUT->render(new \core\output\single_button(
+                $post('researchpackage'),
+                get_string('package:download', $component),
+                'post',
+                \core\output\single_button::BUTTON_PRIMARY
+            ));
+        } else {
+            $out .= \html_writer::div(
+                get_string('package:toolarge', $component),
+                'alert alert-warning',
+                ['data-region' => 'catquizlab-package-toolarge']
+            );
+        }
+        $buttons .= $OUTPUT->single_button($post('researchpackagelater'), get_string('package:background', $component), 'post');
+        $out .= \html_writer::div($buttons, 'd-flex flex-wrap gap-2 mb-2', ['data-region' => 'catquizlab-package-actions']);
+
+        $items = [];
+        foreach (\local_catquizlab\task\build_research_package::pending($experimentid) as $pending) {
+            $items[] = get_string(
+                $pending['running'] ? 'package:running' : 'package:waiting',
+                $component,
+                userdate($pending['since'], get_string('strftimedatetimeshort', 'langconfig'))
+            );
+        }
+        foreach (\local_catquizlab\task\build_research_package::stored($experimentid) as $file) {
+            $items[] = \html_writer::link(\moodle_url::make_pluginfile_url(
+                \context_system::instance()->id,
+                'local_catquizlab',
+                'export',
+                0,
+                '/',
+                $file->get_filename(),
+                true
+            ), s($file->get_filename())) . ' · '
+                . display_size($file->get_filesize()) . ' · '
+                . userdate($file->get_timemodified(), get_string('strftimedatetimeshort', 'langconfig'));
+        }
+        if ($items !== []) {
+            $out .= \html_writer::tag('h4', get_string('package:built', $component), ['class' => 'h6']);
+            $out .= \html_writer::alist($items, ['class' => 'small', 'data-region' => 'catquizlab-package-files']);
+        }
 
         return $out;
     }
@@ -3687,11 +3801,15 @@ class results_page {
         $chart->set_axes(axis_scale::SYMMETRIC, axis_scale::SYMMETRIC);
         $chart->set_basis($this->plot_basis());
         $this->configure_chart($chart, 'mode' . $target . $baseline);
+        // Each point names what it is (#144 AK6): the twin, the subscale, both signed errors with the mode they
+        // belong to and the sitting they come from. Every point of this plot is a pair of valid sittings.
         $chart->set_points(array_map(static fn(array $point): array => [
             'x' => $point['x'], 'y' => $point['y'],
             'label' => get_string('mode:plotlabel', $component, (object) [
-                'attempt' => $point['attemptid'], 'twin' => $point['twin'], 'scale' => $point['scale'],
-                'x' => format_float($point['x'], 3), 'y' => format_float($point['y'], 3),
+                'twin' => ($point['twinid'] ?? '') !== '' ? $point['twinid'] : '?', 'scale' => $point['scale'],
+                'baseline' => $names->baseline, 'mode' => $names->mode,
+                'x' => scatter_chart::readable((float) $point['x']), 'y' => scatter_chart::readable((float) $point['y']),
+                'baseattempt' => $point['twin'], 'modeattempt' => $point['attemptid'],
             ]),
         ], $comparison['points']))
             ->set_description(get_string('mode:plotpoint', $component))

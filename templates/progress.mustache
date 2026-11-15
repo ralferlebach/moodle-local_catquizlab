@@ -515,7 +515,11 @@
             <li>{{#str}}queue:failedlabel, local_catquizlab{{/str}}
                 <span data-region="catquizlab-failed">{{queue.failed}}</span></li>
             {{#queue.hasblocked}}
-                <li class="text-danger">{{#str}}queue:blocked, local_catquizlab{{/str}} {{queue.blocked}}</li>
+                <li class="text-danger">{{#str}}queue:blocked, local_catquizlab{{/str}} {{queue.blocked}}
+                    <ul class="small mb-0" data-region="catquizlab-blockcauses">
+                        {{#queue.blockcauses}}<li>{{line}}</li>{{/queue.blockcauses}}
+                    </ul>
+                </li>
             {{/queue.hasblocked}}
             {{#queue.hasnotdue}}
                 <li>{{#str}}queue:notdue, local_catquizlab{{/str}} {{queue.notdue}}</li>

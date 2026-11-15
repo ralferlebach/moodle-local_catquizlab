@@ -48,8 +48,12 @@ class metrics {
         $est = [];
         $errors = [];
         foreach ($attempts as $attempt) {
+            // No estimate, no error: left out, never counted as an estimate of 0 (#156 AK7, #157 AK3).
+            if (!isset($attempt['esttheta']) || !is_numeric($attempt['esttheta'])) {
+                continue;
+            }
             $t = (float) ($attempt['truetheta'] ?? 0.0);
-            $e = (float) ($attempt['esttheta'] ?? 0.0);
+            $e = (float) $attempt['esttheta'];
             $true[] = $t;
             $est[] = $e;
             $errors[] = $e - $t;

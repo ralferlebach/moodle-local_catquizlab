@@ -22,17 +22,22 @@ Experimentzeile (`progress_view`), Live-Poll (`local_catquizlab_live_status`:
 
 | Phase | Wann | Nächster Schritt |
 |---|---|---|
-| planned | keine Läufe | Läufe anlegen (POST `prepareexperiment`) |
-| preparing | Läufe in Vorbereitung | Fortschritt ansehen |
-| ready | alle Läufe bereit, nichts gestartet | Experiment starten (POST `startexperiment`) |
-| queued | in der Ausführungswarteschlange, nichts gestartet | Fortschritt ansehen — **kein zweiter Start** |
-| starting / collecting / waiting / paused | aus `live_progress` | Fortschritt ansehen |
+| planned | keine Läufe, nicht gestartet | **Experiment starten** (POST `startexperiment`, seit 0.7.64, #151) |
+| created | Läufe angelegt, nicht gestartet, nicht in der Warteschlange | Experiment starten |
+| preparing | Läufe in Vorbereitung; oder die Warteschlange bereitet es an seiner Reihe selbst vor (#151) | Fortschritt ansehen — bzw. Experiment starten, wenn es nicht in der Warteschlange steht |
+| ready | alle Läufe bereit, nichts gestartet, nicht in der Warteschlange | Experiment starten |
+| queued | in der Warteschlange, wartet auf seine Reihe | Fortschritt ansehen — **kein zweiter Start** |
+| starting | an der Reihe und vorbereitet, noch keine Testbearbeitung: Worker werden gestartet (#151) | Fortschritt ansehen |
+| collecting / waiting / paused | aus `live_progress` | Fortschritt ansehen |
 | blocked | Lauf angehalten/gescheitert | Probleme ansehen (`runs.php#catquizlab-recovery`) |
 | aggregating | Ergebnisse werden berechnet | Fortschritt ansehen |
 | complete / completefailures | nichts mehr offen (gesammelt oder endgültig gescheitert) | Ergebnisse ansehen |
 
-Der Startknopf erscheint nur in `ready`; `execution_queue::enqueue` ist
-zusätzlich idempotent. Auf dem Schritt, auf den die Aktion führt, wird sie nicht
+Seit 0.7.64 (#151) gibt es **einen** Start: „Experiment starten“ in planned/created/preparing/ready, solange das
+Experiment nicht in der Warteschlange steht. Er nimmt nur den Auftrag an (`experiment_runner::start()`); Läufe
+anlegen, starten, vorbereiten und ausführen folgen von selbst (`docs/dev/ein-start.md`). Die früheren Einzelschritte
+„Läufe anlegen“ und „Läufe starten“ sind keine Hauptaktion mehr; „Vorbereiten“ bleibt als Wiederherstellung bei
+blockiert. `execution_queue::enqueue` ist idempotent, unter einer Sperre. Auf dem Schritt, auf den die Aktion führt, wird sie nicht
 als Knopf angeboten (außer POST-Aktionen und „Probleme ansehen“).
 
 ## Weitere Korrekturen

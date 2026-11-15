@@ -167,6 +167,8 @@ class run_lifecycle {
             'timemodified' => time(),
         ], 'provisioned');
         self::refresh_experiment($runid);
+        // Its sittings can be played now: workers are started at once, not at the next scheduled tick (#151 AK8).
+        \local_catquizlab\task\kick_pipeline::queue('run-ready');
     }
 
     /**
@@ -577,6 +579,12 @@ class run_lifecycle {
         self::set_status($runid, registry::STATUS_FINISHED, 'aggregated');
         $DB->set_field('local_catquizlab_run', 'timemodified', time(), ['id' => $runid]);
         self::refresh_experiment($runid);
+        // The experiment's last run: its place in the line is closed and the next one begins at once, not at the next
+        // scheduled tick (#151 AK12).
+        $experimentid = (int) $DB->get_field('local_catquizlab_run', 'experimentid', ['id' => $runid]);
+        if ($experimentid > 0 && experiment_runner::state($experimentid)['state'] === experiment_runner::STATE_FINISHED) {
+            \local_catquizlab\task\kick_pipeline::queue('experiment-finished');
+        }
     }
 
     /**
@@ -859,7 +867,21 @@ class run_lifecycle {
         // leaving the scales behind loses the record of which scales belonged
         // to this run — and an engine object nobody owns is not a leftover, it
         // is a scale a later selection can still find.
-        $removed = purger::delete_engine_objects($runid);
+        // The same end state as a deep deletion (#161 AK3): the run's footprint in the engine and its activity is
+        // taken first and checked after; a failing activity deletion or anything left or lost keeps the lab rows,
+        // which are what leads to those engine rows, and says so.
+        $before = engine_footprint::of_run($runid);
+        try {
+            $removed = purger::delete_engine_objects($runid);
+            $check = engine_footprint::check($before);
+            if (!$check['ok']) {
+                throw new purge_incomplete($runid, $check);
+            }
+        } catch (purge_incomplete $e) {
+            run_log::record($runid, run_log::STAGE_FAILED, ['reason' => 'engine-incomplete',
+                'message' => \core_text::substr($e->getMessage(), 0, 1000)], 'reset');
+            return ['ok' => false, 'removed' => [], 'reason' => 'engine-incomplete', 'message' => $e->getMessage()];
+        }
 
         // Its queued tasks too: one that wakes up to provision a run that has
         // been reset would provision it a second time.

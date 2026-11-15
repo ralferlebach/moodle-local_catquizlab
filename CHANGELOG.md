@@ -6,6 +6,333 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.7.64] — 2026-11-15 — One start, everything else by itself (#151): save, "Start experiment" once, close the browser; why sittings cannot be claimed, per run (#133)
+
+No database change. See `docs/dev/ein-start.md`.
+
+- **One start (AK1, AK10).** "Start experiment" is the one primary action in the status bar of plan and progress.
+  It is offered for a saved experiment whatever is prepared already (planned, runs created, being prepared, ready),
+  as long as the experiment is not in the line.
+  - "Create runs" and "Start runs" are no longer steps of their own. The progress card no longer offers them.
+  - "Prepare" stays as a recovery action for a blocked experiment.
+- **The start request only accepts the order (AK6, AK9).** `experiment_runner::start()`:
+  - checks that the experiment exists, is not being deleted, has a valid definition (otherwise refused at once,
+    with the errors) and is not running, finished, stopped or blocked;
+  - puts it in the execution line, under a lock, so a second click or browser finds the order there;
+  - asks for a pipeline tick now and redirects to the progress page: "Start accepted … nothing is running yet".
+
+  It builds no run and starts no worker, so a sweep of hundreds of runs costs the request nothing.
+- **The line prepares it at its turn (AK2, AK3).** `execution_queue::advance()`, now under a lock: an experiment
+  that is not prepared holds the line as "preparing" and gets `task\prepare_experiment`. The task runs as the person
+  who started it, under a lock per experiment: it creates the sweep's runs if there are none and starts every draft
+  run with its own setup task. From there on the existing pipeline takes over: setup, workers, sittings, traces,
+  aggregation, finished. Nothing waits for a page: neither page views nor the live poll drive anything.
+- **Sooner (AK8, AK12).** A pipeline tick is asked for at once (`task\kick_pipeline`, never doubled) when a start
+  is accepted, when a run becomes ready (workers start then, not at the next five-minute mark) and when an
+  experiment finishes (the next one begins).
+- **Interruptions (AK4, AK5).**
+  - A preparation lost, failed for good or refused by the preflight is asked for again on every tick. Its reason
+    stands on the line's entry and in the line, and the entry is no longer taken for an orphan and cancelled.
+  - An installation that cannot run yet does not refuse the order: it waits with the reason and goes on once
+    that is fixed.
+  - Stopped meanwhile: a waiting preparation does nothing.
+  - A waiting entry without runs is no longer cancelled as "experiment has no runs": the line prepares it.
+- **One at a time (AK7).** An experiment is prepared only at its turn. A second started one waits as saved, with no
+  runs, until the first is done.
+- **Phases (AK9).** "Queued" while waiting for its turn, "Runs being prepared" while the line prepares it,
+  "Starting" when it is prepared and at its turn but nothing has been played. The same in the library.
+- **Unchanged (AK11):** the start and the preparation change nothing of the definition; tests compare it before
+  and after.
+- **Deep deletion on MySQL and MariaDB (#161, found by the MariaDB mirror of the 0.7.63 gate).** Moodle's question
+  engine deletes a question usage there only together with its question attempts
+  (`question_engine_data_mapper::delete_usage_records_for_mysql()`, an inner join). The usage of an activity attempt
+  that never got its first question therefore stayed after the activity was deleted, and the engine check rightly
+  stopped the deletion. Such usages are the run's own, from its activity's attempts, and empty; the deep deletion now
+  deletes them after the activity. `engine_footprint_test` gives its sittings a first question, as played ones have,
+  and covers the empty one apart; it passes on PostgreSQL and MariaDB.
+- **No core function Moodle 5.2 or 5.3 calls deprecated (#139, found while checking the 0.7.64 gate).** On the 5.x
+  mirrors PHPUnit ended "OK, but there were issues!": 8 notices on 5.2, 34 on 5.3, each "Unexpected debugging() call
+  detected" for a deprecation in the plugin's own code. `course_delete_module()` (deprecated since 5.2, MDL-86856;
+  the deep deletion of #161 calls it, which brought the 8 on 5.2), `user_create_user()` and `user_get_users_by_id()`
+  (since 5.3, MDL-82650; simulated persons, the worker account, the acceptance users, `cli/seed_plain_user.php`,
+  the name history). New `local\core_compat` takes the new core call where the running Moodle has one
+  (`formatactions::cm()->delete()`, `\core\user::create_user()`, `\core\user::get_users_by_id()`) and the old one on
+  4.5. Same behaviour on both paths: the module goes at once (not in the background), a missing one is no error, the
+  password policy holds. New `core_compat_test`: both calls on every Moodle of the matrix without any debugging, and a
+  scan of every plain function call in the plugin's PHP (PHP's tokenizer, comments do not count) against the core's
+  `#[\core\attribute\deprecated]`, so such a call cannot come back unnoticed. On the 5.x mirrors: notices 0.
+- **Why sittings cannot be claimed, per run (#133 AK2).** The queue lists sittings that cannot be claimed because
+  their run is not handing out work. It now names, per run, the run's state and, for a failed run, the reason it
+  failed with: "Run 51: Failed: … — 7 sitting(s) waiting". A run whose scale generations need recovery says so. This
+  completes the queue's counts: claimable, being played, retryable and waiting for their retry, held by a paused run
+  (with the breaker's cause), cannot be claimed (with the cause), failed for good. Test:
+  `run_recovery_test::test_unclaimable_sittings_name_their_cause_per_run`.
+- **Tests and CI:**
+  - **PHPUnit:** new `one_start_test` (11 tests). `experiment_runner_test`, `experiment_status_test` and
+    `stalled_start_test` follow the one start.
+  - **Interface E2E, all stacks (DoD1):** `experiment.spec.js` saves a definition and posts exactly one start; every
+    form submission to the plugin is counted until the results. It then signs out, which ends the session on the
+    server, and closes the browser context. A new session later only reads until every sitting is collected and
+    the results are there.
+  - **Worker E2E, all stacks (DoD2, DoD5):** new step "Issue 151 — one start, then nobody"
+    (`cli/one_start_check.php`). A definition is saved and started once; after that only cron runs, as separate
+    processes. Cron is stopped for 90 s on the way, and every worker process is killed once the first sitting is
+    in. PASS only when the experiment finished by itself: every sitting collected, results there, its entry in
+    the line closed.
+
+---
+
+## [0.7.63] — 2026-11-15 — Deep deletion against the real engine (#161, #145): a run's whole footprint, checked before and after, nothing of others touched, a failure that stops and says so, one deletion record
+
+No database change. Depends on the CAT model's deletion fix (adaptivequizcatmodel_catquiz #11, version 2026101701 or
+later); CI pins it (see below). See `docs/dev/loeschen.md`.
+
+- **What a run owns (#161 AK1).** New `engine_footprint::of_run()`: everything of the engine, its activity and Moodle
+  that is the run's alone. Found through the lab's own records (the run's activity, its simulated accounts, its scale
+  map and item record), never by an attempt number alone:
+  - the activity, its attempts and question usages;
+  - CAT attempts, progress, abilities and engine traces;
+  - test settings, engine contexts, scales, items, item parameters and questions.
+  Rows of **others** that share an attempt number with the run, in either id space (`adaptivequiz_attempt.id`,
+  `local_catquiz_attempts.id`), are listed apart as at risk.
+- **Deep deletion, checked (#161 AK1/AK2/AK4).**
+  - **Before:** the footprint is taken first.
+  - **A failing activity stops it:** if `course_delete_module()` fails, nothing else goes, and the run keeps
+    everything that leads to its engine rows. Until 0.7.62 this counted an "adaptive quiz that could not be deleted"
+    and deleted the rest.
+  - **Rows it left before:** item parameters go before their items, and items before their questions (deleting a
+    question made the engine drop its item and leave the parameters). The abilities of the run's own accounts and
+    its emptied engine contexts go too.
+  - **After:** nothing of the footprint may be left and every row of others must still be there. Otherwise
+    `purge_incomplete`: the run, its lab rows and the experiment stay, the message names tables and ids, and the task
+    is retried.
+- **Every path ends the same (#161 AK3).** A reset (`run_lifecycle::reset()`, now `engine-incomplete` in the run log
+  when it fails) and a run cleanup (`run_cleanup::cleanup()`, now engine first, lab rows after) take the same steps and
+  the same check. An activity deleted in the course first ends in the same state after the lab's deep deletion.
+- **Not deep stays not deep (#161 AK5).** Nothing of the engine or the activity goes. The preview and the message say
+  what stays.
+- **The preview** of a deep deletion counts the footprint by kind and says how many rows of others share a number. It
+  warns when the installed CAT model is older than 2026101701.
+- **One deletion record per experiment (#145 AK6).** `moodledata/local_catquizlab/deletions/experiment-<id>.jsonl`
+  holds queued, started, each run's engine check before and after, failed and finished (with what was left in the lab
+  tables), with time and correlation id. It survives the experiment.
+  - `cli/deletion_report.php --experimentid=N [--json] [--expect-deleted]` reads it; with `--expect-deleted` it is a
+    check.
+  - The interface E2E keeps all records of its run (`evidence/deletions/`).
+- **The library test counts "gone" only with a complete record (#145 AK1):** queued, started, finished, nothing
+  left.
+- **Read-only inventory for operators (#161 AK6).** `cli/engine_inventory.php --orphans [--json]` counts the engine's
+  rows without an owner by kind, with oldest and newest time and component; `--runid=N` and `--runs` show footprints.
+  It deletes nothing and attributes nothing to a run that no longer exists.
+- **CI:**
+  - **Worker E2E, all three stacks:** new step "Issue 161 — deep deletion against the real engine, checked before and
+    after". The experiment just played is stopped and queued as by the confirmation, deleted by the background task
+    with the real `course_delete_module()`, then checked: the experiment gone, nothing of any footprint left, nothing
+    of others lost, no kind of ownerless engine row grown, and the record complete (`cli/deep_delete_check.php`).
+  - **Interface E2E, all three stacks:** new last step "Issue 161 — the played experiment deleted deeply through the
+    interface" (`tests/playwright/deep_delete.spec.js`, run only with `CATQUIZLAB_DEEP_DELETE`). The experiment that
+    `experiment.spec.js` created and played through the interface is deleted deeply in the browser: the preview, the
+    name typed, the button. Cron carries out the task, and the test waits for the deletion record, without sleeping.
+    The checks before and after are the same. Its recordings and report go to folders of their own, so the main run's
+    stay.
+  - **CAT model pins:** `engine-pins.env` and `engine-pins-interface.env` pin `adaptivequizcatmodel_catquiz` to the
+    fixed heads, `a7ba075` (legacy line, 2026101801) and `15d4c55` (v-3.0, 2026102800). The earlier pins `1414a9c`
+    and `e724f6a` still had #11: they deleted progress by the activity's attempt numbers. CatQuizLab does not repeat
+    that fix (#161 AK7).
+- **Tests:** new `engine_footprint_test` with the real engine tables and activity, and two runs whose ids cross. It
+  covers:
+  - the footprint and the rows at risk;
+  - deep deletion through the task;
+  - a callback taking the other run's progress;
+  - a failing activity and its retry, also as cron runs it (`\core\cron::run_adhoc_task()`: failed, kept with a fail
+    delay, retried, done);
+  - reset and run cleanup, failing and passing;
+  - an activity deleted in the course first;
+  - not deep;
+  - the inventory changing nothing.
+- **#145 DoD1:** the failures of interface E2E #42703053917 (0.7.52) are traced from its artifacts. In all three stacks
+  cron's keep-alive ran the queued deletion within a second of the confirmation, before the test's next page load; the
+  experiment was completely deleted and its copy kept. The test was too strict, not the deletion.
+
+---
+
+## [0.7.62] — 2026-11-15 — Re-audit 14.11.2026, open criteria: real screen readers in CI (#122, #143, #144), plot markers from the keyboard with their whole provenance (#143, #144), unknown parameters out of every log (#149), a given-up trace that says where it is and can be looked for again (#138), all 300 sittings of the load test (#139), no PHPUnit skip left (#140), the claim race against its target (#133)
+
+No database change.
+
+- **Real screen readers in CI (#122 DoD 3, #143 AK7, #144 AK9).** New job `screen-reader` in `ui-e2e.yml`, run per
+  Moodle stack and reader: NVDA on Windows with Chromium, VoiceOver on macOS with WebKit. Driven through Guidepup, with
+  exact pins in `tests/screenreader/package-lock.json`.
+  - **The pages:** The Linux interface run records two results pages (`tests/playwright/screenreader_snapshot.spec.js`):
+    the overview with its filter bar, and the mode-specific detection with a scatter plot. The recording is a HAR file
+    with everything the browser fetched, scripts included. The screen reader jobs replay it, so the pages run as they
+    did, without a Moodle behind them.
+  - **The filter bar:** walked with the keyboard. Every control must be announced with its name, its role and, for
+    the six drop-downs, the value shown, in the order of the bar.
+  - **The plot:** Tab reaches its first marker, which must be announced as a graphic with what it stands for. The
+    reader's own navigation must reach the next marker.
+  - **Evidence:** what the reader said is kept per job, pass or fail. JAWS has no automation interface and is not
+    tested. See `docs/dev/screenreader-ci.md`.
+- **Plot markers are what a screen reader reaches, and the keyboard too (#143 AK4/AK7, #144 AK6/AK9).**
+  - **Structure:** A scatter plot with markers is a group ("scatter plot"), no longer one image that hid its parts.
+    Every marker is an image named by its tooltip; axes, ticks, lines and legends are hidden from assistive
+    technology.
+  - **Keyboard:** The markers are one tab stop. The arrow keys, Home and End move between them
+    (`amd/src/plot_points.js`). The focus is ringed, and what the focused marker stands for is shown beneath the
+    plot. A hint under every plot says how.
+  - **What a marker says:** how many points, where and whose. A single point now says where it is too. Values that
+    four decimals hold stay exact; others are rounded and marked "≈" (625.0000000004 reads "≈625").
+  - **The mode comparison:** each point names the twin, the subscale and both signed errors Δ̂s − Δs,true with the
+    mode they belong to and the sitting they come from, and that it is a pair of valid sittings. Title, description
+    and n line speak of one subscale observation per point; the per-person mean difference beneath the plot is
+    marked as the tables' figure.
+  - **Exports:** the SVG file (from which the PDF and the PNG are made) is checked against the page, marker for
+    marker, and the settings file's counts against both.
+- **Unknown parameters are not logged (#149 AK2/AK4).**
+  - **Request URIs:** In a logged URI, only routing parameters keep their values (`log_redactor::ROUTING_NAMES`:
+    ids, page, tab, filters). Every other parameter keeps its name; its value becomes `[omitted]`. Secret names stay
+    `[redacted]`.
+  - **The worker** applies the same list to the URLs in its logs (`worker/log_params.json`, kept equal by a test).
+  - **Long URIs** are cut between pairs. "[redac~cut" no longer appears, and the log scanner no longer reads it as a
+    value.
+  - **CI:** New `cli/probe_log_secrets.php` sends the plugin's pages requests full of a probe value, in every
+    spelling, encoding and place, traced as the worker's. It then reads every log the plugin wrote for it. The
+    worker E2E runs it, and the secret scanner over all request traces and worker logs of the run.
+  - **Every channel the plugin writes to**, and what lies outside it (the web server's access log): see
+    `docs/dev/log-datenschutz.md`.
+- **A trace given up says where it is, and can be looked for again (#138 AK3/AK4).**
+  - **Provenance:** The history row of the end carries the engine attempt and, under `diagnosis.trace`: the lab
+    sitting, `adaptivequiz_attempt.id` and what the host holds of it, the workers' correlation ids, what the trace
+    lacked, what the engine says about it, how often it was looked for, and when.
+  - **Looked for again:** `attempt_scheduler::reopen_trace_lookup()` and `cli/recover_traces.php` open the lookup
+    again, with all looks and nothing played again.
+  - **In CI:** The worker E2E now runs the real collection race (`cli/race_collect.php`) on all three stacks: separate
+    processes report, tick, re-collect and recover at once on real sittings, while a reader watches every row and the
+    engine attempt only comes back late.
+- **The load test plays all 300 sittings (#139 AK7):** `--require-all`, within at most 80 minutes. Before, it counted
+  what finished in 30 minutes; the Moodle 5.x jobs got 249 to 260.
+- **No PHPUnit skip left in CI (#140).** The fifteen skips are gone:
+  - **Engine guards:** the twelve tests of what happens without the engine, which skipped where the engine is
+    installed, now run against `environment::simulate_absent()`; it refuses outside PHPUnit and Behat.
+  - **engine_perf:** runs without `local_catquiz`; `engine_perf::available()` now requires it.
+  - **Unwritable runtime directory:** tested under a file, which fails for root too.
+  - **preflight:** the two version-bound preflight tests are one test for 4.5 and 5.x.
+- **The claim race counts against its target (#133):**
+  - Each claim retries a busy queue a bounded number of times (`--retries`).
+  - Every claim is accounted for: handed out, or not served with its reason.
+  - PASS only with no duplicate, no error, nothing busy, and at least min(queued, processes × claims) handed out by
+    this run.
+
+## [0.7.61] — 2026-11-15 — Re-audit 14.11.2026, block C: the same items in every strategy cell (#154), the same answers from the same twin (#155), a research data package (#156) with an R re-analysis of the dashboard (#157)
+
+Database: `local_catquizlab_item` gets `itemkey`, `contentfp`, `fingerprint` and an index on (`runid`, `itemkey`);
+`local_catquizlab_pool` gets `fingerprint` (upgrade step 2026111500). Existing rows stay as they are.
+
+- **Every item has a key of its own, apart from its Moodle question (#154 AK1).**
+  - **Key:** `r<replication>-<model>-c<category>-s<subscale>-i<index>`, e.g. `r001-2pl-c01-s02-i0017`: the same item in
+    every run of a replication, whatever its question id.
+  - **Fingerprints:** `contentfp` over the item as the blueprint generated it, `fingerprint` over the item as realised
+    (stored parameters, assigned placement, error flags, name, text and options), the pool's over all its keys and
+    fingerprints.
+  - **Question texts** name the scale by its blueprint label (`K1.2`) and the item by its key, in the site's language.
+    Before, they named the engine scale, whose name carries the run, and were rendered in the language of whoever
+    set the run up: the same item read differently in each strategy cell. Own templates may still use `{scalename}`.
+- **The pools are compared and a defect is said (#154 AK2–AK4).** `item_identity::compare()` groups the runs by what
+  their pool may depend on (replication, model, variant, recipe; not the strategy).
+  - **Within a group** every pool must be the same to the bit. A run that differs is listed with the items that
+    differ, are missing or are extra; duplicate keys too.
+  - **Between groups** the differences are the design: the varying factors, and per replication and model each pool
+    variant against the ideal pool item by item (same, content changed, realisation changed, removed, added).
+  - **Shown** on the results page (a line, and a warning in the analysis basis on a defect), in the package (`itempool`
+    per run, `itemidentity` per experiment), and in the research dataset's item table (`replication`, `poolvariant`,
+    `itemkey`, `contentfp`, `fingerprint` beside `runid` and `questionid`).
+  - **Runs from before 0.7.61** have no keys: named as such, never keyed afterwards.
+- **The same twin answers the same item alike in every strategy cell (#155).** New runs are created under **RNG schema
+  2**: the random number of an answer comes from master seed, replication, twin and item key, no longer from run,
+  person row and question.
+  - **Same conditions, same answer:** the same category and score fraction in every strategy cell, dichotomous and
+    polytomous.
+  - **Other conditions, same random number:** another stratum, severity or a shifted or miscalibrated true parameter
+    draws the same number through another probability. Nothing is copied.
+  - **Retries, lost responses or requests, restarts and resets** draw nothing new. An item presented again to the
+    same twin would get the same answer (documented rule).
+  - **Runs from before** keep schema 1 and are answered as they were; the manifest and the package say which schema a
+    run has.
+- **How each answer was drawn, in the step export (#155 AK5).** New columns: `rngseed`, `uniform` (the common random
+  number), `trueability`, `trueprobs`, `responsecategory`, `oraclefraction`, beside `replication`, `twinid`, `itemkey`,
+  `rngschema`, `runid`, `questionid` and `score`.
+  - **Checkable without the plugin:** the pair, the rule (dichotomous: correct when u < P(1); polytomous: the smallest k
+    with u < P(0) + … + P(k)), and that the engine recorded what was drawn.
+  - **Schema 1 runs:** the new cells stay empty; their answers are not reconstructed.
+- **Proved on a real setup (#154 DoD4, #155 DoD3).** `cli/smoke.php` checks, after the sittings:
+  - every group of runs that must share a pool shares it;
+  - from the step export, no twin answered one item differently in two runs, every recorded answer is the drawn one,
+    at least one item was shared, every run is under schema 2.
+  - `--pairs=FILE` writes the steps with their draws as CSV.
+  - **Worker E2E:** the step "Issues 141/142/160" writes `pairs.csv`; the step for #134 now plays classic and fastest
+    with a lost response and a lost request in each sitting (four reconciliations) and writes `pairs-recovery.csv`.
+- **Tests:** `item_identity_test`, `item_identity_setup_test` (real setup with the engine, five strategies, two
+  replications, one in reverse order, one run set up twice), `twin_response_test` (2PL and GPCM, five strategies, two
+  replications, 100 twins, 200 items: no answer differs; stratum, severity and a shifted pool draw the same numbers;
+  schema 1 kept; the step export's draw checked from its own columns).
+- **Documentation:** `docs/dev/item-identitaet-crn.md`.
+- **A research data package of an experiment (#156).** "4. Results → Export" and the experiment page offer one ZIP
+  for an independent re-analysis of the runs in the current selection:
+  - **Tables** (UTF-8 CSV): experiments, runs, items, twins, truth_profiles, twin_item_responses, attempts, validity,
+    analysis_population, steps, estimated_profiles. Joined by `experimentid`, `runid`, `replication`, `twinid`,
+    `itemkey`, `questionid`, `attemptid`, `step`.
+  - **Potential answers apart from administered ones:** every twin's answer to every item of its pool, computed by the
+    function that answers in a sitting (RNG schema 2 runs only), in a table of its own; the steps hold what was really
+    administered, now with slot, time, question state and the answer as Moodle summarises it.
+  - **Every sitting,** valid, invalid or unknown; `analysis_population` says which ones the results count under the
+    filter and why the others not. Twins without a sitting are in `twins`.
+  - **Described and checked:** `codebook.json` (every column with type, unit and meaning, EN/DE), `manifest.json`
+    (schema version, versions, filter, per run RNG and item schema, per table rows, bytes and sha256),
+    `reproducibility.json`, `README.md`.
+  - **Size first:** the export tab forecasts the rows per table from grouped counts, never by reading the sittings:
+    exact for every table but steps and subscale estimates, which are bounded from above ("at most"). Up to a million
+    rows the package streams directly; beyond, and on request, it is built in the background and listed for download
+    (export capability only).
+- **No estimate is not an estimate of 0 (#156 AK7).** A sitting without a final ability had `esttheta` 0 and an error
+  of minus its true ability in exports, and entered RMSE and correlation as such when "all" sittings were selected.
+  Now both are empty and the sitting is left out of RMSE, correlation and `metrics::ability_recovery()`.
+- **Found while counting queries (#156 DoD3):** the step export asked for the run's root scale once per sitting on the
+  TI@n path; now once per run. The step CSV of the 50 000-sitting benchmark went from 12.9 s to 8.3 s.
+- **Tests:** `research_package_test` (3 strategies × 2 replications × 2 pool variants, 12 twins per run, sittings of
+  different lengths, valid, invalid and without estimate, twins without sitting: every table counted and checksummed
+  as the manifest says, every key joining, one potential answer per twin and item, every administered answer equal to
+  it, the population as the results page counts it, the forecast exact; no query per sitting; the background build and
+  its access check), Playwright `downloads.spec.js` (the package from the experiment page link, unpacked and checked
+  against its manifest; refusals without POST, session key or capability).
+- **Documentation:** `docs/dev/forschungsdatenpaket.md`.
+- **The dashboard recomputed in R from the package (#157).** The package carries `reanalysis/` (base R ≥ 4.1, no
+  packages, offline) and `reference/dashboard.csv`, the figures of "4. Results" as the results page computes them under
+  the package's filter (`research_reference`).
+  - `Rscript reanalysis/run_all.R` checks every table's rows and md5, recomputes the figures from the raw tables
+    (abilities, steps, items, subscale estimates, the population) and writes `figures.csv`, `comparison.csv` (expected,
+    actual, difference, tolerance, PASS/FAIL/NOT_REPRODUCED per figure), `coverage.csv`, every plot's points and PNGs.
+    Exit status 1 on any FAIL.
+  - **Recomputed and compared:** Overview (key figures, strategy and cell tables), Global (recovery, range, exposure),
+    Subscales (local recovery overall, by category, by subscale), Robustness (global, local and ranking outcomes —
+    Spearman, top-3, nDCG@3 — per cell and their differences to the ideal pool), Test flow (feasibility of the
+    precision target), Mode-specific detection (every mode against the truth and against each baseline, paired, on
+    common scales and unpaired: recall, precision, F1, bias, RMSE, MAE, correlation, target RMSE, Spearman, top-1,
+    top-3, nDCG@3, mean difference).
+  - **Not recomputed, said so:** the count of scale results with an administered item in the detection table (it
+    includes results without an estimate, which the package does not hold) is NOT_REPRODUCED; scale coverage, spread,
+    item classes and the comparison of flows are "not reproduced" in the coverage matrix. Never PASS.
+  - **Tolerance:** counts equal; otherwise 1.5e-6 (both sides round to 6 decimals, summation order and half-way
+    rounding differ); percentages 1e-9 relative.
+  - **Proved:** `research_package_test::test_the_r_reanalysis_reproduces_the_dashboard` runs R on the packages of a
+    2PL and a GPCM experiment (3 strategies, 2 replications, 2 pool variants, 2 strata, lengths 12–18, valid and invalid
+    sittings, strategies with every detection role): 681 and 1 009 figures, all PASS; an estimate moved by 0.5 logit
+    makes it fail on the bias, a line taken from a table makes the package check fail. CI installs R 4.3.3 (pinned) in every PHPUnit job and requires it (`CATQUIZLAB_REQUIRE_R`).
+  - **Documentation:** `docs/dev/r-reanalyse.md` (inventory of every figure with definition, columns and status),
+    `research/README.md` (EN/DE).
+- **The runs table names each run's precision target and test length budget** (`setarget`, `globalminitems`,
+  `globalmaxitems`), and the package has `filter.csv`, `codebook.csv` and `manifest-tables.csv` (with md5): what a
+  re-analysis without a JSON parser needs.
+
 ## [0.7.60] — 2026-11-15 — Re-audit 14.11.2026, blocks A and B: a run's own work apart from when it is done (#160), the claim order instead of the run id, a calibrated range, all experiments at once (#158), questions that do not count said apart (#141); experiments A–Z (#153), runs named with their experiment and strategy (#150), renaming without touching the design (#152), log-normal discrimination as three coupled inputs (#159)
 
 No database change.

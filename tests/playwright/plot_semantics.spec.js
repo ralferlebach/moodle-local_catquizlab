@@ -201,6 +201,22 @@ test('every marker is its CSV rows, and its tooltip names every one of them (#14
             }
             const found = await markers(plot);
             const say = `${tab} plot ${i}`;
+            // The SVG file is the drawing the PDF is made from on the server and the PNG in the browser (#143 AK4): its
+            // markers are the page's, value for value, with the same descriptions; the settings file counts them.
+            const decode = async(kind) => {
+                const href = await figures.nth(i).locator('[data-download="' + kind + '"]').first().getAttribute('href');
+                return Buffer.from(href.slice(href.indexOf(',') + 1), 'base64').toString('utf8');
+            };
+            const circle = new RegExp('<circle [^>]*aria-label="([^"]*)" data-x="([^"]+)" data-y="([^"]+)"'
+                + ' data-count="(\\d+)" data-region="point">', 'g');
+            const filed = [...(await decode('svg')).matchAll(circle)]
+                .map((m) => ({x: Number(m[2]), y: Number(m[3]), count: Number(m[4]), title: m[1]
+                    .replace(/&quot;/g, '"').replace(/&#039;/g, '\'').replace(/&lt;/g, '<').replace(/&gt;/g, '>')
+                    .replace(/&amp;/g, '&')}));
+            expect(filed, say + ': the SVG file has the page\'s markers').toEqual(found);
+            const settings = JSON.parse(await decode('json'));
+            expect(settings.markers.markers, say + ': the settings count the markers').toBe(found.length);
+            expect(settings.markers.points, say + ': and the points').toBe(found.reduce((n, m) => n + m.count, 0));
             expect(found.length, say + ': one marker per exact coordinate').toBe(groups.size);
             for (const marker of found) {
                 const members = groups.get((marker.x + 0) + '|' + (marker.y + 0));
@@ -214,4 +230,85 @@ test('every marker is its CSV rows, and its tooltip names every one of them (#14
         }
     }
     expect(compared, 'plots compared with their CSV').toBeGreaterThan(1);
+});
+
+test('the markers from the keyboard, each saying whose it is (#143 AK4/AK7, #144 AK6/AK9)', async({page}) => {
+    const id = seed('seed_modes.php', [], 'MODES_EXPERIMENTID');
+    needs(!id, 'cli/seed_modes.php could not be run here.');
+    await login(page);
+    await page.goto('/local/catquizlab/results.php?experimentid=' + id + '&tab=deficits', {waitUntil: 'networkidle'});
+    await expect(page.locator('html')).toHaveAttribute('data-catquizlab-plotkeys', 'ready');
+
+    // The comparison with ten points: two markers of five.
+    const plots = page.locator('[data-region="catquizlab-mode-deficit"] [data-region="catquizlab-mode-plot"]');
+    let plot = null;
+    for (let i = 0; i < await plots.count(); i++) {
+        const counts = await plots.nth(i).locator('circle[data-region="point"]').evaluateAll((cs) =>
+            cs.map((c) => Number(c.getAttribute('data-count'))));
+        if (counts.reduce((a, b) => a + b, 0) === 10) {
+            plot = plots.nth(i);
+        }
+    }
+    expect(plot, 'a comparison with ten points').toBeTruthy();
+    const svg = plot.locator('svg');
+    const points = svg.locator('circle[data-region="point"]');
+    await expect(svg).toHaveAttribute('role', 'group');
+    await expect(points).toHaveCount(2);
+
+    // What a screen reader is given: the description says what one point is, in its unit.
+    const described = await svg.evaluate((el) => el.getAttribute('aria-labelledby').split(' ')
+        .map((ref) => document.getElementById(ref).textContent).join(' '));
+    expect(described).toMatch(/one subscale observation|eine Subskalenbeobachtung/);
+    expect(described).toMatch(/Δ̂s − Δs,(true|wahr)/);
+    // Every marker an image named by what it stands for: how many, where, and every member — twin, subscale, both
+    // signed errors with the mode they belong to and the sitting they come from, and that they are a valid pair.
+    for (const marker of await points.all()) {
+        await expect(marker).toHaveAttribute('role', 'img');
+        const label = await marker.getAttribute('aria-label');
+        expect(await marker.locator('title').textContent()).toBe(label);
+        expect(label).toMatch(/^5 (points at|Punkte bei) \(/);
+        const members = label.split('; Twin ').length;
+        expect(members, 'five twins named: ' + label).toBe(5);
+        expect(label).toMatch(/subscale|Subskala/);
+        expect(label).toMatch(/\((sitting|Bearbeitung) \d+\).*\((sitting|Bearbeitung) \d+\)/);
+        expect(label).toMatch(/a pair of valid sittings|Paar gültiger Bearbeitungen/);
+    }
+
+    // One tab stop: Tab from the element before it lands on the first marker.
+    await page.evaluate((first) => {
+        const tabbable = Array.from(document.querySelectorAll('a[href], button, input, select, textarea, [tabindex]'))
+            .filter((el) => el.tabIndex >= 0 && !el.disabled && el.getClientRects().length > 0);
+        tabbable[tabbable.indexOf(first) - 1].focus();
+    }, await points.nth(0).elementHandle());
+    await page.keyboard.press('Tab');
+    const focused = () => page.evaluate(() => {
+        const el = document.activeElement;
+        return el && el.getAttribute('data-region') === 'point' ? Number(el.getAttribute('data-x')) : null;
+    });
+    const xs = await points.evaluateAll((cs) => cs.map((c) => Number(c.getAttribute('data-x'))));
+    expect(await focused()).toBe(xs[0]);
+    const readout = plot.locator('[data-region="catquizlab-point-readout"]');
+    await expect(readout).toBeVisible();
+    await expect(readout).toHaveText(await points.nth(0).getAttribute('aria-label'));
+
+    // The arrow keys within, in the order of x; End and Home; the tab stop follows the focus.
+    await page.keyboard.press('ArrowRight');
+    expect(await focused()).toBe(xs[1]);
+    await expect(readout).toHaveText(await points.nth(1).getAttribute('aria-label'));
+    await page.keyboard.press('ArrowRight');
+    expect(await focused(), 'the last stays the last').toBe(xs[1]);
+    await page.keyboard.press('Home');
+    expect(await focused()).toBe(xs[0]);
+    await page.keyboard.press('End');
+    expect(await focused()).toBe(xs[1]);
+    expect(await points.evaluateAll((cs) => cs.map((c) => c.getAttribute('tabindex')))).toEqual(['-1', '0']);
+    // Tab leaves the plot; Shift+Tab comes back to the marker it left.
+    await page.keyboard.press('Tab');
+    expect(await focused()).toBeNull();
+    await page.keyboard.press('Shift+Tab');
+    expect(await focused()).toBe(xs[1]);
+
+    // The focus can be seen.
+    const ring = await points.nth(1).evaluate((c) => getComputedStyle(c).outlineStyle + ' ' + getComputedStyle(c).stroke);
+    expect(ring).toMatch(/^solid /);
 });

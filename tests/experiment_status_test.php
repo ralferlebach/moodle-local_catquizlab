@@ -131,7 +131,7 @@ final class experiment_status_test extends \advanced_testcase {
      */
     public function test_the_phases_and_their_next_step(): void {
         $status = $this->current_status();
-        $this->assertSame(['planned', 'create'], [$status['phase'], $status['next']['kind']]);
+        $this->assertSame(['planned', 'start'], [$status['phase'], $status['next']['kind']]);
         $this->assertTrue($status['next']['post']);
 
         $this->runs(registry::STATUS_READY);

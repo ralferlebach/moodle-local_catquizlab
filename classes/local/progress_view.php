@@ -186,8 +186,9 @@ class progress_view {
                     // above; here only preparing again, for a blocked experiment.
                     'canstart'   => false,
                     'canprepare' => $status['phase'] === 'blocked' && !empty($status['runner']['canprepare']),
-                    // Runs created and never started: the one way on, here too (incident 2026-11-09).
-                    'canstartruns' => !empty($status['runner']['canstartruns']),
+                    // Runs created and never started (incident 2026-11-09): since #151 the one start above takes
+                    // them on, so no second button here — technical single steps are not the normal path.
+                    'canstartruns' => false,
                     // Stopping takes work away from running workers: the same authority as starting it (0.7.49).
                     'canstop' => !empty($status['runner']['canstop'])
                         && has_capability('local/catquizlab:execute', \context_system::instance()),

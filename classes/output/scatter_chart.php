@@ -35,10 +35,15 @@ namespace local_catquizlab\output;
  * approximating with a bar chart.
  *
  * The output is static inline SVG. It needs no JavaScript, prints, and survives
- * being copied into a document. Since an SVG cannot be read by a screen reader
- * in any useful way, every plot carries a title, a description and an
+ * being copied into a document. Every plot carries a title, a description and an
  * accompanying summary table; the visual and the table come from the same
  * values.
+ *
+ * The point markers are what a screen reader meets of the drawing (#143 AK7, #144 AK6/AK9): each one an image
+ * with the description its tooltip shows — how many points, where exactly, whose. Axes, ticks, reference lines and
+ * traces are hidden from assistive technology; the title, the description and the axis labels name what they show.
+ * The markers of a plot are one stop in the tab order; with amd/src/plot_points.js the arrow keys go from marker
+ * to marker, in the order of x and then y, and the marker's description is shown beneath the plot.
  */
 class scatter_chart {
     /** @var int Plot width in user units. */
@@ -97,6 +102,9 @@ class scatter_chart {
 
     /** @var array|null Fixed axis ranges: xmin, xmax, ymin, ymax, any of them. */
     protected ?array $fixed = null;
+
+    /** @var bool Whether the keyboard module for the markers has been asked for on this page. */
+    protected static bool $keyboard = false;
 
     /** @var string[] Colours by group, distinguishable in print as on screen. */
     protected const PALETTE = ['#1b9e77', '#d95f02', '#7570b3', '#e7298a', '#66a61e', '#e6ab02', '#a6761d', '#666666'];
@@ -254,6 +262,60 @@ class scatter_chart {
         usort($out, static fn(array $a, array $b): int => [$a['x'], $a['y']] <=> [$b['x'], $b['y']]);
 
         return $out;
+    }
+
+    /**
+     * A number for a marker's description: as it is up to four decimals, otherwise rounded and marked "≈" (#143 AK4).
+     *
+     * Exact values stay exact (625, 0.3, −0.25); a value that four decimals cannot hold is not passed off as one
+     * that they can — 625.0000000004 reads "≈625", not "625". The exact value is in the marker's data-x/data-y and
+     * in the CSV.
+     *
+     * @param float $value The value.
+     * @return string
+     */
+    public static function readable(float $value): string {
+        $rounded = round($value, 4);
+        $text = rtrim(rtrim(number_format($rounded, 4, '.', ''), '0'), '.');
+        if ($text === '-0') {
+            $text = '0';
+        }
+
+        return ($rounded == $value ? '' : '≈') . $text;
+    }
+
+    /**
+     * What a marker says, in its tooltip and to a screen reader: how many points, where, whose.
+     *
+     * @param array $cluster From clusters(): x, y, n, label, labels.
+     * @return string
+     */
+    public static function marker_text(array $cluster): string {
+        $n = (int) $cluster['n'];
+        $at = ['n' => $n, 'x' => self::readable((float) $cluster['x']), 'y' => self::readable((float) $cluster['y'])];
+        if ($n <= 1) {
+            $label = (string) $cluster['label'];
+            return get_string(
+                $label === '' ? 'chart:pointonly' : 'chart:pointlabel',
+                'local_catquizlab',
+                (object) ($at + ['label' => $label])
+            );
+        }
+        // One label when all members share it; otherwise every member's, in order, each once with how often it
+        // stands there (#143, #144): a tooltip naming one person or subscale and counting the rest kept the
+        // others from a reader who cannot see the export.
+        $counted = array_count_values($cluster['labels']);
+        $others = count($counted) - 1;
+        $named = [];
+        foreach ($counted as $member => $times) {
+            $named[] = $member . ($times > 1 ? ' ×' . $times : '');
+        }
+
+        return get_string(
+            $others > 0 ? 'chart:clusterlabelmixed' : 'chart:clusterlabel',
+            'local_catquizlab',
+            (object) ($at + ['label' => $cluster['label'], 'others' => $others, 'labels' => implode('; ', $named)])
+        );
     }
 
     /**
@@ -586,6 +648,22 @@ class scatter_chart {
         if (strpos($svg, '<svg') === false) {
             return $svg;
         }
+        if (strpos($svg, 'data-region="point"') !== false) {
+            // The markers from the keyboard (#143 AK7): one tab stop, the arrow keys within; what the focused marker
+            // stands for is shown beneath the drawing for those who see it (a screen reader says it already).
+            $svg = \html_writer::div(
+                $svg
+                . \html_writer::div('', 'small font-weight-bold mt-1', [
+                    'data-region' => 'catquizlab-point-readout', 'aria-hidden' => 'true', 'hidden' => 'hidden',
+                ])
+                . \html_writer::div(get_string('chart:pointkeys', 'local_catquizlab'), 'small text-muted mt-1', [
+                    'data-region' => 'catquizlab-point-keys',
+                ]),
+                '',
+                ['data-region' => 'catquizlab-chart-points']
+            );
+            self::keyboard();
+        }
         if ($this->hidden > 0) {
             $svg .= \html_writer::div(get_string('chart:hiddenpoints', 'local_catquizlab', (object) [
                 'hidden' => $this->hidden,
@@ -627,6 +705,26 @@ class scatter_chart {
         $svg .= $this->controls;
 
         return $svg;
+    }
+
+    /**
+     * Asks once per page for the module that moves between markers with the arrow keys.
+     *
+     * @return void
+     */
+    protected static function keyboard(): void {
+        global $PAGE;
+        if (self::$keyboard || (defined('CLI_SCRIPT') && CLI_SCRIPT) || empty($PAGE)) {
+            return;
+        }
+        try {
+            $PAGE->requires->js_call_amd('local_catquizlab/plot_points', 'init');
+            self::$keyboard = true;
+        } catch (\Throwable $e) {
+            // A page past its header can no longer take a module; the markers still take the focus and say what
+            // they are, only the arrow keys do not move between them.
+            debugging('Plot keyboard module not loaded: ' . $e->getMessage(), DEBUG_DEVELOPER);
+        }
     }
 
     /**
@@ -717,11 +815,20 @@ class scatter_chart {
         $metadata = '<metadata>' . s((string) json_encode($this->settings, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE))
             . '</metadata>';
         $svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ' . self::WIDTH . ' ' . self::HEIGHT . '" '
-            . 'class="local-catquizlab-chart" role="img" '
+            . 'class="local-catquizlab-chart" '
+            // A group, not an image (#143 AK7): an image hides its parts, and the markers are what a screen reader
+            // has to reach. Without markers there is nothing inside to reach, and the drawing stays one image.
+            . ($clusters !== [] ? 'role="group" aria-roledescription="'
+                . s(get_string('chart:roledescription', 'local_catquizlab')) . '" ' : 'role="img" ')
             . 'aria-labelledby="' . $titleid . ' ' . $descid . '" '
             . 'style="max-width:100%;height:auto;">' . $metadata;
         $svg .= '<title id="' . $titleid . '">' . s($this->title) . '</title>';
         $svg .= '<desc id="' . $descid . '">' . s($this->description) . '</desc>';
+
+        // What only the eye needs — axes, ticks, reference lines, traces, legend — is hidden from assistive
+        // technology; it would be read as a run of loose numbers. The title, the description and the axis labels
+        // say what it shows.
+        $svg .= '<g aria-hidden="true">';
 
         // Axes.
         $svg .= $this->line(
@@ -826,32 +933,21 @@ class scatter_chart {
                 . ' stroke-opacity="0.8" data-region="trajectory"/>';
         }
 
+        $svg .= '</g>';
+
         // Points are drawn where they are (#143): no sideways spread. Points on exactly the same coordinates
         // become one marker whose area grows with the logarithm of their number, labelled with that number, so a
         // test length of 625 stays 625 and two hundred equal sittings do not read as one.
-        foreach ($clusters as $cluster) {
+        // Every marker says how many points it stands for, where exactly and whose (#143 AK4) — as its tooltip and, as
+        // an image of its own, to a screen reader. The first marker is the plot's stop in the tab order (#143 AK7).
+        foreach ($clusters as $index => $cluster) {
             $n = (int) $cluster['n'];
-            $label = $cluster['label'];
-            if ($n > 1) {
-                // One label when all members share it; otherwise every member's, in order, each once with how often it
-                // stands there (#143, #144): a tooltip naming one person or subscale and counting the rest kept the
-                // others from a reader who cannot see the export.
-                $counted = array_count_values($cluster['labels']);
-                $others = count($counted) - 1;
-                $named = [];
-                foreach ($counted as $member => $times) {
-                    $named[] = $member . ($times > 1 ? ' ×' . $times : '');
-                }
-                $label = get_string($others > 0 ? 'chart:clusterlabelmixed' : 'chart:clusterlabel', 'local_catquizlab', (object) [
-                    'n' => $n, 'x' => self::format($cluster['x']), 'y' => self::format($cluster['y']),
-                    'label' => $cluster['label'], 'others' => $others, 'labels' => implode('; ', $named),
-                ]);
-            }
-            $title = $label !== '' ? '<title>' . s($label) . '</title>' : '';
+            $text = s(self::marker_text($cluster));
             $svg .= '<circle cx="' . round($sx($cluster['x']), 2) . '" cy="' . round($sy($cluster['y']), 2)
                 . '" r="' . self::marker_radius($n) . '" fill="#2c3e50" fill-opacity="' . ($n > 1 ? '0.6' : '0.45') . '"'
+                . ' role="img" tabindex="' . ($index === 0 ? '0' : '-1') . '" aria-label="' . $text . '"'
                 . ' data-x="' . self::exact($cluster['x']) . '" data-y="' . self::exact($cluster['y']) . '"'
-                . ' data-count="' . $n . '" data-region="point">' . $title . '</circle>';
+                . ' data-count="' . $n . '" data-region="point"><title>' . $text . '</title></circle>';
         }
 
         // Axis labels.

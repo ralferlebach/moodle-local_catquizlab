@@ -44,3 +44,11 @@
     max-height: calc(100vh - 8rem);
     scroll-margin-top: 5rem;
 }
+
+/* A plot's point markers take the keyboard focus (#143 AK7): the focused one is ringed, visibly on any colour. */
+.local-catquizlab-chart circle[data-region="point"]:focus {
+    stroke: #d35400;
+    stroke-width: 3px;
+    outline: 2px solid #d35400;
+    outline-offset: 2px;
+}

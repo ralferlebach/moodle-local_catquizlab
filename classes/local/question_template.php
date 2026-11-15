@@ -33,10 +33,16 @@ namespace local_catquizlab\local;
  * of option templates each carrying a grading fraction (1.0 correct, 0 for a
  * distractor, k/m for the k-th of m graded categories). Both the
  * question text and each option text may use placeholders — {scalename},
- * {scalenumber}, {itemname}, {itemnumber}, {itemid}, {difficulty},
- * {discrimination}, {guessing} — which are filled from the item spec. Rendering
- * is pure and testable; the engine-side question and item creation consume its
- * output.
+ * {scalelabel}, {scalenumber}, {itemname}, {itemnumber}, {itemid}, {itemkey},
+ * {difficulty}, {discrimination}, {guessing} — which are filled from the item
+ * spec. Rendering is pure and testable; the engine-side question and item
+ * creation consume its output.
+ *
+ * The defaults name the scale by its label in the blueprint (K1.2) and the item
+ * by its canonical key, not by the engine scale's name, which carries the run:
+ * the same item reads the same in every run of a replication (#154). They are
+ * rendered in the site's language, whoever triggers the provisioning, for the
+ * same reason. {scalename} stays available to own templates.
  */
 class question_template {
     /**
@@ -46,14 +52,14 @@ class question_template {
      */
     public static function default_dichotomous(): array {
         return [
-            'name'         => '{itemname} — {scalename}',
-            'questiontext' => get_string('question:text_single', 'local_catquizlab'),
+            'name'         => '{itemname} — {scalelabel}',
+            'questiontext' => self::text('question:text_single'),
             'single'       => true,
             'options'      => [
-                ['text' => get_string('question:correct', 'local_catquizlab'), 'fraction' => 1.0],
-                ['text' => get_string('question:distractor', 'local_catquizlab', 'A'), 'fraction' => 0.0],
-                ['text' => get_string('question:distractor', 'local_catquizlab', 'B'), 'fraction' => 0.0],
-                ['text' => get_string('question:distractor', 'local_catquizlab', 'C'), 'fraction' => 0.0],
+                ['text' => self::text('question:correct'), 'fraction' => 1.0],
+                ['text' => self::text('question:distractor', 'A'), 'fraction' => 0.0],
+                ['text' => self::text('question:distractor', 'B'), 'fraction' => 0.0],
+                ['text' => self::text('question:distractor', 'C'), 'fraction' => 0.0],
             ],
         ];
     }
@@ -75,22 +81,22 @@ class question_template {
         // category would be unreachable and the item silently truncated.
         $labels = [];
         foreach ([0, 1, 2, 3, 4] as $k) {
-            $labels[$k] = get_string('question:level_' . $k, 'local_catquizlab');
+            $labels[$k] = self::text('question:level_' . $k);
         }
 
         $options = [];
         for ($k = 0; $k <= $top; $k++) {
-            $label = $k === $top ? get_string('question:level_full', 'local_catquizlab')
-                : ($labels[$k] ?? get_string('question:levelplain', 'local_catquizlab', $k));
+            $label = $k === $top ? self::text('question:level_full')
+                : ($labels[$k] ?? self::text('question:levelplain', $k));
             $options[] = [
-                'text'     => get_string('question:leveloption', 'local_catquizlab', (object) ['k' => $k, 'label' => $label]),
+                'text'     => self::text('question:leveloption', (object) ['k' => $k, 'label' => $label]),
                 'fraction' => $top > 0 ? round($k / $top, 7) : 0.0,
             ];
         }
 
         return [
-            'name'         => get_string('question:name_poly', 'local_catquizlab'),
-            'questiontext' => get_string('question:text_poly', 'local_catquizlab'),
+            'name'         => self::text('question:name_poly'),
+            'questiontext' => self::text('question:text_poly'),
             // Shuffling is disabled on save, so the definition order is the
             // on-screen order and category k stays the k-th option.
             'single'       => true,
@@ -174,7 +180,7 @@ class question_template {
      * @return string
      */
     protected static function substitute(string $text, array $item): string {
-        $keys = ['scalename', 'scalenumber', 'itemname', 'itemnumber', 'itemid',
+        $keys = ['scalename', 'scalelabel', 'scalenumber', 'itemname', 'itemnumber', 'itemid', 'itemkey',
             'difficulty', 'discrimination', 'guessing'];
 
         $replacements = [];
@@ -183,6 +189,19 @@ class question_template {
         }
 
         return strtr($text, $replacements);
+    }
+
+    /**
+     * A string of the plugin in the site's language: the same question text whoever provisions the run (#154).
+     *
+     * @param string $key The string key.
+     * @param mixed $a Its argument.
+     * @return string
+     */
+    protected static function text(string $key, $a = null): string {
+        global $CFG;
+
+        return get_string_manager()->get_string($key, 'local_catquizlab', $a, (string) ($CFG->lang ?? 'en'));
     }
 
     /**

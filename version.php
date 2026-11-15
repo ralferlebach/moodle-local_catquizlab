@@ -33,7 +33,7 @@ $plugin->supported    = [405, 503];   // Moodle 5.3 in CI acceptance; release on
 // exercised end to end against a real CAT engine, and a study of 90 attempts
 // was run through it. What is missing for stable is field use, not function.
 $plugin->maturity     = MATURITY_BETA;
-$plugin->release      = '0.7.60';
+$plugin->release      = '0.7.64';
 
 // The engine is a hard dependency now, as the note here used to promise it
 // would become. The suite no longer drives it as an optional black box: it

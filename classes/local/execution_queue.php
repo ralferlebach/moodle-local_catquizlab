@@ -48,23 +48,29 @@ class execution_queue {
     public const CANCELLED = 'cancelled';
 
     /**
+     * @var string The reason of a running entry whose experiment the line prepares itself (#151). Kept with the
+     *      entry, where an entry that has stopped keeps why, until the entry ends.
+     */
+    public const PREPARING = 'preparing';
+
+    /**
      * Put an experiment in the line.
      *
      * @param int $experimentid The experiment.
-     * @return array{ok: bool, position: int, reason: string}
+     * @return array{ok: bool, position: int, place?: int, reason: string, warning?: string}
      */
     public static function enqueue(int $experimentid): array {
-        global $DB, $USER;
+        global $DB;
 
-        // Only an experiment that is actually ready: queueing one that has not
-        // been prepared means it reaches the front of the line and fails there,
-        // having held up everything behind it.
         // An experiment being deleted (0.7.50) does not go back into the line.
         if ((int) $DB->get_field('local_catquizlab_experiment', 'timedeleting', ['id' => $experimentid]) > 0) {
             return ['ok' => false, 'position' => 0, 'reason' => 'being-deleted'];
         }
+        // Prepared or not (#151): an experiment that has not been prepared is prepared when its turn comes, in the
+        // background (advance()). What cannot join is one that is running, finished, stopped or needs recovery: it
+        // would reach the front and have nothing to do there.
         $state = experiment_runner::state($experimentid);
-        if (!$state['canstart']) {
+        if (!in_array($state['state'], experiment_runner::STARTABLE, true)) {
             return ['ok' => false, 'position' => 0, 'reason' => 'not-ready'];
         }
 
@@ -74,6 +80,28 @@ class execution_queue {
         // turn comes.
         $setup = setup_wizard::state();
         $warning = empty($setup['ready']) ? 'setup-incomplete: ' . implode(', ', $setup['blockers']) : '';
+
+        // Two clicks, two browsers, at once (#151 AK7): the check and the insert under one lock, so that the second
+        // finds the first one's entry. Without the lock both read "not in the line" and both insert.
+        $lock = \core\lock\lock_config::get_lock_factory('local_catquizlab_queue')->get_lock('enqueue', 10);
+        try {
+            return self::enqueue_once($experimentid, $warning);
+        } finally {
+            if ($lock) {
+                $lock->release();
+            }
+        }
+    }
+
+    /**
+     * Put an experiment in the line unless it is there already; under the lock of enqueue().
+     *
+     * @param int $experimentid The experiment.
+     * @param string $warning What is missing on the installation, if anything.
+     * @return array{ok: bool, position: int, place: int, reason: string, warning: string}
+     */
+    protected static function enqueue_once(int $experimentid, string $warning): array {
+        global $DB, $USER;
 
         // Already in the line: asking twice should not mean running twice.
         $existing = $DB->get_record_select(
@@ -87,7 +115,8 @@ class execution_queue {
         );
 
         if ($existing) {
-            return ['ok' => true, 'position' => (int) $existing->position, 'reason' => 'already-queued'];
+            return ['ok' => true, 'position' => (int) $existing->position, 'place' => self::place((int) $existing->position),
+                'reason' => 'already-queued', 'warning' => $warning];
         }
 
         $position = 1 + (int) $DB->get_field_sql(
@@ -102,7 +131,25 @@ class execution_queue {
             'timecreated'  => time(),
         ]);
 
-        return ['ok' => true, 'position' => $position, 'reason' => '', 'warning' => $warning];
+        return ['ok' => true, 'position' => $position, 'place' => self::place($position), 'reason' => '',
+            'warning' => $warning];
+    }
+
+    /**
+     * Where an entry stands among those still in the line: 1 for the first. The position itself only orders, and
+     * counts every entry there ever was (#151: "number 10 in the line" for the only one in it).
+     *
+     * @param int $position The entry's position.
+     * @return int
+     */
+    public static function place(int $position): int {
+        global $DB;
+
+        return (int) $DB->count_records_select(
+            'local_catquizlab_execqueue',
+            'state IN (:waiting, :running) AND position <= :position',
+            ['waiting' => self::WAITING, 'running' => self::RUNNING, 'position' => $position]
+        );
     }
 
     /**
@@ -142,11 +189,49 @@ class execution_queue {
         if (!$DB->get_manager()->table_exists('local_catquizlab_execqueue')) {
             return ['started' => 0, 'reason' => 'no-queue'];
         }
+        // One at a time (#151 AK7): the scheduled tick and a tick asked for by a start or a ready run can meet; two
+        // advances at once could both find the front entry waiting and both start it. The second one waits its turn
+        // for a moment, then leaves the line to the first.
+        $lock = \core\lock\lock_config::get_lock_factory('local_catquizlab_queue')->get_lock('advance', 5);
+        if (!$lock) {
+            return ['started' => 0, 'reason' => 'advancing'];
+        }
+        try {
+            return self::advance_locked();
+        } finally {
+            $lock->release();
+        }
+    }
+
+    /**
+     * advance(), under its lock.
+     *
+     * @return array See advance().
+     */
+    protected static function advance_locked(): array {
+        global $DB;
 
         // Close out whatever finished since the last tick, so the line moves.
         $closed = [];
         foreach ($DB->get_records('local_catquizlab_execqueue', ['state' => self::RUNNING]) as $entry) {
             $experimentid = (int) $entry->experimentid;
+            // Being prepared (#151): no runs yet, or runs not started yet, is what preparing looks like. The
+            // preparation is asked for again on every tick until it has started every run — a task lost or failed
+            // for good is replaced, a running one is not doubled (prepare_experiment::queue() checks).
+            if (self::preparing($entry) && $DB->record_exists('local_catquizlab_experiment', ['id' => $experimentid])) {
+                $state = experiment_runner::state($experimentid);
+                if (in_array($state['state'], [experiment_runner::STATE_DRAFT, experiment_runner::STATE_CREATED], true)) {
+                    \local_catquizlab\task\prepare_experiment::queue($experimentid, (int) $entry->userid);
+
+                    return ['started' => 0, 'reason' => 'busy', 'holder' => $experimentid,
+                        'since' => (int) $entry->timestarted, 'closed' => $closed, 'preparing' => true];
+                }
+                if ($state['state'] !== experiment_runner::STATE_PREPARING) {
+                    // Prepared: the entry no longer says so.
+                    $DB->set_field('local_catquizlab_execqueue', 'reason', '', ['id' => $entry->id]);
+                    $entry->reason = '';
+                }
+            }
             $orphan = self::orphaned($experimentid);
             if ($orphan !== '') {
                 // An entry whose experiment has no runs any more, or whose runs were never started, is not
@@ -174,15 +259,12 @@ class execution_queue {
                 'since' => (int) $entry->timestarted, 'closed' => $closed];
         }
 
-        // Waiting entries whose experiment is gone or has no runs left: taken out of the line now, not when
-        // they reach its front, so the line shows what will really run.
+        // Waiting entries whose experiment is gone: taken out of the line now, not when they reach its front, so
+        // the line shows what will really run. One without runs is not gone (#151): the line prepares it at its turn.
         foreach ($DB->get_records('local_catquizlab_execqueue', ['state' => self::WAITING]) as $entry) {
             if (!$DB->record_exists('local_catquizlab_experiment', ['id' => $entry->experimentid])) {
                 self::close($entry, self::CANCELLED, 'orphaned: experiment deleted');
                 $closed[] = ['experimentid' => (int) $entry->experimentid, 'reason' => 'orphaned: experiment deleted'];
-            } else if (!$DB->record_exists('local_catquizlab_run', ['experimentid' => $entry->experimentid])) {
-                self::close($entry, self::CANCELLED, 'orphaned: experiment has no runs');
-                $closed[] = ['experimentid' => (int) $entry->experimentid, 'reason' => 'orphaned: experiment has no runs'];
             }
         }
 
@@ -204,7 +286,25 @@ class execution_queue {
         // Ready when it reaches the front, not merely when it was queued: an
         // experiment can be reset or fail while it waits.
         $state = experiment_runner::state($experimentid);
-        if (!$state['canstart']) {
+        // Not prepared yet (#151): prepared now, in the background, holding the line meanwhile — so that one
+        // experiment is prepared and run at a time, and the ones behind it wait as they were saved.
+        if (
+            in_array($state['state'], [experiment_runner::STATE_DRAFT, experiment_runner::STATE_CREATED,
+                experiment_runner::STATE_PREPARING], true)
+        ) {
+            $DB->update_record('local_catquizlab_execqueue', (object) [
+                'id'          => $entry->id,
+                'state'       => self::RUNNING,
+                'reason'      => self::PREPARING,
+                'timestarted' => time(),
+            ]);
+            if ($state['state'] !== experiment_runner::STATE_PREPARING) {
+                \local_catquizlab\task\prepare_experiment::queue($experimentid, (int) $entry->userid);
+            }
+
+            return ['started' => $experimentid, 'reason' => 'preparing', 'closed' => $closed];
+        }
+        if (!$state['canstart'] && $state['state'] !== experiment_runner::STATE_RUNNING) {
             $DB->update_record('local_catquizlab_execqueue', (object) [
                 'id'           => $entry->id,
                 'state'        => self::FINISHED,
@@ -223,6 +323,32 @@ class execution_queue {
         ]);
 
         return ['started' => $experimentid, 'reason' => '', 'closed' => $closed];
+    }
+
+    /**
+     * Whether the line prepares this running entry's experiment itself (#151).
+     *
+     * @param \stdClass $entry The entry.
+     * @return bool
+     */
+    public static function preparing(\stdClass $entry): bool {
+        return $entry->state === self::RUNNING && strpos((string) ($entry->reason ?? ''), self::PREPARING) === 0;
+    }
+
+    /**
+     * Say how the preparation of a running entry's experiment went, on the entry, where the line shows it (#151).
+     *
+     * @param int $experimentid The experiment.
+     * @param string $how 'preparing' and what is missing or failed, if anything.
+     * @return void
+     */
+    public static function note_preparation(int $experimentid, string $how): void {
+        global $DB;
+
+        $entry = $DB->get_record('local_catquizlab_execqueue', ['experimentid' => $experimentid, 'state' => self::RUNNING]);
+        if ($entry && self::preparing($entry)) {
+            $DB->set_field('local_catquizlab_execqueue', 'reason', \core_text::substr($how, 0, 1000), ['id' => $entry->id]);
+        }
     }
 
     /**
@@ -324,6 +450,9 @@ class execution_queue {
                 'state'        => $row->state,
                 'running'      => $row->state === self::RUNNING,
                 'waiting'      => $row->state === self::WAITING,
+                // Prepared by the line itself (#151), and how that goes: "preparing", or what it waits for.
+                'preparing'    => self::preparing($row),
+                'reason'       => self::preparing($row) ? (string) $row->reason : '',
                 'place'        => $place,
                 'queuedago'    => duration::ago((int) $row->timecreated),
             ];

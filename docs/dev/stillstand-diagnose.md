@@ -42,7 +42,7 @@ Auf der Log-Seite steht dieselbe Tick-Zeile mit einem Schweregrad:
 
 | Was `diagnose.php` sagt | Bedeutung | Was zu tun ist |
 |---|---|---|
-| „run(s) created but never started“ | Das Experiment wurde mit „Speichern und Läufe anlegen“ angelegt, aber nicht gestartet. | Auf der Fortschrittsseite **Läufe starten**. |
+| „run(s) created but never started“ | Das Experiment wurde mit „Speichern und Läufe anlegen“ angelegt, aber nicht gestartet. | **Experiment starten** (seit 0.7.64 der eine Start, #151): die Warteschlange startet die Läufe an seiner Reihe. |
 | „run(s) being prepared“ | Einrichtungsaufgaben laufen (DigiTwins, Test, Sitzungen). Bei 2000 Personen und 2500 Items dauert das 1–2 Minuten je Lauf. | Warten. Bei `faildelay` > 0 steht der Grund in `mdl_task_log`. |
 | „execution queue held by experiment N“ | Ein anderes Experiment läuft. | Warten, oder dieses Experiment beenden bzw. zurücksetzen. Verwaiste Einträge schließt der Tick selbst. |
 | „sitting(s) in paused runs“ | Ein Lauf ist pausiert, von Hand oder durch den Schutzschalter. | Auf der Fortschrittsseite unter „Diagnose und Wiederherstellung“ fortsetzen. |

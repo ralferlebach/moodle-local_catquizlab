@@ -104,7 +104,8 @@ final class density_marker_test extends \advanced_testcase {
         if ($n > 1) {
             $this->assertStringContainsString((string) $n, $markers[0]['title']);
         } else {
-            $this->assertSame('CLASSIC', $markers[0]['title']);
+            // One point says where it is too (#143 AK4), not only whose it is.
+            $this->assertSame('One point at (625; 0.31) — CLASSIC', $markers[0]['title']);
         }
 
         // The axis is centred on 625, and the marker sits on its middle tick.
@@ -331,5 +332,74 @@ final class density_marker_test extends \advanced_testcase {
         preg_match('~data:text/csv;charset=utf-8;base64,([^"]+)"~', $html, $csv);
         $lines = array_values(array_filter(explode("\n", base64_decode($csv[1]))));
         $this->assertCount(4, $lines, 'a header and all three points');
+    }
+
+    /**
+     * The markers are what a screen reader reaches (#143 AK7, #144 AK9): each an image with its tooltip as its name,
+     * one stop in the tab order per plot, the rest of the drawing hidden from assistive technology.
+     *
+     * @return void
+     */
+    public function test_markers_are_reachable_and_say_what_they_are(): void {
+        $this->resetAfterTest();
+        $points = array_merge(
+            array_fill(0, 625, ['x' => 625, 'y' => 0.31, 'label' => 'CLASSIC']),
+            [['x' => 600, 'y' => -0.25, 'label' => 'P1'], ['x' => 610, 'y' => 0.123456, 'label' => '']]
+        );
+        $html = $this->length_chart($points)->render();
+
+        // The drawing is a group whose parts can be reached, named by its title and description.
+        $this->assertMatchesRegularExpression('~<svg [^>]*role="group" aria-roledescription="scatter plot"'
+            . ' aria-labelledby="catlabtitle\w+ catlabdesc\w+"~', $html);
+        // Axes, ticks and lines are hidden from it; the markers come after them, outside.
+        $this->assertSame(1, substr_count($html, '<g aria-hidden="true">'));
+        $this->assertGreaterThan(strpos($html, '</g>'), strpos($html, 'data-region="point"'));
+
+        preg_match_all('~<circle [^>]*role="img" tabindex="(-?\d)" aria-label="([^"]*)"[^>]*data-count="(\d+)"'
+            . ' data-region="point"><title>([^<]*)</title></circle>~', $html, $m, PREG_SET_ORDER);
+        $this->assertCount(3, $m, 'three markers, every one an image with a name');
+        $this->assertSame(['0', '-1', '-1'], array_column($m, 1), 'one tab stop: the first marker');
+        foreach ($m as $marker) {
+            $this->assertSame($marker[2], $marker[4], 'what it says is what its tooltip shows');
+        }
+        // In the order of x: 600, 610, 625. Exact values as they are; one four decimals cannot hold, marked.
+        $this->assertSame('One point at (600; -0.25) — P1', html_entity_decode($m[0][2], ENT_QUOTES));
+        $this->assertSame('One point at (610; ≈0.1235)', html_entity_decode($m[1][2], ENT_QUOTES));
+        $this->assertSame('625 points at (625; 0.31) — CLASSIC', html_entity_decode($m[2][2], ENT_QUOTES));
+        $this->assertSame('625', $m[2][3]);
+
+        // From the keyboard: the hint beneath the plot, and the place where the focused marker is shown.
+        $this->assertStringContainsString('data-region="catquizlab-point-keys"', $html);
+        $this->assertStringContainsString('data-region="catquizlab-point-readout" aria-hidden="true" hidden="hidden"', $html);
+    }
+
+    /**
+     * A plot without markers stays one image: nothing inside it to reach.
+     *
+     * @return void
+     */
+    public function test_a_plot_without_markers_is_one_image(): void {
+        $this->resetAfterTest();
+        $chart = new scatter_chart('t', 'x', 'y');
+        $chart->add_series('a', 'g', [['x' => 1, 'y' => 1], ['x' => 2, 'y' => 3]]);
+        $html = $chart->render();
+        $this->assertStringContainsString('role="img" aria-labelledby=', $html);
+        $this->assertStringNotContainsString('tabindex', $html);
+        $this->assertStringNotContainsString('catquizlab-point-keys', $html);
+    }
+
+    /**
+     * Numbers in a marker's description: exact where four decimals hold them, otherwise marked as rounded.
+     *
+     * @return void
+     */
+    public function test_readable_numbers_say_when_they_are_rounded(): void {
+        $this->assertSame('625', scatter_chart::readable(625.0));
+        $this->assertSame('≈625', scatter_chart::readable(625.0000000004));
+        $this->assertSame('0.3', scatter_chart::readable(0.3));
+        $this->assertSame('-0.25', scatter_chart::readable(-0.25));
+        $this->assertSame('0', scatter_chart::readable(-0.0));
+        $this->assertSame('≈0.1235', scatter_chart::readable(0.123456));
+        $this->assertSame('≈0', scatter_chart::readable(0.00001));
     }
 }

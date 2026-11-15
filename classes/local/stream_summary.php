@@ -93,9 +93,16 @@ class stream_summary {
             }
         }
 
-        // The same pairs metrics::ability_recovery() uses.
-        $t = (float) ($row['truetheta'] ?? 0.0);
-        $e = (float) ($row['esttheta'] ?? 0.0);
+        // The same pairs metrics::ability_recovery() uses. A sitting without an estimate has no error: it is left
+        // out of RMSE and correlation, not counted as an estimate of 0 (#156 AK7, #157 AK3).
+        if (
+            !isset($row['truetheta'], $row['esttheta']) || !is_numeric($row['truetheta'])
+                || !is_numeric($row['esttheta'])
+        ) {
+            return;
+        }
+        $t = (float) $row['truetheta'];
+        $e = (float) $row['esttheta'];
         $err = $e - $t;
         $this->sums['n']++;
         $this->sums['t'] += $t;
