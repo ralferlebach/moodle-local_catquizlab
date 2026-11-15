@@ -25,7 +25,7 @@
 defined('MOODLE_INTERNAL') || die();
 
 $plugin->component    = 'local_catquizlab';
-$plugin->version      = 2026111400;
+$plugin->version      = 2026111500;
 $plugin->requires     = 2024100700;   // Moodle 4.5.0 — hard minimum.
 $plugin->supported    = [405, 503];   // Moodle 5.3 in CI acceptance; release only after all matrix gates pass.
 // Beta since 0.6.0: the whole chain — definition, provisioning, engine
