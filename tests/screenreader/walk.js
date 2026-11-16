@@ -90,19 +90,42 @@ async function heard(reader, action) {
 }
 
 /**
- * Where the keyboard focus is: whether the page has it at all (the browser window in front), and whether it is still
- * on the start point.
+ * Where the keyboard focus is: whether the page has it at all (the browser window in front), whether it is still on
+ * the start point, and whether it is somewhere before the start point in the page.
+ *
+ * Before the start point means the key did not go from there: a screen reader in browse mode moves on from its own
+ * cursor, and when that cursor had not followed the focus to the start point it was still at the top of the page
+ * (GitHub, NVDA, moodle5, 2026-11-16: the first Tab said "Skip to main content").
  *
  * @param {import('@playwright/test').Page} page The page.
- * @returns {Promise<{page: boolean, start: boolean, element: string}>}
+ * @returns {Promise<{page: boolean, start: boolean, before: boolean, element: string}>}
  */
 async function focusState(page) {
-    return page.evaluate((id) => ({
-        page: document.hasFocus(),
-        start: !!document.activeElement && document.activeElement.id === id,
-        element: document.activeElement ? (document.activeElement.tagName.toLowerCase()
-            + (document.activeElement.id ? '#' + document.activeElement.id : '')) : '',
-    }), START);
+    return page.evaluate((id) => {
+        const active = document.activeElement;
+        const start = document.getElementById(id);
+        return {
+            page: document.hasFocus(),
+            start: !!active && active.id === id,
+            before: !!active && !!start && active !== start && active !== document.body
+                && (start.compareDocumentPosition(active) & Node.DOCUMENT_POSITION_PRECEDING) !== 0,
+            element: active ? (active.tagName.toLowerCase() + (active.id ? '#' + active.id : '')) : '',
+        };
+    }, START);
+}
+
+/**
+ * Puts the focus on the start point so that the reader notices: away first (a focus event, also when the start point
+ * had it already), then on it, then time for the reader to move its own cursor there.
+ *
+ * @param {import('@playwright/test').Page} page The page.
+ * @param {object} reader The screen reader.
+ */
+async function toStart(page, reader) {
+    await page.evaluate(() => document.activeElement?.blur());
+    await page.focus('#' + START);
+    await settled(reader);
+    await page.waitForTimeout(500);
 }
 
 /**
@@ -120,8 +143,8 @@ async function refocus(page, reader) {
     if (typeof reader.navigateToWebContent === 'function') {
         await reader.navigateToWebContent();
     }
-    await page.focus('#' + START);
     await settled(reader);
+    await toStart(page, reader);
 }
 
 /**
@@ -131,9 +154,10 @@ async function refocus(page, reader) {
  * Option+Tab, the macOS key that also reaches links and buttons when "keyboard navigation" is off.
  *
  * A key that does not arrive in the page at all (the page lost the window focus, or the focus is still on the start
- * point afterwards) is not taken as "this control cannot be reached": the window is brought back to the front and the
- * key pressed again, at most three times per key. How often that was needed is part of the result; the verdict on the
- * controls stays the same.
+ * point afterwards), or that did not go from the start point (the focus is before it afterwards), is not taken as
+ * "this control cannot be reached": the window is brought back to the front, the focus put on the start point again
+ * and the key pressed again, at most three times per key. How often that was needed is part of the result; the
+ * verdict on the controls stays the same.
  *
  * @param {import('@playwright/test').Page} page The page.
  * @param {object} reader The screen reader (press, spokenPhraseLog).
@@ -154,8 +178,7 @@ async function walk(page, reader, keys, count, bar = BAR, controls = CONTROLS) {
         if (heard.every((said) => said !== null)) {
             break;
         }
-        await page.focus('#' + START);
-        await settled(reader);
+        await toStart(page, reader);
         let entered = false;
         let retries = 0;
         for (let i = 0; i < count + 3; i++) {
@@ -165,7 +188,7 @@ async function walk(page, reader, keys, count, bar = BAR, controls = CONTROLS) {
             const at = await focused(page, bar, controls);
             if (at < 0 && !entered && retries < 3) {
                 const state = await focusState(page);
-                if (!state.page || state.start) {
+                if (!state.page || state.start || state.before) {
                     refocused.push({key: key, step: i, state: state});
                     retries++;
                     await refocus(page, reader);

@@ -6,6 +6,34 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.7.67] — 2026-11-16 — Version 2026111601. The CI of 0.7.66 on GitHub: a file left over from 0.7.65, the NVDA walk on the experiment form
+
+No change to the plugin's code, its database or its strings: one test helper and this version. On GitHub (05cb757,
+0.7.66) the release CI and the worker CI were green; the interface run and one screen reader job were red:
+
+- **Interface E2E, all three stacks: 76 green, 3 red — the old resume spec still in the repository.** 0.7.66 renamed
+  `tests/playwright/experiment_resume.spec.js` to `experiments_resume.spec.js`. Unpacking the ZIP over the repository
+  added the new file but left the old one: the repository at 05cb757 has exactly one file the ZIP does not
+  (`tests/playwright/experiment_resume.spec.js`), every other file is the same, byte for byte. So both ran. The old one
+  ran before `experiment.spec.js`, as in 0.7.65, waited twenty minutes for workers nobody had set up yet, and on the
+  way resumed one stopped experiment and reset the other; the new one then found nothing stopped (`cancelled`
+  expected above 0, was 0). `experiment.spec.js` itself was green there (2.2 minutes), the deep delete too.
+  **The fix is to delete the old file from the repository** (`git rm tests/playwright/experiment_resume.spec.js`);
+  nothing in the plugin changes for it.
+- **NVDA on 5.2: the item model group (#159) red, on 5.3 red once and green on the retry.** The walk put the focus
+  on its start point right before the group, and NVDA's first Tab said "Skip to main content": it went on from the
+  top of the page (the artefact's spoken log), not from the start point, so the group was never reached in seventeen
+  Tabs. In browse mode NVDA moves on from its own cursor, which had not followed the focus to the start point on this
+  long page. The same group was flaky in 0.7.65 already (5.3: red, then green on the retry). `tests/screenreader/walk.js`
+  now takes a key after which the focus is before the start point as one that did not go from there, like a key that
+  never arrived: focus away and onto the start point again, half a second for the reader, the key again, at most
+  three times per key, each time on record. Checked against a fake reader whose first keys go on from the top of the
+  page: recovered; a reader that always does so stays red, with the three retries in the message. Not checked with
+  NVDA itself here (no Windows).
+- **VoiceOver on 4.5 and 5.3: cancelled by GitHub**, "The job was not acquired by Runner of type hosted even after
+  multiple attempts", with the notice "Due to capacity constraints, jobs targeting macOS arm64 runners may experience
+  longer queue times" (the jobs' annotations). No step ran. Not the plugin; to be run again.
+
 ## [0.7.66] — 2026-11-16 — Version 2026111600. The CI of 0.7.65 on GitHub: the upgrade check, the interface run and the NVDA walk; the experiment form on a slowly loading page; the self-test takes no work
 
 No change to the database or the strings. In the code: two scripts of the experiment form and the self-test's web
