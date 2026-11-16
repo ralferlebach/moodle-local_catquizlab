@@ -263,9 +263,11 @@ jobs:
         run: php local/catquizlab/cli/seed_request_trace.php --lines=250000 | grep -E '^LOGS_ERRORS=' >> "$GITHUB_ENV"
 
       # Issue 165: two experiments prepared in the real engine and stopped
-      # (what "Stop experiment" does) for resume.spec.js: one is resumed through
-      # the interface and finished by the workers and cron, the other is reset
-      # the destructive way. Only the expected keys reach the environment.
+      # (what "Stop experiment" does) for experiments_resume.spec.js: one is
+      # resumed through the interface and finished by the workers and cron,
+      # the other is reset the destructive way. Only the expected keys reach
+      # the environment. The spec runs right after experiment.spec.js, which
+      # sets the installation up for its workers.
       - name: Issue 165 — two stopped experiments, to resume and to reset
         working-directory: ${{ matrix.dirroot }}
         run: |

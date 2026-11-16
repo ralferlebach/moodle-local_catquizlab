@@ -337,7 +337,7 @@ const draw = (svg, caption, p, problem) => {
  *
  * @param {string} separator The decimal separator of the user's language.
  */
-export const init = (separator) => {
+const start = (separator) => {
     decsep = separator || '.';
     const inputs = {};
     ROLES.forEach((role) => {
@@ -403,4 +403,26 @@ export const init = (separator) => {
         });
     });
     update();
+};
+
+/**
+ * Couple the three inputs and the drawing, once the page is parsed.
+ *
+ * The drawing's words come from the page (strings_for_js), written after the AMD init code and after scripts the page
+ * loads from elsewhere; before the page is parsed they may not be there yet (see levels.js).
+ *
+ * @param {string} separator The decimal separator of the user's language.
+ */
+export const init = (separator) => {
+    // Pending for Behat and anything else that waits for the page's scripts, until the work is done.
+    M.util.js_pending('local_catquizlab/lognormal:init');
+    const run = () => {
+        start(separator);
+        M.util.js_complete('local_catquizlab/lognormal:init');
+    };
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', run, {once: true});
+    } else {
+        run();
+    }
 };

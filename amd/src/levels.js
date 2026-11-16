@@ -262,6 +262,14 @@ const enhance = (area) => {
         sync();
         const fields = list.lastElementChild.querySelectorAll('input');
         fields[0].focus();
+        // Moodle's message drawer may hand the focus back to the clicked button once this handler is done
+        // (core_message/message_drawer, on every click outside it; seen with MathJax unable to load, 2026-11-16):
+        // what is typed next would go nowhere. Into the new row again, unless it went somewhere else.
+        setTimeout(() => {
+            if (document.activeElement === add) {
+                fields[0].focus();
+            }
+        }, 0);
     });
 
     render();
@@ -271,12 +279,27 @@ const enhance = (area) => {
 };
 
 /**
- * Enhance every levels field of the form.
+ * Enhance every levels field of the form, once the page is parsed.
+ *
+ * The strings come from the page (strings_for_js), and Moodle writes them after the AMD init code and after the
+ * scripts the page loads from elsewhere (MathJax from a CDN, with that filter on). An init that ran while such a
+ * script was still loading found none and showed the keys: "[[levels:add,local_catquizlab]]" on the buttons, seen
+ * on a slow local server (2026-11-16). Once the page is parsed, they are there.
  */
 export const init = () => {
-    document.querySelectorAll('textarea[data-catquizlab-levels]').forEach((area) => {
-        if (!area.disabled && !area.readOnly) {
-            enhance(area);
-        }
-    });
+    // Pending for Behat and anything else that waits for the page's scripts, until the work is done.
+    M.util.js_pending('local_catquizlab/levels:init');
+    const run = () => {
+        document.querySelectorAll('textarea[data-catquizlab-levels]').forEach((area) => {
+            if (!area.disabled && !area.readOnly) {
+                enhance(area);
+            }
+        });
+        M.util.js_complete('local_catquizlab/levels:init');
+    };
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', run, {once: true});
+    } else {
+        run();
+    }
 };

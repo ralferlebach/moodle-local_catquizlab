@@ -90,13 +90,25 @@ const open = async(page) => {
 };
 
 test('the library, the experiment form and the progress page', async({page}, info) => {
+    const own = !process.env.PROGRESS_RUNNING_EXPERIMENTID;
     const running = seeded('PROGRESS_RUNNING_EXPERIMENTID', 'seed_progress.php', ['--state=running']);
     needs(!running, 'No running experiment could be seeded.');
-    await login(page);
-    await check(page, '/local/catquizlab/index.php', info);
-    await check(page, '/local/catquizlab/experiment.php', info, open);
-    await check(page, '/local/catquizlab/experiment.php?id=' + running, info, open);
-    await check(page, '/local/catquizlab/runs.php?experimentid=' + running, info, open);
+    try {
+        await login(page);
+        await check(page, '/local/catquizlab/index.php', info);
+        await check(page, '/local/catquizlab/experiment.php', info, open);
+        await check(page, '/local/catquizlab/experiment.php?id=' + running, info, open);
+        await check(page, '/local/catquizlab/runs.php?experimentid=' + running, info, open);
+    } finally {
+        // The seeded experiment "runs": sittings held by a worker for a day, others not due for a month. Under the one
+        // rule for the execution line (#163) the line adopts it and it holds the line, with nothing anybody could
+        // play, in front of every experiment started after it — on GitHub (2026-11-16) in front of the one
+        // experiment.spec.js plays through the interface. Stopped once looked at, if seeded here.
+        if (own) {
+            execFileSync('php', [path.resolve(__dirname, '../../cli/stop_experiment.php'), '--experimentid=' + running,
+                '--yes'], {encoding: 'utf8'});
+        }
+    }
 });
 
 test('every results tab', async({page}, info) => {

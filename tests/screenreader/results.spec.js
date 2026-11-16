@@ -199,13 +199,15 @@ async function walkGroup(page, reader, keys, group, info) {
     await reader.navigateToWebContent();
     const result = await walk(page, reader, keys, controls.length, group.bar, group.selector);
     await keep(info, group.key, {
-        reader: SR, keys: keys, order: result.order, url: group.url,
+        reader: SR, keys: keys, order: result.order, url: group.url, refocused: result.refocused,
         controls: controls.map((control, i) => Object.assign({}, control, {key: result.keys[i], heard: result.heard[i]})),
         log: await reader.spokenPhraseLog(),
     });
 
     const missing = controls.filter((control, i) => result.heard[i] === null).map((control) => control.name);
-    expect(missing, group.key + ': controls the keyboard did not reach with ' + keys.join(' / ')).toEqual([]);
+    expect(missing, group.key + ': controls the keyboard did not reach with ' + keys.join(' / ')
+        + (result.refocused.length ? ' (window brought back ' + result.refocused.length + ' time(s): '
+            + JSON.stringify(result.refocused) + ')' : '')).toEqual([]);
     expect(result.order, group.key + ': the keyboard goes through in the page\'s order')
         .toEqual([...result.order].sort((a, b) => a - b));
     controls.forEach((control, i) => {
@@ -234,13 +236,15 @@ async function filterbar(page, reader, keys, info) {
     await reader.navigateToWebContent();
     const result = await walk(page, reader, keys, controls.length);
     await keep(info, 'filterbar', {
-        reader: SR, keys: keys, order: result.order,
+        reader: SR, keys: keys, order: result.order, refocused: result.refocused,
         controls: controls.map((control, i) => Object.assign({}, control, {key: result.keys[i], heard: result.heard[i]})),
         log: await reader.spokenPhraseLog(),
     });
 
     const missing = controls.filter((control, i) => result.heard[i] === null).map((control) => control.name);
-    expect(missing, 'controls the keyboard did not reach with ' + keys.join(' / ')).toEqual([]);
+    expect(missing, 'controls the keyboard did not reach with ' + keys.join(' / ')
+        + (result.refocused.length ? ' (window brought back ' + result.refocused.length + ' time(s): '
+            + JSON.stringify(result.refocused) + ')' : '')).toEqual([]);
     expect(result.order, 'the keyboard goes through the bar in its order').toEqual([...result.order].sort((a, b) => a - b));
     controls.forEach((control, i) => {
         const said = norm(result.heard[i]);

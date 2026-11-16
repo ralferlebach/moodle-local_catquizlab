@@ -6,6 +6,68 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.7.66] — 2026-11-16 — Version 2026111600. The CI of 0.7.65 on GitHub: the upgrade check, the interface run and the NVDA walk; the experiment form on a slowly loading page; the self-test takes no work
+
+No change to the database or the strings. In the code: two scripts of the experiment form and the self-test's web
+service check (last three points below, found while running the interface CI here). On GitHub, 0.7.65 had the release CI's worker check, lint,
+PHPUnit and Behat green on every cell, and the worker CI green on every stack; red was:
+
+- **Upgrade job, every cell (#167).** The upgrade from 0.7.60 and its check passed on all six cells (4.5/5.2/5.3 ×
+  PostgreSQL/MariaDB). The second upgrade then failed: Moodle's `admin/cli/upgrade.php` writes "No upgrade needed"
+  to STDERR (`cli_error(…, 0)`, exit code 0), and the job piped only STDOUT into the file it searched for it. Both
+  upgrade calls now take `2>&1`, in `moodle-release.yml` and `moodle-ci.yml`. The local runs wrote both streams into
+  their log and so did not show it.
+- **Interface run, every stack: the experiment played through the interface never got its turn.** `a11y.spec.js`,
+  the first spec, seeds a "running" experiment for its checks (`seed_progress.php --state=running`): sittings a
+  worker holds for a day, the rest not due for a month. Since the one rule for the execution line (#163) the line
+  adopts such an experiment, and it held the line, with nothing anybody could play, in front of the experiment
+  `experiment.spec.js` creates and starts through the interface; that one waited 15 minutes and failed, and with it
+  the deep deletion of the played experiment. `a11y.spec.js` now stops the experiment it seeded once it has looked at
+  it.
+- **Interface run: the resume test ran too early.** Playwright sorts the files as text: `experiment_resume.spec.js`
+  came before `experiment.spec.js`, which sets the installation up for its workers through the interface; nothing
+  could be played yet, and the resumed experiment stayed in the line. Renamed to `experiments_resume.spec.js`, which
+  sorts after it (checked with `playwright test --list`). And whatever a test there sets going — the resumed
+  experiment, the one reset and started again — is stopped again after the test if it has not finished, so it cannot
+  hold the line for the specs after it.
+- **NVDA on Moodle 5.3: "controls the keyboard did not reach".** In one run NVDA's walk with Tab reached none of the
+  controls of three of the groups, also on the retry, while the same recording passed with VoiceOver, and NVDA passed
+  on the other stacks. Most likely the browser window had lost the foreground and the keys went elsewhere; the logs do
+  not say. The walk (`tests/screenreader/walk.js`) now notices a key that did not arrive (the page without the window
+  focus, or the focus still on the start point), brings the window to the front again, puts the reader back into the
+  page and presses the key again, at most three times per key. The verdict on the controls is unchanged; every such
+  recovery is kept in the record and named in the failure message. Not reproducible here (no Windows, no NVDA):
+  whether this was the cause shows the next run on GitHub.
+- **Experiment form: "[[levels:add,local_catquizlab]]" instead of "Add level".** Found running the interface CI job
+  here: the buttons of the level editor (#126) and the words of the log-normal sketch (#159) showed their string keys,
+  and three tests of `experiment_form.spec.js` failed. Both scripts read their words from `M.str`, which Moodle writes
+  into the page after the AMD init code and after scripts the page loads from elsewhere — here MathJax from a CDN,
+  which could not load through this machine's proxy; the page waited until the attempt failed. A script that started
+  in that time found no words.
+  `amd/src/levels.js` and `amd/src/lognormal.js` now do their work once the page is parsed (`DOMContentLoaded`, at
+  once if it already is), marked pending (`M.util.js_pending`) until then for Behat and other waiting tests. On
+  GitHub the tests were green; a slow CDN or a slow site could show the same to anyone.
+- **Level editor: "Add level", then typing, went nowhere.** Found the same way (`sweep_levels.spec.js`, red here,
+  green on GitHub). The button puts the focus into the new row; Moodle's message drawer
+  (`core_message/message_drawer`, which acts on every click outside it) then handed the focus back to the clicked
+  button — here when MathJax could not load (the browser did not trust this machine's proxy for the CDN; with
+  MathJax loaded, in the same setup, it did not happen). Traced with a focus log: the input got the focus, then a
+  `focus()` on the button from the message drawer's click handler took it away. `amd/src/levels.js` now puts the
+  focus into the new row again right after the click has been handled, if it is still on the button.
+- **The self-test took a real sitting and held the execution line with it (#163).** Found in the next run here:
+  `experiment.spec.js` failed again, its experiment "waiting for its turn" behind experiment 1, the experiment the
+  interface job prepares at its start and nobody plays. The check "Web service answers the stored token" of the
+  self-test (which the setup runs) was a real `local_catquizlab_job_claim` as worker "selftest". With the line empty,
+  that claim made experiment 1 the holder and handed its one sitting to "selftest", which never played it: the lease
+  lapsed after nine minutes, the sitting waited six more for its retry, and the line was held for sixteen (the
+  sitting's history: `worker selftest held the sitting and did not renew its lease`). On a live installation every
+  self-test run while work was waiting took one sitting the same way, and with the line empty its experiment became
+  the holder. The check now calls `local_catquizlab_sitting_state` for sitting 0: a read in the same service with the
+  same capability, which takes and moves nothing, and it expects that function's answer (`selftest_probe_test`). On
+  GitHub this most likely did not show because another experiment held the line already (the one `a11y.spec.js` left
+  running; on 5.3 the resumed one). Run 3 here most likely passed only because the retry came just in time:
+  `experiment.spec.js` took 15.6 of its 20 minutes there.
+
 ## [0.7.65] — 2026-11-15 — Version 2026111501. A stop cancels, it does not fail (#166), and a stopped experiment goes on keeping what it collected (#165); the upgrade from 0.7.60 tested on every stack (#167); the release CI ships with the plugin (#161, #140); one rule for the line and the claims (#163); the load guard released by a person (#162); traces linked to their sitting (#164)
 
 **Version number.** 0.7.61 to 0.7.64 were numbered a day ahead each (2026111600 to 2026111800) although they were

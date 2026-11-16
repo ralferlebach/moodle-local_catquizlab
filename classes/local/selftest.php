@@ -38,6 +38,9 @@ namespace local_catquizlab\local;
  * @license    http://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
  */
 class selftest {
+    /** @var string The web service function the check calls: a read, never a claim (0.7.66). */
+    public const PROBE_FUNCTION = 'local_catquizlab_sitting_state';
+
     /**
      * Run every check, in the order each depends on the last.
      *
@@ -123,12 +126,7 @@ class selftest {
         // failure, which sends somebody looking at the token.
         $curl = new \curl(['ignoresecurity' => true]);
         $curl->setopt(['CURLOPT_TIMEOUT' => 20, 'CURLOPT_CONNECTTIMEOUT' => 10]);
-        $response = $curl->post($url, [
-            'wstoken'            => $token,
-            'wsfunction'         => 'local_catquizlab_job_claim',
-            'moodlewsrestformat' => 'json',
-            'workerid'           => 'selftest',
-        ]);
+        $response = $curl->post($url, self::probe_request($token));
 
         $errno = $curl->get_errno();
         if ($errno) {
@@ -165,12 +163,44 @@ class selftest {
             );
         }
 
+        if (!array_key_exists('found', $decoded)) {
+            // An answer, but not the one this function gives: not the service the worker talks to.
+            return self::row(
+                'webservice',
+                get_string('selftest:webservice', $component),
+                false,
+                get_string('selftest:badresponse', $component)
+                    . ' ' . \core_text::substr(trim(json_encode($decoded)), 0, 120)
+            );
+        }
+
         return self::row(
             'webservice',
             get_string('selftest:webservice', $component),
             true,
             get_string('selftest:serviceanswered', $component)
         );
+    }
+
+    /**
+     * The web service call of the check: a read, in the worker's service, with the worker's capability.
+     *
+     * It asks where a sitting stands that does not exist (sitting_state, sitting 0). That needs everything a claim
+     * needs (the token, the account, the service, the capability) and changes nothing. Until 0.7.66 it was a real
+     * job_claim as worker "selftest": where work was waiting, the check took a sitting, held it until its lease lapsed
+     * (about nine minutes) and then queued it for a retry; since the one rule for the execution line (#163) it held
+     * the line with it, for every experiment behind it (Interface E2E, 2026-11-16: about sixteen minutes).
+     *
+     * @param string $token The stored worker token.
+     * @return array<string, string|int> The fields of the POST.
+     */
+    public static function probe_request(string $token): array {
+        return [
+            'wstoken'            => $token,
+            'wsfunction'         => self::PROBE_FUNCTION,
+            'moodlewsrestformat' => 'json',
+            'attemptid'          => 0,
+        ];
     }
 
     /**

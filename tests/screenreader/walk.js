@@ -90,10 +90,50 @@ async function heard(reader, action) {
 }
 
 /**
+ * Where the keyboard focus is: whether the page has it at all (the browser window in front), and whether it is still
+ * on the start point.
+ *
+ * @param {import('@playwright/test').Page} page The page.
+ * @returns {Promise<{page: boolean, start: boolean, element: string}>}
+ */
+async function focusState(page) {
+    return page.evaluate((id) => ({
+        page: document.hasFocus(),
+        start: !!document.activeElement && document.activeElement.id === id,
+        element: document.activeElement ? (document.activeElement.tagName.toLowerCase()
+            + (document.activeElement.id ? '#' + document.activeElement.id : '')) : '',
+    }), START);
+}
+
+/**
+ * Brings the browser window to the front again and the reader back into the page, with the focus on the start point.
+ *
+ * On a Windows runner another window can take the foreground in the middle of a run (GitHub, NVDA, moodle53,
+ * 2026-11-16): the reader's keys then go to that window, the page never sees them, and every control looks
+ * unreachable although the page is fine.
+ *
+ * @param {import('@playwright/test').Page} page The page.
+ * @param {object} reader The screen reader.
+ */
+async function refocus(page, reader) {
+    await page.bringToFront();
+    if (typeof reader.navigateToWebContent === 'function') {
+        await reader.navigateToWebContent();
+    }
+    await page.focus('#' + START);
+    await settled(reader);
+}
+
+/**
  * Walks the bar from the start point, once per key until every control has been reached.
  *
  * A walk ends when the focus leaves the bar after having entered it. VoiceOver walks with Tab first and then with
  * Option+Tab, the macOS key that also reaches links and buttons when "keyboard navigation" is off.
+ *
+ * A key that does not arrive in the page at all (the page lost the window focus, or the focus is still on the start
+ * point afterwards) is not taken as "this control cannot be reached": the window is brought back to the front and the
+ * key pressed again, at most three times per key. How often that was needed is part of the result; the verdict on the
+ * controls stays the same.
  *
  * @param {import('@playwright/test').Page} page The page.
  * @param {object} reader The screen reader (press, spokenPhraseLog).
@@ -101,13 +141,15 @@ async function heard(reader, action) {
  * @param {number} count How many controls the bar has.
  * @param {string} bar The bar's selector.
  * @param {string} controls The selector of its controls.
- * @returns {Promise<{heard: Array<?string>, keys: Array<?string>, order: number[]}>} Per control what was said and
- *     with which key it was reached; and the order in which the first key reached them.
+ * @returns {Promise<{heard: Array<?string>, keys: Array<?string>, order: number[], refocused: Array<object>}>} Per
+ *     control what was said and with which key it was reached; the order in which the first key reached them; and
+ *     every time the window had to be brought to the front again, with where the focus was.
  */
 async function walk(page, reader, keys, count, bar = BAR, controls = CONTROLS) {
     const heard = new Array(count).fill(null);
     const reachedwith = new Array(count).fill(null);
     const order = [];
+    const refocused = [];
     for (const key of keys) {
         if (heard.every((said) => said !== null)) {
             break;
@@ -115,11 +157,22 @@ async function walk(page, reader, keys, count, bar = BAR, controls = CONTROLS) {
         await page.focus('#' + START);
         await settled(reader);
         let entered = false;
+        let retries = 0;
         for (let i = 0; i < count + 3; i++) {
             const before = (await reader.spokenPhraseLog()).length;
             await reader.press(key, {capture: true});
             const said = (await settled(reader)).slice(before).join(' ');
             const at = await focused(page, bar, controls);
+            if (at < 0 && !entered && retries < 3) {
+                const state = await focusState(page);
+                if (!state.page || state.start) {
+                    refocused.push({key: key, step: i, state: state});
+                    retries++;
+                    await refocus(page, reader);
+                    i--;
+                    continue;
+                }
+            }
             if (at < 0) {
                 if (entered) {
                     break;
@@ -136,7 +189,7 @@ async function walk(page, reader, keys, count, bar = BAR, controls = CONTROLS) {
             }
         }
     }
-    return {heard: heard, keys: reachedwith, order: order};
+    return {heard: heard, keys: reachedwith, order: order, refocused: refocused};
 }
 
 /**

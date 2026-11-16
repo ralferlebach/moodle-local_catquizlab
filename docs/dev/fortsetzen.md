@@ -135,7 +135,7 @@ die nicht zurückgesetzt werden konnten, werden mit Grund genannt.
 - **Upgrade von 0.7.60:** `cli/upgrade_check.php` und der CI-Job „Upgrade“ (#167).
 - **Echte Worker:** `cli/resume_check.php` im Worker-E2E (alle drei Stacks): gestoppt, während gespielt wird,
   fortgesetzt, von Cron zu Ende gebracht.
-- **Oberfläche:** `tests/playwright/experiment_resume.spec.js`.
+- **Oberfläche:** `tests/playwright/experiments_resume.spec.js`.
 
 ## Prognose
 

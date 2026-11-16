@@ -519,13 +519,16 @@ jobs:
         run: |
           set -o pipefail
           rsync -a --delete --exclude .git plugin/ "$PLUGIN/"
-          php moodle/admin/cli/upgrade.php --non-interactive | tee /tmp/upgrade-1.txt
+          # Moodle's upgrade script writes its "no upgrade needed" (and its errors) to STDERR: both into the record.
+          php moodle/admin/cli/upgrade.php --non-interactive 2>&1 | tee /tmp/upgrade-1.txt
           php "$PLUGIN/cli/upgrade_check.php" --phase=after --before=/tmp/upgrade-before.json | tee /tmp/upgrade-after-1.txt
 
       - name: Issue 167 — upgraded again changes nothing
         run: |
           set -o pipefail
-          php moodle/admin/cli/upgrade.php --non-interactive | tee /tmp/upgrade-2.txt
+          # "No upgrade needed …" comes on STDERR with exit code 0 (cli_error(…, 0)); without 2>&1 the grep saw
+          # nothing (release CI 2026-11-16, all six cells red here).
+          php moodle/admin/cli/upgrade.php --non-interactive 2>&1 | tee /tmp/upgrade-2.txt
           grep -qi 'no upgrade needed' /tmp/upgrade-2.txt
           php "$PLUGIN/cli/upgrade_check.php" --phase=after --before=/tmp/upgrade-before.json | tee /tmp/upgrade-after-2.txt
 
