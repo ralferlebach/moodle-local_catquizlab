@@ -57,7 +57,6 @@ class operations_view {
     public static function context(): array {
         global $DB, $SESSION;
 
-        $component = 'local_catquizlab';
         $pageurl = new \moodle_url('/local/catquizlab/index.php', ['tab' => 'setup']);
 
         $wizard = \local_catquizlab\local\setup_wizard::state();
@@ -89,72 +88,15 @@ class operations_view {
             'failed'    => $DB->count_records('local_catquizlab_attempt', ['status' => attempt_scheduler::STATUS_FAILED]),
         ];
 
-        // The claims held longest: "which attempt is stuck, and since when" was one of
-        // the questions that needed a database client.
-        $stuck = array_values(array_map(static function (\stdClass $row): array {
-            return [
-                'attemptid' => (int) $row->id,
-                'runid'     => (int) $row->runid,
-                'owner'     => $row->leaseowner,
-                'tries'     => (int) $row->tries,
-                'since'     => duration::human(time() - (int) $row->timemodified),
-                'lasterror' => $row->lasterror,
-            ];
-        }, $DB->get_records(
-            'local_catquizlab_attempt',
-            ['status' => attempt_scheduler::STATUS_RUNNING],
-            'timemodified ASC',
-            'id, runid, leaseowner, tries, timemodified, lasterror',
-            0,
-            10
-        )));
-
-        $inflight = array_values(array_map(static function (\stdClass $run) use ($component, $pageurl): array {
-            $counts = run_lifecycle::attempt_counts((int) $run->id);
-            $paused = run_lifecycle::is_paused((int) $run->id);
-
-            return [
-                'runid'     => (int) $run->id,
-                'cellkey'   => $run->cellkey,
-                'status'    => \local_catquizlab\local\run_registry::status_label((int) $run->status),
-                'total'     => $counts['total'],
-                'open'      => $counts['open'],
-                'collected' => $counts['collected'],
-                'failed'    => $counts['failed'],
-                'paused'    => $paused,
-                // Posted, not linked. A state change behind a GET is a state
-                // change a prefetcher, a crawler or a back button can make on
-                // somebody's behalf — and pausing a run they are watching is
-                // exactly the kind of thing that then looks like a bug in the
-                // plugin.
-                // Posted where the handler is. Correcting the method and
-                // leaving the target is half a fix: the form went to
-                // index.php and pauserun is handled in operations.php.
-                'pauseurl'  => (new \moodle_url('/local/catquizlab/operations.php'))->out(false),
-                'pauseaction' => $paused ? 'resumerun' : 'pauserun',
-                'sesskey'   => sesskey(),
-            ];
-        }, $DB->get_records_select(
-            'local_catquizlab_run',
-            'status IN (:scheduled, :ready, :running, :aggregating)',
-            [
-                'scheduled'   => registry::STATUS_SCHEDULED,
-                'ready'       => registry::STATUS_READY,
-                'running'     => registry::STATUS_RUNNING,
-                'aggregating' => registry::STATUS_AGGREGATING,
-            ],
-            'id ASC',
-            'id, cellkey, status',
-            0,
-            20
-        )));
+        // No list of single runs here (#150 AK2). The setup tab stopped showing "claims held longest" and "runs in
+        // flight" in 0.6.51 (2026091705) and has since shown neither; they were still read on every visit, with two
+        // queries per run, and named no experiment. The runs being played are on the progress page, each with its
+        // experiment and strategy (progress_view, run_labels).
 
         return [
         'health'     => $health,
         'workers'    => ['hasany' => $workers !== [], 'rows' => $workers],
         'queue'      => $queue,
-        'stuck'      => ['hasany' => $stuck !== [], 'rows' => $stuck],
-        'inflight'   => ['hasany' => $inflight !== [], 'rows' => $inflight],
         'sesskey'    => sesskey(),
         // Actions post to operations.php, which performs them and sends the
         // person back to this tab. Keeping the handler separate from the view

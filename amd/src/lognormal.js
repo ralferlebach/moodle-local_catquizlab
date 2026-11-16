@@ -139,6 +139,115 @@ const el = (name, attrs, text = '') => {
 };
 
 /**
+ * A round step at least this big: 1, 2 or 5 times a power of ten.
+ *
+ * @param {number} raw The least step.
+ * @returns {number}
+ */
+const nice = (raw) => {
+    const power = Math.pow(10, Math.floor(Math.log10(raw)));
+    return [1, 2, 5, 10].map((m) => m * power).find((s) => s >= raw);
+};
+
+/**
+ * The range shown and its scale (#159 AK-12): the 0.5th to the 99.5th percentile, at least past E(a).
+ *
+ * - Strongly skewed (the 99.5th percentile more than a hundred times the 0.5th, σlog above about 0.9): on a linear
+ *   axis from 0 the bulk sat in the first few pixels and the long tail filled the rest. The axis is logarithmic
+ *   then, labelled in values of a; the curve is the density over log a, which is what a log axis shows.
+ * - Narrow (the 0.5th percentile more than a quarter of the 99.5th): from 0 the curve was a spike a few pixels wide
+ *   and its peak fell between the sampled points. The axis starts below the 0.5th percentile then, at a round value.
+ * - Otherwise from 0, as before.
+ *
+ * @param {Object} p The parameters.
+ * @returns {{logscale: boolean, xmin: number, xmax: number}}
+ */
+const axisRange = (p) => {
+    const qlo = Math.exp(p.mu + p.sigma * normalQuantile(0.005));
+    const qhi = Math.max(Math.exp(p.mu + p.sigma * normalQuantile(0.995)), p.mean * 1.1);
+    const logscale = qhi / qlo > 100;
+    let xmin = 0;
+    if (logscale) {
+        xmin = qlo;
+    } else if (qlo / qhi > 0.25) {
+        const step = nice((qhi - qlo) / 4);
+        xmin = Math.max(0, Math.floor(qlo / step) * step);
+    }
+    return {logscale, xmin, xmax: qhi};
+};
+
+/**
+ * The curve's points over the axis, with the peak as a point of its own, and the highest density.
+ *
+ * The height drawn is the density of a, or on a log axis the density of log a (the normal density of z). The peak
+ * (the mode of a, or the median on a log axis) is added where the grid could miss it.
+ *
+ * @param {Object} p The parameters.
+ * @param {{logscale: boolean, xmin: number, xmax: number}} axis The range shown.
+ * @returns {{points: number[][], ymax: number}}
+ */
+const curve = (p, axis) => {
+    const {logscale, xmin, xmax} = axis;
+    const density = (x) => {
+        if (x <= 0) {
+            return 0;
+        }
+        const z = (Math.log(x) - p.mu) / p.sigma;
+        const normal = Math.exp(-0.5 * z * z) / (p.sigma * Math.sqrt(2 * Math.PI));
+        return logscale ? normal : normal / x;
+    };
+    const n = 240;
+    const points = [];
+    let ymax = 0;
+    for (let i = 0; i <= n; i++) {
+        const x = logscale ? Math.exp(Math.log(xmin) + (Math.log(xmax) - Math.log(xmin)) * i / n)
+            : xmin + (xmax - xmin) * i / n;
+        if (x <= 0) {
+            continue;
+        }
+        const y = density(x);
+        ymax = Math.max(ymax, y);
+        points.push([x, y]);
+    }
+    const peak = logscale ? Math.exp(p.mu) : Math.exp(p.mu - p.sigma * p.sigma);
+    if (peak >= xmin && peak <= xmax) {
+        ymax = Math.max(ymax, density(peak));
+        points.push([peak, density(peak)]);
+        points.sort((a, b) => a[0] - b[0]);
+    }
+    return {points, ymax};
+};
+
+/**
+ * The values at which the axis gets a tick, each with the decimals its label needs: on a linear axis 1, 2 or 5 times
+ * a power of ten apart; on a log axis 1, 2 and 5 of each decade in the range.
+ *
+ * @param {{logscale: boolean, xmin: number, xmax: number}} axis The range shown.
+ * @returns {number[][]} [value, decimals] pairs.
+ */
+const ticks = (axis) => {
+    const {logscale, xmin, xmax} = axis;
+    const out = [];
+    if (logscale) {
+        for (let decade = Math.floor(Math.log10(xmin)); decade <= Math.ceil(Math.log10(xmax)); decade++) {
+            [1, 2, 5].map((m) => m * Math.pow(10, decade)).filter((x) => x >= xmin && x <= xmax)
+                .forEach((x) => out.push([x, Math.max(0, -decade)]));
+        }
+        return out;
+    }
+    const step = nice((xmax - xmin) / 4);
+    const decimals = Math.max(0, -Math.floor(Math.log10(step)));
+    for (let i = Math.ceil(xmin / step - 1e-9); i * step <= xmax + 1e-9; i++) {
+        const x = Number((i * step).toPrecision(12));
+        if (x > 0 || i === 0) {
+            // On a linear axis 0 is a tick of its own; on one that starts later there is none below its start.
+            out.push([x, decimals]);
+        }
+    }
+    return out;
+};
+
+/**
  * Draw the density of a for μlog, σlog, with E(a) and the central 90 % marked; or say why there is nothing.
  *
  * @param {Element} svg The drawing.
@@ -175,28 +284,19 @@ const draw = (svg, caption, p, problem) => {
         return;
     }
     svg.setAttribute('data-state', 'curve');
-    // From 0 to the 99.5th percentile, at least past E(a): the bulk of a skewed curve and its long tail in view.
-    const xmax = Math.max(Math.exp(p.mu + p.sigma * normalQuantile(0.995)), p.mean * 1.1);
-    const density = (x) => {
-        if (x <= 0) {
-            return 0;
-        }
-        const z = (Math.log(x) - p.mu) / p.sigma;
-        return Math.exp(-0.5 * z * z) / (x * p.sigma * Math.sqrt(2 * Math.PI));
-    };
-    const n = 240;
-    const points = [];
-    let ymax = 0;
-    for (let i = 1; i <= n; i++) {
-        const x = xmax * i / n;
-        const y = density(x);
-        ymax = Math.max(ymax, y);
-        points.push([x, y]);
-    }
-    // The mode's height, where the grid could miss it.
-    const mode = Math.exp(p.mu - p.sigma * p.sigma);
-    ymax = Math.max(ymax, density(mode)) * 1.08;
-    const sx = (x) => left + (right - left) * x / xmax;
+    const axis = axisRange(p);
+    const {logscale, xmin, xmax} = axis;
+    svg.setAttribute('data-scale', logscale ? 'log' : 'linear');
+    svg.setAttribute('data-xmin', xmin);
+    svg.setAttribute('data-xmax', xmax);
+    // The position of a value on the axis, 0..1.
+    const pos = logscale
+        ? (x) => (Math.log(x) - Math.log(xmin)) / (Math.log(xmax) - Math.log(xmin))
+        : (x) => (x - xmin) / (xmax - xmin);
+    const drawn = curve(p, axis);
+    const points = drawn.points;
+    const ymax = drawn.ymax * 1.08;
+    const sx = (x) => left + (right - left) * pos(x);
     const sy = (y) => bottom - (bottom - top) * y / ymax;
 
     // The central 90 %.
@@ -215,23 +315,21 @@ const draw = (svg, caption, p, problem) => {
     // Axes and their names.
     svg.appendChild(el('line', {x1: left, x2: right, y1: bottom, y2: bottom, stroke: 'currentColor'}));
     svg.appendChild(el('line', {x1: left, x2: left, y1: top, y2: bottom, stroke: 'currentColor'}));
-    // Ticks at round numbers (1, 2 or 5 times a power of ten), labelled with as few decimals as their step needs.
-    const raw = xmax / 4;
-    const power = Math.pow(10, Math.floor(Math.log10(raw)));
-    const step = [1, 2, 5, 10].map((m) => m * power).find((s) => s >= raw);
-    const decimals = Math.max(0, -Math.floor(Math.log10(step)));
-    for (let x = 0; x <= xmax + 1e-9; x += step) {
+    // Ticks at round numbers, labelled with as few decimals as they need.
+    ticks(axis).forEach(([x, decimals]) => {
         const label = String(Number(x.toFixed(decimals))).replace('.', decsep);
         svg.appendChild(el('line', {x1: sx(x), x2: sx(x), y1: bottom, y2: bottom + 3, stroke: 'currentColor'}));
         svg.appendChild(el('text', {x: sx(x), y: bottom + 14, 'text-anchor': 'middle', 'font-size': 10,
-            'data-role': 'tick'}, label));
-    }
+            'data-role': 'tick', 'data-value': x}, label));
+    });
     svg.appendChild(el('text', {x: (left + right) / 2, y: bottom + 32, 'text-anchor': 'middle', 'font-size': 12},
-        str('lognormal:xaxis')));
+        str(logscale ? 'lognormal:xaxislog' : 'lognormal:xaxis')));
     svg.appendChild(el('text', {x: 12, y: (top + bottom) / 2, 'text-anchor': 'middle', 'font-size': 12,
-        transform: `rotate(-90 12 ${(top + bottom) / 2})`}, str('lognormal:yaxis')));
+        transform: `rotate(-90 12 ${(top + bottom) / 2})`}, str(logscale ? 'lognormal:yaxislog' : 'lognormal:yaxis')));
     caption.textContent = str('lognormal:summary', {mu: format(p.mu), sigma: format(p.sigma), mean: format(p.mean),
-        median: format(median), low: format(q05), high: format(q95)});
+        median: format(median), low: format(q05), high: format(q95)})
+        + (logscale ? ' ' + str('lognormal:logaxisnote') : '')
+        + (!logscale && xmin > 0 ? ' ' + str('lognormal:fromnote', format(xmin)) : '');
 };
 
 /**

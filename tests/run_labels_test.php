@@ -16,6 +16,7 @@
 
 namespace local_catquizlab;
 
+use local_catquizlab\local\debug_trace;
 use local_catquizlab\local\progress_view;
 use local_catquizlab\local\registry;
 use local_catquizlab\local\run_labels;
@@ -135,5 +136,72 @@ final class run_labels_test extends \advanced_testcase {
             $this->assertSame($row['id'], $row['label']['runid']);
             $this->assertNotSame('', $row['label']['experimentname']);
         }
+    }
+
+    /**
+     * AK2, AK5: the remaining run short lists. The debug log on the progress page holds entries of every experiment:
+     * each with experiment and strategy, one query for all of them; a run deleted since keeps its number. The setup
+     * tab lists no single runs at all: the lists it read and never showed are gone.
+     *
+     * @return void
+     */
+    public function test_the_debug_log_names_the_experiment_and_setup_lists_no_runs(): void {
+        global $CFG, $DB, $PAGE;
+        $this->resetAfterTest();
+        $this->setAdminUser();
+        set_config('debuglevel', debug_trace::LEVEL_VERBOSE, 'local_catquizlab');
+        $runs = $this->twins(1);
+        [$a, $b] = array_values($runs);
+        debug_trace::record(debug_trace::UI, 'pauserun', [], 'ok', [], $a[0]);
+        debug_trace::record(debug_trace::UI, 'pauserun', [], 'ok', [], $b[0]);
+        debug_trace::record(debug_trace::UI, 'deleterun', [], 'ok', [], 999999);
+
+        // Renamed after the entries were written: the log shows the name of now, escaped once.
+        $DB->set_field(
+            'local_catquizlab_experiment',
+            'name',
+            'Ärger & Öl',
+            ['id' => $DB->get_field('local_catquizlab_run', 'experimentid', ['id' => $a[0]])]
+        );
+        $rows = progress_view::context(0)['debug']['rows'];
+        $byrun = array_column($rows, null, 'runid');
+        $classic = \local_catquizlab\local\strategy_catalog::display_label('classic');
+        $this->assertSame([$a[0], 'Ärger & Öl', $classic], [$byrun[$a[0]]['runlabel']['runid'],
+            $byrun[$a[0]]['runlabel']['experimentfull'], $byrun[$a[0]]['runlabel']['strategylabel']]);
+        $this->assertNotSame($byrun[$a[0]]['runlabel']['experimentid'], $byrun[$b[0]]['runlabel']['experimentid']);
+        $this->assertTrue($byrun[$b[0]]['runlabel']['shortened'], 'the long name shortened, the whole kept');
+        $this->assertNull($byrun[999999]['runlabel'], 'a run deleted since: its number, no label');
+
+        // Rendered: the run linked, the experiment linked, the whole name for screen readers, escaped once.
+        $html = $PAGE->get_renderer('core')->render_from_template('local_catquizlab/progress', progress_view::context(0));
+        $this->assertMatchesRegularExpression('/data-region="catquizlab-debug-run-' . $a[0] . '">\(<a href="[^"]*runid='
+            . $a[0] . '"/', $html);
+        $this->assertStringContainsString('>Ärger &amp; Öl</a>', $html);
+        $this->assertStringNotContainsString('&amp;amp;', $html);
+        $this->assertStringContainsString('<span class="sr-only">' . $byrun[$b[0]]['runlabel']['experimentfull'], $html);
+        $this->assertStringContainsString('#999999', $html);
+
+        // One query for the labels, whatever the number of entries.
+        for ($i = 0; $i < 40; $i++) {
+            debug_trace::record(
+                debug_trace::UI,
+                'tick',
+                [],
+                'ok',
+                [],
+                $i % 2 ? $a[0] : $b[0]
+            );
+        }
+        $entries = debug_trace::entries([], 60);
+        $before = $DB->perf_get_reads();
+        $labels = run_labels::for_runs(array_column($entries, 'runid'));
+        $this->assertSame(1, $DB->perf_get_reads() - $before, 'one read for the labels of all entries');
+        $this->assertCount(2, $labels);
+
+        $context = \local_catquizlab\local\operations_view::context();
+        $this->assertArrayNotHasKey('inflight', $context);
+        $this->assertArrayNotHasKey('stuck', $context);
+        $source = file_get_contents($CFG->dirroot . '/local/catquizlab/templates/operations.mustache');
+        $this->assertDoesNotMatchRegularExpression('/\{\{[#^]?\s*runid\b/', $source, 'no run is listed on the setup tab');
     }
 }

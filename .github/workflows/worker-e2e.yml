@@ -259,11 +259,12 @@ jobs:
           PHP_CLI_SERVER_WORKERS=4 nohup php -d memory_limit="${PHP_MEMORY_LIMIT}" -S 127.0.0.1:8000 -t . \
               > /tmp/webserver.log 2>&1 &
           # The web server's processes, sampled every two seconds: resident memory for AK 6.
+          # shellcheck disable=SC2016 # expanded by the inner shell, on purpose
           nohup bash -c 'echo "unixtime,pid,rss_kb" > /tmp/php-rss.csv; while true; do
               ps -C php -o pid=,rss= | while read -r pid rss; do echo "$(date +%s),$pid,$rss"; done >> /tmp/php-rss.csv;
               sleep 2; done' > /dev/null 2>&1 &
           start=$(date +%s)
-          for i in $(seq 1 20); do
+          for _ in $(seq 1 20); do
             # The measuring window opens only once the server answers (#135 AK 5).
             if curl -sf -o /dev/null http://127.0.0.1:8000/; then echo "$start" > /tmp/e2e-start; exit 0; fi
             sleep 1
@@ -304,6 +305,38 @@ jobs:
           runid=$(php local/catquizlab/cli/e2e_prepare.php --persons=300 | grep -E '^runid=' | cut -d= -f2)
           php local/catquizlab/cli/claim_race.php --runid="$runid" --processes=8 --claims=25
 
+      # Issue 163: a claim hands out only sittings of the experiment holding the
+      # execution line. On the live installation the line was held by one
+      # experiment for a day while every worker played another's sittings: the
+      # claim read every ready run, oldest due time first. Here, under a backlog
+      # like that one (twenty experiments started outside the line, sittings
+      # queued earlier, some in play), every claim must be the holder's, in the
+      # order they were queued; 11 and 25 claimers at once hand out none twice
+      # and none of another experiment; the holder through, the line moves on
+      # and the others wait at its end in the order they were queued. Times per
+      # claim, for the counts and the forecast, and the query plan are kept.
+      - name: Issue 163 — claims follow the execution line, under a backlog, 11 and 25 claimers at once
+        working-directory: ${{ matrix.dirroot }}
+        timeout-minutes: 15
+        run: |
+          set -o pipefail
+          php local/catquizlab/cli/claim_bench.php --old=20 --per=2000 --claims=120 --processes=11,25 | tee /tmp/claim-bench.txt
+
+      # Issue 163 with real workers: a run started outside the line, queued
+      # first, and an experiment started afterwards with "Start experiment".
+      # The started one holds the line and is played first; the other is given
+      # a place behind it and is played after the holder's last sitting has
+      # ended — moved on by the workers' own claims, without a tick or a click.
+      - name: Issue 163 — two experiments, real workers, the holder first and nothing beside it
+        working-directory: ${{ matrix.dirroot }}
+        timeout-minutes: 20
+        run: |
+          set -o pipefail
+          outside=$(php local/catquizlab/cli/e2e_prepare.php --persons=4 --name="Line: started outside" | grep -E '^runid=' | cut -d= -f2)
+          holder=$(php local/catquizlab/cli/e2e_prepare.php --persons=4 --name="Line: started" | grep -E '^runid=' | cut -d= -f2)
+          php local/catquizlab/cli/line_order_check.php --outside="$outside" --holder="$holder" --workers=4 --minutes=15 \
+            | tee /tmp/line-order.txt
+
       # One attempt through the UI proves the worker can play a question. It
       # does not prove that an experiment reaches results, and for five
       # releases it did not: a worker that stopped after one attempt, a
@@ -316,6 +349,84 @@ jobs:
           MINUTES: 4
         run: bash local/catquizlab/cli/smoke_all.sh
 
+
+      # Issue 138 AK3: the order engine attempt → trace → collected under real
+      # concurrency. Eight sittings are played and kept; then their end is played
+      # again in separate PHP processes at once — workers reporting completion
+      # again and again, the pipeline tick, a run re-collection, the lease
+      # recovery — while a reader process watches every row, and the engine's
+      # attempt only reappears after twelve seconds (a late trace). Checked per
+      # sitting: never collected before its engine attempt was back, never
+      # without its trace or engine attempt, collected exactly once with the
+      # same trace, the engine attempt not doubled. Put back as it was after.
+      - name: Issue 138 — collection under concurrency, a late trace, a reader
+        working-directory: ${{ matrix.dirroot }}
+        timeout-minutes: 15
+        env:
+          MOODLE_ROOT: ${{ github.workspace }}/${{ matrix.dirroot }}
+        run: |
+          set -o pipefail
+          php local/catquizlab/cli/smoke.php --strategy=fastest --persons=8 --minutes=8 --require-all --keep \
+              | tee /tmp/race-smoke.log
+          sed -n 's/.*Defined experiment \([0-9]*\).*/\1/p' /tmp/race-smoke.log | head -1 > /tmp/race-experiment
+          php local/catquizlab/cli/race_collect.php --sittings=8 --reporters=4 --seconds=40 --delay=12 \
+              | tee /tmp/race-collect.json
+
+      # Issue 161 DoD 2 (and #145 AK 1): the experiment just played, deleted
+      # deeply as on a site — stopped and queued by the confirmation, carried
+      # out by the background task with the real course_delete_module() and
+      # the activity's own callbacks. Before: every run's footprint in the
+      # engine, the activity and Moodle, the rows of others sharing an attempt
+      # number, and the engine's ownerless rows. After: the experiment gone,
+      # nothing of the footprint left, every row of others there, no kind of
+      # ownerless engine row grown, and the deletion record complete.
+      - name: Issue 161 — deep deletion against the real engine, checked before and after
+        working-directory: ${{ matrix.dirroot }}
+        timeout-minutes: 10
+        run: |
+          set -o pipefail
+          exp=$(cat /tmp/race-experiment)
+          test -n "$exp" || { echo "No experiment from the step before." >&2; exit 1; }
+          php local/catquizlab/cli/deep_delete_check.php --experimentid="$exp" --phase=before > /tmp/deep-delete-before.json
+          php local/catquizlab/cli/deep_delete_check.php --experimentid="$exp" --phase=queue
+          php "${{ github.workspace }}/${{ matrix.coreroot }}/admin/cli/adhoc_task.php" --execute \
+              --classname='\local_catquizlab\task\delete_experiment'
+          php local/catquizlab/cli/deep_delete_check.php --experimentid="$exp" --phase=after \
+              --before=/tmp/deep-delete-before.json | tee /tmp/deep-delete-check.txt
+          php local/catquizlab/cli/deletion_report.php --experimentid="$exp" --expect-deleted | tee -a /tmp/deep-delete-check.txt
+
+      # Issue 151 DoD 2 and DoD 5: one start, then nobody. A definition saved
+      # and started once, as an administrator; after that only cron, run as
+      # an installation runs it (separate processes), and on the way what a
+      # weekend alone brings: cron stopped for a while, every worker process
+      # killed once the first sitting is in. PASS only when the experiment
+      # finished by itself — every sitting collected, results there, its place
+      # in the line closed.
+      - name: Issue 151 — one start, then nobody (cron stopped, workers killed) until finished
+        working-directory: ${{ matrix.dirroot }}
+        timeout-minutes: 40
+        env:
+          MOODLE_ROOT: ${{ github.workspace }}/${{ matrix.dirroot }}
+        run: |
+          set -o pipefail
+          php local/catquizlab/cli/one_start_check.php --persons=3 --minutes=35 | tee /tmp/one-start.txt
+
+      # Issues 165/166: an experiment stopped while its workers play it, then
+      # resumed — what "Stop experiment" and "Resume experiment" do — and left
+      # to cron. The stop comes with a sitting in play; its worker's report
+      # after the stop must change nothing. PASS only when the stop closed what
+      # was open as cancelled (nothing failed), and after the resume every
+      # planned sitting is collected once, the ones from before the stop with
+      # the same trace, no simulated person with two finished engine attempts,
+      # a second resume finding nothing, the place in the line closed.
+      - name: Issues 165/166 — stopped while played, resumed, finished by cron; nothing collected twice, nothing lost
+        working-directory: ${{ matrix.dirroot }}
+        timeout-minutes: 40
+        env:
+          MOODLE_ROOT: ${{ github.workspace }}/${{ matrix.dirroot }}
+        run: |
+          set -o pipefail
+          php local/catquizlab/cli/resume_check.php --persons=12 --minutes=35 | tee /tmp/resume-check.txt
 
       - name: Issue 110 — one long attempt, 120 questions in one sitting
         working-directory: ${{ matrix.dirroot }}
@@ -330,6 +441,26 @@ jobs:
           php local/catquizlab/cli/smoke.php --strategy=classic --persons=1
           --minanswers=60 --minutes=12 --no-navigation-failures
 
+      - name: Issues 141/142/160 — two strategies in parallel, long classic sittings, every forecast against the actual end
+        working-directory: ${{ matrix.dirroot }}
+        timeout-minutes: 25
+        env:
+          MOODLE_ROOT: ${{ github.workspace }}/${{ matrix.dirroot }}
+        # A classic run of three 120-question sittings and a fastest run, played by the same four workers. Every
+        # 5 s a progress snapshot as the page gets it: runs add up to the experiment, the question count never
+        # falls without a failure, nothing reads as complete before it is, the experiment's remaining time is its
+        # last run's; the page's poll, read right after, is never behind. At the end every forecast against the
+        # run's actual end. Alongside, a browser signed in as a temporary manager reads the progress page (header
+        # and run rows) every 5 s: never falling, never ahead of the server, no 100 % with sittings queued (#141).
+        # Any contradiction, or no moment with two runs in flight, fails the step; snapshots, page readings and
+        # the summary are kept as evidence. The same three twins play both strategies: every item both runs put to
+        # the same twin, under its own question id in each, must be answered alike, and every played answer must be
+        # the one drawn from its common random number (#155); the step export of the played questions is kept.
+        run: >-
+          php local/catquizlab/cli/smoke.php --strategies=classic,fastest --persons=3
+          --minanswers=60 --concurrency=4 --minutes=20 --no-navigation-failures
+          --eta-probe=/tmp/eta-probe.jsonl --watch-page=/tmp/watch-page.jsonl --pairs=/tmp/pairs.csv
+
       - name: AK 6 — one long ALLSUBS sitting, 100+ questions, at the production memory limit
         working-directory: ${{ matrix.dirroot }}
         timeout-minutes: 25
@@ -342,32 +473,39 @@ jobs:
           php local/catquizlab/cli/smoke.php --strategy=allsubs --persons=1
           --minanswers=100 --minutes=20 --no-navigation-failures
 
-      - name: Issue 134 — a lost response and a lost request are reconciled, nothing answered twice
+      - name: Issues 134/155 — a lost response and a lost request are reconciled, nothing answered twice, paired answers kept
         working-directory: ${{ matrix.dirroot }}
-        timeout-minutes: 12
+        timeout-minutes: 16
         env:
           MOODLE_ROOT: ${{ github.workspace }}/${{ matrix.dirroot }}
-          # The fifth POST to attempt.php is processed by the server but its
-          # response never reaches the browser; the ninth never reaches the
-          # server. Both must be reconciled with the server and the sitting
-          # finished, every question answered exactly once.
+          # In each sitting the fifth POST to attempt.php is processed by the
+          # server but its response never reaches the browser; the ninth never
+          # reaches the server. Both must be reconciled with the server and the
+          # sitting finished, every question answered exactly once: two sittings,
+          # four reconciliations. The same twin plays both strategies; the items
+          # both put to it must be answered alike, and every recorded answer,
+          # the reconciled ones included, must be the one drawn (#155 DoD3).
           CATQUIZLAB_FAULTS: lostresponse@5,lostrequest@9
         run: >-
-          php local/catquizlab/cli/smoke.php --strategy=classic --persons=1
-          --minanswers=10 --minutes=8 --expect-recovered=2
+          php local/catquizlab/cli/smoke.php --strategies=classic,fastest --persons=1
+          --minanswers=15 --minutes=10 --expect-recovered=4 --pairs=/tmp/pairs-recovery.csv
 
-      - name: Issue 100 — load test, several hundred sittings without a navigation failure
+      - name: Issue 100 — load test, 300 sittings to the end without a navigation failure
         working-directory: ${{ matrix.dirroot }}
-        timeout-minutes: 35
+        timeout-minutes: 90
         env:
           MOODLE_ROOT: ${{ github.workspace }}/${{ matrix.dirroot }}
         # 300 sittings, four workers, some 6000 question transitions. Every
         # execution is counted, including ones a retry later covered: a single
         # "Execution context was destroyed", "did not reach the finish page" or
-        # "fetch failed" fails the step.
+        # "fetch failed" fails the step. All 300 must be played to the end
+        # (--require-all, #139 AK 7): with 30 minutes the Moodle 5.x jobs
+        # collected 249 to 260 and stopped there, which said nothing about the
+        # rest. The step ends as soon as the last sitting is in; the window is
+        # wide for slower machines (a two-core machine needs some 55 minutes).
         run: >-
           php local/catquizlab/cli/smoke.php --strategy=fastest --persons=300
-          --concurrency=4 --minutes=30 --no-navigation-failures
+          --concurrency=4 --minutes=80 --no-navigation-failures --require-all
 
       - name: Issue 102 — the ability range reaches the engine's root scale
         working-directory: ${{ matrix.dirroot }}
@@ -380,6 +518,24 @@ jobs:
         # classic unlimited, allsubs 80, relsubs 40: read back from the engine's
         # record of each created test, not from the definition.
         run: php local/catquizlab/cli/smoke.php --case=104 --provisioning-only
+      # Issue 149 AK 2: no secret in any log the plugin writes. The probe sends
+      # the plugin's pages requests with a probe value in every place a secret
+      # can hide (listed names in every spelling, twice, an unlisted parameter,
+      # an e-mail address, a line break, a POST body), traced as the worker's
+      # are, and reads every log the plugin wrote for it; the web server's own
+      # log is reported apart. Then the logs of the whole run above — request
+      # traces and worker logs — are read for any secret parameter with a value.
+      - name: Issue 149 — no secret in any log the plugin wrote
+        if: always() && steps.web.outcome == 'success'
+        working-directory: ${{ matrix.dirroot }}
+        run: |
+          set -o pipefail
+          php local/catquizlab/cli/probe_log_secrets.php --server-log=/tmp/webserver.log | tee /tmp/log-secrets.txt
+          files=$(find "$HOME"/moodledata/catquizlab/requests "$HOME"/moodledata/local_catquizlab/worker-logs -type f \
+              \( -name '*.jsonl' -o -name '*.log' \) 2>/dev/null | sort | paste -sd, -)
+          test -n "$files" || { echo "No log of the plugin to read." >&2; exit 1; }
+          php local/catquizlab/cli/scan_logs_for_secrets.php --all --file="$files" | tee -a /tmp/log-secrets.txt
+
       # The server's side of everything above, from its own trace of the
       # worker's requests: no HTTP 5xx, no PHP fatal — at PHP_MEMORY_LIMIT — and
       # PHP's peak memory per page, beside the resident memory of the web
@@ -402,6 +558,10 @@ jobs:
         run: |
           mkdir -p evidence
           cp engine-manifest.txt installed-versions.txt /tmp/request-report.* /tmp/php-rss.csv /tmp/php-rss-summary.txt \
+              /tmp/eta-probe.jsonl /tmp/eta-probe.jsonl.summary.json /tmp/watch-page.jsonl /tmp/watch-page.jsonl.log \
+              /tmp/pairs.csv /tmp/pairs-recovery.csv /tmp/log-secrets.txt /tmp/race-collect.json \
+              /tmp/deep-delete-before.json /tmp/deep-delete-check.txt /tmp/one-start.txt /tmp/resume-check.txt \
+              /tmp/claim-bench.txt /tmp/line-order.txt \
               evidence/ 2>/dev/null || true
           if [ "${{ steps.web.outcome }}" != "success" ]; then
             # Said in the artefact itself, so that nobody reads an empty report as a clean one.

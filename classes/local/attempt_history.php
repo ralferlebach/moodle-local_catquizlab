@@ -56,6 +56,12 @@ class attempt_history {
     /** @var string A sitting given up: no tries left (#90). */
     public const ABANDONED = 'abandoned';
 
+    /** @var string Closed by an operator: the experiment or its run was stopped (#166). Not a failure of the sitting. */
+    public const CANCELLED = 'cancelled';
+
+    /** @var string Given back to the queue when its stopped experiment was resumed (#165). */
+    public const RESUMED = 'resumed';
+
     /**
      * @var string An answer submission that ended uncertainly, reconciled with the server and continued (#134).
      *
@@ -115,14 +121,55 @@ class attempt_history {
             'correlationid'   => \core_text::substr(debug_trace::correlation_id(), 0, 64),
             // Why it ended, as a code (#107): for a failure now; for a sitting
             // that finished, once the collector knows its stop reason.
-            'reasoncode'      => in_array($outcome, [self::FAILED, self::RECOVERED], true)
+            // A decision of a person (#166) carries its own code: stopped, aborted, resumed.
+            'reasoncode'      => isset($detail['reasoncode']) ? \core_text::substr((string) $detail['reasoncode'], 0, 40)
+                : (in_array($outcome, [self::FAILED, self::RECOVERED], true)
                 ? reason_catalog::failure(
                     (string) ($detail['detail'] ?? ''),
                     (array) (json_decode((string) self::diagnosis_json($detail), true) ?: [])
                 )
-                : ($outcome === self::COLLECTED ? self::take_pending_code($attemptid) : null),
+                : ($outcome === self::COLLECTED ? self::take_pending_code($attemptid) : null)),
             'timecreated'     => time(),
         ]);
+    }
+
+    /**
+     * One history row for each of many sittings at once, for what a person decided for all of them (#166, #165): a
+     * stop, an abort, a resume. In blocks of 500, one query to read them and one insert per block.
+     *
+     * @param int[] $attemptids The sittings.
+     * @param string $outcome CANCELLED or RESUMED.
+     * @param string $reasoncode Why, as a code, the same in every language (stopped_by_operator, ...).
+     * @param string $detail The note in words, as the person who decided read it.
+     * @return int Rows written.
+     */
+    public static function record_many(array $attemptids, string $outcome, string $reasoncode, string $detail = ''): int {
+        global $DB;
+
+        $attemptids = array_values(array_unique(array_filter(array_map('intval', $attemptids))));
+        if ($attemptids === [] || !$DB->get_manager()->table_exists('local_catquizlab_attemptlog')) {
+            return 0;
+        }
+        $written = 0;
+        $correlation = \core_text::substr(debug_trace::correlation_id(), 0, 64);
+        foreach (array_chunk($attemptids, 500) as $chunk) {
+            [$insql, $params] = $DB->get_in_or_equal($chunk, SQL_PARAMS_NAMED, 'a');
+            $rows = [];
+            foreach ($DB->get_records_select('local_catquizlab_attempt', 'id ' . $insql, $params, 'id', 'id, runid, tries') as $a) {
+                $rows[] = (object) [
+                    'attemptid' => (int) $a->id, 'runid' => (int) $a->runid, 'tryno' => (int) $a->tries,
+                    'outcome' => $outcome, 'workerid' => null, 'engineattemptid' => null, 'runtimems' => null,
+                    'detail' => $detail !== '' ? $detail : null, 'diagnosis' => null, 'correlationid' => $correlation,
+                    'reasoncode' => \core_text::substr($reasoncode, 0, 40), 'timecreated' => time(),
+                ];
+            }
+            if ($rows !== []) {
+                $DB->insert_records('local_catquizlab_attemptlog', $rows);
+                $written += count($rows);
+            }
+        }
+
+        return $written;
     }
 
     /**

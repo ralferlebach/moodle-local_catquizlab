@@ -23,8 +23,10 @@ namespace local_catquizlab\local;
  * three cannot disagree, and with a fixed number of queries however many runs there are: every per-run figure is a
  * GROUP BY, none is a query per run (#160 AK12, #158 AK6).
  *
- * The set read is the runs asked for plus every run a worker can claim right now, because a run's completion
- * depends on what is ahead of it in the claim order, whichever experiment that belongs to (#160 AK04).
+ * The set read is the runs asked for plus every run a worker can claim right now or in its experiment's turn,
+ * because a run's completion depends on what is ahead of it in the claim order, whichever experiment that belongs to
+ * (#160 AK04). That order is the execution line's since 0.7.65 (#163): the holder's sittings first, in the order they
+ * were queued, a retry at its place once its backoff is over; then each experiment behind it, in the line's order.
  *
  * @package    local_catquizlab
  * @copyright  2026 Ralf Erlebach
@@ -44,12 +46,14 @@ class run_figures {
      * @param int $now The clock.
      * @return array{now: int, runs: array<int, array>, claimable: int[], groups: array[], workers: array}
      *      runs: per run its record fields (experimentid, status, cellkey, strategy, paused, held), sitting counts
-     *      (total, collected, failed, queued, inflight, stale, tracepending, open), the duration sample of its
+     *      (total, collected, failed, cancelled, queued, inflight, stale, tracepending, open), the duration sample of its
      *      finished executions (n, s, ss in seconds, lastend) and of its last RECENT ones (recent), its first start,
      *      the sittings it has in flight with their summed and latest start times (flying, flyingstarts, flyinglast),
      *      and the busy seconds that fell into the capacity window (busy, from busyfrom,
      *      in a window of window seconds).
-     *      groups: the queued sittings of the claimable runs, grouped by run and due time, in claim order.
+     *      groups: the queued sittings of the claimable runs, grouped by run and due time, in claim order: by the
+     *      rank of their experiment in the line (0 for the holder), then by when they were queued.
+     *      line: experiment id => rank in the execution line (0 the holder; experiments not in it after all of it).
      */
     public static function read(array $runids, int $now): array {
         global $DB;
@@ -76,7 +80,8 @@ class run_figures {
         $all = array_values(array_unique(array_merge($runids, $claimablecandidates, $siblings)));
         sort($all);
 
-        $out = ['now' => $now, 'runs' => [], 'claimable' => [], 'groups' => [], 'workers' => worker_registry::summary()];
+        $out = ['now' => $now, 'runs' => [], 'claimable' => [], 'groups' => [], 'workers' => worker_registry::summary(),
+            'line' => self::line()];
         if ($all === []) {
             return $out;
         }
@@ -94,7 +99,7 @@ class run_figures {
                 'strategy' => (string) ($manifest['config']['strategy']['key'] ?? ''),
                 'paused' => $paused,
                 'held' => circuit_breaker::is_held($run),
-                'total' => 0, 'collected' => 0, 'failed' => 0, 'queued' => 0, 'inflight' => 0, 'stale' => 0,
+                'total' => 0, 'collected' => 0, 'failed' => 0, 'cancelled' => 0, 'queued' => 0, 'inflight' => 0, 'stale' => 0,
                 'tracepending' => 0, 'open' => 0,
                 'sample' => ['n' => 0, 's' => 0.0, 'ss' => 0.0], 'lastend' => null, 'firststart' => null,
                 'requested' => null,
@@ -143,6 +148,10 @@ class run_figures {
                 case attempt_scheduler::STATUS_COLLECTED:
                 case attempt_scheduler::STATUS_VALIDATED:
                     $r['collected'] += $n;
+                    break;
+                case attempt_scheduler::STATUS_CANCELLED:
+                    // Closed by an operator (#166): ended, and not failed.
+                    $r['cancelled'] += $n;
                     break;
                 default:
                     $r['failed'] += $n;
@@ -271,8 +280,9 @@ class run_figures {
             $out['runs'][$runid]['window'] = $window;
         }
 
-        // The queue as job_claim reads it: nextruntime, then timecreated, then id (#160 AK04). Grouped by run and
-        // due time, so a thousand fresh sittings of a run are one group and each retry with its own time another.
+        // The queue as job_claim reads it (#163): the experiment's place in the line, then timecreated, then id; the
+        // due time only says from when. Grouped by run and due time, so a thousand fresh sittings of a run are one
+        // group and each retry with its own time another.
         if ($out['claimable'] !== []) {
             [$qsql, $qparams] = $DB->get_in_or_equal($out['claimable'], SQL_PARAMS_NAMED, 'q');
             $groups = $DB->get_recordset_sql(
@@ -282,22 +292,60 @@ class run_figures {
                GROUP BY runid, nextruntime",
                 $qparams + ['queued' => attempt_scheduler::STATUS_QUEUED]
             );
+            // Not in the line: given a place at its end at the line's next move.
+            $last = $out['line'] === [] ? 0 : max($out['line']) + 1;
+            $rank = fn(int $runid): int => $out['line'][$out['runs'][$runid]['experimentid']] ?? $last;
             foreach ($groups as $row) {
                 $out['groups'][] = ['runid' => (int) $row->runid, 'due' => (int) $row->nextruntime, 'n' => (int) $row->n,
-                    'firstcreated' => (int) $row->firstcreated, 'firstid' => (int) $row->firstid];
+                    'firstcreated' => (int) $row->firstcreated, 'firstid' => (int) $row->firstid,
+                    'rank' => $rank((int) $row->runid)];
             }
             $groups->close();
-            // A sitting whose lease ran out is reclaimed and queued again with a backoff: at the end of the line.
+            // A sitting whose lease ran out is reclaimed and queued again with a backoff: at the end of its experiment.
             foreach ($out['claimable'] as $runid) {
                 if ($out['runs'][$runid]['stale'] > 0) {
                     $out['groups'][] = ['runid' => $runid, 'due' => $now + attempt_scheduler::RETRY_BACKOFF,
-                        'n' => $out['runs'][$runid]['stale'], 'firstcreated' => PHP_INT_MAX, 'firstid' => PHP_INT_MAX];
+                        'n' => $out['runs'][$runid]['stale'], 'firstcreated' => PHP_INT_MAX, 'firstid' => PHP_INT_MAX,
+                        'rank' => $rank($runid)];
                 }
             }
             usort($out['groups'], static fn(array $a, array $b): int =>
-                [$a['due'], $a['firstcreated'], $a['firstid']] <=> [$b['due'], $b['firstcreated'], $b['firstid']]);
+                [$a['rank'], $a['firstcreated'], $a['firstid'], $a['due']]
+                <=> [$b['rank'], $b['firstcreated'], $b['firstid'], $b['due']]);
         }
 
         return $out;
+    }
+
+    /**
+     * The execution line as ranks: the holder 0, the experiments waiting behind it 1, 2, … in the line's order (#163).
+     *
+     * @return array<int, int> Experiment id => rank.
+     */
+    public static function line(): array {
+        global $DB;
+
+        if (!$DB->get_manager()->table_exists('local_catquizlab_execqueue')) {
+            return [];
+        }
+        $rows = $DB->get_records_select(
+            'local_catquizlab_execqueue',
+            'state IN (:waiting, :running)',
+            ['waiting' => execution_queue::WAITING, 'running' => execution_queue::RUNNING],
+            'position ASC, id ASC',
+            'id, experimentid, state'
+        );
+        $line = [];
+        $holder = execution_queue::holder();
+        if ($holder > 0) {
+            $line[$holder] = 0;
+        }
+        foreach ($rows as $row) {
+            if (!isset($line[(int) $row->experimentid])) {
+                $line[(int) $row->experimentid] = count($line) + ($holder > 0 ? 0 : 1);
+            }
+        }
+
+        return $line;
     }
 }

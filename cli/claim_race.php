@@ -83,6 +83,16 @@ $claims = max(1, (int) $options['claims']);
 $queued = $DB->count_records('local_catquizlab_attempt', [
     'runid' => $runid, 'status' => \local_catquizlab\local\attempt_scheduler::STATUS_QUEUED,
 ]);
+// A claim hands out only sittings of the experiment holding the execution line (#163): this run's experiment takes
+// its front for the race, openly, and gives it back afterwards, however the race ends.
+$experimentid = (int) $DB->get_field('local_catquizlab_run', 'experimentid', ['id' => $runid], MUST_EXIST);
+$front = \local_catquizlab\local\execution_queue::take_front($experimentid, 'cli/claim_race.php', 15 * MINSECS);
+if (empty($front['ok'])) {
+    cli_error('The execution line could not be taken for the race (' . $front['reason'] . ').');
+}
+register_shutdown_function(static function () use ($experimentid): void {
+    \local_catquizlab\local\execution_queue::release_front($experimentid, 'cli/claim_race.php ended');
+});
 
 $start = microtime(true) + 2.0;
 $children = [];
@@ -117,8 +127,8 @@ foreach ($children as [$handle, $pipes]) {
 }
 
 $counts = array_count_values($handedout);
-// Which runs the sittings came from: the claim takes the site's oldest due sitting, so on a site with other queued work
-// some may be another run's.
+// Which runs the sittings came from: the claim takes the line holder's next sitting — this run's experiment, which may
+// have other runs with queued sittings.
 $fromrun = $handedout === [] ? 0 : $DB->count_records_select(
     'local_catquizlab_attempt',
     'runid = :runid AND id IN (' . implode(',', array_map('intval', array_unique($handedout))) . ')',

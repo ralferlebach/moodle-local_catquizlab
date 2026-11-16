@@ -709,7 +709,61 @@ function xmldb_local_catquizlab_upgrade($oldversion): bool {
         upgrade_plugin_savepoint(true, 2026111500, 'local', 'catquizlab');
     }
 
+    if ($oldversion < 2026111501) {
+        // Sittings an operator closed are cancelled, not failed (#166). From 0.7.49 a stopped experiment, and the
+        // operations page's "stop the pipeline", closed the open sittings as failed with a fixed text as their error;
+        // the progress pages counted them as failures (CLARA: 4982 "failed for good" of 6000 after a stop). Exactly
+        // those are reclassified, by that text, which nothing else writes: from a stop, only in runs that are
+        // cancelled. A sitting that failed for any other reason stays failed. Nothing else of the row changes.
+        local_catquizlab_upgrade_reclassify_cancelled();
+        upgrade_plugin_savepoint(true, 2026111501, 'local', 'catquizlab');
+    }
+
     return true;
+}
+
+/**
+ * Reclassify the sittings a stop closed as failed before 2026111501 as cancelled (#166).
+ *
+ * @return int How many.
+ */
+function local_catquizlab_upgrade_reclassify_cancelled(): int {
+    global $DB;
+
+    $error = $DB->sql_compare_text('a.lasterror', 255);
+    [$stopsql, $stopparams] = $DB->get_in_or_equal(
+        \local_catquizlab\local\experiment_stop::LEGACY_TEXTS,
+        SQL_PARAMS_NAMED,
+        'stoptext'
+    );
+    [$pipesql, $pipeparams] = $DB->get_in_or_equal(
+        \local_catquizlab\local\purger::LEGACY_PIPELINE_TEXTS,
+        SQL_PARAMS_NAMED,
+        'pipetext'
+    );
+    $ids = $DB->get_fieldset_sql(
+        "SELECT a.id
+           FROM {local_catquizlab_attempt} a
+           JOIN {local_catquizlab_run} r ON r.id = a.runid
+          WHERE a.status = :failed
+                AND (({$error} {$stopsql} AND r.status = :runcancelled) OR {$error} {$pipesql})",
+        $stopparams + $pipeparams + [
+            'failed' => \local_catquizlab\local\attempt_scheduler::STATUS_FAILED,
+            'runcancelled' => \local_catquizlab\local\registry::STATUS_CANCELLED,
+        ]
+    );
+    foreach (array_chunk($ids, 1000) as $chunk) {
+        [$insql, $params] = $DB->get_in_or_equal($chunk, SQL_PARAMS_NAMED, 'sitting');
+        $DB->set_field_select(
+            'local_catquizlab_attempt',
+            'status',
+            \local_catquizlab\local\attempt_scheduler::STATUS_CANCELLED,
+            "id {$insql}",
+            $params
+        );
+    }
+
+    return count($ids);
 }
 
 /**

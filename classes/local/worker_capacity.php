@@ -58,6 +58,15 @@ class worker_capacity {
     public const GUARD_EVERY = 30;
 
     /**
+     * @var int After a release by a person, how long a new trip counts as "the same problem again" (#162): the
+     *      throttle then holds for twice the cooldown and cannot be released again before it ends.
+     */
+    public const RELEASE_PROBATION = 1800;
+
+    /** @var int The longest a throttle holds after a trip in probation, in seconds. */
+    public const RETRIP_COOLDOWN_MAX = 7200;
+
+    /**
      * The guard's thresholds as set by the administrator, the constants above where nothing is set (#124).
      *
      * Each is held to a sane range: a window under a minute measures noise, a share of 0 throttles on the first
@@ -150,6 +159,11 @@ class worker_capacity {
             'share'      => (float) ($kept['share'] ?? 0.0),
             'until'      => (int) ($kept['until'] ?? 0),
             'causes'     => (array) ($kept['causes'] ?? []),
+            // When it was counted, from when (a release starts a fresh count), and the release in force (#162).
+            'checked'    => (int) ($kept['checked'] ?? 0),
+            'since'      => (int) ($kept['since'] ?? 0),
+            'released'   => (array) ($kept['released'] ?? []),
+            'noreleaseuntil' => (int) ($kept['noreleaseuntil'] ?? 0),
         ];
     }
 
@@ -164,7 +178,10 @@ class worker_capacity {
         global $DB;
 
         $thresholds = self::guard_thresholds();
-        $since = $now - $thresholds['window'];
+        // Counted from a release at the earliest (#162): the failures that tripped the throttle a person released are
+        // not counted again; new ones are.
+        $released = (array) ($kept['released'] ?? []);
+        $since = max($now - $thresholds['window'], (int) ($released['at'] ?? 0));
         [$insql, $params] = $DB->get_in_or_equal(circuit_breaker::CAPACITY_CAUSES, SQL_PARAMS_NAMED, 'c');
         // Failed executions and reconciled submissions alike: a 5xx the worker
         // recovered from is still a 5xx the server sent.
@@ -185,22 +202,118 @@ class worker_capacity {
         $trips = $thresholds['enabled'] && $failures >= $thresholds['minfailures'] && $share >= $thresholds['share'];
         $until = (int) ($kept['until'] ?? 0);
         $was = $until > $now;
+        $noreleaseuntil = (int) ($kept['noreleaseuntil'] ?? 0);
+        $inprobation = (int) ($released['probation'] ?? 0) > $now;
 
         if ($trips) {
-            $until = $now + $thresholds['cooldown'];
+            // The same problem again soon after a person released the throttle (#162 AK7): twice the cooldown, and no
+            // second release before it ends — not a release and a trip every few minutes.
+            $cooldown = $inprobation ? min(self::RETRIP_COOLDOWN_MAX, 2 * $thresholds['cooldown']) : $thresholds['cooldown'];
+            $until = max($until, $now + $cooldown);
+            if ($inprobation) {
+                $noreleaseuntil = $until;
+            }
             if (!$was) {
                 run_log::record(0, run_log::LOAD_THROTTLED, ['failures' => $failures, 'executions' => $executions,
-                    'share' => round($share, 2), 'causes' => $causes, 'cooldown' => $thresholds['cooldown'],
-                    'thresholds' => $thresholds]);
+                    'share' => round($share, 2), 'causes' => $causes, 'cooldown' => $cooldown,
+                    'thresholds' => $thresholds, 'afterrelease' => $inprobation]);
             }
+        } else if (!$thresholds['enabled'] && $was) {
+            // Switched off (minimum failures 0): off now, not at the end of a cooldown it set before (#162 AK4).
+            run_log::record(0, run_log::LOAD_RELEASED, ['failures' => $failures, 'executions' => $executions,
+                'by' => 'guard switched off']);
+            $until = 0;
         } else if (!$was && $until > 0) {
             // Released by time: said once, then forgotten.
             run_log::record(0, run_log::LOAD_RELEASED, ['failures' => $failures, 'executions' => $executions]);
             $until = 0;
         }
 
-        return ['checked' => $now, 'until' => $until, 'failures' => $failures, 'executions' => $executions,
-            'share' => round($share, 3), 'causes' => $causes];
+        return ['checked' => $now, 'since' => $since, 'until' => $until, 'failures' => $failures,
+            'executions' => $executions, 'share' => round($share, 3), 'causes' => $causes,
+            'released' => $released, 'noreleaseuntil' => $noreleaseuntil > $now ? $noreleaseuntil : 0];
+    }
+
+    /**
+     * Whether a person may release the throttle now, and if not, why (#162).
+     *
+     * @param array $guard load_guard().
+     * @param int $now The clock.
+     * @return string '' when a release is possible; else not-throttled, retripped.
+     */
+    public static function release_refusal(array $guard, int $now): string {
+        if (empty($guard['throttled'])) {
+            return 'not-throttled';
+        }
+        if ((int) ($guard['noreleaseuntil'] ?? 0) > $now) {
+            return 'retripped';
+        }
+
+        return '';
+    }
+
+    /**
+     * Release the load guard's throttle, by a person, on purpose, recorded (#162).
+     *
+     * What it does: ends the cooldown in force now; the guard counts again from this moment, so the failures that
+     * tripped it are not counted twice, and new ones trip it again. What it does not do: switch the guard off
+     * (minimum failures 0 does, as a setting), raise anything above the configured limit or the safety cap, stop or
+     * restart a worker, or touch a lease. Workers for the slots it frees are started by the pipeline, one after
+     * another (#120), as for any free slot.
+     *
+     * Within RELEASE_PROBATION after a release, a new trip holds twice the cooldown and cannot be released before it
+     * ends. Two people releasing at once release once: the second finds nothing to release.
+     *
+     * The caller checks the permission (moodle/site:config) and the session key.
+     *
+     * @param int $userid Who releases it.
+     * @param string $reason Why, in their words (required).
+     * @param int|null $now The clock.
+     * @return array{ok: bool, reason: string, before: array, after: array}
+     */
+    public static function release_guard(int $userid, string $reason, ?int $now = null): array {
+        $now = $now ?? time();
+        $reason = trim(\core_text::substr(clean_param($reason, PARAM_TEXT), 0, 500));
+        if ($reason === '') {
+            return ['ok' => false, 'reason' => 'no-reason', 'before' => [], 'after' => []];
+        }
+        $lock = \core\lock\lock_config::get_lock_factory('local_catquizlab_loadguard')->get_lock('release', 10);
+        if (!$lock) {
+            return ['ok' => false, 'reason' => 'busy', 'before' => [], 'after' => []];
+        }
+        try {
+            $before = self::effective($now);
+            $refusal = self::release_refusal($before['guard'], $now);
+            if ($refusal !== '') {
+                return ['ok' => false, 'reason' => $refusal, 'before' => $before, 'after' => $before];
+            }
+            $kept = json_decode((string) get_config('local_catquizlab', 'loadguard'), true) ?: [];
+            $kept['until'] = 0;
+            $kept['checked'] = $now;
+            // Who released it is in the site log (the event below), not here: no user id in the plugin's own tables.
+            $kept['released'] = ['at' => $now, 'reason' => $reason, 'probation' => $now + self::RELEASE_PROBATION,
+                'until' => (int) $before['guard']['until'], 'failures' => (int) $before['guard']['failures'],
+                'executions' => (int) $before['guard']['executions'], 'causes' => (array) $before['guard']['causes']];
+            set_config('loadguard', json_encode($kept), 'local_catquizlab');
+            $after = self::effective($now);
+
+            $detail = ['reason' => $reason, 'limitbefore' => $before['limit'], 'limitafter' => $after['limit'],
+                'configured' => $after['configured'], 'cap' => $after['cap'], 'until' => (int) $before['guard']['until'],
+                'failures' => (int) $before['guard']['failures'], 'executions' => (int) $before['guard']['executions'],
+                'causes' => (array) $before['guard']['causes'], 'probation' => $now + self::RELEASE_PROBATION];
+            run_log::record(0, run_log::LOAD_RELEASED, $detail + ['manual' => true]);
+            \local_catquizlab\event\loadguard_released::create([
+                'context' => \context_system::instance(),
+                'userid' => $userid,
+                'other' => $detail,
+            ])->trigger();
+            // The slots it frees are filled by the pipeline, staggered, now rather than at the next five-minute mark.
+            \local_catquizlab\task\kick_pipeline::queue('loadguard-released');
+
+            return ['ok' => true, 'reason' => '', 'before' => $before, 'after' => $after];
+        } finally {
+            $lock->release();
+        }
     }
 
     /**
@@ -310,6 +423,64 @@ class worker_capacity {
         return $effective + $counts + [
             'free'  => $free,
             'text'  => self::describe($effective, $counts, $free),
+            // One reading, one time (#162 AK1): every figure above is of this moment.
+            'asof'  => gmdate('Y-m-d H:i:s', $now) . ' UTC',
+            'guardview' => self::guard_view($effective, $now),
+        ];
+    }
+
+    /**
+     * The load guard as a person deciding about it needs to see it (#162 AK1, AK2, AK9, AK10).
+     *
+     * @param array $effective effective().
+     * @param int $now The clock.
+     * @return array
+     */
+    public static function guard_view(array $effective, int $now): array {
+        $component = 'local_catquizlab';
+        $guard = $effective['guard'];
+        $thresholds = self::guard_thresholds();
+        $utc = static fn(int $t): string => $t > 0 ? gmdate('Y-m-d H:i:s', $t) . ' UTC' : '–';
+        $refusal = self::release_refusal($guard, $now);
+        $released = (array) ($guard['released'] ?? []);
+        $causes = [];
+        foreach ((array) $guard['causes'] as $cause => $n) {
+            $causes[] = ['cause' => (string) $cause, 'n' => (int) $n];
+        }
+
+        return [
+            'enabled' => $thresholds['enabled'],
+            'throttled' => !empty($guard['throttled']),
+            'counted' => get_string('loadguard:counted', $component, (object) [
+                'failures' => (int) $guard['failures'], 'executions' => (int) $guard['executions'],
+                'share' => (int) round(100 * (float) $guard['share']), 'from' => $utc((int) ($guard['since'] ?? 0)),
+                'checked' => $utc((int) ($guard['checked'] ?? 0)),
+            ]),
+            'causes' => $causes,
+            'thresholds' => get_string('loadguard:thresholds', $component, (object) [
+                'minfailures' => $thresholds['minfailures'], 'share' => (int) round(100 * $thresholds['share']),
+                'window' => (int) round($thresholds['window'] / 60), 'cooldown' => (int) round($thresholds['cooldown'] / 60),
+            ]),
+            // The share is of the guard's own count, not of sittings or people (#162 AK10).
+            'denominator' => get_string('loadguard:denominator', $component),
+            'until' => $utc((int) $guard['until']),
+            'limits' => get_string('loadguard:limits', $component, (object) ['configured' => $effective['configured'],
+                'cap' => $effective['cap'] > 0 ? $effective['cap'] : '–', 'limit' => $effective['limit'],
+                'halved' => !empty($guard['throttled']) ? max(1, intdiv($effective['cap'] > 0
+                    ? min($effective['configured'], $effective['cap']) : $effective['configured'], 2)) : '–']),
+            'released' => $released === [] ? '' : get_string('loadguard:lastrelease', $component, (object) [
+                'at' => $utc((int) $released['at']), 'reason' => (string) ($released['reason'] ?? ''),
+                'probation' => $utc((int) ($released['probation'] ?? 0)),
+            ]),
+            'canrelease' => $refusal === '' && has_capability('moodle/site:config', \context_system::instance()),
+            'refusal' => $refusal === 'retripped' ? get_string(
+                'loadguard:retripped',
+                $component,
+                $utc((int) $guard['noreleaseuntil'])
+            ) : '',
+            'sesskey' => sesskey(),
+            'url' => (new \moodle_url('/local/catquizlab/operations.php'))->out(false),
+            'settingsurl' => (new \moodle_url('/admin/settings.php', ['section' => registry::SETTINGS_SECTION]))->out(false),
         ];
     }
 

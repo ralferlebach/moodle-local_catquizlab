@@ -60,7 +60,9 @@ Eine Seite, die offen ist, treibt nichts an. Weder Seitenaufrufe noch die Live-A
 ## Reihenfolge und Doppelungen (AK7)
 
 - Ein Experiment zur Zeit: Vorbereitet wird erst an der Reihe. Ein zweites gestartetes bleibt `queued`, ohne Läufe,
-  bis das erste fertig ist.
+  bis das erste fertig ist. Seit 0.7.65 gilt das auch für die Claims (#163, `docs/dev/claim-reihenfolge.md`): Ein Worker
+  bekommt nur Testbearbeitungen des Experiments, das die Reihe hält; außerhalb gestartete Läufe reiht die Reihe hinten
+  ein; ein Halter, dessen Testbearbeitungen alle vergeben und fertig sind, gibt die Reihe ab.
 - Doppelklick, zwei Browser: ein Eintrag, unter Sperre.
 - Zwei Takte zugleich (geplant und angefragt): `advance()` unter Sperre.
 - Zwei Vorbereitungen zugleich: Sperre je Experiment, Läufe nur ohne Läufe, Starts nur für Entwürfe.

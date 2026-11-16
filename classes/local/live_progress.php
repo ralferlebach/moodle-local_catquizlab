@@ -106,7 +106,7 @@ class live_progress {
             return self::empty_snapshot($experimentid);
         }
         $rows = [];
-        $totals = ['done' => 0, 'total' => 0, 'running' => 0, 'queued' => 0, 'failed' => 0];
+        $totals = ['done' => 0, 'total' => 0, 'running' => 0, 'queued' => 0, 'failed' => 0, 'cancelled' => 0];
 
         foreach ($runs as $run) {
             $f = $figures['runs'][(int) $run->id];
@@ -114,10 +114,12 @@ class live_progress {
             $done = (int) $f['collected'];
             $total = (int) $f['total'];
             $failed = (int) $f['failed'];
+            $cancelled = (int) $f['cancelled'];
 
             $totals['done'] += $done;
             $totals['total'] += $total;
             $totals['failed'] += $failed;
+            $totals['cancelled'] += $cancelled;
             $totals['running'] += $inflight;
             $totals['queued'] += max(0, (int) $f['open'] - $inflight);
 
@@ -136,6 +138,8 @@ class live_progress {
                 'inflight' => $inflight,
                 'tracepending' => (int) $f['tracepending'],
                 'failed'   => $failed,
+                // Closed by an operator (#166): apart from failed, in every figure.
+                'cancelled' => $cancelled,
                 'complete' => $total > 0 && $done >= $total,
                 // What a screen reader says for the bar: the unit, not a bare percentage (#141 AK8).
                 'sittingstext' => get_string('progress:sittingsvalue', $component, (object) ['done' => $done, 'total' => $total]),
@@ -179,6 +183,7 @@ class live_progress {
                 'queued'    => $totals['queued'],
                 'collected' => $totals['done'],
                 'failed'    => $totals['failed'],
+                'cancelled' => $totals['cancelled'],
             ],
         ];
         // The times rest on the same counts the bar shows (#125).
@@ -227,9 +232,9 @@ class live_progress {
             ];
         }
 
-        // Nothing left to play: collected or failed for good. A run that ended
+        // Nothing left to play: collected, failed for good or closed by an operator. A run that ended
         // with a failed sitting used to stay "Waiting" for ever (#128).
-        if ($totals['total'] > 0 && $totals['done'] + $totals['failed'] >= $totals['total']) {
+        if ($totals['total'] > 0 && $totals['done'] + $totals['failed'] + $totals['cancelled'] >= $totals['total']) {
             $aggregating = in_array(registry::STATUS_AGGREGATING, $statuses, true);
 
             return [
@@ -339,6 +344,7 @@ class live_progress {
                 'queued'    => 0,
                 'collected' => 0,
                 'failed'    => 0,
+                'cancelled' => 0,
             ],
             'time'         => eta::estimate(0, []),
         ];

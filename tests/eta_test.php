@@ -786,6 +786,11 @@ final class eta_test extends \advanced_testcase {
     public function test_the_query_count_does_not_grow_with_runs(): void {
         global $DB;
 
+        // Once to fill Moodle's own caches (table metadata, plugin config), then counted.
+        $warm = $this->experiment();
+        $this->queued($this->make_run($warm, 0, 'classic'), 5, 60);
+        $this->workers(2);
+        live_progress::snapshot($warm);
         $counts = [];
         foreach ([1, 10, 40] as $n) {
             $experimentid = $this->experiment();

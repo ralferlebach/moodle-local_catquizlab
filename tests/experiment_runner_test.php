@@ -196,6 +196,11 @@ final class experiment_runner_test extends \advanced_testcase {
             $runid = (int) $generator->create_run()->id;
             $DB->set_field('local_catquizlab_run', 'status', registry::STATUS_READY, ['id' => $runid]);
             $ids[] = (int) $DB->get_field('local_catquizlab_run', 'experimentid', ['id' => $runid]);
+            // Ready with its sittings queued, as its setup leaves it (#163: a holder without any is through).
+            $person = $generator->create_person(['runid' => $runid]);
+            $DB->insert_record('local_catquizlab_attempt', (object) ['runid' => $runid, 'personid' => $person->id,
+                'status' => \local_catquizlab\local\attempt_scheduler::STATUS_QUEUED, 'tries' => 0, 'nextruntime' => 0,
+                'timecreated' => time(), 'timemodified' => time()]);
         }
 
         $first = \local_catquizlab\local\execution_queue::enqueue($ids[0]);

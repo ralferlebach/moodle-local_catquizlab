@@ -331,6 +331,32 @@ if ($action !== '') {
         );
     }
 
+    // A person ends the load guard's cooldown on purpose (#162): administrators only, with a reason, recorded in the
+    // site log (event loadguard_released) and the installation's lifecycle log. Nothing is switched off or raised
+    // above the configured limit or the safety cap; the pipeline fills the freed slots one after another.
+    if ($action === 'releaseguard') {
+        require_capability('moodle/site:config', $context);
+        $return = optional_param('returnurl', '', PARAM_LOCALURL);
+        $return = $return !== '' ? new moodle_url($return) : $pageurl;
+        if (!optional_param('checked', 0, PARAM_BOOL)) {
+            redirect($return, get_string('loadguard:notchecked', $component), null, \core\output\notification::NOTIFY_ERROR);
+        }
+        $released = \local_catquizlab\local\worker_capacity::release_guard(
+            (int) $USER->id,
+            optional_param('reason', '', PARAM_TEXT)
+        );
+        redirect(
+            $return,
+            $released['ok']
+                ? get_string('loadguard:releaseddone', $component, (object) [
+                    'before' => $released['before']['limit'], 'after' => $released['after']['limit'],
+                ])
+                : get_string('loadguard:refused_' . str_replace('-', '', $released['reason']), $component),
+            null,
+            $released['ok'] ? \core\output\notification::NOTIFY_SUCCESS : \core\output\notification::NOTIFY_WARNING
+        );
+    }
+
     if ($action === 'startworkers') {
         // Back to the page the button was on, with a sentence about what
         // happened — the setup tab and a code said neither.

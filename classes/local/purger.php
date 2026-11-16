@@ -530,6 +530,12 @@ class purger {
         return ['workers' => $workers, 'attempts' => $attempts];
     }
 
+    /** @var string Why kill_pipeline() closed a sitting, as stored with it (#166). */
+    public const PIPELINE_STOPPED = 'pipeline_stopped_by_operator';
+
+    /** @var string[] What 0.7.x before 2026111501 stored instead (`history:pipelinestopped`, English and German). */
+    public const LEGACY_PIPELINE_TEXTS = ['pipeline stopped by an operator', 'Pipeline von einer Person angehalten'];
+
     /**
      * Stop everything: tasks, workers, and every queued attempt.
      *
@@ -546,18 +552,32 @@ class purger {
         $workers = self::kill_workers();
 
         $queued = $DB->count_records('local_catquizlab_attempt', ['status' => attempt_scheduler::STATUS_QUEUED]);
+        $closing = $DB->get_fieldset_select(
+            'local_catquizlab_attempt',
+            'id',
+            'status IN (:queued, :running)',
+            ['queued' => attempt_scheduler::STATUS_QUEUED, 'running' => attempt_scheduler::STATUS_RUNNING]
+        );
+        // Closed by an operator, not failed (#166): the reason in the same words in every language.
         $DB->execute(
             'UPDATE {local_catquizlab_attempt}
-                SET status = :failed, lasterror = :reason, leaseowner = NULL, leaseexpires = 0,
+                SET status = :cancelled, lasterror = :reason, leaseowner = NULL, leaseexpires = 0,
                     timemodified = :now
               WHERE status IN (:queued, :running)',
             [
-                'failed' => attempt_scheduler::STATUS_FAILED,
-                'reason' => get_string('history:pipelinestopped', 'local_catquizlab'),
+                'cancelled' => attempt_scheduler::STATUS_CANCELLED,
+                'reason' => self::PIPELINE_STOPPED,
                 'now'    => time(),
                 'queued' => attempt_scheduler::STATUS_QUEUED,
                 'running' => attempt_scheduler::STATUS_RUNNING,
             ]
+        );
+
+        attempt_history::record_many(
+            $closing,
+            attempt_history::CANCELLED,
+            self::PIPELINE_STOPPED,
+            get_string('history:pipelinestopped', 'local_catquizlab')
         );
 
         return ['tasks' => $tasks, 'workers' => $workers['workers'], 'attempts' => $queued];

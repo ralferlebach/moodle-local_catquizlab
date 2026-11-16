@@ -186,6 +186,10 @@ class progress_overview {
                 $lastend = max($lastend, (int) $time['finish']);
                 continue;
             }
+            if ($time['reliability'] === eta::STOPPED) {
+                // Stopped (#166): nothing of it is played until it is resumed, and it has no end.
+                continue;
+            }
             if ($time['reliability'] === eta::NONE || isset($queue[$id]) && $time['started'] === null) {
                 // Planned and never started, or waiting in line: counted below, or not at all.
                 continue;

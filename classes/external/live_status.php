@@ -109,6 +109,8 @@ class live_status extends external_api {
             'running'        => $count(attempt_scheduler::STATUS_RUNNING),
             'collected'      => $count(attempt_scheduler::STATUS_COLLECTED),
             'failed'         => $count(attempt_scheduler::STATUS_FAILED),
+            // Closed by an operator (#166), never among the failed.
+            'cancelled'      => $count(attempt_scheduler::STATUS_CANCELLED),
             'state'          => $verdict['state'],
             'headline'       => $verdict['headline'],
             'detail'         => $verdict['detail'],
@@ -190,6 +192,7 @@ class live_status extends external_api {
                 'percent' => $total > 0 ? ($done < $total ? min(99, (int) floor(100 * $done / $total)) : 100) : 0,
                 'open'    => (int) $f['open'],
                 'failed'  => (int) $f['failed'],
+                'cancelled' => (int) $f['cancelled'],
             ];
         }
 
@@ -435,6 +438,7 @@ class live_status extends external_api {
             'running'        => new external_value(PARAM_INT, 'Attempts being played.'),
             'collected'      => new external_value(PARAM_INT, 'Attempts with a trace.'),
             'failed'         => new external_value(PARAM_INT, 'Attempts that failed.'),
+            'cancelled'      => new external_value(PARAM_INT, 'Attempts closed by an operator (#166).'),
             'state'          => new external_value(PARAM_ALPHA, 'The overall verdict.'),
             'headline'       => new external_value(PARAM_TEXT, 'One sentence about what is going on.'),
             'detail'         => new external_value(PARAM_TEXT, 'Why, when that helps.'),
@@ -453,6 +457,7 @@ class live_status extends external_api {
                     'percent' => new external_value(PARAM_INT, 'How far along.'),
                     'open'    => new external_value(PARAM_INT, 'Attempts not yet collected.'),
                     'failed'  => new external_value(PARAM_INT, 'Attempts that failed.'),
+                    'cancelled' => new external_value(PARAM_INT, 'Attempts closed by an operator (#166).'),
                 ]),
                 'The runs of the experiment in view.'
             ),
@@ -495,6 +500,7 @@ class live_status extends external_api {
                         'percent'  => new external_value(PARAM_INT, 'How far along.'),
                         'inflight' => new external_value(PARAM_INT, 'Being played now.'),
                         'failed'   => new external_value(PARAM_INT, 'Failed for good.'),
+                        'cancelled' => new external_value(PARAM_INT, 'Closed by an operator (#166).', VALUE_DEFAULT, 0),
                         'complete' => new external_value(PARAM_BOOL, 'Whether it is done.'),
                         'sittingstext' => new external_value(PARAM_TEXT, 'Done of planned sittings, in words.', VALUE_OPTIONAL),
                         'held'     => new external_value(PARAM_BOOL, 'Whether it was stopped.'),
@@ -525,6 +531,7 @@ class live_status extends external_api {
                     'queued'    => new external_value(PARAM_INT, 'Sittings waiting.'),
                     'collected' => new external_value(PARAM_INT, 'Sittings done.'),
                     'failed'    => new external_value(PARAM_INT, 'Sittings failed for good.'),
+                    'cancelled' => new external_value(PARAM_INT, 'Sittings closed by an operator (#166).', VALUE_DEFAULT, 0),
                 ], 'What is happening this second.'),
                 // Started, elapsed, finish, remaining (#125): computed on the
                 // server with each poll, so a reload cannot move the start.

@@ -27,7 +27,8 @@ namespace local_catquizlab\local;
  *
  * - every run that can still build or hand out work (created, scheduled, ready, running) is cancelled, so no claim
  *   finds it and no tick starts a worker for it;
- * - its waiting and running sittings are closed as failed with the reason. A worker in the middle of one learns at
+ * - its waiting and running sittings are closed as cancelled by an operator (#166; until 0.7.64 as failed, which
+ *   counted a decision as a defect). A worker in the middle of one learns at
  *   its next heartbeat (every 20 s) that the sitting is no longer its own and stops before its next answer; what it
  *   reports afterwards is recorded as late and not applied;
  * - the workers that held them are asked to exit;
@@ -35,7 +36,8 @@ namespace local_catquizlab\local;
  *
  * Kept: everything already collected, the traces still being fetched for sittings that finished, and runs that are
  * aggregating — their sittings are all done, and stopping them would only throw a finished measurement away.
- * A stopped run can be reset and run again from the runs page.
+ * A stopped experiment can be resumed (experiment_resume, #165): what was collected stays, the cancelled sittings are
+ * played. Resetting a run and running it again is the other, destructive way.
  *
  * @package    local_catquizlab
  * @copyright  2026 Ralf Erlebach
@@ -188,10 +190,20 @@ class experiment_stop {
     }
 
     /**
+     * The texts 0.7.49 to 0.7.64 wrote as the failure of the sittings a stop closed (`history:experimentstopped` in
+     * English and German, unchanged since 0.7.49): what the upgrade to 2026111501 recognises them by (#166).
+     */
+    public const LEGACY_TEXTS = ['experiment stopped by an operator', 'Experiment von Hand gestoppt'];
+
+    /**
      * Close the open sittings of runs, with the stop as their reason.
      *
      * Also for a run its setup was still building when it was stopped: the last setup stage plans sittings, and
-     * those must not outlive the stop either.
+     * those must not outlive the stop either. Also for a single run cancelled on its page (#166), which left its
+     * sittings queued before.
+     *
+     * Closed as cancelled, not failed (#166): the reason is the stop's own, in the same words in every language
+     * (REASON); the page says it in the reader's.
      *
      * @param int[] $runids The runs.
      * @return array{queued: int, running: int} How many of each were closed.
@@ -203,7 +215,7 @@ class experiment_stop {
             return ['queued' => 0, 'running' => 0];
         }
         [$insql, $params] = $DB->get_in_or_equal($runids, SQL_PARAMS_NAMED, 'r');
-        $reason = get_string('history:experimentstopped', 'local_catquizlab');
+        $reason = self::REASON;
 
         // The sittings being played get a line in their history: which worker held them, and that it was a stop,
         // not a failure of theirs.
@@ -215,29 +227,40 @@ class experiment_stop {
             'id, leaseowner'
         );
         foreach ($running as $attempt) {
-            attempt_history::record((int) $attempt->id, attempt_history::ABANDONED, [
-                'workerid' => $attempt->leaseowner,
-                'detail'   => $reason,
+            attempt_history::record((int) $attempt->id, attempt_history::CANCELLED, [
+                'workerid'   => $attempt->leaseowner,
+                'detail'     => get_string('history:experimentstopped', 'local_catquizlab'),
+                'reasoncode' => $reason,
             ]);
         }
 
-        $queued = $DB->count_records_select(
+        // The waiting ones too, each with its line (AK1: auditable): who decided is the stop, not a worker.
+        $queuedids = $DB->get_fieldset_select(
             'local_catquizlab_attempt',
+            'id',
             'runid ' . $insql . ' AND status = :queued',
             $params + ['queued' => attempt_scheduler::STATUS_QUEUED]
         );
+        $queued = count($queuedids);
 
         $DB->execute(
             'UPDATE {local_catquizlab_attempt}
-                SET status = :failed, lasterror = :reason, leaseowner = NULL, leaseexpires = 0, timemodified = :now
+                SET status = :cancelled, lasterror = :reason, leaseowner = NULL, leaseexpires = 0, timemodified = :now
               WHERE runid ' . $insql . ' AND status IN (:queued, :running)',
             $params + [
-                'failed'  => attempt_scheduler::STATUS_FAILED,
+                'cancelled' => attempt_scheduler::STATUS_CANCELLED,
                 'reason'  => $reason,
                 'now'     => time(),
                 'queued'  => attempt_scheduler::STATUS_QUEUED,
                 'running' => attempt_scheduler::STATUS_RUNNING,
             ]
+        );
+
+        attempt_history::record_many(
+            $queuedids,
+            attempt_history::CANCELLED,
+            $reason,
+            get_string('history:experimentstopped', 'local_catquizlab')
         );
 
         return ['queued' => $queued, 'running' => count($running)];

@@ -64,8 +64,18 @@ class attempt_scheduler {
     /** @var int Attempt status: collected trace validated. */
     public const STATUS_VALIDATED = 30;
 
-    /** @var int Attempt status: failed. */
+    /** @var int Attempt status: failed — a technical end, its tries spent or its run failed. */
     public const STATUS_FAILED = 40;
+
+    /**
+     * @var int Attempt status: closed by an operator — the experiment or the run was stopped (#166). Not a failure:
+     *      nothing went wrong with the sitting, somebody decided it should not be played now. Counted apart from
+     *      failed everywhere, and the one an experiment resumed plays again (#165). Terminal like failed otherwise.
+     */
+    public const STATUS_CANCELLED = 45;
+
+    /** @var int[] The statuses a sitting ends in: collected, validated, failed, closed by an operator. */
+    public const TERMINAL = [self::STATUS_COLLECTED, self::STATUS_VALIDATED, self::STATUS_FAILED, self::STATUS_CANCELLED];
 
     /** @var int Maximum number of tries before an attempt is failed for good. */
     public const MAX_TRIES = 3;
@@ -108,6 +118,7 @@ class attempt_scheduler {
             self::STATUS_TRACEPENDING => 'attemptstatus:tracepending',
             self::STATUS_VALIDATED => 'attemptstatus:validated',
             self::STATUS_FAILED    => 'attemptstatus:failed',
+            self::STATUS_CANCELLED => 'attemptstatus:cancelled',
         ];
 
         return get_string($keys[$status] ?? 'attemptstatus:unknown', 'local_catquizlab');
@@ -122,8 +133,12 @@ class attempt_scheduler {
      * state that hands out work, or paused by a decision somebody took. Those
      * four need four different responses, and one number gave them one.
      *
+     * And a fifth since 0.7.65 (#163): sittings of a run that could hand out work, but whose experiment does not hold
+     * the execution line. A worker claims only the holder's, so these wait for their experiment's turn — counted as
+     * "waitingturn", not as claimable, which would have workers started for work they may not take.
+     *
      * @param int $experimentid Restrict to one experiment, or 0 for the installation.
-     * @return array{claimable: int, notdue: int, blocked: int, paused: int,
+     * @return array{claimable: int, notdue: int, blocked: int, paused: int, waitingturn: int,
      *               running: int, collected: int, failed: int, queued: int}
      */
     public static function queue_breakdown(int $experimentid = 0): array {
@@ -163,9 +178,15 @@ class attempt_scheduler {
             'notdue'    => 0,
             'blocked'   => 0,
             'paused'    => 0,
+            'waitingturn' => 0,
+            // The experiment whose sittings a worker asking now is handed (#163): the line's holder, or the one a
+            // claim would make the holder.
+            'holder'    => execution_queue::next_holder(),
             'running'   => $count(self::STATUS_RUNNING),
             'collected' => $count(self::STATUS_COLLECTED),
             'failed'    => $count(self::STATUS_FAILED),
+            // Closed by an operator (#166): not failed.
+            'cancelled' => $count(self::STATUS_CANCELLED),
             // Finished, waiting for its trace (#138): neither collected nor failed.
             'tracepending' => $count(self::STATUS_TRACEPENDING),
             'pausecauses' => [],
@@ -178,14 +199,14 @@ class attempt_scheduler {
         // attempt: a queue of 1600 would otherwise be 1600 lookups to draw one
         // line of text.
         $rows = $DB->get_records_sql(
-            'SELECT a.runid, r.status AS runstatus, r.manifestjson,
+            'SELECT a.runid, r.experimentid, r.status AS runstatus, r.manifestjson,
                     SUM(CASE WHEN a.nextruntime <= :now THEN 1 ELSE 0 END) AS due,
                     COUNT(1) AS total
                FROM {local_catquizlab_attempt} a
                JOIN {local_catquizlab_run} r ON r.id = a.runid
               WHERE a.status = :queued'
               . ($experimentid > 0 ? ' AND r.experimentid = :experimentid' : '')
-              . ' GROUP BY a.runid, r.status, r.manifestjson',
+              . ' GROUP BY a.runid, r.experimentid, r.status, r.manifestjson',
             ['now' => $now, 'queued' => self::STATUS_QUEUED] + $scopeparams
         );
 
@@ -239,12 +260,18 @@ class attempt_scheduler {
                 continue;
             }
 
+            // Not the line's holder (#163): its sittings wait for the experiment's turn, due or not.
+            if ((int) $row->experimentid !== $counts['holder']) {
+                $counts['waitingturn'] += $total;
+                continue;
+            }
+
             $counts['claimable'] += $due;
             $counts['notdue'] += $total - $due;
         }
 
         $counts['queued'] = $counts['claimable'] + $counts['notdue']
-            + $counts['blocked'] + $counts['paused'];
+            + $counts['blocked'] + $counts['paused'] + $counts['waitingturn'];
 
         return $counts;
     }
@@ -514,7 +541,7 @@ class attempt_scheduler {
     }
 
     /**
-     * Abort a run: fail every attempt that has not reached a terminal state.
+     * Abort a run: close every sitting that has not reached a terminal state, as cancelled by an operator (#166).
      *
      * @param int $runid The run.
      * @return int The number of attempts aborted.
@@ -526,21 +553,21 @@ class attempt_scheduler {
         $active = [self::STATUS_QUEUED, self::STATUS_RUNNING];
         [$insql, $params] = $DB->get_in_or_equal($active, SQL_PARAMS_NAMED);
         $params['runid'] = $runid;
-        $count = $DB->count_records_select('local_catquizlab_attempt', "runid = :runid AND status $insql", $params);
+        $ids = $DB->get_fieldset_select('local_catquizlab_attempt', 'id', "runid = :runid AND status $insql", $params);
+        $count = count($ids);
 
-        $DB->set_field_select(
-            'local_catquizlab_attempt',
-            'status',
-            self::STATUS_FAILED,
-            "runid = :runid AND status $insql",
-            $params
+        // A decision, not a defect: cancelled, with the reason in the same words in every language.
+        $DB->execute(
+            "UPDATE {local_catquizlab_attempt}
+                SET status = :cancelled, lasterror = :reason, leaseowner = NULL, leaseexpires = 0, timemodified = :now
+              WHERE runid = :runid AND status $insql",
+            $params + ['cancelled' => self::STATUS_CANCELLED, 'reason' => 'aborted_by_operator', 'now' => time()]
         );
-        $DB->set_field_select(
-            'local_catquizlab_attempt',
-            'timemodified',
-            time(),
-            "runid = :runid AND status = :failed",
-            ['runid' => $runid, 'failed' => self::STATUS_FAILED]
+        attempt_history::record_many(
+            $ids,
+            attempt_history::CANCELLED,
+            'aborted_by_operator',
+            get_string('history:runaborted', 'local_catquizlab')
         );
 
         if ($count > 0) {

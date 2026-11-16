@@ -11,8 +11,6 @@
     * health - status, checks with label/detail/status flags
     * workers - hasany, rows
     * queue - queued, running, collected, failed
-    * stuck - hasany, rows
-    * inflight - hasany, rows
     * sesskey, actionurl, formurl — formurl is where the forms post; an empty
       one renders an invalid form action and does nothing when pressed
 
@@ -21,8 +19,6 @@
         "health": {"status": "ok", "checks": [], "blockers": 0, "warnings": 0},
         "workers": {"hasany": false, "rows": []},
         "queue": {"queued": 0, "running": 0, "collected": 0, "failed": 0},
-        "stuck": {"hasany": false, "rows": []},
-        "inflight": {"hasany": false, "rows": []},
         "sesskey": "abc123",
         "actionurl": "/local/catquizlab/index.php?tab=setup",
         "formurl": "/local/catquizlab/operations.php",

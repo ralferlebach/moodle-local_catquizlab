@@ -385,6 +385,7 @@ const applySnapshot = (status) => {
     setRegion('catquizlab-running', status.running);
     setRegion('catquizlab-collected', status.collected);
     setRegion('catquizlab-failed', status.failed);
+    setRegion('catquizlab-cancelled', status.cancelled);
 
     (status.regions || []).forEach((region) => {
         setRegion(region.name, region.text);

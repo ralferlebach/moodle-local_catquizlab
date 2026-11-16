@@ -21,7 +21,7 @@
     * loadspreading - text, off: how worker starts and retries are spread
     * retrywindow - when the sittings waiting for a retry are due, or empty
     * queuestatus - the queue as a status card
-    * queue - claimable, notdue, blocked, paused, running, collected, failed
+    * queue - claimable, notdue, blocked, paused, waitingturn, running, collected, failed
     * pipelinestatus - the pipeline as a status card
     * formurl, sesskey - where recovery actions post
     * logsurl - the execution log, filtered to what is shown here
@@ -83,12 +83,15 @@
                 "notdue": 0,
                 "blocked": 0,
                 "paused": 0,
+                "waitingturn": 0,
                 "running": 0,
                 "collected": 0,
                 "failed": 0,
+                "cancelled": 0,
                 "hasblocked": false,
                 "hasnotdue": false,
-                "haspaused": false
+                "haspaused": false,
+                "haswaitingturn": false
         },
         "pipelinestatus": {
                 "level": "good",
@@ -236,6 +239,7 @@
                 <li>{{#str}}progress:nowqueued, local_catquizlab, {{now.queued}}{{/str}}</li>
                 <li>{{#str}}progress:nowcollected, local_catquizlab, {{now.collected}}{{/str}}</li>
                 <li>{{#str}}progress:nowfailed, local_catquizlab, {{now.failed}}{{/str}}</li>
+                {{#now.cancelled}}<li data-region="catquizlab-progress-cancelled">{{#str}}progress:nowcancelled, local_catquizlab, {{now.cancelled}}{{/str}}</li>{{/now.cancelled}}
             </ul>
         </div>
     </div>
@@ -254,8 +258,8 @@
 {{/population}}
 {{#runner}}
     <div class="card mb-3">
-        <div class="card-body d-flex align-items-center justify-content-between">
-            <div>
+        <div class="card-body d-flex flex-wrap align-items-center justify-content-between">
+            <div class="mr-3 text-nowrap">
                 <strong data-region="catquizlab-experiment-state">{{label}}</strong>
                 <div class="small text-muted">
                     {{runs.finished}} / {{runs.total}} &middot;
@@ -303,6 +307,25 @@
                         </button>
                     </form>
                 {{/canstop}}
+                {{#canresume}}
+                    <form method="post" action="{{formurl}}" class="d-inline" data-region="catquizlab-resume">
+                        <input type="hidden" name="sesskey" value="{{sesskey}}">
+                        <input type="hidden" name="action" value="resumeexperiment">
+                        <input type="hidden" name="experimentid" value="{{experimentid}}">
+                        <button type="submit" class="btn btn-primary" data-action="catquizlab-resumeexperiment">
+                            {{#str}}runner:resume, local_catquizlab{{/str}}
+                        </button>
+                    </form>
+                    <form method="post" action="{{formurl}}" class="d-inline">
+                        <input type="hidden" name="sesskey" value="{{sesskey}}">
+                        <input type="hidden" name="action" value="restartstopped">
+                        <input type="hidden" name="experimentid" value="{{experimentid}}">
+                        <button type="submit" class="btn btn-outline-danger" data-action="catquizlab-restartstopped">
+                            {{#str}}runner:restartstopped, local_catquizlab{{/str}}
+                        </button>
+                    </form>
+                    <p class="small text-muted mb-0 mt-1">{{#str}}runner:resumehint, local_catquizlab{{/str}}</p>
+                {{/canresume}}
                 {{#queued}}
                     <span class="badge badge-info">{{#str}}runner:queued, local_catquizlab{{/str}}</span>
                 {{/queued}}
@@ -321,6 +344,7 @@
                         {{name}}
                         {{#running}}<span class="badge badge-success">{{#str}}runner:staterunning, local_catquizlab{{/str}}</span>{{/running}}
                         {{#waiting}}<span class="text-muted">{{queuedago}}</span>{{/waiting}}
+                        {{#note}}<span class="text-muted">— {{note}}</span>{{/note}}
                     </li>
                 {{/execqueue.rows}}
             </ol>
@@ -459,6 +483,37 @@
             {{#text.why}}
                 <p class="small text-warning mb-2" data-region="catquizlab-capacity-why" role="status">{{.}}</p>
             {{/text.why}}
+            {{! The load guard as a person deciding about it needs to see it, and the one way to release it (#162). }}
+            {{#guardview}}
+                <details class="small mb-2" data-region="catquizlab-loadguard" {{#throttled}}open{{/throttled}}>
+                    <summary>{{#str}}loadguard:heading, local_catquizlab{{/str}} <span class="text-muted">({{asof}})</span></summary>
+                    <ul class="mb-1">
+                        <li>{{limits}}</li>
+                        <li>{{counted}}{{#causes}} · {{cause}}: {{n}}{{/causes}}</li>
+                        <li>{{thresholds}}</li>
+                        {{#throttled}}<li>{{#str}}loadguard:until, local_catquizlab, {{until}}{{/str}}</li>{{/throttled}}
+                        {{^enabled}}<li>{{#str}}loadguard:off, local_catquizlab{{/str}}</li>{{/enabled}}
+                        {{#released}}<li>{{.}}</li>{{/released}}
+                    </ul>
+                    <p class="text-muted mb-1">{{denominator}}</p>
+                    {{#refusal}}<p class="text-warning mb-1" role="status">{{.}}</p>{{/refusal}}
+                    {{#canrelease}}
+                        <form method="post" action="{{url}}" class="border rounded p-2 mb-1" data-region="catquizlab-loadguard-release">
+                            <input type="hidden" name="sesskey" value="{{sesskey}}">
+                            <input type="hidden" name="action" value="releaseguard">
+                            <p class="mb-1">{{#str}}loadguard:releaseexplain, local_catquizlab{{/str}}</p>
+                            <p class="mb-1">{{#str}}loadguard:alternative, local_catquizlab, {{settingsurl}}{{/str}}</p>
+                            <label class="d-block mb-1" for="catquizlab-loadguard-reason">{{#str}}loadguard:reason, local_catquizlab{{/str}}</label>
+                            <input type="text" class="form-control form-control-sm mb-1" id="catquizlab-loadguard-reason" name="reason" required maxlength="500">
+                            <div class="form-check mb-1">
+                                <input class="form-check-input" type="checkbox" id="catquizlab-loadguard-checked" name="checked" value="1" required>
+                                <label class="form-check-label" for="catquizlab-loadguard-checked">{{#str}}loadguard:checkedlabel, local_catquizlab{{/str}}</label>
+                            </div>
+                            <button type="submit" class="btn btn-sm btn-warning">{{#str}}loadguard:release, local_catquizlab{{/str}}</button>
+                        </form>
+                    {{/canrelease}}
+                </details>
+            {{/guardview}}
         {{/capacity}}
         {{#loadspreading}}
             <p class="small mb-2 {{#off}}text-danger{{/off}}{{^off}}text-muted{{/off}}" data-region="catquizlab-load-spreading">{{text}}</p>
@@ -514,6 +569,8 @@
                 <span data-region="catquizlab-collected">{{queue.collected}}</span></li>
             <li>{{#str}}queue:failedlabel, local_catquizlab{{/str}}
                 <span data-region="catquizlab-failed">{{queue.failed}}</span></li>
+            <li>{{#str}}queue:cancelledlabel, local_catquizlab{{/str}}
+                <span data-region="catquizlab-cancelled">{{queue.cancelled}}</span></li>
             {{#queue.hasblocked}}
                 <li class="text-danger">{{#str}}queue:blocked, local_catquizlab{{/str}} {{queue.blocked}}
                     <ul class="small mb-0" data-region="catquizlab-blockcauses">
@@ -524,6 +581,9 @@
             {{#queue.hasnotdue}}
                 <li>{{#str}}queue:notdue, local_catquizlab{{/str}} {{queue.notdue}}</li>
             {{/queue.hasnotdue}}
+            {{#queue.haswaitingturn}}
+                <li data-region="catquizlab-waitingturn">{{#str}}queue:waitingturn, local_catquizlab{{/str}} {{queue.waitingturn}}</li>
+            {{/queue.haswaitingturn}}
             {{#retrywindow}}
                 <li data-region="catquizlab-retry-window">{{retrywindow}}</li>
             {{/retrywindow}}
@@ -559,7 +619,7 @@
                                 <tr class="{{#failed}}table-danger{{/failed}}{{#refused}}table-warning{{/refused}}">
                                     <td>{{time}}</td>
                                     <td>{{channel}}</td>
-                                    <td>{{action}}{{#runid}} <span class="text-muted">#{{.}}</span>{{/runid}}</td>
+                                    <td>{{action}}{{#runlabel}} <span class="text-muted" data-region="catquizlab-debug-run-{{runid}}">(<a href="{{runurl}}">{{#str}}run:label, local_catquizlab{{/str}} {{runid}}</a>, <a href="{{experimenturl}}" title="{{experimentfull}}">{{experimentname}}</a>{{#shortened}}<span class="sr-only">{{experimentfull}}</span>{{/shortened}}{{#strategylabel}}, {{.}}{{/strategylabel}})</span>{{/runlabel}}{{^runlabel}}{{#runid}} <span class="text-muted">#{{.}}</span>{{/runid}}{{/runlabel}}</td>
                                     <td><code>{{params}}</code></td>
                                     <td>{{outcome}} {{#detail}}<code>{{.}}</code>{{/detail}}</td>
                                 </tr>

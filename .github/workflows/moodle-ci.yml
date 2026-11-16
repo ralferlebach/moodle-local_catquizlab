@@ -269,8 +269,21 @@ jobs:
           DB: ${{ matrix.db.type }}
           MOODLE_BRANCH: ${{ matrix.moodle }}
 
+      # The R re-analysis of the research data package (#157 DoD2) runs inside PHPUnit
+      # (research_package_test::test_the_r_reanalysis_reproduces_the_dashboard) against the package it builds: a 2PL
+      # and a GPCM experiment, three strategies, two replications, two pool variants, two strata. R is pinned to the
+      # version of Ubuntu 24.04 (4.3.3); a different one fails the install instead of passing unnoticed. Base R only.
+      - name: Install R for the re-analysis (pinned)
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q --no-install-recommends r-base-core=4.3.3-2build2
+          Rscript --version
+
       - name: PHPUnit – all tests
         run: moodle-plugin-ci phpunit --fail-on-warning
+        env:
+          # Without R the re-analysis test fails instead of being skipped.
+          CATQUIZLAB_REQUIRE_R: '1'
 
       - name: Keep the engine manifest
         if: always()
@@ -380,16 +393,164 @@ jobs:
           if-no-files-found: warn
 
   # ── Gate ─────────────────────────────────────────────────────────────────
+  # ── 4. Upgrade from what is installed ─────────────────────────────────────
+  # Issue 167: an installation of 0.7.60 (2026111400, the version CLARA runs)
+  # is given data by its own code — a run provisioned in the real engine,
+  # with items and a pool, and finished and blocked experiments with their
+  # sittings, a stopped experiment and a sitting failed for a technical reason
+  # — then the code of this commit is put in place and upgraded,
+  # twice. cli/upgrade_check.php checks before and after: the version stored,
+  # nothing left to upgrade, the tables exactly as db/install.xml has them,
+  # the columns and index of 2026111500, no row lost or added, items, pools,
+  # runs and sittings from before unchanged in every column they had, their
+  # new identity columns left empty, and the runs and experiments readable.
+  upgrade:
+    name: "Upgrade 0.7.60 → this commit (${{ matrix.moodle }} / ${{ matrix.db.engine }})"
+    runs-on: ubuntu-24.04
+    needs: [lint-php]
+    strategy:
+      fail-fast: false
+      matrix:
+        moodle: [MOODLE_405_STABLE, MOODLE_502_STABLE, MOODLE_503_STABLE]
+        db:
+          - { engine: mariadb, type: mariadb, port: 3306, user: root,   pass: root   }
+          - { engine: pgsql,   type: pgsql,   port: 5432, user: moodle, pass: moodle }
+
+    services:
+      mariadb:
+        image: ${{ matrix.moodle == 'MOODLE_503_STABLE' && 'mariadb:11.4' || 'mariadb:10.11' }}
+        env:
+          MYSQL_ROOT_PASSWORD: root
+        ports: ['3306:3306']
+        options: >-
+          --health-cmd="mariadb-admin ping --silent"
+          --health-interval=10s --health-retries=10
+      pgsql:
+        image: ${{ matrix.moodle == 'MOODLE_503_STABLE' && 'postgres:17' || 'postgres:16' }}
+        env:
+          POSTGRES_USER:     moodle
+          POSTGRES_PASSWORD: moodle
+          POSTGRES_DB:       postgres
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd="pg_isready -U moodle -d postgres"
+          --health-interval=10s --health-retries=5
+
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          path: plugin
+
+      # 0.7.60 as released (a09be96b, version 2026111400).
+      - uses: actions/checkout@v5
+        with:
+          path: plugin-old
+          ref: a09be96b319120487dbc8456c1036075b19c0f7e
+
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.3'
+          extensions: mbstring, pdo, pdo_mysql, pdo_pgsql, gd, xml, zip, intl
+          ini-values: max_input_vars=5000
+          coverage: none
+
+      - name: Install en_AU.UTF-8 locale
+        run: sudo locale-gen en_AU.UTF-8 && sudo update-locale
+
+      - name: Set TRAVIS_BRANCH
+        run: |
+          BRANCH=${GITHUB_HEAD_REF:-$GITHUB_REF_NAME}
+          echo "TRAVIS_BRANCH=${BRANCH:-main}" >> "$GITHUB_ENV"
+
+      - name: Install moodle-plugin-ci
+        run: |
+          composer create-project -n --no-dev moodlehq/moodle-plugin-ci ci ${{ env.MOODLE_CI }}
+          echo "$GITHUB_WORKSPACE/ci/bin"        >> "$GITHUB_PATH"
+          echo "$GITHUB_WORKSPACE/ci/vendor/bin" >> "$GITHUB_PATH"
+
+      - name: Fetch the CAT engine
+        run: bash plugin/.github/scripts/fetch-engine.sh
+        env:
+          ENGINE_DIR: ${{ github.workspace }}/engine
+          ENGINE_MANIFEST: ${{ github.workspace }}/engine-manifest.txt
+          MOODLE_BRANCH: ${{ matrix.moodle }}
+
+      - name: Install Moodle, the engine and 0.7.60
+        run: |
+          moodle-plugin-ci install \
+            --plugin ./plugin-old \
+            --extra-plugins "$GITHUB_WORKSPACE/engine" \
+            --db-host 127.0.0.1 \
+            --db-port ${{ matrix.db.port }} \
+            --db-user ${{ matrix.db.user }} \
+            --db-pass ${{ matrix.db.pass }} \
+            --db-name moodle \
+            --no-init
+          # The site itself: --no-init writes the configuration only.
+          php moodle/admin/cli/install_database.php --agree-license --adminpass='Upgrade-1!' \
+            --adminemail=admin@example.com --fullname=Upgrade --shortname=upgrade
+          # Moodle 5.x moves the question banks into activities in ad-hoc tasks after the installation; until they
+          # have run nothing can be prepared (0.7.60's e2e_prepare.php says so and stops). As an installation's cron.
+          php moodle/admin/cli/adhoc_task.php --execute
+          ls -d moodle/public/local/catquizlab 2>/dev/null && echo "PLUGIN=moodle/public/local/catquizlab" >> "$GITHUB_ENV" \
+            || echo "PLUGIN=moodle/local/catquizlab" >> "$GITHUB_ENV"
+        env:
+          DB: ${{ matrix.db.type }}
+          MOODLE_BRANCH: ${{ matrix.moodle }}
+
+      - name: Data, written by 0.7.60's own code
+        run: |
+          grep -E 'release' "$PLUGIN/version.php"
+          php "$PLUGIN/cli/e2e_prepare.php" --persons=3 --name="Upgrade: provisioned" | grep -E '^runid='
+          php "$PLUGIN/cli/seed_progress.php" --state=finished
+          php "$PLUGIN/cli/seed_progress.php" --state=blocked
+          # A stopped experiment (0.7.60 closes its open sittings as failed, with the stop's text) and a sitting
+          # that failed for a technical reason: the upgrade makes the first cancelled (#166), the second stays failed.
+          stopped=$(php "$PLUGIN/cli/seed_progress.php" --state=running | grep -E '^PROGRESS_RUNNING_EXPERIMENTID=' | cut -d= -f2)
+          php "$PLUGIN/cli/stop_experiment.php" --experimentid="$stopped" --yes
+          php "$PLUGIN/cli/seed_failed_attempt.php"
+
+      - name: Before
+        run: |
+          cp plugin/cli/upgrade_check.php "$PLUGIN/cli/upgrade_check.php"
+          php "$PLUGIN/cli/upgrade_check.php" --phase=before --out=/tmp/upgrade-before.json | tee /tmp/upgrade-before.txt
+
+      - name: Issue 167 — the code of this commit in place, upgraded, checked
+        run: |
+          set -o pipefail
+          rsync -a --delete --exclude .git plugin/ "$PLUGIN/"
+          php moodle/admin/cli/upgrade.php --non-interactive | tee /tmp/upgrade-1.txt
+          php "$PLUGIN/cli/upgrade_check.php" --phase=after --before=/tmp/upgrade-before.json | tee /tmp/upgrade-after-1.txt
+
+      - name: Issue 167 — upgraded again changes nothing
+        run: |
+          set -o pipefail
+          php moodle/admin/cli/upgrade.php --non-interactive | tee /tmp/upgrade-2.txt
+          grep -qi 'no upgrade needed' /tmp/upgrade-2.txt
+          php "$PLUGIN/cli/upgrade_check.php" --phase=after --before=/tmp/upgrade-before.json | tee /tmp/upgrade-after-2.txt
+
+      - name: Keep the upgrade record
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: upgrade-${{ matrix.moodle }}-${{ matrix.db.engine }}
+          path: |
+            /tmp/upgrade-*.txt
+            /tmp/upgrade-before.json
+            ${{ github.workspace }}/engine-manifest.txt
+          retention-days: 30
+          if-no-files-found: warn
+
   ci-complete:
     name: CI complete
-    needs: [worker-check, phpunit, behat]
+    needs: [worker-check, phpunit, behat, upgrade]
     runs-on: ubuntu-24.04
     if: always()
     steps:
       - name: All matrix jobs must have succeeded
         run: |
-          result="${{ needs.worker-check.result }}-${{ needs.phpunit.result }}-${{ needs.behat.result }}"
-          if [[ "$result" == "success-success-success" ]]; then
+          result="${{ needs.worker-check.result }}-${{ needs.phpunit.result }}-${{ needs.behat.result }}-${{ needs.upgrade.result }}"
+          if [[ "$result" == "success-success-success-success" ]]; then
             echo "All CI jobs passed."
           else
             echo "CI result: $result – one or more jobs failed or were cancelled."

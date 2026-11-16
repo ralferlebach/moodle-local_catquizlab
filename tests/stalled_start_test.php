@@ -153,8 +153,12 @@ final class stalled_start_test extends \advanced_testcase {
         $empty = (int) $generator->create_experiment()->id;
         $DB->insert_record('local_catquizlab_execqueue', (object) ['experimentid' => $empty, 'state' => 'running',
             'position' => 1, 'userid' => 2, 'timecreated' => time() - 48 * DAYSECS, 'timestarted' => time() - 48 * DAYSECS]);
-        // Behind it, one that is ready.
+        // Behind it, one that is ready, its sittings queued (#163: a ready run without any has nothing to play).
         $ready = $this->experiment(1, registry::STATUS_READY);
+        $person = $generator->create_person(['runid' => $ready['runids'][0]]);
+        $DB->insert_record('local_catquizlab_attempt', (object) ['runid' => $ready['runids'][0], 'personid' => $person->id,
+            'status' => \local_catquizlab\local\attempt_scheduler::STATUS_QUEUED, 'tries' => 0, 'nextruntime' => 0,
+            'timecreated' => time(), 'timemodified' => time()]);
         $this->assertTrue(execution_queue::enqueue($ready['experimentid'])['ok']);
 
         $result = execution_queue::advance();
@@ -200,7 +204,15 @@ final class stalled_start_test extends \advanced_testcase {
         $this->resetAfterTest();
         $this->setAdminUser();
         setup_wizard::assume_ready_for_testing(true);
+        global $DB;
         $running = $this->experiment(1, registry::STATUS_READY);
+        // A ready run has its sittings; one without any has nothing to hold the line for (#163).
+        $person = $this->getDataGenerator()->get_plugin_generator('local_catquizlab')->create_person(
+            ['runid' => $running['runids'][0]]
+        );
+        $DB->insert_record('local_catquizlab_attempt', (object) ['runid' => $running['runids'][0], 'personid' => $person->id,
+            'status' => \local_catquizlab\local\attempt_scheduler::STATUS_QUEUED, 'tries' => 0, 'nextruntime' => 0,
+            'timecreated' => time(), 'timemodified' => time()]);
         execution_queue::enqueue($running['experimentid']);
         execution_queue::advance();
 

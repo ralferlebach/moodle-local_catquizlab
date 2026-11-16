@@ -170,6 +170,12 @@ foreach ($listed as $row) {
         ['label' => get_string('manage:compare', $component), 'link' => true,
             'url' => (new moodle_url('/local/catquizlab/compare.php', ['experimentid' => $row['id']]))->out(false)],
     ];
+    // A stopped experiment goes on from the library too (#165): the preview comes first.
+    if ($state['phase'] === 'stopped' && $canexecute) {
+        $more[] = ['label' => get_string('runner:resume', $component), 'post' => true,
+            'url' => (new moodle_url('/local/catquizlab/runs.php'))->out(false),
+            'id' => $row['id'], 'action' => 'resumeexperiment', 'sesskey' => sesskey()];
+    }
     if ($canedit) {
         $more[] = ['label' => get_string('manage:duplicate', $component), 'post' => true,
             'url' => (new moodle_url('/local/catquizlab/experiment.php'))->out(false),

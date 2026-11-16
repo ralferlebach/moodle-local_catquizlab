@@ -6,6 +6,204 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.7.65] — 2026-11-15 — Version 2026111501. A stop cancels, it does not fail (#166), and a stopped experiment goes on keeping what it collected (#165); the upgrade from 0.7.60 tested on every stack (#167); the release CI ships with the plugin (#161, #140); one rule for the line and the claims (#163); the load guard released by a person (#162); traces linked to their sitting (#164)
+
+**Version number.** 0.7.61 to 0.7.64 were numbered a day ahead each (2026111600 to 2026111800) although they were
+all made on 15 November; GitHub has 0.7.64 as 2026111500. This release is **2026111501**: today's date, one above the
+highest savepoint on GitHub. The numbers 2026111600–2026111800 were never pushed and are not used again.
+
+**Database.** One upgrade step, 2026111501, no schema change: sittings that a stop closed before 0.7.65 become
+cancelled (#166, below). See `docs/dev/claim-reihenfolge.md`, `docs/dev/worker-kapazitaet.md`,
+`docs/dev/tracing-messung.md` and `docs/dev/fortsetzen.md`.
+
+- **The release CI ships with the plugin (#161, #140).** GitHub's release CI 43746130162 (commit 4ce5120) failed in
+  all ten PHPUnit jobs in `engine_footprint_test` (5 errors, 2 failures: `local_catquiz_attempts` and
+  `local_catquiz_progress` left behind) because the repository's `.github` is still the one of 11 November: it pins
+  the CAT model at `1414a9cc` / `e724f6ac`, whose `delete_instance_callback()` looks for the CAT attempts as
+  `component = 'adaptivequiz'` and deletes progress by the activity attempt's id. The model since 2026101701 (pins
+  `a7ba075` / `15d4c55`) deletes both, which is what the test asks. Reproduced here on PostgreSQL and MariaDB with only
+  the model changed: the old pin fails with the same 7 tests, the new one passes. The workflows of 0.7.61–0.7.64 were
+  delivered in a separate ZIP and never pushed; from 0.7.65 they are in the plugin ZIP as `catquizlab/.github`, so
+  plugin and CI are pushed together. The one skip of that CI (#140) is `research_package_test::
+  test_the_r_reanalysis_reproduces_the_dashboard` ("Rscript not found", position 681 of 1148): the release workflow
+  `moodle-release.yml`, the one that runs on `main`, installed no R — also in the workflows delivered with 0.7.61–0.7.64,
+  where only `moodle-ci.yml` (branches other than `main`) did. Now both install R 4.3.3 and set
+  `CATQUIZLAB_REQUIRE_R=1`: the test fails where R is missing instead of skipping.
+- **A stop cancels, it does not fail (#166).** On the live installation a stop left 4982 sittings "failed" beside 1018
+  collected: the failure rate, the run cards, the results and the research package counted an operator's decision as
+  technical failure. Now:
+  - **Own status.** A sitting closed by a stop or by cancelling its run is **cancelled** (`STATUS_CANCELLED = 45`),
+    terminal, with the reason `stopped_by_operator` (`pipeline_stopped_by_operator` when the whole pipeline is stopped,
+    `aborted_by_operator` when a run is aborted with `attempt_scheduler::abort()`). Every sitting closed gets a history
+    line `cancelled` with that reason as a code (`reasoncode`, the same in every language; new
+    `attempt_history::record_many()`, in blocks of 500). A technical failure stays **failed** (40) with its own error.
+  - **Counted apart everywhere:** run figures and cards, the progress page and its live update, the queue breakdown,
+    the forecast, the experiment status and library, the status report, the run registry and its filter ("Cancelled"),
+    the results page's run summary and population, reproducibility, the population plan and the research package's
+    codebook (`sittingscancelled`). "Failed" counts technical failures only; in the library an experiment whose
+    sittings are all collected, failed or cancelled has nothing left to play.
+  - **The forecast says "Stopped".** A stopped experiment's times said "Finished" and "Nothing left": what the stop
+    closed was simply not counted. Now its status is "Stopped", the remaining work "N sitting(s) closed by the stop;
+    played when the experiment is resumed", no end is forecast, and each run it stopped says the same
+    (`eta::STOPPED`); "All experiments" leaves it out of the forecast like a finished one.
+  - **Upgrade 2026111501** reclassifies what 0.7.60–0.7.64 left: a failed sitting whose error is the stop's text (EN or
+    DE) in a cancelled run, or the pipeline stop's text, becomes cancelled; every other failed sitting stays failed. In
+    chunks, once, idempotent. Tested from a real 0.7.60 database (#167).
+  - **The run registry's "done" counted run statuses (#141):** `run_registry` counted a run's sittings with
+    `status >= registry::STATUS_FINISHED (30)`, a run constant, so failed (40) and now cancelled (45) sittings counted
+    as done. It counts collected and validated sittings, and its percentage is rounded down: 997 of 1000 is 99 %, not
+    100 %.
+  - **Tests:** new `operator_cancel_test` (the stop cancels and keeps real failures, every figure; the live case
+    6000/1018/4982 with its times; a sitting waiting for its trace and a validated one left alone; the upgrade's
+    reclassification; cancelling one run, aborting one; the history lines with their codes);
+    `experiment_stop_test`, `mode_detection_test` (the population's `cancelled`).
+- **A stopped experiment goes on, keeping what it collected (#165).** Until now the only way on was resetting each run
+  on its own page, which deletes its sittings, people, items and results — on the live installation 1018 collected
+  sittings in six runs. Now:
+  - **"Resume experiment"** on the progress page, as the status bar's next step and in the library's menu (POST, session
+    key, `local/catquizlab:execute`). It shows first, run by run, what happens: planned, collected (kept), validated,
+    failed technically (kept), closed by the stop, played again, finished in the engine after the stop (collected, not
+    played again), engine attempt continued, still held by a worker; then it is confirmed.
+  - **What it does** (`experiment_resume`): under a lock and in one transaction, each run the stop cancelled goes on —
+    ready again with its sittings, or a draft again if nobody had started it (prepared at the experiment's turn);
+    every sitting the stop closed is queued again at its place (history `resumed`); one whose engine attempt finished
+    after the stop is collected from it (`TRACEPENDING`, no try spent), one whose engine attempt is in progress is
+    continued by the worker that takes it. Collected, validated and failed sittings, results, items, fingerprints,
+    seeds and the design are not touched. The experiment takes a place at the end of the execution line (#163) and the
+    pipeline is kicked. A second resume finds nothing and says so; a late report of a worker that held a sitting before
+    the stop is not applied.
+  - **What cannot go on is named:** a run stopped while it was being prepared ("partial"), one whose activity is gone,
+    one a worker still holds — each with the safe alternatives (reset and run again, or a new replicate). The others go
+    on.
+  - **One run on its own:** a run cancelled on its own has "Resume this run (keeps what it collected)" on its page,
+    before the destructive reset; the experiment keeps its place in the line.
+  - **The destructive way, apart:** "Reset stopped runs and run them again (deletes)" lists per run the sittings, the
+    collected ones, people, items and result rows deleted for good, and needs a ticked "I understand" before it resets
+    and starts each run.
+  - **Tests:** new `experiment_resume_test` (the live case: the 1018 rows and traces unchanged, the 4982 queued, runs
+    ready, the experiment in the line and taking its turn, a second resume finding nothing; partial, gone activity and a
+    never-started run; a sitting finished in the engine after the stop collected, one in progress continued, a late
+    report refused; one run on its own; a hundred runs in one action); `experiment_stop_test`.
+  - **Worker E2E, all stacks:** "Issues 165/166 — stopped while played, resumed, finished by cron"
+    (`cli/resume_check.php`: real workers and engine; the stop comes with a sitting in play and its worker's report
+    after it changes nothing; the stop cancels and fails nothing; after the resume every planned sitting is collected
+    once, the ones from before the stop with the same trace, no simulated person with two finished engine attempts, a
+    second resume finds nothing, the place in the line is closed).
+  - **Interface:** `tests/playwright/experiment_resume.spec.js` — the progress page of a stopped experiment prepared in the real
+    engine: both ways offered, resume by keyboard, the preview table with caption and row headers, nothing changed
+    before the confirmation, at 320 px no sideways scroll, confirmed, then (in the UI CI, with workers and cron) played
+    to the end with figures that only grow; the destructive way refused without the ticked box, done with it.
+    `ui-e2e.yml` seeds the two stopped experiments.
+- **The upgrade from 0.7.60, tested (#167).** New `cli/upgrade_check.php`: before the upgrade it records each table's
+  rows and a digest of the runs, items, pools and sittings; after it it checks the version, that nothing is left to
+  upgrade, the schema against `db/install.xml` (`check_database_schema`), the columns and index of 2026111500, the rows
+  of every table, every row from before unchanged (a sitting's status only where #166 reclassifies it, and exactly
+  there), the identity of old items and pools left empty, and the labels, figures and progress of every run. New CI job
+  "Upgrade 0.7.60 → this commit" in `moodle-release.yml` (which runs on `main`) and `moodle-ci.yml` (other branches),
+  for Moodle 4.5, 5.2 and 5.3 on MariaDB and PostgreSQL: installs 0.7.60 (`a09be96b`) and runs the installation's
+  ad-hoc tasks (on Moodle 5.x they move the question banks, before which nothing can be prepared),
+  writes data with its own code (a provisioned run in the real engine, a finished experiment, a blocked one, a stopped
+  one, a technical failure), puts this commit in place, upgrades, checks, upgrades again (nothing to do), checks again.
+  "CI complete" and "CI complete (release)" wait for it.
+- **A claim hands out only sittings of the experiment holding the execution line (#163).** On the live installation
+  experiment 21 held the line for a day with 300 untouched sittings while all eleven workers played experiment 19:
+  `job_claim` read every ready run of the installation, oldest due time first, and a sitting never started has due
+  time 0. Now:
+  - **One holder.** `execution_queue::holder()` is the line's running entry; `job_claim::claim_next()` asks only for
+    its runs (`next_of()`), in the order the sittings were queued (`timecreated`, `id`). The due time only says from
+    when: a retry keeps its place and is taken once its backoff is over (AK4).
+  - **Started outside, waits at the end.** Runs started outside the line — a run on its own, "Start runs", "Create
+    and start", runs from before 0.7.65 — are given a place at its end (`adopt()`, reason "adopted"), the experiment
+    whose sittings were queued first first; only sittings a worker could take count. Their sittings in play finish.
+    The start message says who holds the line.
+  - **Through means through.** A holder with no sitting to hand out and none in play leaves the line at once
+    ("sittings-done"; "blocked" where a run failed or the circuit breaker holds one), whatever is still to be
+    aggregated; one whose turn would be empty is passed at once. A claim that finds nothing moves the line itself
+    (`take_turn()`): no tick to wait for, nothing prepared by it, no entry passed that still has to be prepared (AK6).
+  - **Tools take the front openly.** `cli/smoke.php` and `cli/claim_race.php` take the front for their experiment for
+    a limited time (`take_front()`, reason `front:<until>:<by>`) and give it back however they end; the holder they
+    displaced waits at the front ("preempted"). A front whose time ran out holds nothing. A tool's front displaced by a
+    second tool keeps its time limit: it comes back as a front when the second gives the front back, and its own tool
+    can give it back while it waits. Other experiments' sittings are not touched: the smoke test no longer defers them
+    (`queue_deferral` only gives back what an old killed run left, #120).
+  - **No false empty.** Fifty sittings of a paused run first in the order no longer hide the holder's other runs; a
+    worker waits 20 s while the holder's last sittings are in play (`IN_PLAY_WAIT`), and is not kept waiting for a
+    paused run (AK9).
+  - **Said the same everywhere (AK2, AK7).** New count "waiting for their experiment's turn" (`queue_breakdown`
+    `waitingturn`, `holder`); the launcher starts no worker for those and moves the line first; an experiment behind
+    the holder is "Waiting for its turn" with its place and the holder, also when it has played before; run cards
+    "Waiting for its experiment's turn" / "Finishing what is in play, then waiting …"; the situation line; the idle
+    reasons of the tick; the line on the progress page says how each entry got there. The forecast (#160, #158) plays
+    the queue in the line's order: the holder first, each experiment after the one before has left the slots.
+  - **Tests:** new `claim_order_test` (the live snapshot as a test: the old order's first 50 had none of the holder;
+    every claim the holder's, in queued order; the other adopted and its 11 sittings in play untouched; the line
+    moving on; retries; paused runs; a blocked holder; a tool's front, also displaced by a second tool; nobody
+    holding). `experiment_status_test`,
+    `stalled_start_test`, `one_start_test`, `experiment_runner_test` and `eta_test` follow the rule (a ready run has
+    its sittings; the line moves before sittings are played; the query count is taken after a warm-up);
+    `status_bar.spec.js` accepts "Waiting for its turn" for its seeded experiment, which is not started through the
+    line (header, card and run summary must still agree).
+  - **Worker E2E, all stacks:** "Issue 163 — claims follow the execution line, under a backlog, 11 and 25 claimers at
+    once" (`cli/claim_bench.php`: twenty experiments outside the line, every claim the holder's in queued order, 11 and
+    25 processes claiming at once — none twice, none of another experiment —, the line moving on, times per claim, for
+    the counts and the forecast, the query plan) and "Issue 163 — two experiments, real workers, the holder first and
+    nothing beside it" (`cli/line_order_check.php`: a run started outside the line queued first, an experiment started
+    after it; the started one is played first, the other only after the holder's last sitting has ended, moved on by
+    the workers' own claims).
+- **The load guard released by a person (#162).** The live installation was held at 12 of 25 workers: 37 capacity
+  failures (`submit_cdp_timeout`) against 10 executions, 78.7 % over 20 %. Waiting did not end it (every evaluation
+  renewed the cooldown), switching the guard off did not end the cooldown in force, and nothing but SQL did.
+  - **Release** (`worker_capacity::release_guard()`, action `releaseguard` on `operations.php`): administrators only
+    (`moodle/site:config`), session key, a reason and the confirmation that the server's load and the cause were
+    checked. It ends the cooldown and the guard counts again from that moment; nothing is switched off, nothing goes
+    above `worker_concurrency` or `worker_safety_cap`, no worker is stopped, no lease touched; `kick_pipeline` fills the
+    freed slots one after another. Recorded as the event `loadguard_released` (site log, with the actor) and
+    `load_released` with `manual` in the installation's lifecycle log (no user id).
+  - **No oscillation:** a trip within 30 minutes of a release holds twice the cooldown (at most 2 h) and cannot be
+    released before it ends. Two people releasing at once release once.
+  - **Switched off is off now:** `loadguard_minfailures = 0` ends a cooldown in force at once.
+  - **Shown** on the progress page's worker card ("Load guard", open while throttled), from one reading with its UTC
+    time: configured, cap, in force, halved; counted at/since, failures against executions, share, each cause;
+    thresholds; until; the last release; what the share is a share of; the release form and the conservative
+    alternative (lower the limit).
+  - **Tests:** new `loadguard_release_test` (the live snapshot, the release, a trip after it, the cap, draining, the
+    guard switched off, the view).
+- **Tracing (#164).** `live_correlation::link()` links each engine trace (and engine attempt) to its lab sitting, run,
+  experiment and worker while the sitting is played, from the trace's Moodle user, which is the simulated person's
+  own; read only, three queries. `cli/trace_report.php` counts every trace of a window (n, mean, sd, 95 % interval,
+  p50/p95/p99, max per kind and for `strategy:select_question`), the bytes, the links, the executions and capacity
+  causes and the lab's debug log. `cli/trace_matrix.sh` plays the 2 × 2 matrix `attempttrace` × `debuglevel` with
+  real workers (order ABCD/DCBA, cold or warm, settings restored). Tests: new `live_correlation_test`.
+- **The experiment selector by keyboard (#153 AK8).** It left the page at every change of its value; on Windows the
+  arrow keys change a closed drop-down's value at every press, so a keyboard or screen reader user could not choose
+  (WCAG 3.2.2). The arrow keys now only choose; Enter or the now visible "Apply" shows the choice; a choice with the
+  mouse is shown at once, as before. Tests: `tests/playwright/order_keyboard.spec.js` (keyboard only, and at 320 px,
+  for the selector and the library's sort).
+- **The log-normal sketch's axis for narrow and strongly skewed distributions (#159 AK-12).** From 0 to the 99.5th
+  percentile, a narrow distribution (σlog 0.02) was a spike a few pixels wide whose peak fell between the sampled
+  points, and a strongly skewed one (σlog 1.5) had its bulk in the first pixels. Now the range is the 0.5th to the
+  99.5th percentile (at least past E(a)): strongly skewed (the 99.5th above a hundred times the 0.5th) on a log axis
+  with ticks at 1, 2 and 5 of each decade and the density of log a; narrow starting at a round value below the bulk;
+  otherwise from 0 as before. The peak is always a drawn point; the axis titles and the text alternative say which.
+  Test: `experiment_form.spec.js` "#159 AK-12".
+- **Screen reader CI (#153 AK8, #159 DoD5):** the library's search and sort, the experiment selector and the experiment
+  editor's item model with the three log-normal fields are recorded with the results pages and walked by NVDA and
+  VoiceOver like the filter bar.
+- **The last run short lists without their experiment (#150 AK2).** The debug log on the progress page holds entries
+  of every experiment and named a run by its number only; each entry now names its run (linked), its experiment
+  (linked, the whole name for screen readers where shortened) and its strategy, one query for all of them, and a run
+  deleted since keeps its number. The setup tab still read "claims held longest" and "runs in flight" on every visit,
+  two queries per run, without the experiment, although it has shown neither since 0.6.51; both are gone. Test:
+  `run_labels_test::test_the_debug_log_names_the_experiment_and_setup_lists_no_runs`.
+- **The forecast probe no longer calls a retry a contradiction (#141, #160).** `smoke.php --eta-probe` took any fall of
+  the questions answered as a contradiction unless a sitting had failed in between. A sitting whose execution broke off
+  and went back to the queue drops the answers of that try without failing (gate 0.7.64, Moodle 5.3: a worker timed out,
+  the count fell from 194 to 174, the step failed). Each snapshot now also records the executions that ended without a
+  result (the tries of all sittings less those playing or collected); a fall is a contradiction only where that number
+  and the failed sittings stayed the same.
+
+---
+
 ## [0.7.64] — 2026-11-15 — One start, everything else by itself (#151): save, "Start experiment" once, close the browser; why sittings cannot be claimed, per run (#133)
 
 No database change. See `docs/dev/ein-start.md`.

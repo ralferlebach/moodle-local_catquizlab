@@ -70,21 +70,51 @@
     tabs it read as a filter on the whole plugin, which it is not.
 }}
     {{#hasexperiments}}
-        <form method="get" action="{{selecturl}}" class="form-inline mb-2">
+        {{!
+            Chosen with the mouse, shown at once; chosen with the keyboard, shown on Enter or "Apply" (#153 AK8). The
+            arrow keys of a closed drop-down change its value at every press on Windows, and a page that left on the
+            first press was a page a keyboard or screen reader user could not choose in (WCAG 3.2.2).
+        }}
+        <form method="get" action="{{selecturl}}" class="form-inline mb-2" data-region="catquizlab-experiment-selector">
             <label for="catquizlab-experiment" class="mr-2">
                 {{#str}}shell:experiment, local_catquizlab{{/str}}
             </label>
             <select name="experimentid" id="catquizlab-experiment" class="custom-select mr-2"
-                    onchange="this.form.submit()">
+                    aria-describedby="catquizlab-experiment-hint">
                 <option value="0">{{#str}}shell:allexperiments, local_catquizlab{{/str}}</option>
                 {{#experiments}}
                     <option value="{{id}}" {{#selected}}selected{{/selected}}>{{name}}</option>
                 {{/experiments}}
             </select>
-            <noscript><button type="submit" class="btn btn-sm btn-secondary">
+            <button type="submit" class="btn btn-sm btn-secondary" data-region="catquizlab-experiment-apply">
                 {{#str}}shell:apply, local_catquizlab{{/str}}
-            </button></noscript>
+            </button>
+            <span id="catquizlab-experiment-hint" class="sr-only">{{#str}}shell:experimenthint, local_catquizlab{{/str}}</span>
         </form>
+        {{#js}}
+            (function() {
+                var select = document.getElementById('catquizlab-experiment');
+                if (!select || select.dataset.catquizlabBound) {
+                    return;
+                }
+                select.dataset.catquizlabBound = '1';
+                var keyed = 0;
+                select.addEventListener('keydown', function(e) {
+                    if (e.key === 'Enter') {
+                        e.preventDefault();
+                        select.form.submit();
+                        return;
+                    }
+                    keyed = Date.now();
+                });
+                select.addEventListener('change', function() {
+                    if (Date.now() - keyed < 1000) {
+                        return;
+                    }
+                    select.form.submit();
+                });
+            })();
+        {{/js}}
 
         {{!
             Beside the selector, because creating one is the other thing a

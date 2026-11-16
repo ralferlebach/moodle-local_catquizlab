@@ -128,11 +128,11 @@ jobs:
           if [[ "${{ matrix.stack }}" == "legacy" ]]; then
             CATQUIZ_SHA=8a62ce30db1fa66fb1712e7079dc4caaf5003f20
             HOST_SHA=50b7aad7a783003bff30a57e21854120fee0f32d
-            MODEL_SHA=1414a9cc8e0f436f19f4647348217196c9692c95
+            MODEL_SHA=a7ba07555a30d5cd1f812859ed949dd127721dbd
           else
             CATQUIZ_SHA=02c856f092d91f2387b8499c7c02f8948fb909cc
             HOST_SHA=d3b0dd12f82c759a5a8d256791570fadb4c0111b
-            MODEL_SHA=e724f6acdb56b05dafc0beb1e955b0277b05f497
+            MODEL_SHA=15d4c551b06766a84ad75eea988fe110db58f009
           fi
           grep -E '^local_catquiz[[:space:]]' engine-manifest.txt | grep -Fq "$CATQUIZ_SHA"
           grep -E '^mod_adaptivequiz[[:space:]]' engine-manifest.txt | grep -Fq "$HOST_SHA"
@@ -212,7 +212,7 @@ jobs:
           # real web server this never happens, which is why the same self-test
           # is green on a production site and red here.
           PHP_CLI_SERVER_WORKERS=4 nohup php -d memory_limit="${PHP_MEMORY_LIMIT}" -S 127.0.0.1:8000 -t . > /tmp/webserver.log 2>&1 &
-          for i in $(seq 1 20); do
+          for _ in $(seq 1 20); do
             if curl -sf -o /dev/null http://127.0.0.1:8000/; then exit 0; fi
             sleep 1
           done
@@ -262,6 +262,22 @@ jobs:
         # 250 000 lines: the size that ran the logs page out of PHP memory.
         run: php local/catquizlab/cli/seed_request_trace.php --lines=250000 | grep -E '^LOGS_ERRORS=' >> "$GITHUB_ENV"
 
+      # Issue 165: two experiments prepared in the real engine and stopped
+      # (what "Stop experiment" does) for resume.spec.js: one is resumed through
+      # the interface and finished by the workers and cron, the other is reset
+      # the destructive way. Only the expected keys reach the environment.
+      - name: Issue 165 — two stopped experiments, to resume and to reset
+        working-directory: ${{ matrix.dirroot }}
+        run: |
+          set -o pipefail
+          for which in RESUME RESTART; do
+            id=$(php local/catquizlab/cli/e2e_prepare.php --persons=4 --name="Issue 165 $which" \
+              | grep -E '^experimentid=' | cut -d= -f2)
+            test -n "$id"
+            php local/catquizlab/cli/stop_experiment.php --experimentid="$id" --yes
+            echo "${which}_EXPERIMENTID=$id" >> "$GITHUB_ENV"
+          done
+
       - name: Play one experiment through the interface
         working-directory: ${{ matrix.dirroot }}/local/catquizlab/tests/playwright
         env:
@@ -269,6 +285,36 @@ jobs:
           MOODLE_ADMIN: ${{ env.CATLAB_ADMIN_USER }}
           MOODLE_ADMIN_PASSWORD: ${{ env.CATLAB_ADMIN_PASSWORD }}
           PERSONS: ${{ github.event.inputs.persons || '5' }}
+        run: npx playwright test
+
+      # The results page as this stack rendered it, for the screen reader jobs
+      # below (#122 DoD 3): written by tests/playwright/screenreader_snapshot.spec.js.
+      - name: Keep the results page for the screen readers
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: screenreader-snapshot-${{ matrix.stack }}
+          path: ${{ matrix.dirroot }}/local/catquizlab/tests/playwright/artifacts/screenreader
+          retention-days: 14
+          if-no-files-found: warn
+
+      # Issue 161 DoD 2: the experiment played above, deleted deeply through
+      # the interface — the preview, the name typed, the button — and carried
+      # out by cron's background task with the real course_delete_module()
+      # and the activity's callbacks. Checked before and after against the
+      # engine: nothing of any run's footprint left, no row of others lost, no
+      # kind of ownerless engine row grown, the deletion record complete. Last,
+      # so that no spec that reads the experiment comes after it.
+      - name: Issue 161 — the played experiment deleted deeply through the interface, the engine checked before and after
+        if: ${{ !cancelled() }}
+        working-directory: ${{ matrix.dirroot }}/local/catquizlab/tests/playwright
+        timeout-minutes: 15
+        env:
+          MOODLE_URL: http://127.0.0.1:8000
+          MOODLE_ADMIN: ${{ env.CATLAB_ADMIN_USER }}
+          MOODLE_ADMIN_PASSWORD: ${{ env.CATLAB_ADMIN_PASSWORD }}
+          # The experiment experiment.spec.js created and played through the interface, found in the library.
+          CATQUIZLAB_DEEP_DELETE: UI smoke
         run: npx playwright test
 
       # What the server did meanwhile, from its own trace of the browser's
@@ -291,6 +337,8 @@ jobs:
           mkdir -p evidence
           cp -r ${{ matrix.dirroot }}/local/catquizlab/tests/playwright/artifacts evidence/artifacts || true
           cp -r ${{ matrix.dirroot }}/local/catquizlab/tests/playwright/report evidence/report || true
+          cp -r ${{ matrix.dirroot }}/local/catquizlab/tests/playwright/artifacts-deep-delete evidence/ || true
+          cp -r ${{ matrix.dirroot }}/local/catquizlab/tests/playwright/report-deep-delete evidence/ || true
           cp /tmp/webserver.log evidence/webserver.log || true
           cp /tmp/cron.log evidence/cron.log || true
           cp engine-manifest.txt evidence/engine-manifest.txt || true
@@ -298,6 +346,10 @@ jobs:
           echo "memory_limit=${PHP_MEMORY_LIMIT}" > evidence/php-settings.txt
           mkdir -p evidence/worker-logs
           cp "$HOME"/moodledata*/local_catquizlab/worker-logs/*.log evidence/worker-logs/ 2>/dev/null || true
+          # Issue 145 — every deletion of the run: queued, started, each run's engine check before and after,
+          # failed or finished with what was left (one JSON line per event, kept after the experiment is gone).
+          mkdir -p evidence/deletions
+          cp "$HOME"/moodledata*/local_catquizlab/deletions/*.jsonl evidence/deletions/ 2>/dev/null || true
           find evidence -name '*.webm' -o -name '*.zip' -o -name '*.png' | head -40
 
       - name: Upload the results
@@ -306,5 +358,74 @@ jobs:
         with:
           name: catquizlab-ui-e2e-${{ matrix.stack }}
           path: evidence
+          retention-days: 14
+          if-no-files-found: warn
+
+  # #122 DoD 3: the filter bar with real screen readers. NVDA runs only on
+  # Windows and VoiceOver only on macOS, while Moodle runs here on Linux: every
+  # stack's interface run above keeps its results page as Moodle rendered it
+  # (stylesheets inlined, scripts removed) with the list of the bar's controls,
+  # and these jobs open that page with the screen reader running and walk the
+  # bar with the keyboard (tests/screenreader). The screen reader must announce
+  # each control with its name, its role and the value it shows. JAWS has no
+  # automation interface that Guidepup can drive and is not tested.
+  screen-reader:
+    name: "Screen reader (${{ matrix.reader }}, ${{ matrix.stack }})"
+    needs: ui-e2e
+    if: ${{ !cancelled() }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        stack: [legacy, moodle5, moodle53]
+        reader: [nvda, voiceover]
+        include:
+          - { reader: nvda, os: windows-2025, browser: chromium }
+          - { reader: voiceover, os: macos-15, browser: webkit }
+    defaults:
+      run:
+        shell: bash
+        working-directory: tests/screenreader
+    steps:
+      - name: Check out the plugin
+        uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+
+      - name: The results page the interface run kept (${{ matrix.stack }})
+        uses: actions/download-artifact@v7
+        with:
+          name: screenreader-snapshot-${{ matrix.stack }}
+          path: tests/screenreader/snapshot
+
+      - name: Install the test's dependencies (pinned in package-lock.json)
+        run: npm ci --no-audit --no-fund
+
+      - name: Set up the machine for screen reader automation
+        run: npx guidepup setup --ci
+
+      - name: Install ${{ matrix.reader }} for Guidepup
+        run: npx guidepup install ${{ matrix.reader }}
+
+      - name: Install the browser
+        run: npx playwright install ${{ matrix.browser }}
+
+      - name: Walk the filter bar with ${{ matrix.reader }}
+        env:
+          SR: ${{ matrix.reader }}
+        run: npx playwright test
+
+      - name: Upload what the screen reader said
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: catquizlab-screenreader-${{ matrix.reader }}-${{ matrix.stack }}
+          path: |
+            tests/screenreader/artifacts
+            tests/screenreader/report
+            tests/screenreader/test-results
           retention-days: 14
           if-no-files-found: warn

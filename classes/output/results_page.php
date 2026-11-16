@@ -284,7 +284,7 @@ class results_page {
             return get_string('results:noobservations', $component);
         }
 
-        $counts = ['total' => 0, 'draft' => 0, 'running' => 0, 'finished' => 0, 'failed' => 0];
+        $counts = ['total' => 0, 'draft' => 0, 'running' => 0, 'finished' => 0, 'failed' => 0, 'cancelled' => 0];
         foreach ($rows as $row) {
             $n = (int) $row->n;
             $counts['total'] += $n;
@@ -296,8 +296,11 @@ class results_page {
                     $counts['finished'] += $n;
                     break;
                 case \local_catquizlab\local\registry::STATUS_FAILED:
-                case \local_catquizlab\local\registry::STATUS_CANCELLED:
                     $counts['failed'] += $n;
+                    break;
+                case \local_catquizlab\local\registry::STATUS_CANCELLED:
+                    // Stopped by an operator (#166): not failed.
+                    $counts['cancelled'] += $n;
                     break;
                 default:
                     $counts['running'] += $n;
@@ -525,6 +528,7 @@ class results_page {
                         'collected' => (int) $completeness['attempts']['collected'],
                         'planned' => (int) $completeness['attempts']['planned'],
                         'failed' => (int) $completeness['attempts']['failed'],
+                        'cancelled' => (int) ($completeness['attempts']['cancelled'] ?? 0),
                     ]) . ($completeness['hasunfinished'] ? ' ' . \html_writer::link(
                         $completeness['progressurl'],
                         get_string('repro:openprogress', $component)
@@ -710,6 +714,8 @@ class results_page {
             [get_string('population:scheduled', $component), $funnel['scheduled']],
             [get_string('population:started', $component), $funnel['started']],
             [get_string('population:failed', $component), $funnel['failed']],
+            // Closed by an operator (#166): neither a technical failure nor a result.
+            [get_string('population:cancelled', $component), (int) ($funnel['cancelled'] ?? 0)],
             [get_string('population:collected', $component), $funnel['collected']],
             // Finished without a trace: not a result, and not hidden (#138).
             [get_string('population:withouttrace', $component), (int) ($funnel['tracepending'] ?? 0)

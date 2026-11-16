@@ -1,4 +1,4 @@
-# Screenreader in der CI (#122 DoD 3, #143 AK7, #144 AK9)
+# Screenreader in der CI (#122 DoD 3, #143 AK7, #144 AK9; seit 0.7.65 #153 AK8, #159 DoD5)
 
 Seit 0.7.62. Code: `tests/playwright/screenreader_snapshot.spec.js` (Linux, Moodle), `tests/screenreader/`
 (Windows/macOS, Screenreader), Job `screen-reader` in `.github/workflows/ui-e2e.yml`.
@@ -32,6 +32,24 @@ den Twins („5 points at …, Twin …“). Dann geht der Screenreader mit sein
 (NVDA: G, sonst Pfeil runter; VoiceOver: VO+Rechts, sonst VO+Cmd+G) und muss die zweite Markierung ansagen. Die
 Pfeiltasten des Diagramms selbst (`amd/src/plot_points.js`) sind für Sehende mit Tastatur da: Ein Screenreader im
 Lesemodus behält die Pfeiltasten für sich und navigiert mit eigenen Befehlen — so, wie er es auch tut.
+
+**Seit 0.7.65 drei weitere Gruppen**, gleich durchlaufen wie die Filterleiste (Name, Rolle, angezeigter Wert, Reihenfolge,
+Erreichbarkeit per Tastatur):
+
+- **Bibliothek: Suche und Sortierung** (`[data-region="catquizlab-library-search"]`, #153 AK8): Suchfeld (Rolle
+  „searchbox“), Sortierung (Auswahlliste mit dem gewählten Wert), „Anwenden“.
+- **Experimentauswahl** (`[data-region="catquizlab-experiment-selector"]`, #153 AK8): Auswahlliste mit dem gewählten
+  Experiment, „Übernehmen“. Die Auswahl verließ bis 0.7.64 die Seite bei jeder Änderung ihres Werts; unter Windows ändern
+  die Pfeiltasten einer geschlossenen Auswahlliste den Wert bei jedem Druck, wer mit Tastatur oder Screenreader wählte,
+  landete beim ersten Druck auf dem nächsten Experiment (WCAG 3.2.2). Jetzt wählen die Pfeiltasten nur; die
+  Eingabetaste oder „Übernehmen“ zeigt die Wahl, eine Wahl mit der Maus wie bisher sofort. Ein unsichtbarer Hinweis am
+  Feld sagt das (`aria-describedby`). Tastatur und 320 px ohne Screenreader: `tests/playwright/order_keyboard.spec.js`.
+- **Experiment-Editor: Itemmodell** (`#id_modelheader`, #159 DoD5): Modell, Verteilung der Diskrimination, die drei
+  gekoppelten Log-Normal-Felder (μlog, σlog, E(a)) mit ihren Werten, die Hilfe-Schaltflächen, Kategorien. Die
+  Aufklappschaltfläche des Abschnitts zählt nicht mit (sie steht vor dem ersten Feld).
+
+Die Aufzeichnung (`results-pages.json`, `groups`) hält je Gruppe URL, Selektor und die Bedienelemente; das Protokoll je
+Gruppe: `artifacts/<reader>-library.json`, `-selector.json`, `-lognormal.json`.
 
 Vor den Screenreader-Tests prüft ein Test im selben Job ohne Screenreader, dass die Seiten Namen, Rollen und Werte
 liefern und im Diagramm Tab und Pfeiltasten wirken (Playwright). Scheitert dieser, liegt der Fehler an der Seite,

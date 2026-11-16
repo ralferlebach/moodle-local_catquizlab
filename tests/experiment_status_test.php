@@ -146,6 +146,9 @@ final class experiment_status_test extends \advanced_testcase {
         $this->assertFalse(progress_view::context($this->experimentid)['runner']['canstart']);
         $this->assertNotNull(progress_view::context($this->experimentid)['runner']['queued'], 'shown as queued');
 
+        // Its turn: the line moves (a claim or the tick does that), and only then are its sittings played (#163).
+        $this->assertSame($this->experimentid, execution_queue::take_turn());
+
         // Collecting.
         foreach ($this->runs as $runid) {
             run_lifecycle::set_status($runid, registry::STATUS_RUNNING, 'test');

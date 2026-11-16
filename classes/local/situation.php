@@ -113,6 +113,9 @@ class situation {
             // flight and two held runs — which is the whole point of the
             // experiment selector above it.
             'running'    => (int) $breakdown['running'],
+            // Sittings behind the holder of the execution line (#163): waiting for their turn, not for a worker.
+            'waitingturn' => (int) ($breakdown['waitingturn'] ?? 0),
+            'holder'     => (int) ($breakdown['holder'] ?? 0),
             'failedruns' => $experimentid > 0
                 ? $DB->count_records('local_catquizlab_run', [
                     'experimentid' => $experimentid,
@@ -220,6 +223,20 @@ class situation {
                     'running' => $queue['running'],
                 ]),
                 '',
+                '',
+                null
+            );
+        }
+
+        // Nothing to hand out now, but sittings waiting for their experiment's turn (#163): not idle, and not
+        // stalled either — the line hands them out when their experiment holds it.
+        if ($queue['queued'] === 0 && $queue['running'] === 0 && (int) ($facts['waitingturn'] ?? 0) > 0) {
+            return self::verdict(
+                self::IDLE,
+                get_string('situation:waitingturn', $component, (int) $facts['waitingturn']),
+                (int) ($facts['holder'] ?? 0) > 0
+                    ? get_string('situation:waitingturnholder', $component, (int) $facts['holder'])
+                    : get_string('situation:waitingturnnext', $component),
                 '',
                 null
             );

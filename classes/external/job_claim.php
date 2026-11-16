@@ -37,13 +37,15 @@ use local_catquizlab\local\attempt_scheduler;
  * enqueue attempt jobs and workers on a separate host claim them over the web
  * service. The direct-process-start variant does not need this endpoint.
  *
- * Stub scope (round E0): authenticates, validates and always reports that no
- * job is available. The real claim (atomic status transition on the attempt
- * table) lands in E3.2.
+ * One claim at a time, site-wide, and only a sitting of the experiment that
+ * holds the execution line (#163, see execution_queue).
  */
 class job_claim extends external_api {
     /** @var int Seconds a claim waits for another claim to finish. */
     public const LOCK_TIMEOUT = 10;
+
+    /** @var int Seconds a worker is asked to wait while the holder's last sittings are in play (#163). */
+    public const IN_PLAY_WAIT = 20;
 
     /**
      * Describes the parameters.
@@ -116,7 +118,14 @@ class job_claim extends external_api {
     }
 
     /**
-     * Hand out the oldest claimable queued attempt; called with the claim lock held.
+     * Hand out the next sitting of the experiment holding the line; called with the claim lock held.
+     *
+     * Bound to the line (#163). Until 0.7.65 this read every ready run of the installation, oldest due time first: the
+     * line said one experiment ran while workers played another's sittings, and sittings never started (due time 0)
+     * went before any retry. Now only the holder's sittings are handed out (execution_queue::holder()), and among
+     * them by their place: the order they were queued in (timecreated, then id). The due time decides only from when a
+     * sitting may be handed out: a retry keeps its place and is taken as soon as its backoff is over, and nothing
+     * queued later goes before it.
      *
      * @param array $params The validated parameters.
      * @param array $none The answer when there is nothing to hand out.
@@ -125,83 +134,26 @@ class job_claim extends external_api {
     protected static function claim_next(array $params, array $none): array {
         global $DB;
 
+        // Nobody holds the line, or its holder has nothing left to hand out: the line moves now, not at the next tick.
+        $holder = \local_catquizlab\local\execution_queue::holder();
+        $attempt = $holder > 0 ? self::next_of($holder) : null;
+        if ($attempt === null) {
+            $holder = \local_catquizlab\local\execution_queue::take_turn();
+            $attempt = $holder > 0 ? self::next_of($holder) : null;
+        }
+
         $transaction = $DB->start_delegated_transaction();
-
-        // Runs that cannot hand out work are excluded in the query, not after
-        // it. Fetching fifty candidates and then skipping the unusable ones
-        // works only while the unusable ones are rare: on an installation with
-        // a few failed runs behind it, fifty attempts of dead runs fill the
-        // window and a perfectly good new run is never reached. The worker then
-        // reports an empty queue, which is true of what it was shown and false
-        // of the installation.
-        //
-        // A pause is still checked below, because it can change between this
-        // query and the claim.
-        // And never a person who is already sitting the test somewhere else.
-        // Two workers logging in as the same simulated person open the same
-        // adaptive quiz attempt, and Moodle rejects the second one's answers:
-        // "adaptivequiz/uniquenotpartofattempt". With a thousand people, two
-        // sittings each and a hundred workers, that is not a rare race — it is
-        // the normal case, and it cost a night of results on a live
-        // installation. A person sits the test once at a time, which is also
-        // what the experiment assumes.
-        $queued = $DB->get_records_select(
-            'local_catquizlab_attempt',
-            'status = :status AND nextruntime <= :now
-               AND runid IN (SELECT id FROM {local_catquizlab_run} WHERE status IN (:ready, :running))
-               AND personid NOT IN (
-                   SELECT DISTINCT busy.personid
-                     FROM {local_catquizlab_attempt} busy
-                    WHERE busy.status = :inflight
-                      AND busy.leaseexpires > :leasenow
-                      AND busy.personid > 0
-               )',
-            [
-                'status'   => attempt_scheduler::STATUS_QUEUED,
-                'now'      => time(),
-                'ready'    => \local_catquizlab\local\registry::STATUS_READY,
-                'running'  => \local_catquizlab\local\registry::STATUS_RUNNING,
-                'inflight' => attempt_scheduler::STATUS_RUNNING,
-                'leasenow' => time(),
-            ],
-            'nextruntime ASC, timecreated ASC, id ASC',
-            '*',
-            0,
-            50
-        );
-
-        $attempt = null;
-        foreach ($queued as $candidate) {
-            $runid = (int) $candidate->runid;
-
-            // Two conditions, and the run status is the one that matters most:
-            // a failed or cancelled run must never hand out work again, however
-            // its attempts got into the queue.
-            if (\local_catquizlab\local\run_lifecycle::is_paused($runid)) {
-                continue;
-            }
-            // A run with a twin more than once is not executed (#117): its
-            // results would count people twice. It is failed, with the reason,
-            // rather than left to hand out nothing — which would look like a
-            // run that hangs. Runs damaged before 0.7.26 are caught here.
-            if (\local_catquizlab\local\person_integrity::has_duplicates($runid)) {
-                \local_catquizlab\local\run_lifecycle::fail(
-                    $runid,
-                    get_string('integrity:runblocked', 'local_catquizlab', $runid)
-                );
-                continue;
-            }
-            if (!\local_catquizlab\local\run_lifecycle::is_runnable($runid)) {
-                continue;
-            }
-
-            $attempt = $candidate;
-            break;
+        // Read again inside the transaction: the sitting is still queued (a stop or a reclaim may have closed it).
+        if ($attempt !== null) {
+            $attempt = $DB->get_record(
+                'local_catquizlab_attempt',
+                ['id' => $attempt->id, 'status' => attempt_scheduler::STATUS_QUEUED]
+            ) ?: null;
         }
         if (!$attempt) {
             $transaction->allow_commit();
 
-            return ['nextdue' => self::next_due()] + $none;
+            return ['nextdue' => self::next_due($holder)] + $none;
         }
 
         $DB->update_record('local_catquizlab_attempt', (object) [
@@ -268,30 +220,150 @@ class job_claim extends external_api {
     }
 
     /**
-     * Seconds until the next queued sitting of a run that hands out work may be claimed; 0 when there is none.
+     * The next sitting of an experiment a worker may take now, or null (#163).
+     *
+     * The experiment's runs that hand out work are read first, and the query asks only for their sittings. Fifty
+     * candidates of the whole installation, of which the unusable ones were skipped afterwards, found nothing as soon
+     * as fifty sittings of paused runs came first; a run found unusable here is left out of the next page instead,
+     * so the search ends with a sitting or with every run looked at.
+     *
+     * And never a person who is already sitting the test somewhere else. Two workers logging in as the same simulated
+     * person open the same adaptive quiz attempt, and Moodle rejects the second one's answers:
+     * "adaptivequiz/uniquenotpartofattempt". A person sits the test once at a time, which is also what the experiment
+     * assumes.
+     *
+     * @param int $experimentid The experiment holding the line.
+     * @return \stdClass|null The sitting.
+     */
+    protected static function next_of(int $experimentid): ?\stdClass {
+        global $DB;
+
+        $runids = array_map('intval', $DB->get_fieldset_select(
+            'local_catquizlab_run',
+            'id',
+            'experimentid = :experimentid AND status IN (:ready, :running)',
+            ['experimentid' => $experimentid, 'ready' => \local_catquizlab\local\registry::STATUS_READY,
+                'running' => \local_catquizlab\local\registry::STATUS_RUNNING]
+        ));
+        $usable = [];
+        while ($runids !== []) {
+            [$insql, $inparams] = $DB->get_in_or_equal($runids, SQL_PARAMS_NAMED, 'run');
+            $now = time();
+            $queued = $DB->get_records_select(
+                'local_catquizlab_attempt',
+                "status = :status AND nextruntime <= :now AND runid {$insql}
+                   AND personid NOT IN (
+                       SELECT DISTINCT busy.personid
+                         FROM {local_catquizlab_attempt} busy
+                        WHERE busy.status = :inflight
+                          AND busy.leaseexpires > :leasenow
+                          AND busy.personid > 0
+                   )",
+                $inparams + [
+                    'status'   => attempt_scheduler::STATUS_QUEUED,
+                    'now'      => $now,
+                    'inflight' => attempt_scheduler::STATUS_RUNNING,
+                    'leasenow' => $now,
+                ],
+                'timecreated ASC, id ASC',
+                '*',
+                0,
+                50
+            );
+            if ($queued === []) {
+                return null;
+            }
+            foreach ($queued as $candidate) {
+                $runid = (int) $candidate->runid;
+                if (!isset($usable[$runid])) {
+                    $usable[$runid] = self::hands_out_work($runid);
+                }
+                if ($usable[$runid]) {
+                    return $candidate;
+                }
+            }
+            // Every candidate of this page belonged to a run that hands out nothing: the next page without those runs.
+            $runids = array_values(array_filter($runids, static fn(int $runid): bool => $usable[$runid] ?? true));
+        }
+
+        return null;
+    }
+
+    /**
+     * Whether a run may hand out a sitting now; a run with a twin more than once is failed on the way (#117).
+     *
+     * @param int $runid The run.
+     * @return bool
+     */
+    protected static function hands_out_work(int $runid): bool {
+        // Two conditions, and the run status is the one that matters most: a failed or cancelled run must never hand
+        // out work again, however its attempts got into the queue. A pause can change at any moment, so it is
+        // checked here and not taken from the run list.
+        if (\local_catquizlab\local\run_lifecycle::is_paused($runid)) {
+            return false;
+        }
+        // A run with a twin more than once is not executed (#117): its results would count people twice. It is
+        // failed, with the reason, rather than left to hand out nothing — which would look like a run that hangs.
+        if (\local_catquizlab\local\person_integrity::has_duplicates($runid)) {
+            \local_catquizlab\local\run_lifecycle::fail(
+                $runid,
+                get_string('integrity:runblocked', 'local_catquizlab', $runid)
+            );
+
+            return false;
+        }
+
+        return \local_catquizlab\local\run_lifecycle::is_runnable($runid);
+    }
+
+    /**
+     * Seconds until the next queued sitting of the line's holder may be claimed; 0 when there is none.
      *
      * An empty claim is not always an empty queue: a sitting whose execution failed waits out its retry's backoff,
      * and a person busy in another sitting is passed over for now. A worker told how long that is waits for it instead
      * of leaving (audit 11.11.2026: in the load matrix one of twenty sittings sat out the whole time limit in a backoff
-     * after every worker had left the queue as empty).
+     * after every worker had left the queue as empty). Only the holder's sittings count (#163): another experiment's
+     * retry is not work this worker may take, and waiting for it would keep the worker for nothing.
      *
+     * @param int $holder The experiment holding the line, 0 for none.
      * @return int Seconds, at least 1 where something is queued.
      */
-    protected static function next_due(): int {
+    protected static function next_due(int $holder): int {
         global $DB;
 
+        if ($holder <= 0) {
+            return 0;
+        }
+        // Its runs that will hand out work once a sitting is due: not a paused one, whose sittings would have a worker
+        // asking every second until somebody resumes it.
+        $runids = array_values(array_filter(
+            array_map('intval', $DB->get_fieldset_select(
+                'local_catquizlab_run',
+                'id',
+                'experimentid = :experimentid AND status IN (:ready, :running)',
+                ['experimentid' => $holder, 'ready' => \local_catquizlab\local\registry::STATUS_READY,
+                    'running' => \local_catquizlab\local\registry::STATUS_RUNNING]
+            )),
+            static fn(int $runid): bool => !\local_catquizlab\local\run_lifecycle::is_paused($runid)
+        ));
+        if ($runids === []) {
+            return 0;
+        }
+        [$insql, $inparams] = $DB->get_in_or_equal($runids, SQL_PARAMS_NAMED, 'run');
         $next = $DB->get_field_sql(
-            'SELECT MIN(nextruntime) FROM {local_catquizlab_attempt}
-              WHERE status = :status
-                AND runid IN (SELECT id FROM {local_catquizlab_run} WHERE status IN (:ready, :running))',
-            [
-                'status'  => attempt_scheduler::STATUS_QUEUED,
-                'ready'   => \local_catquizlab\local\registry::STATUS_READY,
-                'running' => \local_catquizlab\local\registry::STATUS_RUNNING,
-            ]
+            "SELECT MIN(nextruntime) FROM {local_catquizlab_attempt} WHERE status = :status AND runid {$insql}",
+            $inparams + ['status' => attempt_scheduler::STATUS_QUEUED]
         );
         if ($next === null || $next === false) {
-            return 0;
+            // Nothing queued, but sittings in play (#163): when they are done the line moves on to the next experiment,
+            // and a worker that asks again then is handed its sittings instead of having left.
+            $inplay = $DB->record_exists_select(
+                'local_catquizlab_attempt',
+                "status = :running AND runid {$insql}",
+                $inparams + ['running' => attempt_scheduler::STATUS_RUNNING]
+            );
+
+            return $inplay ? self::IN_PLAY_WAIT : 0;
         }
 
         return max(1, (int) $next - time());

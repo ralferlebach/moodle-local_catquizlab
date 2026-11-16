@@ -15,7 +15,8 @@
 
 /**
  * The results pages as a screen reader will meet them, recorded for the screen reader jobs (#122 DoD 3, #143 AK7,
- * #144 AK9).
+ * #144 AK9), and since 0.7.65 the library's search and sort, the experiment selector (#153 AK8) and the experiment
+ * editor's item model with the three log-normal fields (#159 DoD5).
  *
  * NVDA runs on Windows and VoiceOver on macOS; Moodle is installed on Linux. This spec, in the Linux interface run,
  * records two results pages with everything the browser fetched for them — HTML, stylesheets, scripts, Moodle's own
@@ -50,6 +51,52 @@ const seed = (script, args, name) => {
         return '';
     }
 };
+
+/**
+ * The controls of a group a screen reader walks: form fields, buttons, links and Moodle's help icons — not the toggle
+ * of a form section, which comes before its first field.
+ */
+const GROUP_CONTROLS = 'select, input:not([type="hidden"]), button, a[href]:not(.fheader), a[role="button"][tabindex]:not(.fheader)';
+
+/**
+ * The visible controls of a group on the page, in the order of the page: name, role and shown value of each.
+ *
+ * The name as a screen reader computes it in these cases: aria-label, the label of the control, the names of what it
+ * holds (a help icon is an icon with an aria-label), its text.
+ *
+ * @param {import('@playwright/test').Page} page The page.
+ * @param {string} bar The group's selector.
+ * @param {string} selector The selector of its controls.
+ * @returns {Promise<object[]>}
+ */
+const controlsOf = (page, bar, selector) => page.locator(bar).first().locator(selector).evaluateAll((elements) =>
+    elements.filter((el) => el.offsetParent !== null).map((el) => {
+        const tag = el.tagName.toLowerCase();
+        const type = (el.getAttribute('type') || '').toLowerCase();
+        const labelled = el.id ? document.querySelector('label[for="' + el.id + '"]') : null;
+        const inner = Array.from(el.querySelectorAll('[aria-label], [title]'))
+            .map((c) => c.getAttribute('aria-label') || c.getAttribute('title')).join(' ');
+        const name = (el.getAttribute('aria-label') || (labelled ? labelled.textContent : '') || inner
+            || (tag === 'input' ? el.value : el.textContent) || '').replace(/\s+/g, ' ').trim();
+        let role = 'textbox';
+        if (tag === 'select') {
+            role = el.multiple || el.size > 1 ? 'listbox' : 'combobox';
+        } else if (el.getAttribute('role')) {
+            role = el.getAttribute('role');
+        } else if (tag === 'a') {
+            role = 'link';
+        } else if (tag === 'button' || ['submit', 'button', 'reset'].includes(type)) {
+            role = 'button';
+        } else if (type === 'checkbox' || type === 'radio') {
+            role = type;
+        } else if (type === 'search') {
+            role = 'searchbox';
+        }
+        const selected = tag === 'select' && el.selectedIndex >= 0
+            ? el.options[el.selectedIndex].text.replace(/\s+/g, ' ').trim()
+            : (tag === 'input' && ['textbox', 'searchbox'].includes(role) ? el.value.trim() : '');
+        return {tag: tag, type: type, id: el.id || '', name: name, role: role, selected: selected};
+    }));
 
 test('the results pages are recorded for the screen reader jobs', async({browser}, info) => {
     needs(!EXPERIMENT, 'PLOTS_EXPERIMENTID not set; run cli/seed_results.php first.');
@@ -137,11 +184,34 @@ test('the results pages are recorded for the screen reader jobs', async({browser
     const plot = {url: page.url(), index: index, title: title, markers: markers};
     const lang = await page.evaluate(() => document.documentElement.lang);
 
+    // More groups a screen reader user meets (#153 AK8, #159 DoD5): the library's search and sort, the experiment
+    // selector on every step, and the item model of the experiment editor with the three log-normal fields.
+    const groups = [];
+    const group = async(key, url, bar, min) => {
+        await page.goto(url, {waitUntil: 'networkidle'});
+        await expect(page.locator(bar).first(), key).toBeVisible();
+        const controls = await controlsOf(page, bar, GROUP_CONTROLS);
+        expect(controls.length, key + ': its controls').toBeGreaterThanOrEqual(min);
+        for (const control of controls) {
+            expect(control.name, key + ': every control has a name: ' + JSON.stringify(control)).not.toBe('');
+        }
+        groups.push({key: key, url: page.url(), bar: bar, selector: GROUP_CONTROLS, controls: controls});
+    };
+    await group('library', '/local/catquizlab/index.php?tab=experiments&sort=name', '[data-region="catquizlab-library-search"]',
+        3);
+    await group('selector', '/local/catquizlab/runs.php', '[data-region="catquizlab-experiment-selector"]', 2);
+    await group('lognormal', '/local/catquizlab/experiment.php', '#id_modelheader', 5);
+    const lognormal = groups[groups.length - 1].controls.map((control) => control.id);
+    for (const id of ['id_lognormalmu', 'id_lognormalsigma', 'id_lognormalmean']) {
+        expect(lognormal, 'the log-normal field ' + id).toContain(id);
+    }
+
     await context.close();
     expect(fs.statSync(har).size, 'the recording').toBeGreaterThan(10000);
     fs.writeFileSync(path.join(OUT, 'results-pages.json'), JSON.stringify({
         lang: lang,
         filterbar: filterbar,
         plot: plot,
+        groups: groups,
     }, null, 2));
 });

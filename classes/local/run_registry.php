@@ -108,10 +108,13 @@ class run_registry {
             $experiment = (string) ($known['experiment'] ?? '');
         } else {
             $attempts = $DB->count_records('local_catquizlab_attempt', ['runid' => $record->id]);
+            // Collected or validated (#141): the sitting statuses, not the run's. ">= run finished (30)" counted the
+            // validated, failed and cancelled sittings as done and the collected ones (20) not at all.
             $done = $DB->count_records_select(
                 'local_catquizlab_attempt',
-                'runid = :runid AND status >= :status',
-                ['runid' => $record->id, 'status' => registry::STATUS_FINISHED]
+                'runid = :runid AND status IN (:collected, :validated)',
+                ['runid' => $record->id, 'collected' => attempt_scheduler::STATUS_COLLECTED,
+                    'validated' => attempt_scheduler::STATUS_VALIDATED]
             );
             $experiment = (string) $DB->get_field('local_catquizlab_experiment', 'name', ['id' => $record->experimentid]);
         }
@@ -145,7 +148,8 @@ class run_registry {
             'severity'      => (string) ($definition['persons']['severity'] ?? 'none'),
             'attempts'      => $attempts,
             'attemptsdone'  => $done,
-            'progress'      => $attempts > 0 ? (int) round(100 * $done / $attempts) : 0,
+            // Rounded down: 997 of 1000 is 99 %, not 100 % — only all of them is all (#141, #166).
+            'progress'      => $attempts > 0 ? (int) floor(100 * $done / $attempts) : 0,
             'timecreated'   => (int) $record->timecreated,
             'timemodified'  => (int) $record->timemodified,
             'duration'      => max(0, (int) $record->timemodified - (int) $record->timecreated),
@@ -166,21 +170,25 @@ class run_registry {
             return [];
         }
         $runids = array_map(static fn(\stdClass $r): int => (int) $r->id, $records);
-        $known = array_fill_keys($runids, ['attempts' => 0, 'done' => 0, 'failed' => 0, 'experiment' => '']);
+        $known = array_fill_keys($runids, ['attempts' => 0, 'done' => 0, 'failed' => 0, 'cancelled' => 0, 'experiment' => '']);
         foreach (array_chunk($runids, 1000) as $chunk) {
             [$in, $params] = $DB->get_in_or_equal($chunk, SQL_PARAMS_NAMED, 'run');
             $counts = $DB->get_records_sql(
                 'SELECT runid, COUNT(1) AS attempts,
-                        SUM(CASE WHEN status >= :finished THEN 1 ELSE 0 END) AS done,
-                        SUM(CASE WHEN status = :failed THEN 1 ELSE 0 END) AS failed
+                        SUM(CASE WHEN status IN (:collected, :validated) THEN 1 ELSE 0 END) AS done,
+                        SUM(CASE WHEN status = :failed THEN 1 ELSE 0 END) AS failed,
+                        SUM(CASE WHEN status = :cancelled THEN 1 ELSE 0 END) AS cancelled
                    FROM {local_catquizlab_attempt}
                   WHERE runid ' . $in . '
                GROUP BY runid',
-                $params + ['finished' => registry::STATUS_FINISHED, 'failed' => attempt_scheduler::STATUS_FAILED]
+                // The sitting statuses (#141), not the run's.
+                $params + ['collected' => attempt_scheduler::STATUS_COLLECTED,
+                    'validated' => attempt_scheduler::STATUS_VALIDATED, 'failed' => attempt_scheduler::STATUS_FAILED,
+                    'cancelled' => attempt_scheduler::STATUS_CANCELLED]
             );
             foreach ($counts as $runid => $count) {
                 $known[(int) $runid] = ['attempts' => (int) $count->attempts, 'done' => (int) $count->done,
-                    'failed' => (int) $count->failed, 'experiment' => ''];
+                    'failed' => (int) $count->failed, 'cancelled' => (int) $count->cancelled, 'experiment' => ''];
             }
         }
         $experimentids = array_values(array_unique(array_map(

@@ -20,6 +20,8 @@
  *   and — for the six drop-downs — the value it shows.
  * - A scatter plot's point markers (#143 AK7, #144 AK9): the Tab key reaches the plot's first marker, the screen
  *   reader's own navigation the next one; each must be announced as a graphic with what it stands for.
+ * - Since 0.7.65 the library's search and sort and the experiment selector (#153 AK8), and the experiment editor's
+ *   item model with the three log-normal fields (#159 DoD5): walked like the filter bar.
  *
  * The pages are the ones the Linux interface run recorded (tests/playwright/screenreader_snapshot.spec.js): results.har
  * with everything the browser fetched — HTML, stylesheets, Moodle's scripts and requests — replayed here, so the pages
@@ -51,10 +53,12 @@ const POINT = 'circle[data-region="point"]';
 /** How each reader says a role, as compared (norm()). */
 const ROLES = {
     nvda: {combobox: /\bcombo ?box\b/, listbox: /\blist\b/, button: /\bbutton\b/, link: /\blink\b/,
-        textbox: /\bedit\b/, checkbox: /\bcheck ?box\b/, radio: /\bradio button\b/, img: /\bgraphic\b/},
+        textbox: /\bedit\b/, searchbox: /\bedit\b|\bsearch\b/, checkbox: /\bcheck ?box\b/, radio: /\bradio button\b/,
+        img: /\bgraphic\b/},
     voiceover: {combobox: /\bpop ?up button\b|\bmenu button\b|\bcombo ?box\b/, listbox: /\blist ?box\b|\btable\b/,
-        button: /\bbutton\b/, link: /\blink\b/, textbox: /\btext field\b|\bedit text\b/, checkbox: /\bcheck ?box\b/,
-        radio: /\bradio button\b/, img: /\bimage\b/},
+        button: /\bbutton\b/, link: /\blink\b/, textbox: /\btext field\b|\bedit text\b/,
+        searchbox: /\bsearch text field\b|\btext field\b/, checkbox: /\bcheck ?box\b/, radio: /\bradio button\b/,
+        img: /\bimage\b/},
 };
 
 /**
@@ -154,7 +158,66 @@ test('the recorded pages give the screen reader names, roles and values', async(
     expect(await focusedMarker(page), 'Tab reaches the first marker').toBe(0);
     await page.keyboard.press('ArrowRight');
     expect(await focusedMarker(page), 'the arrow key the next').toBe(1);
+
+    // The other groups (#153 AK8, #159 DoD5): every control there, by its role and name, as often as recorded.
+    for (const group of META.groups || []) {
+        await open(page, group.url);
+        const bar = page.locator(group.bar).first();
+        await expect(bar, group.key).toBeVisible();
+        const counted = {};
+        for (const control of group.controls) {
+            const key = control.role + '\u0000' + control.name;
+            counted[key] = (counted[key] || 0) + 1;
+        }
+        for (const control of group.controls) {
+            const found = bar.getByRole(control.role, {name: control.name, exact: true});
+            await expect(found, group.key + ': ' + control.role + ' "' + control.name + '"')
+                .toHaveCount(counted[control.role + '\u0000' + control.name]);
+            if (control.id !== '' && control.selected !== '') {
+                const shown = await page.locator('#' + control.id).evaluate((el) => (el.tagName === 'SELECT'
+                    ? el.options[el.selectedIndex].text : el.value).replace(/\s+/g, ' ').trim());
+                expect(shown, group.key + ': the value of ' + control.id).toBe(control.selected);
+            }
+        }
+    }
 });
+
+/**
+ * One recorded group of controls with the screen reader: every control reached by the keyboard, in the page's order,
+ * and announced with its name, its role and the value it shows (#153 AK8, #159 DoD5).
+ *
+ * @param {import('@playwright/test').Page} page The page.
+ * @param {object} reader NVDA or VoiceOver (Guidepup).
+ * @param {string[]} keys The keys of the walk.
+ * @param {object} group The recorded group (key, url, bar, selector, controls).
+ * @param {import('@playwright/test').TestInfo} info The test's info.
+ */
+async function walkGroup(page, reader, keys, group, info) {
+    const controls = group.controls;
+    await open(page, group.url);
+    await addStart(page, group.bar);
+    await reader.navigateToWebContent();
+    const result = await walk(page, reader, keys, controls.length, group.bar, group.selector);
+    await keep(info, group.key, {
+        reader: SR, keys: keys, order: result.order, url: group.url,
+        controls: controls.map((control, i) => Object.assign({}, control, {key: result.keys[i], heard: result.heard[i]})),
+        log: await reader.spokenPhraseLog(),
+    });
+
+    const missing = controls.filter((control, i) => result.heard[i] === null).map((control) => control.name);
+    expect(missing, group.key + ': controls the keyboard did not reach with ' + keys.join(' / ')).toEqual([]);
+    expect(result.order, group.key + ': the keyboard goes through in the page\'s order')
+        .toEqual([...result.order].sort((a, b) => a - b));
+    controls.forEach((control, i) => {
+        const said = norm(result.heard[i]);
+        const what = SR + ' on ' + control.role + ' "' + control.name + '" said "' + result.heard[i] + '"';
+        expect.soft(said, what + ': the name').toContain(words(control.name));
+        expect.soft(said, what + ': the role').toMatch(ROLES[SR][control.role]);
+        if (control.selected !== '') {
+            expect.soft(said, what + ': the value shown').toContain(words(control.selected));
+        }
+    });
+}
 
 /**
  * The filter bar with the screen reader.
@@ -254,6 +317,23 @@ async function plot(page, reader, keys, nexts, info) {
     expect.soft(said, what + ': whose').toMatch(/\btwin\b/);
     expect.soft(said, what + ': its own').toContain(distinct(first.label, second.label));
     expect(way, SR + ' reached the second marker (' + want + '); it said "' + next + '"').toBeGreaterThanOrEqual(0);
+}
+
+for (const group of META.groups || []) {
+    const title = {
+        library: 'the library\'s search and sort are announced with names, roles and values (#153 AK8)',
+        selector: 'the experiment selector is announced with its name, role and value (#153 AK8)',
+        lognormal: 'the item model with the three log-normal fields is announced (#159 DoD5)',
+    }[group.key] || ('the group ' + group.key + ' is announced with names, roles and values');
+    if (SR === 'voiceover') {
+        voiceOverTest(title, async({page, voiceOver}, info) => {
+            await walkGroup(page, voiceOver, ['Tab', 'Alt+Tab'], group, info);
+        });
+    } else {
+        nvdaTest(title, async({page, nvda}, info) => {
+            await walkGroup(page, nvda, ['Tab'], group, info);
+        });
+    }
 }
 
 if (SR === 'voiceover') {

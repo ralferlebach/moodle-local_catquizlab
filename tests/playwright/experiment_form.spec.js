@@ -407,3 +407,61 @@ test('#159: keyboard, decimal comma, a phone, 1PL, and the three reference cases
     await page.selectOption('#id_model', '2pl');
     await expect(page.locator('#id_lognormalmu')).toBeVisible();
 });
+
+test('#159 AK-12: the axis fits narrow and strongly skewed distributions, said in the text alternative', async({page}, info) => {
+    needs(!PASSWORD, 'MOODLE_ADMIN_PASSWORD not set.');
+
+    await page.goto('/login/index.php', {waitUntil: 'networkidle'});
+    await page.fill('#username', ADMIN);
+    await page.fill('#password', PASSWORD);
+    await page.click('#loginbtn');
+    await page.waitForLoadState('networkidle');
+    await page.goto('/local/catquizlab/experiment.php', {waitUntil: 'networkidle'});
+    await page.selectOption('#id_discriminationdist', 'lognormal');
+    const svg = page.locator('[data-region="catquizlab-lognormal-svg"]');
+    const text = page.locator('[data-region="catquizlab-lognormal-text"]');
+    const set = async(mu, sigma) => {
+        await page.fill('#id_lognormalmu', mu);
+        await page.fill('#id_lognormalsigma', sigma);
+        await expect(svg).toHaveAttribute('data-state', 'curve');
+    };
+    // The drawn curve: where its highest point is, as a share of the plot's height, and how wide its bulk is drawn.
+    const shape = () => svg.evaluate((el) => {
+        const d = el.querySelector('[data-role="density"]').getAttribute('d');
+        const pts = d.slice(1).split(' L').map((pair) => pair.split(',').map(Number));
+        const ys = pts.map(([, y]) => y);
+        const top = Math.min(...ys);
+        const base = Math.max(...ys);
+        const high = pts.filter(([, y]) => base - y > 0.1 * (base - top)).map(([x]) => x);
+        return {peak: (180 - top) / (180 - 14), bulk: (Math.max(...high) - Math.min(...high)) / (466 - 46),
+            scale: el.getAttribute('data-scale'), xmin: Number(el.getAttribute('data-xmin')),
+            ticks: Array.from(el.querySelectorAll('[data-role="tick"]')).map((t) => t.textContent)};
+    });
+
+    // The default: from 0, linear, the bulk across the plot.
+    await set('0', '0.3');
+    let s = await shape();
+    expect([s.scale, s.xmin]).toEqual(['linear', 0]);
+    expect(s.bulk, 'the default\'s bulk spans the plot').toBeGreaterThan(0.3);
+
+    // Narrow (σlog 0.02): before, a spike a few pixels wide from 0 and its peak between the sampled points. Now the
+    // axis starts below the 0.5th percentile, the peak is drawn, and the text alternative says where the axis starts.
+    await set('0', '0.02');
+    s = await shape();
+    expect(s.scale).toBe('linear');
+    expect(s.xmin, 'the axis starts at the bulk, not at 0').toBeGreaterThan(0.8);
+    expect(s.peak, 'the peak is drawn').toBeGreaterThan(0.85);
+    expect(s.bulk, 'the bulk is wide enough to read').toBeGreaterThan(0.3);
+    await expect(text).toContainText(/(starts at|beginnt bei)/);
+    await page.screenshot({path: info.outputPath('159-narrow.png')});
+
+    // Strongly skewed (σlog 1.5): before, the bulk in the first few pixels and the tail across the rest. Now a log
+    // axis with ticks at 1, 2, 5 of each decade, and the text alternative says so.
+    await set('0', '1.5');
+    s = await shape();
+    expect(s.scale).toBe('log');
+    expect(s.bulk, 'the bulk spans the plot on the log axis').toBeGreaterThan(0.3);
+    expect(s.ticks).toContain('1');
+    await expect(text).toContainText(/(logarithmic|logarithmisch)/);
+    await page.screenshot({path: info.outputPath('159-skewed.png')});
+});

@@ -58,14 +58,21 @@ des Experiments fertig ist; dazu die eigene Restarbeit des ganzen Experiments.
 
 ## Fertigstellung: die Warteschlange durchgespielt
 
-1. **Claim-Reihenfolge** wie `job_claim::claim_next()`: `nextruntime`, dann `timecreated`, dann `id`, über *alle*
-   übernehmbaren Läufe der Installation (bereit oder laufend, weder pausiert noch angehalten), auch die anderer
-   Experimente. Die wartenden Testbearbeitungen werden je Lauf und Fälligkeit gruppiert: Die frischen eines Laufs
-   sind eine Gruppe, jeder Retry mit eigener Fälligkeit eine weitere.
-   - Gruppen mit gleicher Fälligkeit ordnet die früheste Anlagezeit, dann die kleinste ID. Sind die Testbearbeitungen
-     zweier Läufe verschränkt angelegt, ist das eine Näherung.
+1. **Claim-Reihenfolge** wie `job_claim::claim_next()` seit 0.7.65 (#163, `docs/dev/claim-reihenfolge.md`):
+   über alle übernehmbaren Läufe der Installation (bereit oder laufend, weder pausiert noch angehalten), auch die
+   anderer Experimente, aber in der Reihenfolge der Ausführungswarteschlange. Zuerst der Halter (Rang 0), dann jedes
+   Experiment dahinter (Rang 1, 2, …); Experimente außerhalb der Reihe danach, so wie die Reihe sie aufnimmt.
+   Die wartenden Testbearbeitungen werden je Lauf und Fälligkeit gruppiert: Die frischen eines Laufs sind eine Gruppe,
+   jeder Retry mit eigener Fälligkeit eine weitere.
+   - Innerhalb eines Rangs ordnet die früheste Anlagezeit, dann die kleinste ID. Eine Gruppe, deren Fälligkeit noch
+     nicht erreicht ist, wird übersprungen, bis sie es ist: Ein Retry behält seinen Platz, wird aber nicht vor Ende
+     seines Backoffs vergeben. Sind die Testbearbeitungen zweier Läufe verschränkt angelegt, ist das eine Näherung.
+   - Das nächste Experiment beginnt erst, wenn das vorige nichts mehr auf den Slots hat: Beim Rangwechsel kommt
+     (1 − 1/Kapazität) einer Testbearbeitung hinzu.
    - Eine Testbearbeitung mit abgelaufenem Lease gilt als nach dem Backoff (`RETRY_BACKOFF`) wieder eingereiht,
-     also am Ende der Schlange.
+     also am Ende ihres Experiments.
+   - Bis 0.7.64 galt `nextruntime`, dann `timecreated`, dann `id` über alle Experimente: Das war die Reihenfolge des
+     Claims, aber nicht die der Ausführungswarteschlange (#163).
 2. **Kapazität** = Belegzeit im Messfenster / Fensterlänge, höchstens so viele Slots, wie Worker laufen (#160 AK07).
    - **Fenster:** max(10 min, 3 × mittlere Dauer), höchstens seit Beginn der Belegung im Fenster.
    - **Belegzeit:** Von einer Ausführung, die vor dem Fenster begann, zählt nur der Teil im Fenster. Laufende
@@ -73,7 +80,7 @@ des Experiments fertig ist; dazu die eigene Restarbeit des ganzen Experiments.
      Fenster endete. Das ergab mehr Slots, als Worker existierten.
    - **Ohne Messung:** Ist nichts gemessen, aber Testbearbeitungen laufen, sind diese die Kapazität.
 3. **Durchspielen:** Erst die laufende Arbeit, sie belegt die Slots schon. Dann jede Gruppe in Claim-Reihenfolge:
-   - Uhr = max(Uhr, Fälligkeit) + Einheiten × Dauer / Kapazität.
+   - Uhr = Uhr + Einheiten × Dauer / Kapazität; ist im Rang nichts fällig, springt die Uhr zur nächsten Fälligkeit.
    - Ein Lauf ist fertig, wenn seine letzte Gruppe abgearbeitet ist, plus (1 − 1/Kapazität) einer Testbearbeitung:
      Die letzte wird übernommen, wenn die Schlange sie erreicht, und dauert dann eine ganze Testbearbeitung. Drei lange
      Testbearbeitungen auf vier Workern brauchen eine Testbearbeitung lang, nicht drei Viertel davon.
@@ -171,7 +178,8 @@ möglicherweise veraltet (`eta:stale`), bevor nach drei Fehlern das Aktualisiere
   - Screenshot #84–#88: Die alte Methode gibt #86 über 2 h; die neue gibt ihm 3 Testbearbeitungen, ≈ 75 Fragen und
     3 min Worker-Zeit und Fertigstellung in Minuten.
   - Umnummerieren und Hinzufügen anderer Läufe lässt die eigene Restarbeit unverändert.
-  - Claim-Reihenfolge statt Lauf-ID; Retry mit Backoff zuletzt.
+  - Claim-Reihenfolge statt Lauf-ID; Retry mit Backoff zuletzt (bis 0.7.64) bzw. an seinem Platz, sobald fällig
+    (seit 0.7.65, `tests/claim_order_test.php`).
   - konkurrierendes Experiment;
   - lange Testbearbeitungen ohne Schein-Slots;
   - keine Kapazität ohne Countdown;

@@ -26,8 +26,9 @@ namespace local_catquizlab\local;
  *   while it has none of its own). Adding, changing or renumbering other runs does not change it (#160 AK02/AK03).
  *   Divided by the workers the run itself has right now, it is the run's own processing time.
  * - **When a run will be done** depends on what is ahead of it. Workers claim sittings site-wide in the order
- *   job_claim uses: due time (nextruntime), then creation, then id — not by run id. The forecast plays that queue
- *   through: the work in flight first, then each group of queued sittings in claim order, over the capacity the site
+ *   job_claim uses (#163): the execution line's holder first, then each experiment behind it; within one, the order
+ *   the sittings were queued in, a retry at its place once its backoff is over — not by run id. The forecast plays that
+ *   queue through: the work in flight first, then each group of queued sittings in claim order, over the capacity the site
  *   actually has (busy time inside the window, at most the workers there are). A run is done when its last sitting
  *   is; the experiment when its last run is (#160 AK04, AK07, AK09).
  *
@@ -58,6 +59,9 @@ class eta {
 
     /** @var string Everything done: the times are the recorded ones. */
     public const FINAL = 'final';
+
+    /** @var string Nothing left to play because a person stopped it (#166): not done, and no end to forecast. */
+    public const STOPPED = 'stopped';
 
     /** @var int Finished executions needed before there is an estimate. */
     public const MIN_SAMPLE = 3;
@@ -148,6 +152,16 @@ class eta {
         $end = $out['started'] !== null ? ($pending === 0 ? max($lastend, $out['started']) : $now) : null;
         $out['elapsed'] = $end !== null ? max(0, $end - $out['started']) : null;
 
+        // Stopped (#166): what the stop closed is neither done nor work left until somebody resumes it.
+        $cancelled = array_sum(array_map(static fn(array $row): int => (int) ($row['cancelled'] ?? 0), $rows));
+        if ($pending === 0 && $cancelled > 0) {
+            $out['reliability'] = self::STOPPED;
+            $out['remaining'] = 0;
+            $out['cancelled'] = $cancelled;
+            $out['reason'] = 'eta:whystopped';
+
+            return self::labelled($out);
+        }
         // Done: the recorded end, not a forecast.
         if ($pending === 0) {
             $out['reliability'] = self::FINAL;
@@ -270,25 +284,58 @@ class eta {
         $clock = (float) $now + $inflightwork / $slots;
         $done = $inflightwork;
         $variance = $inflightvar;
-        foreach ($figures['groups'] as $group) {
+        // In the line's order (#163): the holder's groups first, each taken once its due time has come — a retry keeps
+        // its place but is not taken before its backoff is over, and what is due behind it goes first meanwhile —;
+        // then the next experiment, once the one before has nothing left on the slots (execution_queue moves on when
+        // its holder has no sitting queued or in play).
+        $pending = $figures['groups'];
+        $rank = null;
+        $tail = 0.0;
+        $lastrun = null;
+        while ($pending !== []) {
+            $first = reset($pending);
+            if ($rank !== null && $first['rank'] !== $rank) {
+                // The next experiment starts when the last sitting of the one before is done, not when it is handed out.
+                $clock += $tail;
+                $tail = 0.0;
+            }
+            $rank = $first['rank'];
+            $pick = null;
+            $earliest = PHP_FLOAT_MAX;
+            foreach ($pending as $key => $group) {
+                if ($group['rank'] !== $rank) {
+                    break;
+                }
+                if ((float) $group['due'] <= $clock) {
+                    $pick = $key;
+                    break;
+                }
+                $earliest = min($earliest, (float) $group['due']);
+            }
+            if ($pick === null) {
+                // Nothing of this experiment due yet: the workers wait for its next retry.
+                $clock = $earliest;
+                continue;
+            }
+            $group = $pending[$pick];
+            unset($pending[$pick]);
             $runid = $group['runid'];
             if (!isset($work[$runid])) {
                 continue;
             }
-            // Not yet due: the workers wait for it (everything behind it is due later still).
-            $clock = max($clock, (float) $group['due']);
             $units = (float) self::queued_units($group['n']);
             $clock += $units * $work[$runid]['mean'] / $slots;
             $done += $units * $work[$runid]['mean'];
             $variance += ($units * $work[$runid]['se']) ** 2;
             $work[$runid]['last'] = ['clock' => $clock, 'done' => $done, 'variance' => $variance];
+            $tail = $work[$runid]['mean'] * max(0.0, 1 - 1 / $slots);
+            $lastrun = $runid;
         }
 
         // The run whose last sitting is the last work of the site: when it runs out, the site empties. Whether its
         // last sittings then speed up depends on whether the site is bound by its processors (they do: fewer
         // sittings share them) or by the slots (they do not). The forecast takes the middle and the range covers
         // both (#160 DoD05: on a two-processor site the last run's end came out up to half too late).
-        $lastrun = $figures['groups'] !== [] ? end($figures['groups'])['runid'] : null;
         foreach ($work as $runid => $w) {
             $run = $figures['runs'][$runid];
             // Its sittings in flight are each on a slot of their own: they are done when the one begun last is.
@@ -348,7 +395,8 @@ class eta {
         $f = $forecast['figures']['runs'][$runid] ?? null;
         [$mean, $se, $basis] = $forecast['durations'][$runid] ?? [0.0, 0.0, 'none'];
         $q = $forecast['questions'][$runid] ?? ($row['questions'] ?? null);
-        $left = max(0, (int) $row['total'] - (int) $row['done'] - (int) $row['failed']);
+        // Closed by an operator (#166) is no work left, as failed for good is not.
+        $left = max(0, (int) $row['total'] - (int) $row['done'] - (int) $row['failed'] - (int) ($row['cancelled'] ?? 0));
         $inflight = min($left, (int) ($row['inflight'] ?? 0));
         $pace = $f !== null ? self::pace_of($f, $q, $now) : null;
         $work = null;
@@ -364,6 +412,7 @@ class eta {
 
         return [
             'sittings' => $left,
+            'cancelled' => (int) ($row['cancelled'] ?? 0),
             'inflight' => $inflight,
             'questions' => $q['remaining'] ?? null,
             'questionkind' => $q['kind'] ?? question_progress::UNKNOWN,
@@ -393,6 +442,14 @@ class eta {
             'remaining' => null, 'finish' => null,
             'margin' => null, 'ahead' => null, 'reliability' => self::CALCULATING, 'reason' => '',
             'meanseconds' => $own['mean'] > 0 ? round($own['mean'], 1) : null, 'basis' => $own['basis'], 'own' => $own];
+        if ($own['sittings'] === 0 && $own['cancelled'] > 0) {
+            // Stopped (#166): no end to record or forecast.
+            $out['reliability'] = self::STOPPED;
+            $out['remaining'] = 0;
+            $out['elapsed'] = $started !== null ? max(0, (int) ($f['lastend'] ?? $now) - $started) : null;
+
+            return $out;
+        }
         if ($own['sittings'] === 0) {
             $out['reliability'] = self::FINAL;
             $out['remaining'] = 0;
@@ -599,7 +656,7 @@ class eta {
     protected static function questions(array $figures): array {
         $sittings = [];
         foreach ($figures['runs'] as $runid => $run) {
-            $left = max(0, $run['total'] - $run['collected'] - $run['failed']);
+            $left = max(0, $run['total'] - $run['collected'] - $run['failed'] - $run['cancelled']);
             $sittings[$runid] = ['inflight' => min($left, $run['inflight']),
                 'queued' => max(0, $left - $run['inflight'] - $run['tracepending'])];
         }
@@ -846,8 +903,11 @@ class eta {
         // The method where there is something it produced; the record where it is history.
         if ($out['reliability'] === self::FINAL) {
             $out['text']['method'] = get_string('eta:methodfinal', $component);
-        } else if ($out['reliability'] === self::NONE) {
+        } else if (in_array($out['reliability'], [self::NONE, self::STOPPED], true)) {
             $out['text']['method'] = '';
+        }
+        if ($out['reliability'] === self::STOPPED) {
+            $out['text']['remaining'] = get_string('eta:stoppedleft', $component, (int) ($out['cancelled'] ?? 0));
         }
         if ($out['reliability'] === self::FINAL) {
             $out['text']['finish'] = $out['finish'] !== null
@@ -869,21 +929,24 @@ class eta {
                 'started' => $run['started'] !== null ? self::when($run['started']) : $na,
                 'elapsed' => $run['elapsed'] !== null ? self::span($run['elapsed']) : $na,
                 'own' => self::own_text($own),
-                'owntime' => $run['reliability'] === self::FINAL ? get_string('eta:nothingleft', $component)
+                'owntime' => $run['reliability'] === self::STOPPED
+                    ? get_string('eta:stoppedleft', $component, (int) ($own['cancelled'] ?? 0))
+                    : ($run['reliability'] === self::FINAL ? get_string('eta:nothingleft', $component)
                     : ($own['seconds'] !== null
                         ? get_string('eta:ownat', $component, (object) ['time' => self::span($own['seconds']),
                             'slots' => format_float($own['slots'], 1)])
-                        : get_string('eta:ownnoworker', $component)),
-                'remaining' => $run['remaining'] !== null
+                        : get_string('eta:ownnoworker', $component))),
+                'remaining' => $run['reliability'] === self::STOPPED ? get_string('eta:stopped', $component)
+                    : ($run['remaining'] !== null
                     ? ($run['reliability'] === self::FINAL ? get_string('eta:nothingleft', $component)
                         : get_string('eta:range', $component, (object) [
                             'remaining' => self::span((int) $run['remaining']),
                             'low' => self::span((int) floor($run['remaining'] * (1 - (float) $run['margin']))),
                             'high' => self::span((int) ceil($run['remaining'] * (1 + (float) $run['margin']))),
                         ]))
-                    : get_string('eta:' . $run['reliability'], $component),
+                    : get_string('eta:' . $run['reliability'], $component)),
                 // On what its duration rests, and how sure the figure is (#160 AK10).
-                'basis' => $run['reliability'] === self::FINAL || $own['basis'] === 'none' ? ''
+                'basis' => in_array($run['reliability'], [self::FINAL, self::STOPPED], true) || $own['basis'] === 'none' ? ''
                     : get_string('eta:basis' . $own['basis'], $component, (object) [
                         'n' => (int) ($run['sample'] ?? 0), 'status' => get_string('eta:' . $run['reliability'], $component)]),
                 'finish' => $run['finish'] !== null ? self::when($run['finish']) : $na,

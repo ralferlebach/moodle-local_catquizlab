@@ -408,19 +408,27 @@ step(sprintf(
 
 // 4. Run it: a real browser, against real questions.
 //
-// Other work on this installation is paused first. A worker takes whatever is
-// claimable, so on a busy instance it would spend the whole timeout on
-// somebody else's attempts and this test would report a failure that says
-// nothing about the thing it was testing.
-// Deferred is exactly what was there, and given back exactly (#120, audit 11.11.2026): before 0.7.59 the deferral set
-// every other queued sitting an hour ahead and the end set them all to 0 - a retry's own backoff, set by the scheduler,
-// was gone either way. Now each sitting's own nextruntime is kept, in the database too, so that even a killed run is
-// put right by the next one; and a sitting the scheduler has touched since keeps what the scheduler gave it.
-$deferred = \local_catquizlab\local\queue_deferral::defer_others($experimentid, HOURSECS);
-step('Other queued work deferred for the duration (' . $deferred . ' sittings, each to be given back its own time).');
-// And given back when this ends, however it ends: a failed check (cli_error) used to leave every other queued sitting
-// of the installation an hour in the future.
-register_shutdown_function([\local_catquizlab\local\queue_deferral::class, 'restore']);
+// This test's experiment takes the front of the execution line (#163). A worker claims only the sittings of the
+// experiment holding the line, so on a busy installation this test would otherwise wait behind everything queued
+// before it. Taken openly — the line says by whom and until when — and given back when the test ends, however it
+// ends; whatever held the line before waits at its front and goes on afterwards. Other experiments' sittings are not
+// touched: until 0.7.64 they were deferred for the duration instead and given their times back afterwards (#120).
+// A deferral a killed older test left behind is given back first.
+\local_catquizlab\local\queue_deferral::restore();
+$front = \local_catquizlab\local\execution_queue::take_front(
+    $experimentid,
+    'cli/smoke.php',
+    (max(1, (int) $options['minutes']) + 15) * MINSECS
+);
+if (empty($front['ok'])) {
+    cli_error('The execution line could not be taken for this test (' . $front['reason'] . ').');
+}
+step('This experiment holds the execution line for the test'
+    . ($front['preempted'] !== [] ? ' (experiment ' . implode(', ', $front['preempted']) . ' waits at its front meanwhile)' : '')
+    . '.');
+register_shutdown_function(static function () use ($experimentid): void {
+    \local_catquizlab\local\execution_queue::release_front($experimentid, 'cli/smoke.php ended');
+});
 
 // For a load test, several workers at once: the race of #100 showed under
 // load, not in a single browser.
@@ -952,8 +960,8 @@ if ($noobservations) {
     cli_error('Results report no observations.');
 }
 
-// Give the rest of the installation its queue back, each sitting its own time.
-\local_catquizlab\local\queue_deferral::restore();
+// The line goes on with whatever this test displaced.
+\local_catquizlab\local\execution_queue::release_front($experimentid, 'cli/smoke.php done');
 
 if (empty($options['keep'])) {
     \local_catquizlab\local\purger::delete_experiment($experimentid, true, true);
@@ -1374,9 +1382,11 @@ function smoke_watch_check(string $file, array $snapshots): array {
         $violations[] = 'the page was read ' . count($readings) . ' time(s) with a question count, at least 3 needed'
             . ($errors !== [] ? ': ' . implode('; ', $errors) : '');
     }
-    // A retry may drop the answers of the try it replaces: a fall counts only where no sitting failed.
+    // A retry may drop the answers of the try it replaces: a fall counts only where no sitting failed and no
+    // execution broke off (its sitting back in the queue, see smoke_eta_probe::take()).
     $failed = false;
     foreach ($snapshots as $s) {
+        $failed = $failed || (int) ($s['interrupted'] ?? 0) > 0;
         foreach ($s['runs'] as $r) {
             $failed = $failed || $r['failed'] > 0;
         }
@@ -1480,6 +1490,8 @@ class smoke_eta_probe {
      * @return void
      */
     public function take(int $experimentid): void {
+        global $DB;
+
         \local_catquizlab\local\question_progress::reset_caches();
         $snapshot = \local_catquizlab\local\live_progress::snapshot($experimentid);
         $time = $snapshot['time'];
@@ -1500,7 +1512,25 @@ class smoke_eta_probe {
             $pollruns[(int) $row['runid']] = ['done' => (int) $row['done'],
                 'questions' => (int) ($row['questions']['done'] ?? 0), 'percent' => (int) ($row['questions']['percent'] ?? 0)];
         }
+        // Executions that ended without a result so far: every claim adds a try, and a sitting playing or collected
+        // accounts for one of them. A sitting whose execution broke off and that went back to the queue keeps its try,
+        // so this grows exactly then — also where no sitting failed (gate 0.7.64, moodle53: a worker timed out, its
+        // sitting was queued again, the count fell by the 20 questions of that try and the probe called it a
+        // contradiction).
+        $interrupted = (int) $DB->get_field_sql(
+            "SELECT COALESCE(SUM(a.tries), 0) - COALESCE(SUM(CASE WHEN a.status IN (:running, :collected, :tracepending,
+                    :validated) THEN 1 ELSE 0 END), 0)
+               FROM {local_catquizlab_attempt} a
+               JOIN {local_catquizlab_run} r ON r.id = a.runid
+              WHERE r.experimentid = :experimentid",
+            ['running' => \local_catquizlab\local\attempt_scheduler::STATUS_RUNNING,
+                'collected' => \local_catquizlab\local\attempt_scheduler::STATUS_COLLECTED,
+                'tracepending' => \local_catquizlab\local\attempt_scheduler::STATUS_TRACEPENDING,
+                'validated' => \local_catquizlab\local\attempt_scheduler::STATUS_VALIDATED,
+                'experimentid' => $experimentid]
+        );
         $line = ['at' => $time['computed'], 'state' => $snapshot['state'], 'done' => $snapshot['done'],
+            'interrupted' => $interrupted,
             'total' => $snapshot['total'], 'questions' => $snapshot['questions']['done'],
             'reliability' => $time['reliability'], 'remaining' => $time['remaining'], 'finish' => $time['finish'],
             'range' => $time['range'], 'slots' => $time['capacity']['slots'], 'physical' => $time['capacity']['physical'],
@@ -1553,11 +1583,14 @@ class smoke_eta_probe {
             $this->violations[] = $at . 'final with time remaining';
         }
         // The question count only grows (#141 DoD): a retry may drop the answers of the try it replaces, so a
-        // fall is a contradiction only where no sitting failed in between.
+        // fall is a contradiction only where no sitting failed and no execution broke off in between.
         $previous = count($this->taken) >= 2 ? $this->taken[count($this->taken) - 2] : null;
         if ($previous !== null) {
             $failed = static fn(array $x): int => array_sum(array_map(static fn(array $r): int => (int) $r['failed'], $x['runs']));
-            if ($s['questions'] < $previous['questions'] && $failed($s) === $failed($previous)) {
+            if (
+                $s['questions'] < $previous['questions'] && $failed($s) === $failed($previous)
+                    && ($s['interrupted'] ?? 0) === ($previous['interrupted'] ?? 0)
+            ) {
                 $this->violations[] = $at . 'questions answered fell from ' . $previous['questions'] . ' to ' . $s['questions'];
             }
             if ($s['done'] < $previous['done']) {

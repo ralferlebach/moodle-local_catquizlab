@@ -619,7 +619,8 @@ class experiment_form extends \moodleform {
         $PAGE->requires->js_call_amd('local_catquizlab/lognormal', 'init', [get_string('decsep', 'langconfig')]);
         $PAGE->requires->strings_for_js(['lognormal:errorfinite', 'lognormal:errorsigma', 'lognormal:errormean',
             'lognormal:errorbelow', 'lognormal:errortwo', 'lognormal:constant', 'lognormal:meanline', 'lognormal:xaxis',
-            'lognormal:yaxis', 'lognormal:summary'], 'local_catquizlab');
+            'lognormal:yaxis', 'lognormal:summary', 'lognormal:xaxislog', 'lognormal:yaxislog', 'lognormal:logaxisnote',
+            'lognormal:fromnote'], 'local_catquizlab');
         $PAGE->requires->strings_for_js([
             'levels:add', 'levels:remove', 'levels:min', 'levels:max', 'levels:value', 'levels:key',
             'levels:notvaried', 'levels:varied', 'levels:sharepercent', 'levels:notanumbershort', 'levels:shareshort',

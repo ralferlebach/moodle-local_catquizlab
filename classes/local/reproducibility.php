@@ -50,7 +50,7 @@ class reproducibility {
         $component = 'local_catquizlab';
 
         $runs = $DB->get_records('local_catquizlab_run', ['experimentid' => $experimentid], 'id ASC');
-        $bystatus = ['finished' => 0, 'running' => 0, 'failed' => 0, 'other' => 0];
+        $bystatus = ['finished' => 0, 'running' => 0, 'failed' => 0, 'cancelled' => 0, 'other' => 0];
         $unfinished = [];
         $inflight = [registry::STATUS_READY, registry::STATUS_RUNNING, registry::STATUS_AGGREGATING];
 
@@ -61,8 +61,11 @@ class reproducibility {
                 continue;
             }
 
-            if ($status === registry::STATUS_FAILED || $status === registry::STATUS_CANCELLED) {
+            if ($status === registry::STATUS_FAILED) {
                 $bystatus['failed']++;
+            } else if ($status === registry::STATUS_CANCELLED) {
+                // Stopped by an operator (#166): incomplete, and not failed.
+                $bystatus['cancelled']++;
             } else if (in_array($status, $inflight, true)) {
                 $bystatus['running']++;
             } else {
@@ -72,7 +75,7 @@ class reproducibility {
             $unfinished[] = ['id' => (int) $run->id, 'cellkey' => (string) $run->cellkey];
         }
 
-        $attempts = ['planned' => 0, 'collected' => 0, 'failed' => 0];
+        $attempts = ['planned' => 0, 'collected' => 0, 'failed' => 0, 'cancelled' => 0];
         if ($runs !== []) {
             [$insql, $params] = $DB->get_in_or_equal(array_keys($runs), SQL_PARAMS_NAMED, 'r');
             $attempts['planned'] = $DB->count_records_select('local_catquizlab_attempt', 'runid ' . $insql, $params);
@@ -86,6 +89,11 @@ class reproducibility {
                 'local_catquizlab_attempt',
                 'runid ' . $insql . ' AND status = :failed',
                 $params + ['failed' => attempt_scheduler::STATUS_FAILED]
+            );
+            $attempts['cancelled'] = $DB->count_records_select(
+                'local_catquizlab_attempt',
+                'runid ' . $insql . ' AND status = :cancelled',
+                $params + ['cancelled' => attempt_scheduler::STATUS_CANCELLED]
             );
         }
 

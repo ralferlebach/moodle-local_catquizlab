@@ -59,7 +59,9 @@ test('running: header, progress card and run summary say the same, and wait for 
     await page.goto('/local/catquizlab/runs.php?experimentid=' + id, {waitUntil: 'networkidle'});
 
     const label = (await bar(page).locator('[data-region="catquizlab-status-label"]').textContent()).trim();
-    expect(['Collecting sittings', 'Waiting']).toContain(label);
+    // The seeded experiment was not started through the execution line: it plays when it holds the line, and waits
+    // for its turn while another does (#163). Either way the three places must say the same.
+    expect(['Collecting sittings', 'Waiting', 'Waiting for its turn']).toContain(label);
     await expect(page.locator('[data-region="catquizlab-progress-label"]')).toHaveText(label);
     await expect(page.locator('[data-region="catquizlab-experiment-state"]')).toHaveText(label);
     await expect(bar(page).locator('[data-region="catquizlab-status-sittings"]')).toContainText('28 of 40 sittings');

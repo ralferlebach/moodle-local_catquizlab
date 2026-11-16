@@ -133,7 +133,8 @@ class status_report {
         $status = (int) $run->status;
         $counts = $figures !== null
             ? ['total' => (int) $figures['total'], 'open' => (int) $figures['open'],
-                'collected' => (int) $figures['collected'], 'failed' => (int) $figures['failed']]
+                'collected' => (int) $figures['collected'], 'failed' => (int) $figures['failed'],
+                'cancelled' => (int) ($figures['cancelled'] ?? 0)]
             : run_lifecycle::attempt_counts($runid);
 
         if ($status === registry::STATUS_SCHEDULED) {
@@ -197,6 +198,23 @@ class status_report {
         if ($status === registry::STATUS_READY || $status === registry::STATUS_RUNNING) {
             $breakdown = $breakdown ?? attempt_scheduler::queue_breakdown();
             $workers = $fleet ?? worker_registry::summary();
+
+            // Its experiment does not hold the execution line (#163): nothing new is handed out to this run until it
+            // does, whatever its status says. What it still has in play finishes.
+            $holder = (int) ($breakdown['holder'] ?? execution_queue::holder());
+            if ((int) $run->experimentid !== $holder && $counts['open'] > 0) {
+                $inflight = $figures !== null ? (int) $figures['inflight'] : self::attempts_in_flight($runid);
+
+                // From what the page read once for every card: no query per run (#160 AK12). The experiment's own
+                // status says its place in the line.
+                return self::card(
+                    self::WATCH,
+                    get_string($inflight > 0 ? 'report:runwindingdown' : 'report:runwaitingturn', $component),
+                    get_string($holder > 0 ? 'report:runturnwhy' : 'report:runturnnext', $component, $holder)
+                        . ' ' . self::progress_line($counts, $component),
+                    null
+                );
+            }
 
             // Ready with work and nobody to do it is the state that never
             // resolves itself, and it reads as "running" without this.
@@ -469,8 +487,8 @@ class status_report {
      */
     protected static function queue_reason(array $breakdown, string $component): string {
         $parts = [];
-        foreach (['blocked', 'notdue', 'paused'] as $kind) {
-            if ($breakdown[$kind] > 0) {
+        foreach (['blocked', 'notdue', 'paused', 'waitingturn'] as $kind) {
+            if (($breakdown[$kind] ?? 0) > 0) {
                 $parts[] = get_string('queue:countline', $component, (object) [
                     'label' => get_string('queue:' . $kind, $component), 'count' => $breakdown[$kind],
                 ]);
@@ -549,6 +567,10 @@ class status_report {
 
         if ((int) ($counts['failed'] ?? 0) > 0) {
             $line .= ' ' . get_string('report:progressfailed', $component, $counts['failed']);
+        }
+        // Closed by an operator (#166): said, and not as failed.
+        if ((int) ($counts['cancelled'] ?? 0) > 0) {
+            $line .= ' ' . get_string('report:progresscancelled', $component, $counts['cancelled']);
         }
 
         return $line;

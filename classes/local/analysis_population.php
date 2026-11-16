@@ -79,9 +79,9 @@ class analysis_population {
      * The sittings of a selection, from the plan to the valid ones.
      *
      * @param results_query $query The selection; read once if it has not been.
-     * @return array planned, scheduled, started, failed, collected, valid, invalid, unknown, unknownreasons,
+     * @return array planned, scheduled, started, failed, cancelled, collected, valid, invalid, unknown, unknownreasons,
      *      engine (the engine's verdicts: valid, invalid, unknown), invalidreasons (code => n),
-     *      runs (run id => strategy, cellkey, planned, scheduled, started, failed, collected, valid),
+     *      runs (run id => strategy, cellkey, planned, scheduled, started, failed, cancelled, collected, valid),
      *      strategies (strategy => the same, summed), runids, filter, rule, pairs (complete, twins, strategies).
      */
     public static function funnel(results_query $query): array {
@@ -98,7 +98,8 @@ class analysis_population {
                 'cellkey' => (string) $run['cellkey'],
                 // What the design says; where a run keeps no definition, what was scheduled.
                 'planned' => $definition !== [] ? person_generator::planned_count($definition) : null,
-                'scheduled' => 0, 'started' => 0, 'failed' => 0, 'collected' => 0,
+                // Failed technically, and apart from it closed by an operator (#166).
+                'scheduled' => 0, 'started' => 0, 'failed' => 0, 'cancelled' => 0, 'collected' => 0,
                 // Finished without a trace (#138): waiting for it, or — from versions before 0.7.47 — stored as
                 // collected without one. Neither is a result; both are said.
                 'tracepending' => 0, 'withouttrace' => 0,
@@ -131,6 +132,9 @@ class analysis_population {
                 if ($status === attempt_scheduler::STATUS_FAILED) {
                     $perrun[$runid]['failed'] += $n;
                 }
+                if ($status === attempt_scheduler::STATUS_CANCELLED) {
+                    $perrun[$runid]['cancelled'] += $n;
+                }
                 if (
                     in_array($status, [attempt_scheduler::STATUS_COLLECTED, attempt_scheduler::STATUS_VALIDATED], true)
                     && (int) $row->traced === 1
@@ -146,8 +150,8 @@ class analysis_population {
             $rows->close();
         }
 
-        $total = ['planned' => 0, 'scheduled' => 0, 'started' => 0, 'failed' => 0, 'collected' => 0, 'valid' => 0,
-            'tracepending' => 0, 'withouttrace' => 0];
+        $total = ['planned' => 0, 'scheduled' => 0, 'started' => 0, 'failed' => 0, 'cancelled' => 0, 'collected' => 0,
+            'valid' => 0, 'tracepending' => 0, 'withouttrace' => 0];
         $strategies = [];
         foreach ($perrun as $runid => $run) {
             $planned = $run['planned'] ?? $run['scheduled'];
@@ -257,7 +261,7 @@ class analysis_population {
         $funnel = self::funnel($query);
         $out = [
             'attempts' => array_intersect_key($funnel, array_flip(['planned', 'scheduled', 'started', 'failed',
-                'collected', 'evaluated', 'valid', 'invalid', 'unknown', 'tracepending', 'withouttrace'])),
+                'cancelled', 'collected', 'evaluated', 'valid', 'invalid', 'unknown', 'tracepending', 'withouttrace'])),
             'invalidreasons' => $funnel['invalidreasons'],
             // Not judgeable is not invalid (#112 AK 7); an export of 250 unknown sittings says so (#115).
             'engineverdicts' => $funnel['engine'] + ['unknownreasons' => $funnel['unknownreasons']],

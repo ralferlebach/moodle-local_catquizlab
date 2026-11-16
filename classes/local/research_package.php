@@ -54,7 +54,8 @@ class research_package {
         'experiments' => ['experimentid', 'name', 'tier', 'designhash', 'definitionsha256', 'runs'],
         'runs' => ['runid', 'experimentid', 'replication', 'cellkey', 'tier', 'strategy', 'model', 'variant', 'strength',
             'stratum', 'severity', 'status', 'masterseed', 'seed', 'rngschema', 'itemidentityschema', 'poolfingerprint',
-            'poolitems', 'manifestsha256', 'persons', 'sittings', 'sittingswithtrace', 'sittingsfailed', 'setarget',
+            'poolitems', 'manifestsha256', 'persons', 'sittings', 'sittingswithtrace', 'sittingsfailed', 'sittingscancelled',
+            'setarget',
             'globalminitems', 'globalmaxitems', 'subscalemaps'],
         'twins' => ['runid', 'personid', 'twinid', 'twinindex', 'replication', 'stratum', 'severity', 'abilityglobal',
             'deviancemagnitude', 'deviancesubscales'],
@@ -628,9 +629,10 @@ class research_package {
         $sittings = $DB->get_records_sql(
             "SELECT runid, COUNT(1) AS n,
                 SUM(CASE WHEN tracejson IS NOT NULL THEN 1 ELSE 0 END) AS traced,
-                SUM(CASE WHEN status = :failed THEN 1 ELSE 0 END) AS failed
+                SUM(CASE WHEN status = :failed THEN 1 ELSE 0 END) AS failed,
+                SUM(CASE WHEN status = :cancelled THEN 1 ELSE 0 END) AS cancelled
               FROM {local_catquizlab_attempt} WHERE runid {$insql} GROUP BY runid",
-            $params + ['failed' => attempt_scheduler::STATUS_FAILED]
+            $params + ['failed' => attempt_scheduler::STATUS_FAILED, 'cancelled' => attempt_scheduler::STATUS_CANCELLED]
         );
         $rows = [];
         foreach ($runs as $runid => $run) {
@@ -653,6 +655,8 @@ class research_package {
                 'sittings' => $count ? (int) $count->n : 0,
                 'sittingswithtrace' => $count ? (int) $count->traced : 0,
                 'sittingsfailed' => $count ? (int) $count->failed : 0,
+                // Closed by an operator (#166): apart from the failed ones.
+                'sittingscancelled' => $count ? (int) $count->cancelled : 0,
             ];
             // The run's precision target and test length budget, as the engine was given them (the test flow's
             // feasibility is judged against them).
@@ -668,7 +672,7 @@ class research_package {
                 'strategy' => $row['strategy'], 'rngschema' => $row['rngschema'],
                 'itemidentityschema' => $row['itemidentityschema'], 'poolfingerprint' => $row['poolfingerprint'],
                 'persons' => $row['persons'], 'sittingswithtrace' => $row['sittingswithtrace'],
-                'sittingsfailed' => $row['sittingsfailed']];
+                'sittingsfailed' => $row['sittingsfailed'], 'sittingscancelled' => $row['sittingscancelled']];
         }
 
         return $rows;

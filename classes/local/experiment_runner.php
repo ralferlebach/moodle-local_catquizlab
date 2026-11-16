@@ -367,6 +367,10 @@ class experiment_runner {
             // Something that can still build or hand out work (0.7.49): offered as "Stop experiment".
             // Created runs alone are not that: nothing runs, and deleting or starting them is the question.
             'canstop' => $counts['stoppable'] > $counts['draft'] || execution_queue::state_of($experimentid) !== null,
+            // Runs a stop cancelled, nothing of the experiment running and it not in the line: it can go on, keeping
+            // what it collected (#165). Whether each run can is the resume's own preview.
+            'canresume' => $counts['cancelled'] > 0 && $counts['running'] === 0
+                && execution_queue::state_of($experimentid) === null,
         ];
     }
 

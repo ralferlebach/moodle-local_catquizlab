@@ -26,7 +26,7 @@ Experimentzeile (`progress_view`), Live-Poll (`local_catquizlab_live_status`:
 | created | Läufe angelegt, nicht gestartet, nicht in der Warteschlange | Experiment starten |
 | preparing | Läufe in Vorbereitung; oder die Warteschlange bereitet es an seiner Reihe selbst vor (#151) | Fortschritt ansehen — bzw. Experiment starten, wenn es nicht in der Warteschlange steht |
 | ready | alle Läufe bereit, nichts gestartet, nicht in der Warteschlange | Experiment starten |
-| queued | in der Warteschlange, wartet auf seine Reihe | Fortschritt ansehen — **kein zweiter Start** |
+| queued | in der Warteschlange, wartet auf seine Reihe — auch wenn es schon gespielt hat oder Testbearbeitungen von früher noch laufen; ebenso ein Experiment mit eingereihten Testbearbeitungen außerhalb der Warteschlange, das sie beim nächsten Schritt aufnimmt (#163). Der Grund nennt Platz und Halter | Fortschritt ansehen — **kein zweiter Start** |
 | starting | an der Reihe und vorbereitet, noch keine Testbearbeitung: Worker werden gestartet (#151) | Fortschritt ansehen |
 | collecting / waiting / paused | aus `live_progress` | Fortschritt ansehen |
 | blocked | Lauf angehalten/gescheitert | Probleme ansehen (`runs.php#catquizlab-recovery`) |

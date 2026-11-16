@@ -1079,7 +1079,7 @@ class run_lifecycle {
      * How a run's attempts are distributed across the states that matter.
      *
      * @param int $runid The run.
-     * @return array{total: int, open: int, collected: int, failed: int}
+     * @return array{total: int, open: int, collected: int, failed: int, cancelled: int}
      */
     public static function attempt_counts(int $runid): array {
         global $DB;
@@ -1092,7 +1092,7 @@ class run_lifecycle {
             ['runid' => $runid]
         );
 
-        $counts = ['total' => 0, 'open' => 0, 'collected' => 0, 'failed' => 0];
+        $counts = ['total' => 0, 'open' => 0, 'collected' => 0, 'failed' => 0, 'cancelled' => 0];
         foreach ($rows as $row) {
             $n = (int) $row->n;
             $counts['total'] += $n;
@@ -1105,6 +1105,10 @@ class run_lifecycle {
                 case attempt_scheduler::STATUS_COLLECTED:
                 case attempt_scheduler::STATUS_VALIDATED:
                     $counts['collected'] += $n;
+                    break;
+                case attempt_scheduler::STATUS_CANCELLED:
+                    // Closed by an operator (#166): not a failure of the run.
+                    $counts['cancelled'] += $n;
                     break;
                 default:
                     $counts['failed'] += $n;

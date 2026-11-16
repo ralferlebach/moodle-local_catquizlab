@@ -189,18 +189,24 @@ final class experiment_stop_test extends \advanced_testcase {
         $closed = $DB->get_records_select(
             'local_catquizlab_attempt',
             'runid IN (?, ?) AND status = ?',
-            [$ready, $running, attempt_scheduler::STATUS_FAILED]
+            [$ready, $running, attempt_scheduler::STATUS_CANCELLED]
         );
+        // Closed by an operator, not failed (#166), with the stop's reason in the same words in every language.
         $this->assertCount(5, $closed);
+        $this->assertSame(0, $DB->count_records_select(
+            'local_catquizlab_attempt',
+            'runid IN (?, ?) AND status = ?',
+            [$ready, $running, attempt_scheduler::STATUS_FAILED]
+        ));
         foreach ($closed as $attempt) {
-            $this->assertSame(get_string('history:experimentstopped', 'local_catquizlab'), $attempt->lasterror);
+            $this->assertSame(experiment_stop::REASON, $attempt->lasterror);
             $this->assertNull($attempt->leaseowner);
         }
 
         // The worker that held a sitting is asked to exit, and its sitting's history says it was a stop.
         $this->assertTrue(worker_registry::stop_requested('w1'));
         $history = $DB->get_records('local_catquizlab_attemptlog', ['attemptid' => $sitting]);
-        $this->assertSame(attempt_history::ABANDONED, end($history)->outcome);
+        $this->assertSame(attempt_history::CANCELLED, end($history)->outcome);
         $this->assertSame('w1', end($history)->workerid);
 
         // Setup tasks gone, aggregation kept; out of the execution queue.
@@ -248,7 +254,7 @@ final class experiment_stop_test extends \advanced_testcase {
         $done = \local_catquizlab\external\job_complete::execute($sitting, 'failed', 0, 0, 'lease lost', '', 'w2');
         $this->assertFalse($done['acknowledged']);
         $this->assertSame(
-            attempt_scheduler::STATUS_FAILED,
+            attempt_scheduler::STATUS_CANCELLED,
             (int) $DB->get_field('local_catquizlab_attempt', 'status', ['id' => $sitting])
         );
         $this->assertSame(0, attempt_scheduler::queue_breakdown($e)['claimable'], 'and not requeued');
@@ -317,17 +323,20 @@ final class experiment_stop_test extends \advanced_testcase {
         $snapshot = experiment_status::snapshot($e, true);
         $this->assertSame('stopped', $snapshot['phase']);
         $this->assertSame(get_string('status:phasestopped', 'local_catquizlab'), $snapshot['label']);
-        $this->assertSame('progress', $snapshot['next']['kind'], 'nothing finished: no results to show');
+        // The way on is to resume it, keeping what it collected (#165), shown first and confirmed with a POST.
+        $this->assertSame(['resume', 'resumeexperiment', true], [$snapshot['next']['kind'], $snapshot['next']['action'],
+            $snapshot['next']['post']]);
         $this->assertSame('warn', $snapshot['tone']);
         $this->assertSame('stopped', experiment_status::library([$e])[$e]['phase']);
 
-        // With a finished run, its results are the way on.
+        // With a finished run too: resuming is the way on while a stopped run can go on (#165); once the experiment
+        // is back in the line it is no longer stopped.
         $withresults = $this->experiment();
         $this->run_with($withresults, registry::STATUS_FINISHED, [attempt_scheduler::STATUS_COLLECTED]);
         $this->run_with($withresults, registry::STATUS_RUNNING, [attempt_scheduler::STATUS_QUEUED]);
         experiment_stop::stop($withresults);
         $this->assertSame('stopped', experiment_status::snapshot($withresults, true)['phase']);
-        $this->assertSame('results', experiment_status::snapshot($withresults, true)['next']['kind']);
+        $this->assertSame('resume', experiment_status::snapshot($withresults, true)['next']['kind']);
         $this->assertSame('stopped', experiment_status::library([$withresults])[$withresults]['phase']);
 
         // A run that failed is still a problem, stop or not.

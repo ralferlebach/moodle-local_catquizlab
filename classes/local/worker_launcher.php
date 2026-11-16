@@ -530,6 +530,12 @@ class worker_launcher {
         // found nothing — three misleading signals for no benefit, multiplied
         // by the configured concurrency.
         $breakdown = attempt_scheduler::queue_breakdown();
+        if ($breakdown['claimable'] === 0 && $breakdown['waitingturn'] > 0) {
+            // Sittings that may not be taken until their experiment holds the line (#163): the line moves first, if
+            // it can without preparing anything; whatever then holds it is what workers are started for.
+            execution_queue::take_turn();
+            $breakdown = attempt_scheduler::queue_breakdown();
+        }
         if ($breakdown['claimable'] === 0) {
             return [
                 'launched' => 0,
@@ -742,6 +748,11 @@ class worker_launcher {
                 $why[] = ['code' => $kind, 'n' => (int) $breakdown[$kind]];
             }
         }
+        // Sittings of experiments behind the holder of the line (#163): they wait for their turn, not for a worker.
+        if ((int) ($breakdown['waitingturn'] ?? 0) > 0) {
+            $why[] = ['code' => 'waitingturn', 'n' => (int) $breakdown['waitingturn'],
+                'experiments' => !empty($breakdown['holder']) ? [(int) $breakdown['holder']] : []];
+        }
         if (($queue['reason'] ?? '') === 'busy' && !empty($queue['holder'])) {
             $why[] = ['code' => 'queueheld', 'n' => 1, 'experiments' => [(int) $queue['holder']],
                 'since' => (int) ($queue['since'] ?? 0)];
@@ -845,6 +856,10 @@ class worker_launcher {
                 if ((int) ($breakdown[$kind] ?? 0) > 0) {
                     $parts[] = get_string('workers:queue_' . $kind, $component, (int) $breakdown[$kind]);
                 }
+            }
+            if ((int) ($breakdown['waitingturn'] ?? 0) > 0) {
+                $parts[] = get_string('workers:queue_waitingturn', $component, (object) ['n' => (int) $breakdown['waitingturn'],
+                    'holder' => (int) ($breakdown['holder'] ?? 0)]);
             }
             $nextdue = $breakdown['notdue'] > 0 ? self::next_due() : 0;
             if ($nextdue > 0) {
@@ -981,9 +996,12 @@ class worker_launcher {
     protected static function next_due(): int {
         global $DB;
 
+        // The holder's (#163): another experiment's retry is not work a worker may take now.
         return (int) $DB->get_field_sql(
-            'SELECT MIN(nextruntime) FROM {local_catquizlab_attempt} WHERE status = :queued AND nextruntime > :now',
-            ['queued' => attempt_scheduler::STATUS_QUEUED, 'now' => time()]
+            'SELECT MIN(nextruntime) FROM {local_catquizlab_attempt}
+              WHERE status = :queued AND nextruntime > :now
+                AND runid IN (SELECT id FROM {local_catquizlab_run} WHERE experimentid = :holder)',
+            ['queued' => attempt_scheduler::STATUS_QUEUED, 'now' => time(), 'holder' => execution_queue::holder()]
         );
     }
 

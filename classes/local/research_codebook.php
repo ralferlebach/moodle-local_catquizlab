@@ -196,8 +196,11 @@ class research_codebook {
                 . 'gleich welcher Zustand.'),
             'sittingswithtrace' => $c('integer', 'Sittings with a trace: the rows of attempts.', 'Testbearbeitungen mit Trace: die '
                 . 'Zeilen in attempts.'),
-            'sittingsfailed' => $c('integer', 'Sittings failed for good (no trace).', 'Endgültig gescheiterte Testbearbeitungen '
-                . '(ohne Trace).'),
+            'sittingsfailed' => $c('integer', 'Sittings failed for good (no trace): a technical end.', 'Endgültig gescheiterte '
+                . 'Testbearbeitungen (ohne Trace): ein technisches Ende.'),
+            'sittingscancelled' => $c('integer', 'Sittings closed by an operator when the experiment or the run was stopped '
+                . '(#166): neither a failure nor a result.', 'Testbearbeitungen, die beim Stoppen des Experiments oder des Laufs '
+                . 'von Hand geschlossen wurden (#166): weder Fehlschlag noch Ergebnis.'),
             'setarget' => $c('number', 'Precision target: the standard error at which the engine may stop.', 'Präzisionsziel: '
                 . 'der Standardfehler, bei dem die Engine stoppen darf.', $theta),
             'globalminitems' => $c('integer', 'Least questions a sitting must answer.', 'Mindestzahl der Fragen einer '

@@ -276,7 +276,8 @@ if ($action === 'startdrafts' && $id > 0) {
         );
     }
 
-    redirect($manageurl, get_string('run:started', $component, $started['started']));
+    redirect($manageurl, trim(get_string('run:started', $component, $started['started']) . ' '
+        . \local_catquizlab\local\execution_queue::started_outside_note($id)));
 }
 
 if ($action === 'archive' && $id > 0) {
@@ -330,7 +331,8 @@ if (($action === 'createsweep' || $action === 'createsweepandstart') && $id > 0)
             redirect(
                 $manageurl,
                 get_string('notice:sweepcreated', $component, $result['created'])
-                    . ' ' . get_string('run:started', $component, $started['started']),
+                    . ' ' . get_string('run:started', $component, $started['started'])
+                    . ' ' . \local_catquizlab\local\execution_queue::started_outside_note($id),
                 null,
                 \core\output\notification::NOTIFY_SUCCESS
             );

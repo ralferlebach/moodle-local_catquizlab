@@ -74,6 +74,19 @@ class experiment_status {
         $progress = live_progress::snapshot($experimentid);
         $runner = experiment_runner::state($experimentid);
         $queued = execution_queue::state_of($experimentid);
+        $turn = null;
+        if (
+            $queued === null && (int) ($progress['now']['queued'] ?? 0) > 0
+            && $runner['state'] !== experiment_runner::STATE_BLOCKED
+            && execution_queue::next_holder() !== $experimentid
+        ) {
+            // Sittings to hand out and no place in the line: not claimable (#163). The line gives it a place at its
+            // next move; until then it is shown as what it is, waiting.
+            $queued = execution_queue::WAITING;
+        }
+        if ($queued === execution_queue::WAITING) {
+            $turn = execution_queue::turn($experimentid);
+        }
         $held = count(array_filter($progress['runs'], static fn(array $run): bool => !empty($run['held'])));
         $failed = (int) $progress['now']['failed'];
         $phase = self::phase($progress, $runner, $queued, $held);
@@ -84,7 +97,8 @@ class experiment_status {
             'name'         => format_string($experiment->name),
             'phase'        => $phase,
             'label'        => get_string('status:phase' . $phase, $component),
-            'reason'       => in_array($phase, ['waiting', 'starting', 'paused', 'blocked'], true) ? $progress['reason'] : '',
+            'reason'       => $phase === 'queued' && $turn !== null ? self::turn_reason($turn)
+                : (in_array($phase, ['waiting', 'starting', 'paused', 'blocked'], true) ? $progress['reason'] : ''),
             'done'         => (int) $progress['done'],
             'total'        => (int) $progress['total'],
             'percent'      => (int) $progress['percent'],
@@ -110,6 +124,26 @@ class experiment_status {
         ];
 
         return self::$memo[$experimentid] = $snapshot;
+    }
+
+    /**
+     * Why an experiment waits in the execution line, in words (#163).
+     *
+     * @param array $turn execution_queue::turn().
+     * @return string
+     */
+    public static function turn_reason(array $turn): string {
+        $component = 'local_catquizlab';
+        if ((int) $turn['place'] === 0) {
+            return get_string('status:turnpending', $component);
+        }
+        $text = get_string(
+            (int) $turn['holder'] > 0 ? 'status:turnplace' : 'status:turnplacefree',
+            $component,
+            (object) ['place' => (int) $turn['place'], 'holder' => (int) $turn['holder']]
+        );
+
+        return (string) $turn['note'] !== '' ? $text . ' (' . $turn['note'] . ')' : $text;
     }
 
     /**
@@ -165,7 +199,7 @@ class experiment_status {
         );
         foreach ($rows as $row) {
             $e = (int) $row->experimentid;
-            $sittings[$e] = $sittings[$e] ?? ['total' => 0, 'done' => 0, 'failed' => 0, 'inflight' => 0];
+            $sittings[$e] = $sittings[$e] ?? ['total' => 0, 'done' => 0, 'failed' => 0, 'cancelled' => 0, 'inflight' => 0];
             $n = (int) $row->n;
             $sittings[$e]['total'] += $n;
             $status = (int) $row->status;
@@ -173,6 +207,9 @@ class experiment_status {
                 $sittings[$e]['done'] += $n;
             } else if ($status === attempt_scheduler::STATUS_FAILED) {
                 $sittings[$e]['failed'] += $n;
+            } else if ($status === attempt_scheduler::STATUS_CANCELLED) {
+                // Closed by an operator (#166): ended, not failed.
+                $sittings[$e]['cancelled'] += $n;
             } else if ($status === attempt_scheduler::STATUS_RUNNING) {
                 $sittings[$e]['inflight'] += $n;
             }
@@ -181,7 +218,7 @@ class experiment_status {
 
         foreach ($experimentids as $id) {
             $run = $runs[$id] ?? null;
-            $count = $sittings[$id] ?? ['total' => 0, 'done' => 0, 'failed' => 0, 'inflight' => 0];
+            $count = $sittings[$id] ?? ['total' => 0, 'done' => 0, 'failed' => 0, 'cancelled' => 0, 'inflight' => 0];
             $line = $inline[$id] ?? null;
             if ($run === null || (int) $run->n === 0) {
                 $phase = $line === execution_queue::WAITING ? 'queued' : ($line === execution_queue::RUNNING ? 'preparing'
@@ -191,12 +228,14 @@ class experiment_status {
             } else if ((int) $run->cancelled > 0 && (int) $run->cancelled + (int) $run->finished === (int) $run->n) {
                 // Stopped (0.7.49): not "complete with failures" — the sittings it closed did not fail.
                 $phase = 'stopped';
-            } else if ($count['total'] > 0 && $count['done'] + $count['failed'] >= $count['total']) {
+            } else if ($count['total'] > 0 && $count['done'] + $count['failed'] + $count['cancelled'] >= $count['total']) {
                 $phase = $count['failed'] > 0 ? 'completefailures' : 'complete';
+            } else if ($line === execution_queue::WAITING) {
+                // Behind the holder of the line (#163): what it has in play may still finish, nothing new is handed
+                // out to it — "collecting" would say the opposite.
+                $phase = 'queued';
             } else if ($count['inflight'] > 0 || (int) $run->active > 0) {
                 $phase = $count['done'] + $count['inflight'] > 0 ? 'collecting' : 'starting';
-            } else if ($line === execution_queue::WAITING && $count['done'] + $count['inflight'] === 0) {
-                $phase = 'queued';
             } else if ((int) $run->ready === (int) $run->n && $count['done'] === 0) {
                 $phase = $line === execution_queue::RUNNING ? 'starting' : 'ready';
             } else if ((int) $run->draft > 0 && (int) $run->scheduled === 0 && $line === null) {
@@ -210,6 +249,7 @@ class experiment_status {
                 'done' => $count['done'],
                 'total' => $count['total'],
                 'failed' => $count['failed'],
+                'cancelled' => $count['cancelled'],
                 'percent' => $count['total'] > 0 ? (int) floor(100 * $count['done'] / $count['total']) : 0,
                 'tone' => self::tone($phase),
             ];
@@ -259,7 +299,9 @@ class experiment_status {
         }
         $untouched = (int) $progress['done'] === 0 && (int) $progress['now']['inflight'] === 0
             && ($progress['time']['started'] ?? null) === null;
-        if ($untouched && $queued === execution_queue::WAITING) {
+        // Waiting in the line, played before or not (#163): a worker hands out only the holder's sittings, so an
+        // experiment behind it is queued, whatever it still has in play from before.
+        if ($queued === execution_queue::WAITING) {
             return 'queued';
         }
         if ($preparing) {
@@ -326,6 +368,10 @@ class experiment_status {
                 ['experimentid' => $experimentid],
                 'catquizlab-recovery'
             ), 'progress');
+        }
+        // Stopped: go on, keeping what it collected (#165) — shown first, run by run, then confirmed.
+        if ($phase === 'stopped' && !empty($runner['canresume'])) {
+            return $make('resume', new \moodle_url('/local/catquizlab/runs.php'), 'progress', 'resumeexperiment');
         }
         $stoppedwithresults = $phase === 'stopped' && (int) ($runner['runs']['finished'] ?? 0) > 0;
         if (in_array($phase, ['complete', 'completefailures'], true) || $stoppedwithresults) {

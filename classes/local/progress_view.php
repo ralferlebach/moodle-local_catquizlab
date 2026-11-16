@@ -167,6 +167,12 @@ class progress_view {
         // parameters, and running experiments is not a reason to read that.
         $candebug = has_capability('local/catquizlab:debug', \context_system::instance());
         $debug = ($candebug && debug_trace::enabled()) ? debug_trace::entries([], 60) : [];
+        // The recording holds entries of every experiment: each run with its experiment and strategy, in one query
+        // for all of them (#150 AK2). A run deleted since keeps its number.
+        $debuglabels = run_labels::for_runs(array_column($debug, 'runid'));
+        foreach ($debug as $i => $row) {
+            $debug[$i]['runlabel'] = $debuglabels[(int) $row['runid']] ?? null;
+        }
 
         // The population, as the results report it (#117): the same numbers.
         $population = $experimentid > 0 ? population_plan::describe($experimentid) : null;
@@ -191,6 +197,10 @@ class progress_view {
                     'canstartruns' => false,
                     // Stopping takes work away from running workers: the same authority as starting it (0.7.49).
                     'canstop' => !empty($status['runner']['canstop'])
+                        && has_capability('local/catquizlab:execute', \context_system::instance()),
+                    // A stopped experiment goes on, keeping what it collected; or, apart and destructive, all over
+                    // again (#165). The same authority as starting it.
+                    'canresume' => !empty($status['runner']['canresume'])
                         && has_capability('local/catquizlab:execute', \context_system::instance()),
                 ] + $status['runner'] + [
                     'experimentid' => $experimentid,
@@ -249,6 +259,8 @@ class progress_view {
                 'hasblocked' => $breakdown['blocked'] > 0,
                 'hasnotdue'  => $breakdown['notdue'] > 0,
                 'haspaused'  => $breakdown['paused'] > 0,
+                // Waiting for their experiment's turn in the execution line, not for a worker (#163).
+                'haswaitingturn' => $breakdown['waitingturn'] > 0,
             ],
             'pipelinestatus' => status_report::pipeline() + ['region' => 'catquizlab-pipeline'],
             'formurl'     => (new \moodle_url('/local/catquizlab/operations.php'))->out(false),

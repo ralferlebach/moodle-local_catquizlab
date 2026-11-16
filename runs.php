@@ -142,6 +142,120 @@ if ($action === 'stopexperiment') {
     redirect($back, get_string('stop:done', $component, (object) $stopped), null, \core\output\notification::NOTIFY_SUCCESS);
 }
 
+// Resume a stopped experiment, keeping what it collected (#165). Shown first, run by run: what is kept, what is
+// played, what is collected from the engine, what cannot go on and why. Then, on a second POST, done.
+if ($action === 'resumeexperiment') {
+    require_sesskey();
+    require_capability('local/catquizlab:execute', $context);
+
+    // From the library's menu the experiment comes as "id".
+    $target = optional_param('experimentid', 0, PARAM_INT) ?: required_param('id', PARAM_INT);
+    $back = new moodle_url('/local/catquizlab/runs.php', ['experimentid' => $target]);
+    $preview = \local_catquizlab\local\experiment_resume::preview($target);
+    if (!$preview['resumable']) {
+        redirect(
+            $back,
+            get_string('resume:not_' . $preview['reason'], $component),
+            null,
+            \core\output\notification::NOTIFY_WARNING
+        );
+    }
+    if (!optional_param('confirm', 0, PARAM_BOOL) || !data_submitted()) {
+        echo $OUTPUT->header();
+        echo $OUTPUT->heading(get_string('resume:heading', $component), 3);
+        echo \local_catquizlab\output\resume_view::preview_table($preview);
+        echo $OUTPUT->confirm(
+            get_string('resume:confirm', $component, (object) $preview['totals']),
+            new moodle_url('/local/catquizlab/runs.php', [
+                'action' => 'resumeexperiment', 'experimentid' => $target, 'sesskey' => sesskey(), 'confirm' => 1,
+            ]),
+            $back
+        );
+        echo $OUTPUT->footer();
+        exit;
+    }
+
+    $result = \local_catquizlab\local\experiment_resume::resume($target);
+    \local_catquizlab\local\debug_trace::record('ui', 'resumeexperiment', ['experimentid' => $target] + $result);
+    redirect(
+        $back,
+        $result['ok'] ? get_string('resume:done', $component, (object) $result)
+            : get_string('resume:not_' . $result['reason'], $component),
+        null,
+        $result['ok'] ? \core\output\notification::NOTIFY_SUCCESS : \core\output\notification::NOTIFY_WARNING
+    );
+}
+
+// The other way, and destructive (#165 AK6): every run the stop cancelled reset and run again from the start. Its
+// sittings, people, items and results are deleted for good; the inventory is shown first and the deletion has to be
+// confirmed in its own words.
+if ($action === 'restartstopped') {
+    require_sesskey();
+    require_capability('local/catquizlab:execute', $context);
+
+    $target = required_param('experimentid', PARAM_INT);
+    $back = new moodle_url('/local/catquizlab/runs.php', ['experimentid' => $target]);
+    $inventory = \local_catquizlab\local\experiment_resume::restart_inventory($target);
+    if ($inventory['runs'] === []) {
+        redirect($back, get_string('resume:not_nothing', $component), null, \core\output\notification::NOTIFY_INFO);
+    }
+    if (!optional_param('confirm', 0, PARAM_BOOL) || !data_submitted() || !optional_param('understood', 0, PARAM_BOOL)) {
+        echo $OUTPUT->header();
+        echo $OUTPUT->heading(get_string('restart:heading', $component), 3);
+        echo html_writer::div(
+            get_string('restart:warning', $component, (object) $inventory['totals']),
+            'alert alert-danger',
+            ['role' => 'alert']
+        );
+        echo \local_catquizlab\output\resume_view::restart_table($inventory);
+        echo html_writer::start_tag('form', ['method' => 'post', 'action' => (new moodle_url('/local/catquizlab/runs.php'))
+            ->out(false), 'data-region' => 'catquizlab-restartstopped']);
+        foreach (['action' => 'restartstopped', 'experimentid' => $target, 'sesskey' => sesskey(), 'confirm' => 1] as $k => $v) {
+            echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => $k, 'value' => $v]);
+        }
+        echo html_writer::div(
+            html_writer::empty_tag('input', ['type' => 'checkbox', 'name' => 'understood', 'value' => 1,
+                'id' => 'catquizlab-restart-understood', 'class' => 'form-check-input', 'required' => 'required'])
+            . html_writer::label(
+                get_string('restart:understood', $component),
+                'catquizlab-restart-understood',
+                false,
+                ['class' => 'form-check-label']
+            ),
+            'form-check mb-3'
+        );
+        echo html_writer::tag(
+            'button',
+            get_string('restart:confirmbutton', $component),
+            ['type' => 'submit', 'class' => 'btn btn-danger mr-2']
+        );
+        echo html_writer::link($back, get_string('cancel'), ['class' => 'btn btn-secondary']);
+        echo html_writer::end_tag('form');
+        echo $OUTPUT->footer();
+        exit;
+    }
+
+    $results = [];
+    foreach ($inventory['runs'] as $run) {
+        $results[(int) $run['runid']] = \local_catquizlab\local\run_lifecycle::reset_and_rerun((int) $run['runid']);
+    }
+    $ok = count(array_filter($results, static fn(array $r): bool => !empty($r['ok'])));
+    \local_catquizlab\local\debug_trace::record('ui', 'restartstopped', ['experimentid' => $target, 'runs' => count($results),
+        'restarted' => $ok]);
+    $failures = array_filter($results, static fn(array $r): bool => empty($r['ok']));
+    redirect(
+        $back,
+        get_string('restart:done', $component, (object) ['restarted' => $ok, 'runs' => count($results)])
+            . ($failures === [] ? '' : ' ' . get_string('restart:failedruns', $component, implode(', ', array_map(
+                static fn(int $runid, array $r): string => '#' . $runid . ' (' . ($r['reason'] ?: '?') . ')',
+                array_keys($failures),
+                $failures
+            )))),
+        null,
+        $failures === [] ? \core\output\notification::NOTIFY_SUCCESS : \core\output\notification::NOTIFY_WARNING
+    );
+}
+
 // Runs created and never started (incident 2026-11-09): started in the background, each by its own setup
 // task, exactly as "Start runs" on the experiment page does.
 if ($action === 'startruns') {
@@ -167,7 +281,8 @@ if ($action === 'startruns') {
     }
     redirect(
         $back,
-        get_string('runner:runsstarted', $component, $started['started']),
+        trim(get_string('runner:runsstarted', $component, $started['started']) . ' '
+            . \local_catquizlab\local\execution_queue::started_outside_note($target)),
         null,
         \core\output\notification::NOTIFY_SUCCESS
     );
@@ -486,6 +601,46 @@ if ($action !== '' && $runid > 0) {
         redirect($returnurl, get_string('scales:cleanupdone', $component, implode(', ', $parts)));
     }
 
+    // One cancelled run goes on, keeping what it collected (#165 AK1), the way a stopped experiment does: shown first,
+    // then confirmed. A run that cannot go on as it is says why, and resetting stays the other way.
+    if ($action === 'resumerun') {
+        $preview = \local_catquizlab\local\experiment_resume::preview((int) $run->experimentid, $runid);
+        $entry = $preview['runs'][0] ?? null;
+        if ($entry === null) {
+            redirect($returnurl, get_string('resume:not_nothing', $component), null, \core\output\notification::NOTIFY_INFO);
+        }
+        if ($entry['action'] === \local_catquizlab\local\experiment_resume::BLOCKED) {
+            redirect($returnurl, get_string(
+                'resume:runblocked',
+                $component,
+                get_string('resume:blocker' . $entry['blocker'], $component)
+            ), null, \core\output\notification::NOTIFY_WARNING);
+        }
+        if (!optional_param('confirm', 0, PARAM_BOOL)) {
+            echo $OUTPUT->header();
+            echo $OUTPUT->heading(get_string('resume:runheading', $component), 3);
+            echo \local_catquizlab\output\resume_view::preview_table($preview);
+            echo $OUTPUT->confirm(
+                get_string('resume:runconfirm', $component, (object) $preview['totals']),
+                new moodle_url('/local/catquizlab/runs.php', [
+                    'runid' => $runid, 'action' => 'resumerun', 'sesskey' => sesskey(), 'confirm' => 1,
+                ]),
+                $returnurl
+            );
+            echo $OUTPUT->footer();
+            exit;
+        }
+        $result = \local_catquizlab\local\experiment_resume::resume((int) $run->experimentid, $runid);
+        \local_catquizlab\local\debug_trace::record('ui', 'resumerun', ['runid' => $runid] + $result);
+        redirect(
+            $returnurl,
+            $result['ok'] ? get_string('resume:done', $component, (object) $result)
+                : get_string('resume:not_' . $result['reason'], $component),
+            null,
+            $result['ok'] ? \core\output\notification::NOTIFY_SUCCESS : \core\output\notification::NOTIFY_WARNING
+        );
+    }
+
     if ($action === 'resetrerun') {
         require_sesskey();
         require_capability('local/catquizlab:execute', $context);
@@ -597,7 +752,10 @@ if ($action !== '' && $runid > 0) {
             );
         }
 
-        redirect($returnurl, get_string('run:started', $component, 1));
+        redirect($returnurl, trim(get_string('run:started', $component, 1) . ' '
+            . \local_catquizlab\local\execution_queue::started_outside_note(
+                (int) $DB->get_field('local_catquizlab_run', 'experimentid', ['id' => $runid])
+            )));
     }
 
     if ($action === 'cancel') {
@@ -614,6 +772,9 @@ if ($action !== '' && $runid > 0) {
         // decisions.
         \local_catquizlab\local\run_lifecycle::set_status($runid, registry::STATUS_CANCELLED, 'cancelled_by_user');
         $DB->set_field('local_catquizlab_run', 'timemodified', time(), ['id' => $runid]);
+        // Its open sittings closed as the stop closes them (#166): cancelled by an operator, not failed — they used to
+        // stay queued in a run that hands out nothing, counted as waiting for ever. A resume plays them (#165).
+        \local_catquizlab\local\experiment_stop::close_sittings([$runid]);
         \local_catquizlab\event\run_aborted::create([
             'objectid' => $runid,
             'context'  => $context,
@@ -853,10 +1014,12 @@ if ($runid > 0) {
         // Ever failed or put back, read from the history: the sitting's own
         // row is cleared by the retry, and a filter on that row alone hid the
         // very sittings whose history the page exists to show.
-        'problems'   => ['runid = :runid AND (status = :failed OR tries > 1 OR lasterror IS NOT NULL'
+        // A sitting closed by an operator (#166) is no problem by that alone: its reason is the stop.
+        'problems'   => ['runid = :runid AND (status = :failed OR tries > 1 OR (lasterror IS NOT NULL AND status <> :cancelled)'
             . ' OR id IN (SELECT attemptid FROM {local_catquizlab_attemptlog}'
             . ' WHERE runid = :logrunid AND outcome IN (:logfailed, :logrequeued)))', []],
         'failed'     => ['runid = :runid AND status = :failed', []],
+        'cancelled'  => ['runid = :runid AND status = :cancelled', []],
         'retrydelay' => ['runid = :runid AND status = :queued AND nextruntime > :now', []],
         'running'    => ['runid = :runid AND status = :running', []],
         'stale'      => ['runid = :runid AND status = :running AND leaseexpires < :now', []],
@@ -872,6 +1035,7 @@ if ($runid > 0) {
     $filterparams = [
         'runid'     => $runid,
         'failed'    => $scheduler::STATUS_FAILED,
+        'cancelled' => $scheduler::STATUS_CANCELLED,
         'queued'    => $scheduler::STATUS_QUEUED,
         'running'   => $scheduler::STATUS_RUNNING,
         'collected' => $scheduler::STATUS_COLLECTED,
@@ -1019,7 +1183,10 @@ if ($runid > 0) {
         foreach ($troubled as $row) {
             $history = \local_catquizlab\local\attempt_history::of_attempt((int) $row->id);
             $error = \local_catquizlab\local\attempt_history::redact((string) ($row->lasterror ?? ''));
-            if ($error === '') {
+            if ((int) $row->status === \local_catquizlab\local\attempt_scheduler::STATUS_CANCELLED) {
+                // The stop's own reason, in the reader's language (#166): stored as a code, not as text.
+                $error = \local_catquizlab\local\attempt_scheduler::status_label((int) $row->status);
+            } else if ($error === '') {
                 // Cleared by a retry; the history still has it.
                 $error = \local_catquizlab\local\attempt_history::last_failure((int) $row->id);
             }
@@ -1353,6 +1520,17 @@ if ($runid > 0) {
             get_string('purge:deleterundeep', $component),
             'post'
         );
+        // A cancelled run goes on keeping what it collected (#165): offered before the destructive reset.
+        if ((int) $run['status'] === registry::STATUS_CANCELLED) {
+            $buttons .= $OUTPUT->single_button(
+                new moodle_url('/local/catquizlab/runs.php', [
+                    'runid' => $runid, 'action' => 'resumerun', 'sesskey' => sesskey(),
+                ]),
+                get_string('action:resumerun', $component),
+                'post',
+                ['type' => 'primary']
+            );
+        }
         if (!empty($allowed['reset'])) {
             $buttons .= $OUTPUT->single_button(
                 new moodle_url('/local/catquizlab/runs.php', [

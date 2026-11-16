@@ -161,6 +161,13 @@ final class one_start_test extends \advanced_testcase {
         // Prepared (the setup tasks are not run here; their end is): the line says the workers are starting, and
         // the entry no longer says "preparing".
         $DB->set_field('local_catquizlab_run', 'status', registry::STATUS_READY, ['experimentid' => $id]);
+        // Each ready run with its sittings queued, as its setup leaves it (#163: a holder without any is through).
+        foreach ($DB->get_fieldset_select('local_catquizlab_run', 'id', 'experimentid = ?', [$id]) as $runid) {
+            $person = $this->getDataGenerator()->get_plugin_generator('local_catquizlab')->create_person(['runid' => $runid]);
+            $DB->insert_record('local_catquizlab_attempt', (object) ['runid' => $runid, 'personid' => $person->id,
+                'status' => \local_catquizlab\local\attempt_scheduler::STATUS_QUEUED, 'tries' => 0, 'nextruntime' => 0,
+                'timecreated' => time(), 'timemodified' => time()]);
+        }
         $this->assertSame('busy', execution_queue::advance()['reason']);
         $this->assertSame('', (string) $DB->get_field('local_catquizlab_execqueue', 'reason', ['id' => $entry->id]));
         $this->assertSame('starting', experiment_status::snapshot($id, true)['phase']);
@@ -391,6 +398,11 @@ final class one_start_test extends \advanced_testcase {
         $generator = $this->getDataGenerator()->get_plugin_generator('local_catquizlab');
         $run = $generator->create_run();
         $DB->set_field('local_catquizlab_run', 'status', registry::STATUS_READY, ['id' => $run->id]);
+        // Prepared means its sittings are queued (#163: a ready run without any has nothing to play, its turn is empty).
+        $person = $generator->create_person(['runid' => $run->id]);
+        $DB->insert_record('local_catquizlab_attempt', (object) ['runid' => $run->id, 'personid' => $person->id,
+            'status' => \local_catquizlab\local\attempt_scheduler::STATUS_QUEUED, 'tries' => 0, 'nextruntime' => 0,
+            'timecreated' => time(), 'timemodified' => time()]);
         $id = (int) $run->experimentid;
 
         $this->assertTrue(experiment_runner::start($id)['ok']);

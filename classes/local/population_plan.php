@@ -139,12 +139,20 @@ class population_plan {
             + (int) ($bystatus[attempt_scheduler::STATUS_VALIDATED] ?? 0);
         $failed = (int) ($bystatus[attempt_scheduler::STATUS_FAILED] ?? 0);
         $queued = (int) ($bystatus[attempt_scheduler::STATUS_QUEUED] ?? 0);
+        // Closed by an operator (#166); those closed while still queued never started.
+        $cancelled = (int) ($bystatus[attempt_scheduler::STATUS_CANCELLED] ?? 0);
+        $neverstarted = $cancelled > 0 ? $DB->count_records_select(
+            'local_catquizlab_attempt',
+            "runid {$in} AND status = :cancelled AND tries = 0",
+            $params + ['cancelled' => attempt_scheduler::STATUS_CANCELLED]
+        ) : 0;
 
         return [
             'consistent' => $consistent, 'twins' => $twins, 'runs' => $runs,
             'expected' => $totals['expected'], 'materialised' => $totals['materialised'], 'sittings' => $totals['sittings'],
-            // Started: every sitting that has left the queue.
-            'started' => $totals['sittings'] - $queued, 'collected' => $collected, 'failed' => $failed,
+            // Started: every sitting that has left the queue to be played.
+            'started' => $totals['sittings'] - $queued - $neverstarted, 'collected' => $collected, 'failed' => $failed,
+            'cancelled' => $cancelled,
         ];
     }
 
@@ -172,6 +180,7 @@ class population_plan {
                 'twins' => $actual['twins'], 'runs' => count($actual['runs']), 'expected' => $actual['expected'],
                 'materialised' => $actual['materialised'], 'sittings' => $actual['sittings'],
                 'started' => $actual['started'], 'collected' => $actual['collected'], 'failed' => $actual['failed'],
+                'cancelled' => $actual['cancelled'],
             ]),
             'problems' => $problems,
             'consistent' => $actual['consistent'],

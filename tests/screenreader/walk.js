@@ -29,30 +29,34 @@ const START = 'catquizlab-screenreader-start';
  * Puts a focusable start point right before the bar, so the first key of a walk lands on the bar's first control.
  *
  * @param {import('@playwright/test').Page} page The page.
+ * @param {string} bar The bar's selector (the results page's filter bar unless given).
  */
-async function addStart(page) {
-    await page.evaluate(([bar, id]) => {
-        const form = document.querySelector(bar);
+async function addStart(page, bar = BAR) {
+    await page.evaluate(([selector, id]) => {
+        const form = document.querySelector(selector);
+        document.getElementById(id)?.remove();
         const start = document.createElement('span');
         start.id = id;
         start.tabIndex = 0;
         start.textContent = 'Start';
         form.parentNode.insertBefore(start, form);
-    }, [BAR, START]);
+    }, [bar, START]);
 }
 
 /**
  * Which of the bar's controls has the focus: its position in the bar, or -1 when the focus is elsewhere.
  *
  * @param {import('@playwright/test').Page} page The page.
+ * @param {string} bar The bar's selector.
+ * @param {string} controls The selector of its controls.
  * @returns {Promise<number>}
  */
-async function focused(page) {
-    return page.evaluate(([bar, selector]) => {
-        const form = document.querySelector(bar);
-        const controls = Array.from(form.querySelectorAll(selector)).filter((el) => el.offsetParent !== null);
-        return controls.indexOf(document.activeElement);
-    }, [BAR, CONTROLS]);
+async function focused(page, bar = BAR, controls = CONTROLS) {
+    return page.evaluate(([barselector, selector]) => {
+        const form = document.querySelector(barselector);
+        const all = Array.from(form.querySelectorAll(selector)).filter((el) => el.offsetParent !== null);
+        return all.indexOf(document.activeElement);
+    }, [bar, controls]);
 }
 
 /**
@@ -95,10 +99,12 @@ async function heard(reader, action) {
  * @param {object} reader The screen reader (press, spokenPhraseLog).
  * @param {string[]} keys The keys, in the order they are tried.
  * @param {number} count How many controls the bar has.
+ * @param {string} bar The bar's selector.
+ * @param {string} controls The selector of its controls.
  * @returns {Promise<{heard: Array<?string>, keys: Array<?string>, order: number[]}>} Per control what was said and
  *     with which key it was reached; and the order in which the first key reached them.
  */
-async function walk(page, reader, keys, count) {
+async function walk(page, reader, keys, count, bar = BAR, controls = CONTROLS) {
     const heard = new Array(count).fill(null);
     const reachedwith = new Array(count).fill(null);
     const order = [];
@@ -113,7 +119,7 @@ async function walk(page, reader, keys, count) {
             const before = (await reader.spokenPhraseLog()).length;
             await reader.press(key, {capture: true});
             const said = (await settled(reader)).slice(before).join(' ');
-            const at = await focused(page);
+            const at = await focused(page, bar, controls);
             if (at < 0) {
                 if (entered) {
                     break;
