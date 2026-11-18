@@ -89,6 +89,41 @@ async function heard(reader, action) {
     return (await settled(reader)).slice(before).join(' ');
 }
 
+/** @type {RegExp} Where a VoiceOver usage hint starts; everything from there on is the hint. */
+const HINT = /you are currently on\b[\s\S]*$/i;
+
+/**
+ * Whether a capture holds nothing but a VoiceOver usage hint ("You are currently on a button. To display …").
+ *
+ * VoiceOver speaks the hint a moment after the item. When the hint of one control comes while the focus has already
+ * moved, it can be all that is caught for the next one (GitHub, VoiceOver, moodle5, 18.11.2026: the second Help button
+ * of the item model was heard as "You are currently on a button. To display a list of options, press
+ * Control-Option-Space …", the hint of the combobox before it). The control itself was not heard at all then.
+ *
+ * @param {?string} said What was caught.
+ * @returns {boolean}
+ */
+function onlyHint(said) {
+    return !!said && HINT.test(said) && said.replace(HINT, '').trim() === '';
+}
+
+/**
+ * Has the reader say again what has the keyboard focus, the way a user asks when an announcement was drowned out:
+ * VoiceOver's "describe the item that has the keyboard focus" (VO-F4). Null for a reader without that command.
+ *
+ * @param {object} reader The screen reader.
+ * @returns {Promise<?string>}
+ */
+async function askAgain(reader) {
+    const command = reader.keyboardCommands?.describeItemWithKeyboardFocus;
+    if (!command || typeof reader.perform !== 'function') {
+        return null;
+    }
+    const before = (await settled(reader)).length;
+    await reader.perform(command, {capture: true});
+    return (await settled(reader)).slice(before).join(' ');
+}
+
 /**
  * Where the keyboard focus is: whether the page has it at all (the browser window in front), whether it is still on
  * the start point, and whether it is somewhere before the start point in the page.
@@ -165,15 +200,20 @@ async function refocus(page, reader) {
  * @param {number} count How many controls the bar has.
  * @param {string} bar The bar's selector.
  * @param {string} controls The selector of its controls.
- * @returns {Promise<{heard: Array<?string>, keys: Array<?string>, order: number[], refocused: Array<object>}>} Per
- *     control what was said and with which key it was reached; the order in which the first key reached them; and
- *     every time the window had to be brought to the front again, with where the focus was.
+ * When all that was caught for a control is a VoiceOver usage hint, the reader is asked once what has the focus
+ * (onlyHint(), askAgain()); what it says then is what counts, and both captures are part of the result.
+ *
+ * @returns {Promise<{heard: Array<?string>, keys: Array<?string>, order: number[], refocused: Array<object>,
+ *     askedagain: Array<object>}>} Per control what was said and with which key it was reached; the order in which the
+ *     first key reached them; every time the window had to be brought to the front again, with where the focus was;
+ *     and every control the reader was asked about again, with both captures.
  */
 async function walk(page, reader, keys, count, bar = BAR, controls = CONTROLS) {
     const heard = new Array(count).fill(null);
     const reachedwith = new Array(count).fill(null);
     const order = [];
     const refocused = [];
+    const askedagain = [];
     for (const key of keys) {
         if (heard.every((said) => said !== null)) {
             break;
@@ -207,12 +247,17 @@ async function walk(page, reader, keys, count, bar = BAR, controls = CONTROLS) {
                 order.push(at);
             }
             if (heard[at] === null) {
-                heard[at] = said;
+                // Only the hint of the control before: the control itself was drowned out, so ask what has the focus.
+                const again = onlyHint(said) ? await askAgain(reader) : null;
+                if (again !== null) {
+                    askedagain.push({control: at, key: key, first: said, again: again});
+                }
+                heard[at] = again !== null && again !== '' ? again : said;
                 reachedwith[at] = key;
             }
         }
     }
-    return {heard: heard, keys: reachedwith, order: order, refocused: refocused};
+    return {heard: heard, keys: reachedwith, order: order, refocused: refocused, askedagain: askedagain};
 }
 
 /**
@@ -225,4 +270,4 @@ function norm(text) {
     return (text || '').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
 }
 
-module.exports = {BAR, CONTROLS, addStart, focused, settled, heard, walk, norm};
+module.exports = {BAR, CONTROLS, addStart, focused, settled, heard, walk, norm, onlyHint};

@@ -200,6 +200,7 @@ async function walkGroup(page, reader, keys, group, info) {
     const result = await walk(page, reader, keys, controls.length, group.bar, group.selector);
     await keep(info, group.key, {
         reader: SR, keys: keys, order: result.order, url: group.url, refocused: result.refocused,
+        askedagain: result.askedagain,
         controls: controls.map((control, i) => Object.assign({}, control, {key: result.keys[i], heard: result.heard[i]})),
         log: await reader.spokenPhraseLog(),
     });
@@ -236,7 +237,7 @@ async function filterbar(page, reader, keys, info) {
     await reader.navigateToWebContent();
     const result = await walk(page, reader, keys, controls.length);
     await keep(info, 'filterbar', {
-        reader: SR, keys: keys, order: result.order, refocused: result.refocused,
+        reader: SR, keys: keys, order: result.order, refocused: result.refocused, askedagain: result.askedagain,
         controls: controls.map((control, i) => Object.assign({}, control, {key: result.keys[i], heard: result.heard[i]})),
         log: await reader.spokenPhraseLog(),
     });

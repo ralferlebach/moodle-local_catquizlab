@@ -6,6 +6,39 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.7.70] — 2026-11-18 — Version 2026111801. The lab's deletions against a crossed running attempt (adaptivequizcatmodel_catquiz #11), taken over; a drowned-out VoiceOver announcement asked again
+
+No database change, no change of behaviour.
+
+A snapshot `main-20261117001` carried this test as "0.7.65", version 2026111700 — after 0.7.65 (2026111501) was
+released and above 0.7.69 (2026111603), so an installation that had it would refuse 0.7.69 as a downgrade. 0.7.70
+takes the test over with a version above both; nothing else of that snapshot differs from 0.7.64. Not 2026111800:
+that number was on the first ZIP of 0.7.64 (15.11.2026) before the numbering went back to 2026111500.
+
+- New `tests/engine_isolation_test.php`: a run whose activity has a real running attempt of one of its people, and an
+  activity outside the lab with a real running attempt of somebody else, their CAT attempt numbers crossed. Deep
+  purge, run reset, reset and rerun, and the same deletion again each take the run's footprint and leave the other
+  attempt value for value as it was (every field of every row), create no new orphan, and the other person goes on
+  to the next question. Red when the adapter deletes progress by the activity attempt number.
+- Run here by the plugin's PHPUnit on every stack of the matrix, and by the mandatory job "CatQuizLab integration"
+  of adaptivequizcatmodel_catquiz (both lines).
+- Its coverage is named in the class docblock (`@covers`) like every other test here; the `#[CoversClass]`
+  attributes between docblock and class hid it from the Moodle sniff (one warning, which fails the lint gate).
+
+### Screen reader: an announcement drowned out by the hint before it (#159 DoD5)
+- Interface end-to-end on fd478bd (0.7.69), VoiceOver on moodle5: of the item model's twelve controls, the second
+  Help button was heard only as "You are currently on a button. To display a list of options, press
+  Control-Option-Space …" — the usage hint of the combobox before it, which VoiceOver spoke after the focus had moved.
+  The button itself was not heard at all, so the test found no name. The retry then lost VoiceOver's connection to
+  System Events (-609). The same page passed with VoiceOver on moodle53 and with NVDA on all three stacks.
+- `tests/screenreader/walk.js`: when all that was caught for a control is a VoiceOver usage hint, the reader is asked
+  once what has the keyboard focus (VoiceOver's "describe the item that has the keyboard focus", VO-F4), as a user
+  would; its answer is checked for name, role and value as before. Both captures go into the artifact
+  (`askedagain`). NVDA is unchanged. A control without a name still fails.
+- The rest of that run's red VoiceOver jobs never started — legacy in both attempts, moodle5 in the second: GitHub
+  had no macOS runner for them ("The job was not acquired by Runner of type hosted even after multiple attempts").
+  Nothing in the code; they need a new run.
+
 ## [0.7.69] — 2026-11-17 — Version 2026111603. CLARA read-only snapshot of 17.11.: what it could not tell, told; a stopped experiment no longer "Finished"
 
 The read-only snapshot of CLARA (17.11.2026, 20:30 UTC, 0.7.67) found three runs "running" with 87 sittings due, no
