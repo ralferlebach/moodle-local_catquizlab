@@ -161,3 +161,14 @@ Daneben steht die vorsichtige Alternative: das Limit senken (Link zu den Einstel
 
 **Offen** (Betrieb, nicht Code): Messreihe 1/5/10/12/25 Worker auf CLARA oder einer gleichwertigen Umgebung (DoD-05),
 mit `cli/load_matrix.sh` (`WORKERS="1 5 10 12 25"`) und der Webserver-Auslastung.
+
+## Verwandte Issues (#124 DoD-LOAD-03)
+
+- **#110 (HTTP 500, Zeitüberschreitung, Speicher):** was ein fehlgeschlagener oder zu später Antwort-POST beim Worker
+  auslöst und wo er auf dem Server zu finden ist: `docs/dev/antwortuebermittlung.md` („Ein HTTP 500 finden“); die
+  Speichergrenzen der Ergebnisseiten: `docs/dev/speicher-ergebnisse.md`.
+- **#133 (Circuit Breaker, Lease, Retry):** `docs/dev/lease-retry-breaker.md`. Der Breaker hält einen Lauf an, der
+  Lastschutz senkt die Zahl der Worker; beide zählen Fehler, aber verschiedene.
+- **#120 (gestaffelter Start):** Worker beginnen im Abstand von `worker_start_stagger` (20 s); auch das Nachstarten nach
+  einer Freigabe des Lastschutzes und nach dem Ablösen läuft gestaffelt.
+- **#162, #163, #164, CatQuiz #27:** Abgrenzung in `docs/dev/clara-abgrenzung.md`.

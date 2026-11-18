@@ -97,7 +97,10 @@ class progress_view {
         $workers = [];
         $recent = worker_registry::recent();
         // The runs the workers are playing, in one query each for sittings and labels (#150 AK5).
-        $playing = array_filter(array_map(static fn(\stdClass $w): int => (int) $w->currentattempt, $recent));
+        // Only a live worker plays: a stopped one may still carry the sitting it last held (#124, before 0.7.69).
+        $holds = static fn(\stdClass $w): int => in_array((int) $w->status, [worker_registry::STATUS_STARTING,
+            worker_registry::STATUS_RUNNING], true) ? (int) $w->currentattempt : 0;
+        $playing = array_filter(array_map($holds, $recent));
         $playingruns = $playing === [] ? [] : $DB->get_records_list('local_catquizlab_attempt', 'id', $playing, '', 'id, runid');
         $workerlabels = run_labels::for_runs(array_map(static fn(\stdClass $a): int => (int) $a->runid, $playingruns));
         foreach ($recent as $worker) {
@@ -126,9 +129,9 @@ class progress_view {
                             : worker_registry::status_label($state))),
                 'waiting'    => $waiting,
                 'stale'      => $stale,
-                'attemptid'  => (int) $worker->currentattempt,
-                'runid'      => (int) ($playingruns[(int) $worker->currentattempt]->runid ?? 0),
-                'runlabel'   => $workerlabels[(int) ($playingruns[(int) $worker->currentattempt]->runid ?? 0)] ?? null,
+                'attemptid'  => $holds($worker),
+                'runid'      => (int) ($playingruns[$holds($worker)]->runid ?? 0),
+                'runlabel'   => $workerlabels[(int) ($playingruns[$holds($worker)]->runid ?? 0)] ?? null,
                 'jobsdone'   => (int) $worker->jobsdone,
                 'heartbeat'  => (int) $worker->heartbeat > 0 ? userdate((int) $worker->heartbeat) : '-',
                 'heartbeatago' => (int) $worker->heartbeat > 0

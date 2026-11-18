@@ -40,6 +40,7 @@ require_once($CFG->libdir . '/clilib.php');
 use local_catquizlab\local\attempt_scheduler;
 use local_catquizlab\local\execution_queue;
 use local_catquizlab\local\experiment_runner;
+use local_catquizlab\local\idle_diagnosis;
 use local_catquizlab\local\registry;
 use local_catquizlab\local\setup_wizard;
 use local_catquizlab\local\worker_capacity;
@@ -110,6 +111,9 @@ $report = [
     'capacity' => worker_capacity::effective(),
     'workers' => worker_registry::summary(),
     'draftruns' => $DB->count_records('local_catquizlab_run', ['status' => registry::STATUS_DRAFT]),
+    // Run by run, why waiting work is or is not played, with what releases it (#110, #133, #163: CLARA 17.11.2026).
+    'runswithwork' => idle_diagnosis::runs($experimentid),
+    'enabled' => (int) get_config('local_catquizlab', 'enabled'),
 ];
 
 if ($options['json']) {
@@ -143,6 +147,17 @@ cli_writeln((int) $breakdown['claimable'] > 0
     : 'Why nothing would start: ' . $report['whynothing']);
 cli_writeln('Last tick: ' . (isset($last['time']) ? userdate((int) $last['time']) : 'never') . ', launched '
     . (int) ($last['launched'] ?? 0) . ', reason ' . ((string) ($last['reason'] ?? '') ?: '–'));
+$byverdict = array_count_values(array_column($report['runswithwork'], 'verdict'));
+arsort($byverdict);
+cli_writeln('Runs with sittings waiting or in play: ' . count($report['runswithwork']) . ($byverdict === [] ? ''
+    : ' (' . implode(', ', array_map(
+        static fn(string $v, int $n): string => "{$v} {$n}",
+        array_keys($byverdict),
+        $byverdict
+    )) . ')'));
+foreach ($report['runswithwork'] as $run) {
+    cli_writeln('  ' . $run['text']);
+}
 cli_writeln('Execution queue:');
 foreach ($report['executionqueue'] as $entry) {
     cli_writeln("  experiment {$entry['experimentid']}: {$entry['state']} since {$entry['since']}, {$entry['runs']} run(s)"

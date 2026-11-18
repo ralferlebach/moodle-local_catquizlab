@@ -62,6 +62,7 @@ use local_catquizlab\local\worker_registry;
     'concurrency' => 0,
     'no-navigation-failures' => false,
     'expect-recovered' => 0,
+    'expect-recovered-reasons' => '',
     'budget' => '',
     'require-all' => false,
     'strategies' => '',
@@ -90,6 +91,10 @@ Options:
                        random number, true probabilities, category), as CSV in FILE. Fails when a twin answers the
                        same item differently in two runs, an answer was recorded otherwise than drawn, no item was
                        shared, or a run is not under RNG schema 2 (#155).
+  --expect-recovered=N With CATQUIZLAB_FAULTS for the worker: at least N submissions reconciled, every question answered
+                       exactly once (#134).
+  --expect-recovered-reasons=CODE:N,…  And exactly N reconciliations with each of these reason codes, e.g.
+                       submit_cdp_timeout:2 — one per injected slow response, not a loop of timeouts (#110).
   --keep               Leave the experiment behind for inspection.
   --budget=G1,G2,S1,S2,SE1,SE2
                        The run's budgets instead of the smoke defaults (#123):
@@ -647,6 +652,17 @@ if ($expectrecovered > 0) {
     }
     if (count($recovered) < $expectrecovered) {
         cli_error(count($recovered) . ' reconciled submission(s) recorded, ' . $expectrecovered . ' expected.');
+    }
+    // Exactly as many of each kind as were injected (#110): a slow response is one reconciliation, never a loop of
+    // timeouts and retries.
+    $byreason = array_count_values(array_map(static fn($row): string => (string) $row->reasoncode, $recovered));
+    foreach (array_filter(explode(',', (string) $options['expect-recovered-reasons'])) as $expected) {
+        [$code, $n] = array_pad(explode(':', trim($expected), 2), 2, '0');
+        $got = $byreason[$code] ?? 0;
+        step('reconciled with ' . $code . ': ' . $got . ' (expected ' . (int) $n . ')');
+        if ($got !== (int) $n) {
+            cli_error($got . ' reconciliation(s) with ' . $code . ', exactly ' . (int) $n . ' expected.');
+        }
     }
     // Every question of every collected sitting answered exactly once.
     $sittings = $DB->get_records_select(

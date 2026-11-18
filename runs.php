@@ -180,6 +180,7 @@ if ($action === 'resumeexperiment') {
     redirect(
         $back,
         $result['ok'] ? get_string('resume:done', $component, (object) $result)
+            . (!empty($result['held']) ? ' ' . get_string('resume:doneheld', $component, $result['held']) : '')
             : get_string('resume:not_' . $result['reason'], $component),
         null,
         $result['ok'] ? \core\output\notification::NOTIFY_SUCCESS : \core\output\notification::NOTIFY_WARNING
@@ -635,6 +636,7 @@ if ($action !== '' && $runid > 0) {
         redirect(
             $returnurl,
             $result['ok'] ? get_string('resume:done', $component, (object) $result)
+                . (!empty($result['held']) ? ' ' . get_string('resume:doneheld', $component, $result['held']) : '')
                 : get_string('resume:not_' . $result['reason'], $component),
             null,
             $result['ok'] ? \core\output\notification::NOTIFY_SUCCESS : \core\output\notification::NOTIFY_WARNING

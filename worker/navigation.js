@@ -516,8 +516,11 @@ async function clickAndSettle(page, selectors, questionSelectors,
     page.on('requestfailed', onFailed);
     let navigated = null;
     const submission = (state, error) => {
+        // When it began, to the millisecond, beside how long it took: the server's request line and the PHP error log
+        // are found by this time and the correlation id (#110).
         const record = {label, context, chain: chain.slice(0, 8), state, navigated,
-            error: error ? String(error.message || error) : '', ms: Date.now() - started};
+            error: error ? String(error.message || error) : '', startedat: new Date(started).toISOString(),
+            ms: Date.now() - started};
         record.class = classifySubmit(record);
         return record;
     };
@@ -576,7 +579,8 @@ function describeSubmit(submit) {
         + (hop.location ? ` → ${hop.location}` : '')).join(', ');
     const where = submit.context ? ` usage=${submit.context.qubaid} slot=${submit.context.slot}`
         + ` answered=${submit.context.answered}` : '';
-    return `[submit:${submit.class}] ${submit.label}:${where} chain=[${hops}] in ${submit.ms} ms`;
+    const at = submit.startedat ? ` at ${submit.startedat}` : '';
+    return `[submit:${submit.class}] ${submit.label}:${where} chain=[${hops}]${at} in ${submit.ms} ms`;
 }
 
 /**

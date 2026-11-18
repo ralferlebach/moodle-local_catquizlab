@@ -26,7 +26,7 @@
  * 2. the tables are those of db/install.xml, column by column and index by index (a fresh installation has the same);
  * 3. the columns and the index of 2026111500 (item identity, #154) are there;
  * 4. no row was lost or added by the upgrade, and items, pools, runs and sittings from before are unchanged in every
- *    column they had; the item identity of rows from before is empty, never guessed (#154); the one change 2026111501
+ *    column they had; the item identity of rows from before 2026111500 is empty, never guessed (#154); the one change 2026111501
  *    makes: sittings a stop closed as failed are cancelled now, by their stop text (#166), all others keep their
  *    status;
  * 5. the runs and experiments from before can be read: their labels, figures and progress.
@@ -224,13 +224,19 @@ $say($wrong === [], sprintf(
     $keptfailed
 ) . ($wrong === [] ? '' : ': ' . implode(', ', array_slice($wrong, 0, 10))));
 
-$guessed = $DB->count_records_select(
-    'local_catquizlab_item',
-    'itemkey IS NOT NULL OR contentfp IS NOT NULL OR fingerprint IS NOT NULL'
-);
-$poolguessed = $DB->count_records_select('local_catquizlab_pool', 'fingerprint IS NOT NULL');
-$say($guessed + $poolguessed === 0, sprintf('identity of items and pools from before left empty (%d item(s), %d pool(s) '
-    . 'with a value)', $guessed, $poolguessed));
+// Only where the data is older than item identity (2026111500): data written by a version that has it keeps what it
+// had, which the unchanged-columns check above already holds (a Moodle upgrade with the same plugin, #136).
+if ((int) $before['version'] < 2026111500) {
+    $guessed = $DB->count_records_select(
+        'local_catquizlab_item',
+        'itemkey IS NOT NULL OR contentfp IS NOT NULL OR fingerprint IS NOT NULL'
+    );
+    $poolguessed = $DB->count_records_select('local_catquizlab_pool', 'fingerprint IS NOT NULL');
+    $say($guessed + $poolguessed === 0, sprintf('identity of items and pools from before left empty (%d item(s), %d '
+        . 'pool(s) with a value)', $guessed, $poolguessed));
+} else {
+    $say(true, 'identity of items and pools: written with it (version ' . (int) $before['version'] . '), kept as it was');
+}
 
 // 5. What was there can be read.
 $runids = array_map('intval', $DB->get_fieldset_select('local_catquizlab_run', 'id', '1 = 1'));

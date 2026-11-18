@@ -347,4 +347,69 @@ final class progress_overview_test extends \advanced_testcase {
         $this->assertSame($first['totals'], $last['totals']);
         $this->assertCount(3, $first['pager']['links']);
     }
+
+    /**
+     * Twelve processes busy elsewhere are not this experiment's (#160 AK-CLARA-15, DoD-CLARA-09; #163 AK-CLARA-12;
+     * #158 AK-CLARA-03).
+     *
+     * The CLARA situation: an experiment stopped by its operator — six runs, 1018-like: some collected, the rest
+     * cancelled, no claim — while twelve worker processes play two other experiments. Its progress says twelve processes
+     * on the installation and none of its own sittings in progress, says so in words that keep the two apart, is not
+     * running, gives no countdown and no 100 %; the two others count exactly the twelve sittings the processes hold.
+     *
+     * @return void
+     */
+    public function test_twelve_processes_elsewhere_are_not_this_experiments(): void {
+        global $CFG, $DB;
+
+        $stopped = $this->experiment('Stopped', 6, registry::STATUS_CANCELLED, [
+            attempt_scheduler::STATUS_COLLECTED => 2, attempt_scheduler::STATUS_CANCELLED => 3]);
+        $first = $this->experiment('First', 2, registry::STATUS_RUNNING, [
+            attempt_scheduler::STATUS_RUNNING => 3, attempt_scheduler::STATUS_QUEUED => 5]);
+        $second = $this->experiment('Second', 1, registry::STATUS_RUNNING, [
+            attempt_scheduler::STATUS_RUNNING => 6, attempt_scheduler::STATUS_QUEUED => 4]);
+        // Twelve processes, each holding one sitting of the two running experiments.
+        $held = $DB->get_fieldset_select('local_catquizlab_attempt', 'id', 'status = ?', [attempt_scheduler::STATUS_RUNNING]);
+        $this->assertCount(12, $held);
+        foreach (array_values($held) as $i => $attemptid) {
+            $DB->insert_record('local_catquizlab_worker', (object) ['workerid' => 'w' . ($i + 1), 'slot' => $i + 1,
+                'status' => worker_registry::STATUS_RUNNING, 'heartbeat' => time(), 'currentattempt' => (int) $attemptid,
+                'timecreated' => time(), 'timemodified' => time()]);
+        }
+
+        $own = live_progress::snapshot($stopped['id']);
+        $this->assertSame(12, $own['now']['workers'], 'the installation\'s processes');
+        $this->assertSame(0, $own['now']['inflight'], 'none of them on this experiment');
+        $this->assertSame([12, 18, 0], [$own['now']['collected'], $own['now']['cancelled'], $own['now']['queued']]);
+        $this->assertNotSame(live_progress::RUNNING, $own['state'], 'a stopped experiment is not running');
+        // Stopped, not finished: the label "All experiments" shows (CLARA: it said "Finished" for 1018 of 6000).
+        $this->assertSame(live_progress::STOPPED, $own['state']);
+        $this->assertSame(get_string('progress:statestopped', 'local_catquizlab'), $own['label']);
+        $this->assertLessThan(100, $own['percent'], 'cancelled is not done: no 100 %');
+        foreach ($own['time']['runs'] as $run) {
+            $this->assertNotSame(eta::ESTIMATE, $run['reliability'], 'no countdown for run ' . $run['runid']);
+        }
+
+        // The two running ones count exactly the sittings the twelve processes hold.
+        $inflight = 0;
+        foreach ([$first['id'], $second['id']] as $experimentid) {
+            $snapshot = live_progress::snapshot($experimentid);
+            $this->assertSame(12, $snapshot['now']['workers']);
+            $inflight += $snapshot['now']['inflight'];
+        }
+        $this->assertSame(12, $inflight, 'the twelve are the two others\' sittings');
+
+        // The words keep them apart: the processes are the installation's, the sittings this experiment's — in both
+        // languages, read from the plugin's own files (a test site has no German language pack installed).
+        $words = [
+            'en' => ['on this installation, for every experiment', 'of this experiment in progress'],
+            'de' => ['auf dieser Installation aktiv, für alle Experimente', 'dieses Experiments in Bearbeitung'],
+        ];
+        foreach ($words as $lang => [$workers, $sittings]) {
+            $string = [];
+            include($CFG->dirroot . '/local/catquizlab/lang/' . $lang . '/local_catquizlab.php');
+            $this->assertStringContainsString($workers, $string['progress:nowworkers'], $lang);
+            $this->assertStringContainsString($sittings, $string['progress:nowinflight'], $lang);
+        }
+    }
 }

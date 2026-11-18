@@ -62,6 +62,16 @@ final class operator_cancel_test extends \advanced_testcase {
     }
 
     /**
+     * The setup wizard's assumption is the test's own: the next test class finds the site as it is.
+     *
+     * @return void
+     */
+    protected function tearDown(): void {
+        \local_catquizlab\local\setup_wizard::assume_ready_for_testing(null);
+        parent::tearDown();
+    }
+
+    /**
      * A run of an experiment with sittings in the given statuses, in one insert per status.
      *
      * @param int $experimentid The experiment.
@@ -226,6 +236,242 @@ final class operator_cancel_test extends \advanced_testcase {
         $this->assertSame(get_string('eta:stopped', 'local_catquizlab'), $time['text']['status']);
         $this->assertSame(get_string('eta:stoppedleft', 'local_catquizlab', 4982), $time['text']['remaining']);
         $this->assertSame([\local_catquizlab\local\eta::STOPPED], array_unique(array_column($time['runs'], 'reliability')));
+    }
+
+    /**
+     * One table of a research package, as rows by column.
+     *
+     * @param string $path The package.
+     * @param string $table The table.
+     * @return array{manifest: array, rows: array[]}
+     */
+    protected function package_table(string $path, string $table): array {
+        $zip = new \ZipArchive();
+        $this->assertTrue($zip->open($path) === true);
+        $manifest = json_decode((string) $zip->getFromName('manifest.json'), true);
+        $handle = fopen('php://memory', 'w+b');
+        fwrite($handle, (string) $zip->getFromName($manifest['tables'][$table]['file']));
+        rewind($handle);
+        $header = fgetcsv($handle, null, ',', '"', '');
+        $rows = [];
+        while (($line = fgetcsv($handle, null, ',', '"', '')) !== false) {
+            $rows[] = array_combine($header, $line);
+        }
+        fclose($handle);
+        $zip->close();
+
+        return ['manifest' => $manifest, 'rows' => $rows];
+    }
+
+    /**
+     * #166 DoD-03, the export goldens: the live case stopped and then resumed, written as research package each time.
+     * The runs table and the manifest carry the same disjoint sums as every page: stopped, 1018 collected, 0 failed,
+     * 4982 cancelled of 6000, run by run as on the live installation; resumed, 0 cancelled and the 6000 still all there.
+     * No sitting the stop closed appears as a result (validity, analysis population).
+     *
+     * @return void
+     */
+    public function test_the_live_case_exported_stopped_and_resumed(): void {
+        global $DB;
+        \local_catquizlab\local\setup_wizard::assume_ready_for_testing(true);
+        $e = (int) $this->generator->create_experiment()->id;
+        $runs = [
+            86 => $this->run_with($e, registry::STATUS_RUNNING, [attempt_scheduler::STATUS_COLLECTED => 997,
+                attempt_scheduler::STATUS_QUEUED => 3]),
+            89 => $this->run_with($e, registry::STATUS_RUNNING, [attempt_scheduler::STATUS_COLLECTED => 21,
+                attempt_scheduler::STATUS_QUEUED => 977, attempt_scheduler::STATUS_RUNNING => 2]),
+        ];
+        foreach ([84, 85, 87, 88] as $label) {
+            $runs[$label] = $this->run_with($e, registry::STATUS_READY, [attempt_scheduler::STATUS_QUEUED => 1000]);
+        }
+        $course = $this->getDataGenerator()->create_course();
+        foreach ($runs as $runid) {
+            $cmid = (int) $DB->insert_record('course_modules', (object) ['course' => $course->id, 'module' => 1,
+                'instance' => 6000 + $runid, 'section' => 0, 'added' => time()]);
+            $DB->set_field('local_catquizlab_run', 'testcmid', $cmid, ['id' => $runid]);
+            \local_catquizlab\local\run_log::record($runid, \local_catquizlab\local\run_log::PROVISIONING_READY);
+        }
+        experiment_stop::stop($e);
+
+        $path = make_request_directory() . '/stopped.zip';
+        \local_catquizlab\local\research_package::write_file(['experimentid' => $e], $path);
+        $stopped = $this->package_table($path, 'runs');
+        $byrun = array_column($stopped['rows'], null, 'runid');
+        $golden = [86 => [1000, 0, 3], 89 => [1000, 0, 979], 84 => [1000, 0, 1000], 85 => [1000, 0, 1000],
+            87 => [1000, 0, 1000], 88 => [1000, 0, 1000]];
+        foreach ($golden as $label => $expected) {
+            $row = $byrun[$runs[$label]];
+            $this->assertSame($expected, [(int) $row['sittings'], (int) $row['sittingsfailed'],
+                (int) $row['sittingscancelled']], "run {$label}");
+            $this->assertSame('cancelled', $row['status'], "run {$label}");
+        }
+        $sum = static fn(array $rows, string $column): int => array_sum(array_map('intval', array_column($rows, $column)));
+        $this->assertSame([6000, 0, 4982], [$sum($stopped['rows'], 'sittings'), $sum($stopped['rows'], 'sittingsfailed'),
+            $sum($stopped['rows'], 'sittingscancelled')]);
+        $this->assertSame(4982, array_sum(array_column($stopped['manifest']['runs'], 'sittingscancelled')));
+        $this->assertSame(0, array_sum(array_column($stopped['manifest']['runs'], 'sittingsfailed')));
+        // Nothing the stop closed is a result.
+        $cancelled = array_map('strval', $DB->get_fieldset_select(
+            'local_catquizlab_attempt',
+            'id',
+            'status = ?',
+            [attempt_scheduler::STATUS_CANCELLED]
+        ));
+        foreach (['validity', 'analysis_population'] as $table) {
+            $ids = array_column($this->package_table($path, $table)['rows'], 'attemptid');
+            $this->assertSame([], array_values(array_intersect($ids, $cancelled)), $table);
+        }
+
+        $this->assertTrue(\local_catquizlab\local\experiment_resume::resume($e)['ok']);
+        $path = make_request_directory() . '/resumed.zip';
+        \local_catquizlab\local\research_package::write_file(['experimentid' => $e], $path);
+        $resumed = $this->package_table($path, 'runs');
+        $this->assertSame([6000, 0, 0], [$sum($resumed['rows'], 'sittings'), $sum($resumed['rows'], 'sittingsfailed'),
+            $sum($resumed['rows'], 'sittingscancelled')]);
+        $this->assertSame(['ready'], array_values(array_unique(array_column($resumed['rows'], 'status'))));
+    }
+
+    /**
+     * #133 AK-CLARA-11/12, DoD-CLARA-04: the live case with what can go wrong before a stop — ten technical failures
+     * with their retries spent, the circuit breaker holding that run, one sitting waiting for its retry — then the stop
+     * and the resume. Every kind keeps its own name in status, history and figures: 10 technical failures, 4972 closed
+     * by the stop, never "4982 failed"; the resume plays what the stop closed, leaves what had failed for good, and does
+     * not release the breaker's pause behind anyone's back: the preview says the run stays paused, the result counts it.
+     *
+     * @return void
+     */
+    public function test_failures_and_a_breaker_pause_before_the_stop_keep_their_names_through_stop_and_resume(): void {
+        global $DB;
+        $e = (int) $this->generator->create_experiment()->id;
+        $http5xx = '[submit:http_5xx] submit answer 3';
+        $runs = [
+            86 => $this->run_with($e, registry::STATUS_RUNNING, [attempt_scheduler::STATUS_COLLECTED => 997,
+                attempt_scheduler::STATUS_QUEUED => 3]),
+            // 21 collected, 10 failed for good (retries spent), 967 queued (1 of them waiting for its retry), 2 in play.
+            89 => $this->run_with(
+                $e,
+                registry::STATUS_RUNNING,
+                [attempt_scheduler::STATUS_COLLECTED => 21,
+                attempt_scheduler::STATUS_FAILED => \local_catquizlab\local\circuit_breaker::THRESHOLD,
+                attempt_scheduler::STATUS_QUEUED => 967, attempt_scheduler::STATUS_RUNNING => 2],
+                [attempt_scheduler::STATUS_FAILED => ['lasterror' => $http5xx, 'tries' => attempt_scheduler::MAX_TRIES]]
+            ),
+        ];
+        foreach ([84, 85, 87, 88] as $label) {
+            $runs[$label] = $this->run_with($e, registry::STATUS_READY, [attempt_scheduler::STATUS_QUEUED => 1000]);
+        }
+        // Each run as the live ones: prepared to the end, with its activity (what resuming needs to let it go on).
+        \local_catquizlab\local\setup_wizard::assume_ready_for_testing(true);
+        $course = $this->getDataGenerator()->create_course();
+        foreach ($runs as $runid) {
+            $cmid = (int) $DB->insert_record('course_modules', (object) ['course' => $course->id, 'module' => 1,
+                'instance' => 5000 + $runid, 'section' => 0, 'added' => time()]);
+            $DB->set_field('local_catquizlab_run', 'testcmid', $cmid, ['id' => $runid]);
+            \local_catquizlab\local\run_log::record($runid, \local_catquizlab\local\run_log::PROVISIONING_READY);
+        }
+        $failedids = $DB->get_fieldset_select(
+            'local_catquizlab_attempt',
+            'id',
+            'runid = ? AND status = ?',
+            [$runs[89], attempt_scheduler::STATUS_FAILED]
+        );
+        foreach ($failedids as $id) {
+            attempt_history::record((int) $id, attempt_history::FAILED, ['detail' => $http5xx,
+                'tryno' => attempt_scheduler::MAX_TRIES]);
+        }
+        $retry = (int) $DB->get_field_select(
+            'local_catquizlab_attempt',
+            'MIN(id)',
+            'runid = ? AND status = ?',
+            [$runs[89], attempt_scheduler::STATUS_QUEUED]
+        );
+        $DB->update_record('local_catquizlab_attempt', (object) ['id' => $retry, 'tries' => 1,
+            'nextruntime' => time() + 600, 'lasterror' => '[submit:connect_timeout] submit answer 2']);
+        // The breaker trips on the ten and holds run 89: paused, not failed (#133).
+        $this->assertTrue(\local_catquizlab\local\circuit_breaker::check($runs[89])['tripped']);
+        $this->assertTrue(run_lifecycle::is_paused($runs[89]));
+        $this->assertSame(registry::STATUS_RUNNING, (int) $DB->get_field(
+            'local_catquizlab_run',
+            'status',
+            ['id' => $runs[89]]
+        ));
+
+        experiment_stop::stop($e);
+
+        // Status: 1018 collected, 10 failed for good with their own reason, 4972 cancelled by the stop.
+        $count = static fn(int $status): int => $DB->count_records_select(
+            'local_catquizlab_attempt',
+            'status = ? AND runid IN (' . implode(',', $runs) . ')',
+            [$status]
+        );
+        $this->assertSame([1018, 10, 4972, 0, 0], [$count(attempt_scheduler::STATUS_COLLECTED),
+            $count(attempt_scheduler::STATUS_FAILED), $count(attempt_scheduler::STATUS_CANCELLED),
+            $count(attempt_scheduler::STATUS_QUEUED), $count(attempt_scheduler::STATUS_RUNNING)]);
+        $this->assertSame([$http5xx], array_values(array_unique($DB->get_fieldset_select(
+            'local_catquizlab_attempt',
+            'lasterror',
+            'runid = ? AND status = ?',
+            [$runs[89], attempt_scheduler::STATUS_FAILED]
+        ))));
+        // History: the stop's code on every sitting it closed, the failures' rows untouched and not doubled.
+        $this->assertSame(4972, $DB->count_records_select(
+            'local_catquizlab_attemptlog',
+            'outcome = ? AND reasoncode = ? AND runid IN (' . implode(',', $runs) . ')',
+            [attempt_history::CANCELLED, experiment_stop::REASON]
+        ));
+        $this->assertSame(10, $DB->count_records('local_catquizlab_attemptlog', ['runid' => $runs[89],
+            'outcome' => attempt_history::FAILED]));
+        // Figures and the operations view: 10 technical failures, not 4982; the stop is no problem.
+        $snapshot = live_progress::snapshot($e);
+        $this->assertSame([6000, 1018, 10, 4972], [$snapshot['total'], $snapshot['now']['collected'],
+            $snapshot['now']['failed'], $snapshot['now']['cancelled']]);
+        $status = experiment_status::snapshot($e, true);
+        // Problems: the 10 failed sittings and the 1 run the breaker holds; the 4972 closed by the stop are none.
+        $this->assertSame(['stopped', 11], [$status['phase'], $status['problems']]);
+        $queue = attempt_scheduler::queue_breakdown($e);
+        $this->assertSame([10, 4972], [$queue['failed'], $queue['cancelled']]);
+        $figures = run_figures::read([$runs[89]], time())['runs'][$runs[89]];
+        $this->assertSame([1000, 21, 10, 969], [$figures['total'], $figures['collected'], $figures['failed'],
+            $figures['cancelled']]);
+
+        // The preview: run 89 goes on and stays paused by the breaker, said in its row; the others simply go on.
+        $preview = \local_catquizlab\local\experiment_resume::preview($e);
+        $byrun = array_column($preview['runs'], null, 'runid');
+        $this->assertSame(
+            [\local_catquizlab\local\experiment_resume::RESUME, 969, 10],
+            [$byrun[$runs[89]]['action'], $byrun[$runs[89]]['requeue'], $byrun[$runs[89]]['failed']]
+        );
+        $this->assertStringContainsString('HTTP 5xx', $byrun[$runs[89]]['held']);
+        $this->assertSame('', $byrun[$runs[84]]['held']);
+        $this->assertSame([1, 4972, 10], [$preview['totals']['held'], $preview['totals']['requeue'],
+            $preview['totals']['failed']]);
+        $html = \local_catquizlab\output\resume_view::preview_table($preview);
+        $this->assertStringContainsString('data-held="1"', $html);
+        $this->assertStringContainsString(s(get_string('resume:held', 'local_catquizlab', $byrun[$runs[89]]['held'])), $html);
+
+        $resumed = \local_catquizlab\local\experiment_resume::resume($e);
+        $this->assertTrue($resumed['ok']);
+        $this->assertSame([6, 4972, 1], [$resumed['runs'], $resumed['requeued'], $resumed['held']]);
+        // What had failed for good is not played again behind anyone's back (AK-CLARA-12).
+        $this->assertSame(10, $count(attempt_scheduler::STATUS_FAILED));
+        $this->assertSame([$http5xx], array_values(array_unique($DB->get_fieldset_select(
+            'local_catquizlab_attempt',
+            'lasterror',
+            'runid = ? AND status = ?',
+            [$runs[89], attempt_scheduler::STATUS_FAILED]
+        ))));
+        $this->assertSame([4972, 0], [$count(attempt_scheduler::STATUS_QUEUED), $count(attempt_scheduler::STATUS_CANCELLED)]);
+        // The sitting that had used a try keeps it: its tries go on counting.
+        $this->assertSame(1, (int) $DB->get_field('local_catquizlab_attempt', 'tries', ['id' => $retry]));
+        // The breaker's pause stays until a person releases it; its sittings are held, the other runs hand out work.
+        $this->assertTrue(run_lifecycle::is_paused($runs[89]));
+        $this->assertStringStartsWith(
+            \local_catquizlab\local\circuit_breaker::PAUSE_REASON,
+            run_lifecycle::pause_reason($runs[89])
+        );
+        $after = attempt_scheduler::queue_breakdown($e);
+        $this->assertSame([969, 10], [$after['paused'], $after['failed']]);
+        $this->assertTrue(\local_catquizlab\local\execution_queue::has_work($e));
     }
 
     /**

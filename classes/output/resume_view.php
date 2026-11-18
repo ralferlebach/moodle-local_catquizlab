@@ -47,6 +47,10 @@ class resume_view {
             if ($run['blocker'] !== '') {
                 $action .= ': ' . get_string('resume:blocker' . $run['blocker'], $component);
             }
+            if (($run['held'] ?? '') !== '') {
+                // Goes on, but stays paused as before the stop (#133): said here, not discovered later.
+                $action .= '. ' . get_string('resume:held', $component, $run['held']);
+            }
             $cell = new \html_table_cell(\html_writer::link(
                 new \moodle_url('/local/catquizlab/runs.php', ['runid' => $run['runid']]),
                 '#' . $run['runid']
@@ -58,6 +62,9 @@ class resume_view {
                 $run['leases']]);
             $row->attributes['data-runid'] = $run['runid'];
             $row->attributes['data-action'] = $run['action'];
+            if (($run['held'] ?? '') !== '') {
+                $row->attributes['data-held'] = '1';
+            }
             if ($run['action'] === experiment_resume::BLOCKED) {
                 $row->attributes['class'] = 'table-warning';
             }

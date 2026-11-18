@@ -61,14 +61,15 @@ class experiment_resume {
      *      runs: runid, cellkey, status, action (resume, prepare, blocked), blocker (string key or ''), planned,
      *      collected, validated, failed (technical, kept), cancelled (closed by an operator), requeue (to be played),
      *      finishedafter (finished in the engine after the stop: collected, not played again), inprogress (an engine
-     *      attempt to be continued), leases (still held: none after a stop).
+     *      attempt to be continued), leases (still held: none after a stop), held (why a run that goes on stays paused:
+     *      the circuit breaker's cause or "by a person"; '' if it is not paused).
      */
     public static function preview(int $experimentid, int $onlyrunid = 0): array {
         global $DB;
 
         $out = ['resumable' => false, 'reason' => '', 'runs' => [], 'totals' => ['runs' => 0, 'planned' => 0,
             'collected' => 0, 'validated' => 0, 'failed' => 0, 'cancelled' => 0, 'requeue' => 0, 'finishedafter' => 0,
-            'inprogress' => 0, 'leases' => 0, 'blocked' => 0]];
+            'inprogress' => 0, 'leases' => 0, 'blocked' => 0, 'held' => 0]];
         $experiment = $DB->get_record('local_catquizlab_experiment', ['id' => $experimentid], 'id, timedeleting');
         if (!$experiment) {
             $out['reason'] = 'noexperiment';
@@ -151,9 +152,18 @@ class experiment_resume {
             } else {
                 $action = self::RESUME;
             }
+            // Paused before the stop — by the circuit breaker or by a person — it stays paused (#133 AK-CLARA-12):
+            // resuming the experiment is not releasing a pause, and the sittings a breaker held wait for a person.
+            $held = '';
+            if ($action === self::RESUME && run_lifecycle::is_paused($runid)) {
+                $reason = run_lifecycle::pause_reason($runid);
+                $held = strpos($reason, circuit_breaker::PAUSE_REASON) === 0
+                    ? reason_catalog::label(substr($reason, strlen(circuit_breaker::PAUSE_REASON) + 1))
+                    : get_string('resume:heldbyperson', 'local_catquizlab');
+            }
             $entry = [
                 'runid' => $runid, 'cellkey' => (string) $run->cellkey, 'status' => (int) $run->status,
-                'action' => $action, 'blocker' => $blocker,
+                'action' => $action, 'blocker' => $blocker, 'held' => $held,
                 'planned' => $planned,
                 'collected' => $n(attempt_scheduler::STATUS_COLLECTED) + $n(attempt_scheduler::STATUS_VALIDATED),
                 'validated' => $n(attempt_scheduler::STATUS_VALIDATED),
@@ -172,6 +182,7 @@ class experiment_resume {
                 $out['totals'][$key] += $entry[$key];
             }
             $out['totals']['blocked'] += $action === self::BLOCKED ? 1 : 0;
+            $out['totals']['held'] += $held !== '' ? 1 : 0;
         }
         $out['resumable'] = $out['totals']['runs'] > $out['totals']['blocked'];
         $out['reason'] = $out['resumable'] ? '' : 'allblocked';
@@ -185,12 +196,13 @@ class experiment_resume {
      * @param int $experimentid The experiment.
      * @param int $onlyrunid One cancelled run of it, or 0 for every run the stop cancelled.
      * @return array{ok: bool, reason: string, runs: int, prepared: int, requeued: int, collecting: int, blocked: int,
-     *      queue: array}
+     *      held: int, queue: array} held: runs that went on but stay paused, as before the stop.
      */
     public static function resume(int $experimentid, int $onlyrunid = 0): array {
         global $DB;
 
-        $none = ['runs' => 0, 'prepared' => 0, 'requeued' => 0, 'collecting' => 0, 'blocked' => 0, 'queue' => []];
+        $none = ['runs' => 0, 'prepared' => 0, 'requeued' => 0, 'collecting' => 0, 'blocked' => 0, 'held' => 0,
+            'queue' => []];
         $lock = \core\lock\lock_config::get_lock_factory('local_catquizlab_resume')->get_lock('e' . $experimentid, 10);
         if (!$lock) {
             return ['ok' => false, 'reason' => 'busy'] + $none;
@@ -254,6 +266,7 @@ class experiment_resume {
                     );
                 }
                 $done['requeued'] += count($ids);
+                $done['held'] += $run['held'] !== '' ? 1 : 0;
                 run_lifecycle::set_status($runid, registry::STATUS_READY, self::REASON, ['timemodified' => time()]);
                 run_log::record($runid, run_log::RUN_RESUMED, ['requeued' => count($ids), 'why' => self::REASON]);
                 $done['runs']++;

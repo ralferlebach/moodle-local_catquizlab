@@ -145,7 +145,7 @@ damaligen Antworten nicht nachträglich rekonstruiert werden. Damit lässt sich 
    Mindestens ein geteiltes Item, sonst ist nichts verglichen. Alle Läufe unter Schema 2.
 
 `--pairs=FILE` schreibt die Schritte mit allen Spalten oben als CSV. Im Workflow `worker-e2e.yml`: der Schritt
-„Issues 141/142/160“ (klassisch und fastest, drei Twins, 60+ Fragen) und der Schritt „Issues 134/155“ (dieselben zwei
+„Issues 141/142/160“ (klassisch und fastest, drei Twins, 60+ Fragen) und der Schritt „Issues 134/155/110“ (dieselben zwei
 Strategien, verlorene Antwort bei POST 5, verlorene Anfrage bei POST 9 in jeder Testbearbeitung). Beide CSV liegen in
 den Belegen (`/tmp/pairs.csv`, `/tmp/pairs-recovery.csv`).
 

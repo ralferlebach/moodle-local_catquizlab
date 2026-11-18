@@ -57,6 +57,16 @@ final class experiment_resume_test extends \advanced_testcase {
     }
 
     /**
+     * The setup wizard's assumption is the test's own: the next test class finds the site as it is.
+     *
+     * @return void
+     */
+    protected function tearDown(): void {
+        setup_wizard::assume_ready_for_testing(null);
+        parent::tearDown();
+    }
+
+    /**
      * A provisioned run with its activity, people and sittings in the given statuses.
      *
      * @param int $experimentid The experiment.

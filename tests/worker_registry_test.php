@@ -1564,4 +1564,81 @@ final class worker_registry_test extends \advanced_testcase {
         $this->assertSame(1, worker_registry::reap()['workers']);
         $this->assertFalse(worker_registry::slot_is_busy(3));
     }
+
+    /**
+     * A stopped or crashed worker holds no sitting (#124, CLARA 17.11.2026: six crashed workers still carried a
+     * `currentattempt` while no sitting ran anywhere, and the operations view read them as working on it).
+     *
+     * Every way to stop — told to stop, finished, fatal, process gone, silent — leaves `currentattempt` at 0; a row
+     * left behind by an older version is put right by the next reap; and the status card of a stopped or crashed
+     * worker says that, not "working on sitting …".
+     *
+     * @return void
+     */
+    public function test_a_stopped_or_crashed_worker_holds_no_sitting(): void {
+        global $DB;
+        $this->resetAfterTest();
+
+        $current = static fn(string $workerid): int => (int) $DB->get_field(
+            'local_catquizlab_worker',
+            'currentattempt',
+            ['workerid' => $workerid]
+        );
+
+        // Finished on its own terms, and with a fatal error.
+        worker_registry::acquire_slot(1, 'stop-1');
+        worker_registry::report('stop-1', 101, 'working');
+        $this->assertSame(101, $current('stop-1'));
+        worker_registry::record_stop('stop-1', 'queue-empty');
+        $this->assertSame(0, $current('stop-1'), 'stopped');
+
+        worker_registry::acquire_slot(2, 'stop-2');
+        worker_registry::report('stop-2', 102, 'working');
+        worker_registry::record_stop('stop-2', 'fatal-error');
+        $this->assertSame(worker_registry::STATUS_CRASHED, (int) $DB->get_field(
+            'local_catquizlab_worker',
+            'status',
+            ['workerid' => 'stop-2']
+        ));
+        $this->assertSame(0, $current('stop-2'), 'crashed');
+
+        worker_registry::acquire_slot(3, 'stop-3');
+        worker_registry::report('stop-3', 103, 'working');
+        worker_registry::release('stop-3', 'out of memory');
+        $this->assertSame(0, $current('stop-3'), 'released with an error');
+
+        // Silent: the reap marks it crashed and frees what it held.
+        worker_registry::acquire_slot(4, 'stop-4');
+        worker_registry::report('stop-4', 104, 'working');
+        $DB->set_field(
+            'local_catquizlab_worker',
+            'heartbeat',
+            time() - worker_registry::HEARTBEAT_TIMEOUT - 60,
+            ['workerid' => 'stop-4']
+        );
+        $this->assertSame(1, worker_registry::reap()['workers']);
+        $this->assertSame(0, $current('stop-4'), 'reaped');
+
+        // A row as an older version left it: crashed, still "holding" sitting 77.
+        $DB->insert_record('local_catquizlab_worker', (object) ['workerid' => 'old-1', 'slot' => 9,
+            'status' => worker_registry::STATUS_CRASHED, 'heartbeat' => time() - DAYSECS, 'currentattempt' => 77,
+            'lasterror' => 'Worker stopped reporting', 'timecreated' => time() - DAYSECS, 'timemodified' => time() - DAYSECS]);
+        $card = \local_catquizlab\local\status_report::worker($DB->get_record(
+            'local_catquizlab_worker',
+            ['workerid' => 'old-1']
+        ));
+        $this->assertSame(worker_registry::status_label(worker_registry::STATUS_CRASHED), $card['state']);
+        $this->assertStringNotContainsString('77', $card['reason'], 'a crashed worker is not working on anything');
+        $this->assertFalse($card['good']);
+        worker_registry::reap();
+        $this->assertSame(0, $current('old-1'), 'put right by the next reap');
+
+        // A stopped worker's card: stopped, and nothing it plays.
+        $card = \local_catquizlab\local\status_report::worker($DB->get_record(
+            'local_catquizlab_worker',
+            ['workerid' => 'stop-1']
+        ));
+        $this->assertSame(worker_registry::status_label(worker_registry::STATUS_STOPPED), $card['state']);
+        $this->assertTrue($card['good']);
+    }
 }

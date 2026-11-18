@@ -222,8 +222,10 @@ jobs:
           sudo apt-get install -y -q --no-install-recommends r-base-core=4.3.3-2build2
           Rscript --version
 
+      # --testdox: every test by name in the log, so that a test named as evidence in an issue can be found as run and
+      # passed on exactly this commit (re-audit 17.11.2026: an existing test file alone is no evidence).
       - name: PHPUnit – all tests
-        run: moodle-plugin-ci phpunit --fail-on-warning
+        run: moodle-plugin-ci phpunit --fail-on-warning --testdox
         env:
           CATQUIZLAB_REQUIRE_R: '1'
 
@@ -478,16 +480,144 @@ jobs:
           retention-days: 30
           if-no-files-found: warn
 
+  upgrade-moodle:
+    # #136 DoD: Moodle 5.2 upgraded in place to 5.3 — the same database, the same moodledata, the same plugins of
+    # this commit and the same engine set — and everything the plugin had written before still there and readable.
+    name: "Moodle 5.2 → 5.3 in place, this commit (${{ matrix.db.engine }})"
+    runs-on: ubuntu-24.04
+    needs: [lint]
+    strategy:
+      fail-fast: false
+      matrix:
+        db:
+          - { engine: mariadb, type: mariadb, port: 3306, user: root,   pass: root   }
+          - { engine: pgsql,   type: pgsql,   port: 5432, user: moodle, pass: moodle }
+
+    # The database versions of Moodle 5.3 from the start: 5.2 runs on them too, and the upgrade must not need a
+    # database upgrade beside it.
+    services:
+      mariadb:
+        image: mariadb:11.4
+        env:
+          MYSQL_ROOT_PASSWORD: root
+        ports: ['3306:3306']
+        options: >-
+          --health-cmd="mariadb-admin ping --silent"
+          --health-interval=10s --health-retries=10
+      pgsql:
+        image: postgres:17
+        env:
+          POSTGRES_USER:     moodle
+          POSTGRES_PASSWORD: moodle
+          POSTGRES_DB:       postgres
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd="pg_isready -U moodle -d postgres"
+          --health-interval=10s --health-retries=5
+
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          path: plugin
+
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.3'
+          extensions: mbstring, pdo, pdo_mysql, pdo_pgsql, gd, xml, zip, intl
+          ini-values: max_input_vars=5000
+          coverage: none
+
+      - name: Install en_AU.UTF-8 locale
+        run: sudo locale-gen en_AU.UTF-8 && sudo update-locale
+
+      - name: Set TRAVIS_BRANCH
+        run: |
+          BRANCH=${GITHUB_HEAD_REF:-$GITHUB_REF_NAME}
+          echo "TRAVIS_BRANCH=${BRANCH:-main}" >> "$GITHUB_ENV"
+
+      - name: Install moodle-plugin-ci
+        run: |
+          composer create-project -n --no-dev moodlehq/moodle-plugin-ci ci ${{ env.MOODLE_CI }}
+          echo "$GITHUB_WORKSPACE/ci/bin"        >> "$GITHUB_PATH"
+          echo "$GITHUB_WORKSPACE/ci/vendor/bin" >> "$GITHUB_PATH"
+
+      - name: Fetch the CAT engine (the 5.x set, the same for 5.2 and 5.3)
+        run: bash plugin/.github/scripts/fetch-engine.sh
+        env:
+          ENGINE_DIR: ${{ github.workspace }}/engine
+          ENGINE_MANIFEST: ${{ github.workspace }}/engine-manifest.txt
+          MOODLE_BRANCH: MOODLE_502_STABLE
+
+      - name: Install Moodle 5.2, the engine and this commit
+        run: |
+          moodle-plugin-ci install \
+            --plugin ./plugin \
+            --extra-plugins "$GITHUB_WORKSPACE/engine" \
+            --db-host 127.0.0.1 \
+            --db-port ${{ matrix.db.port }} \
+            --db-user ${{ matrix.db.user }} \
+            --db-pass ${{ matrix.db.pass }} \
+            --db-name moodle \
+            --no-init
+          php moodle/admin/cli/install_database.php --agree-license --adminpass='Upgrade-1!' \
+            --adminemail=admin@example.com --fullname=Upgrade --shortname=upgrade
+          php moodle/admin/cli/adhoc_task.php --execute
+          echo "PLUGIN=moodle/public/local/catquizlab" >> "$GITHUB_ENV"
+          echo "Moodle $(php moodle/admin/cli/cfg.php --name=release)"
+        env:
+          DB: ${{ matrix.db.type }}
+          MOODLE_BRANCH: MOODLE_502_STABLE
+
+      - name: Data, written on Moodle 5.2
+        run: |
+          php "$PLUGIN/cli/e2e_prepare.php" --persons=3 --name="Moodle upgrade: provisioned" | grep -E '^runid='
+          php "$PLUGIN/cli/seed_progress.php" --state=finished
+          php "$PLUGIN/cli/seed_progress.php" --state=blocked
+          php "$PLUGIN/cli/seed_progress.php" --state=stopped
+          php "$PLUGIN/cli/seed_failed_attempt.php"
+          php "$PLUGIN/cli/upgrade_check.php" --phase=before --out=/tmp/moodle-upgrade-before.json \
+            | tee /tmp/moodle-upgrade-before.txt
+
+      - name: Moodle 5.3 in place of 5.2, upgraded
+        run: |
+          set -o pipefail
+          # Core only: config.php, moodledata, the database and every plugin directory stay where they are.
+          git -C moodle fetch --depth 1 origin MOODLE_503_STABLE
+          git -C moodle checkout -q FETCH_HEAD
+          php moodle/admin/cli/upgrade.php --non-interactive 2>&1 | tee /tmp/moodle-upgrade-1.txt
+          echo "Moodle $(php moodle/admin/cli/cfg.php --name=release)" | tee -a /tmp/moodle-upgrade-1.txt
+          grep -q 'Moodle 5\.3' /tmp/moodle-upgrade-1.txt
+          php "$PLUGIN/cli/upgrade_check.php" --phase=after --before=/tmp/moodle-upgrade-before.json \
+            | tee /tmp/moodle-upgrade-after.txt
+
+      - name: Upgraded again changes nothing
+        run: |
+          set -o pipefail
+          php moodle/admin/cli/upgrade.php --non-interactive 2>&1 | tee /tmp/moodle-upgrade-2.txt
+          grep -qi 'no upgrade needed' /tmp/moodle-upgrade-2.txt
+
+      - name: Keep the upgrade record
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: upgrade-moodle-502-503-${{ matrix.db.engine }}
+          path: |
+            /tmp/moodle-upgrade-*.txt
+            /tmp/moodle-upgrade-before.json
+            ${{ github.workspace }}/engine-manifest.txt
+          retention-days: 30
+          if-no-files-found: warn
+
   ci-complete:
     name: CI complete (release)
-    needs: [worker-check, lint, phpunit, behat, upgrade]
+    needs: [worker-check, lint, phpunit, behat, upgrade, upgrade-moodle]
     runs-on: ubuntu-24.04
     if: always()
     steps:
       - name: All matrix jobs must have succeeded
         run: |
-          result="${{ needs.worker-check.result }}-${{ needs.lint.result }}-${{ needs.phpunit.result }}-${{ needs.behat.result }}-${{ needs.upgrade.result }}"
-          if [[ "$result" == "success-success-success-success-success" ]]; then
+          result="${{ needs.worker-check.result }}-${{ needs.lint.result }}-${{ needs.phpunit.result }}-${{ needs.behat.result }}-${{ needs.upgrade.result }}-${{ needs.upgrade-moodle.result }}"
+          if [[ "$result" == "success-success-success-success-success-success" ]]; then
             echo "All release CI jobs passed."
           else
             echo "CI result: $result – one or more jobs failed or were cancelled."

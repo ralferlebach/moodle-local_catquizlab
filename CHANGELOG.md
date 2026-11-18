@@ -6,6 +6,130 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.7.69] — 2026-11-17 — Version 2026111603. CLARA read-only snapshot of 17.11.: what it could not tell, told; a stopped experiment no longer "Finished"
+
+The read-only snapshot of CLARA (17.11.2026, 20:30 UTC, 0.7.67) found three runs "running" with 87 sittings due, no
+worker, no entry in the execution line — and could only say the failures were "compatible with" the circuit breaker.
+It also found six crashed workers still holding a sitting. 0.7.69 answers the first in one command and puts the second
+right; on the way, a new browser test found "All experiments" calling a stopped experiment "Finished". No change to
+the database.
+
+### Why waiting work is not played, run by run (#110, #133, #163)
+- `cli/diagnose.php` lists every run with sittings waiting or in play and says, with the conditions the execution
+  line and the claim use and in their order, why it is or is not played: being deleted, not ready, paused by the
+  circuit breaker (cause, failures, and "Clear the errors and continue" on the run's page as the way out), paused by a
+  person, waiting out a retry delay, not yet in the line (the next tick adds it), waiting in the line behind the
+  holder, or claimable now. A count per verdict on top; `--json` has it as `runswithwork`, with `enabled`.
+- New class `idle_diagnosis`; `idle_diagnosis_test` plays the CLARA case: three paused runs, the line does not take
+  them in, the next tick changes nothing; one released — not in the line, then claimable after the next tick.
+- `docs/dev/stillstand-diagnose.md`: the verdicts and what releases each.
+
+### A stopped or crashed worker holds no sitting (#124)
+- Every way a worker stops — finished, told to stop, fatal, process gone, silent — clears its `currentattempt`; rows
+  an older version left behind are put right by the next reap.
+- The status card of a stopped or crashed worker says stopped or crashed, with its last error — not "working on
+  sitting …" (six crashed workers on CLARA read as working). The operations view lists a sitting only for a live
+  worker.
+
+### Stopped, not finished (#141, #158, #166)
+- An experiment whose open sittings an operator closed is "Stopped" in "All experiments" and in its progress snapshot,
+  with how many the stop closed — it was "Finished" there for 1018 of 6000 collected, while its own page said
+  "Stopped". New state `live_progress::STOPPED`, string `progress:statestopped` (EN/DE).
+- New browser test `stopped_runs.spec.js` (#141 DoD-CLARA-02, #158 DoD-CLARA-11): six runs of 1000, stopped the real
+  way with 1018 collected (`cli/seed_progress.php --state=stopped`): 1018 / 6000, 4982 cancelled, 0 failed on the
+  experiment's page and after a reload, every run's row and own page (997 of 1000 is 99 %, not 100 %), "All
+  experiments", and the research data package's runs table.
+
+### Engine and Moodle versions in CI (#136)
+- The worker E2E plays every stack with both engine sets: `release` (`engine-pins.env`) and `candidate` (CatQuiz
+  #146, `engine-pins-interface.env`), six jobs. The candidate becomes the release set once its legs are green.
+- New release CI job "Moodle 5.2 → 5.3 in place": Moodle 5.2 with the engine and this plugin, data written, then only
+  the core switched to 5.3 in the same directory and upgraded — tables, rows and readability checked
+  (`cli/upgrade_check.php`), a second upgrade with nothing to do. Run here with PostgreSQL 17: PASS.
+- `cli/upgrade_check.php`: the item identity must stay empty only for data older than 2026111500; data written by a
+  version that has it keeps what it had.
+
+### Measured here (evidence files beside this release, not CLARA)
+- Progress with 1, 10, 100 and 1000 runs (`cli/bench_progress.php`, PostgreSQL 16): queries per call constant
+  (33–35, 97, 216), the overview of 1000 runs in 1.4 s and 35 MB (#158).
+- The claim under 40 000 queued sittings of other experiments on MariaDB 11.4 (`cli/claim_bench.php`): 0 twice, 0 of
+  another experiment, p95 117 ms with 11 claimers and 295 ms with 25 (#163).
+
+### Tests
+- `worker_registry_test::test_a_stopped_or_crashed_worker_holds_no_sitting`, `idle_diagnosis_test` (2),
+  `progress_overview_test` (stopped, not finished), `stopped_runs.spec.js` (2).
+
+### Upgrade
+No change to the database. Branch protection: the worker E2E checks are now named "Worker end-to-end (legacy,
+release engine set)" and so on.
+
+## [0.7.68] — 2026-11-17 — Version 2026111602. The re-audit of 9bd6152: every open checkbox against code, test or CI; what was missing, added
+
+The consolidated re-audit of 17.11.2026 (commit 9bd6152, 0.7.67) listed 321 open checkboxes in 38 issues. Each is
+now matched to the code, the test that runs it and the CI job it ran in, or named as what only the operator, the
+engine or a scientific decision can settle (evidence files beside this release). No change to the database.
+
+### Tests that were missing (#112, #115, #160/#163/#158, #166, #133, #167)
+- **What is not valid moves no figure** (`validity_matrix_test::test_what_is_not_valid_moves_no_figure`, #112 AK
+  "technically aborted or too short tests do not affect correlation, bias, RMSE, ranking and detection"). The
+  matrix's invalid, unknown, failed and waiting sittings get estimates five logits off; every tab with figures
+  (overview, global, subscales, detection with comparison, robustness, test flow, raw data) is rendered with the
+  default selection, then exactly those sittings are deleted and every tab rendered again: the same page, character
+  for character, apart from what names the excluded ones on purpose (the "not shown" notes, the denominators of the
+  scale results, the rows "all collected" of the before/after table — which must move, and do).
+- **The selection is named alike everywhere** (`::test_the_selection_is_named_alike_everywhere`, #115 AK-PROV-03):
+  a non-default selection (invalid ones, by the engine's verdict) is the same in the CSV, JSON and subscale metadata,
+  in the reproduction package, in every figure's own metadata on every tab, and marked as current on the page.
+- **Twelve processes elsewhere are not this experiment's** (`progress_overview_test`, #160 AK-CLARA-15/DoD-CLARA-09,
+  #163 AK-CLARA-12, #158 AK-CLARA-03): a stopped experiment while twelve workers play two others — twelve processes
+  of the installation, none of its sittings in progress, not running, no countdown, no 100 %; the others count
+  exactly the twelve.
+- **The live case exported, stopped and resumed** (`operator_cancel_test`, #166 DoD-03) and **failures and a breaker
+  pause before the stop keep their names through stop and resume** (#133 AK-CLARA-11/12, DoD-CLARA-04).
+- **The version is not below any savepoint** (`release_version_test`, #167 DoD-04): the 0.7.64 case (version
+  2026111400 below its own savepoint 2026111500) now fails in PHPUnit, not on an installation.
+- Test isolation: `operator_cancel_test` and `experiment_resume_test` leave the setup wizard as they found it
+  (`assume_ready_for_testing(null)` after each test), and `situation_test` asks the real wizard. Found by the local
+  release gate: with the new tests, `situation_test::test_php_cli_does_not_block_readiness` ran after a test that had
+  assumed a ready site and was red.
+
+### A response that comes too late (#110 AK-CLARA-01/02, DoD-CLARA-02)
+- The worker's test faults have a third kind, `slowresponse@N`: the server processes the answer, the browser gets
+  the response only after both of the worker's waits (2 × 30 s + 5 s, like the 56–65 s POSTs on CLARA). The worker
+  times out, asks the server, finds the answer stored, goes on to the next open question — once, not in a loop.
+- The worker E2E step "Issues 134/155/110" injects it in every sitting beside the lost response and the lost request:
+  six reconciliations, exactly two of them timeouts (`smoke.php --expect-recovered-reasons=…`, new), every question
+  answered exactly once. Run here on 4.5/PostgreSQL: green.
+- Each recorded answer submission carries its start to the millisecond (`startedat`), also in its one-line
+  description; with the correlation id it finds the server's request line and the PHP error log
+  (`docs/dev/antwortuebermittlung.md`, new section "Ein HTTP 500 finden").
+
+### Resuming after a stop names a pause that stays (#133)
+- A run the circuit breaker (or a person) had paused before the stop stays paused when the experiment is resumed; the
+  preview says so per run with its cause, the result and the message count them (new strings `resume:held`,
+  `resume:heldbyperson`, `resume:doneheld`, EN/DE).
+
+### Words
+- "Right now" on the progress page: "{n} simulation processes active on this installation, for every experiment" and
+  "{n} test sittings of this experiment in progress" (EN/DE) — the installation's processes and this experiment's
+  sittings apart (#163 AK-CLARA-12).
+
+### CI
+- PHPUnit runs with `--testdox`: every test by name in the log, so that a test named as evidence can be found as run
+  and passed on exactly that commit.
+- The worker CI and the interface CI mask the worker token from the preparation step's output (`::add-mask::`); the
+  step that shows what the preparation reported shows the token as "(not shown)".
+
+### Docs
+- `docs/dev/clara-abgrenzung.md` (new): what of the CLARA run of 15.11. belongs to #110, #162, #163, #164 and
+  CatQuiz #27 (#110 DoD-CLARA-04).
+- `docs/dev/release-gate.md`: section 2b on version, savepoints and upgrade (#167).
+- `docs/dev/worker-kapazitaet.md`: the related issues #110, #133, #120 (#124 DoD-LOAD-03).
+
+### Upgrade
+No change to the database. The worker script changes (test faults only); workers already running keep the old
+script until they are replaced.
+
 ## [0.7.67] — 2026-11-16 — Version 2026111601. The CI of 0.7.66 on GitHub: a file left over from 0.7.65, the NVDA walk on the experiment form
 
 No change to the plugin's code, its database or its strings: one test helper and this version. On GitHub (05cb757,

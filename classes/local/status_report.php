@@ -330,6 +330,18 @@ class status_report {
         $ago = time() - (int) $worker->heartbeat;
         $attemptid = (int) ($worker->currentattempt ?? 0);
 
+        // Stopped or crashed: it plays nothing and waits for nothing, whatever an old row still says it held (#124:
+        // six crashed workers on CLARA read as "working" on a sitting nobody played).
+        $state = (int) ($worker->status ?? worker_registry::STATUS_RUNNING);
+        if (!in_array($state, [worker_registry::STATUS_STARTING, worker_registry::STATUS_RUNNING], true)) {
+            return self::card(
+                $state === worker_registry::STATUS_CRASHED ? self::WATCH : self::GOOD,
+                worker_registry::status_label($state),
+                (string) ($worker->lasterror ?? ''),
+                null
+            );
+        }
+
         if ($attemptid > 0) {
             $runid = (int) $DB->get_field('local_catquizlab_attempt', 'runid', ['id' => $attemptid]);
 

@@ -292,4 +292,190 @@ final class validity_matrix_test extends \advanced_testcase {
             'the package counts the sittings as the page does'
         );
     }
+
+    /**
+     * What is not valid moves no figure (#112 AK: "technically aborted or too short tests do not affect correlation,
+     * bias, RMSE, ranking and detection").
+     *
+     * The matrix's sittings that are not valid under the default rule (invalid, unknown, failed, waiting for the trace)
+     * first get estimates far from the truth — five logits off, every scale too — so that any of them reaching a figure
+     * would show. Every tab with figures (overview, global, subscales, detection with comparison, robustness, test flow,
+     * raw data) is rendered with the default selection (valid only); then exactly those sittings are deleted and every
+     * tab rendered again. The pages must be the same, character for character, apart from what names the excluded ones
+     * on purpose: the notes "not shown", the denominators of the scale results, and the rows "all collected" of the
+     * before/after table, which must move. With "all" selected the same estimates do move the overview: the comparison
+     * is sensitive.
+     *
+     * @return void
+     */
+    public function test_what_is_not_valid_moves_no_figure(): void {
+        global $DB;
+        $this->resetAfterTest();
+        $this->setAdminUser();
+        [$experimentid, $playable] = $this->experiment();
+        $filter = ['experimentid' => $experimentid, 'validity' => 'valid', 'validityrule' => 'uniform'];
+        // Not the export tab: the research package it offers carries every sitting with its reason on purpose
+        // (attempts.csv, validity.csv, analysis_population.csv; the first test of this class counts them).
+        $tabs = ['overview', 'global', 'subscales', 'deficits', 'robustness', 'testflow', 'rawdata'];
+
+        // The sittings that are not valid: by the page's own filter, and those it never evaluates.
+        $notvalid = [];
+        foreach (['invalid', 'unknown'] as $validity) {
+            results_query::reset_caches();
+            foreach ((new results_query(['validity' => $validity] + $filter))->each_observation() as $observation) {
+                $notvalid[] = (int) $observation['attemptid'];
+            }
+        }
+        [$insql, $params] = $DB->get_in_or_equal(array_column($DB->get_records(
+            'local_catquizlab_run',
+            ['experimentid' => $experimentid],
+            '',
+            'id'
+        ), 'id'));
+        $technical = $DB->get_fieldset_select(
+            'local_catquizlab_attempt',
+            'id',
+            "runid $insql AND status <> ?",
+            array_merge($params, [attempt_scheduler::STATUS_COLLECTED])
+        );
+        $this->assertCount(2 * count($playable), $technical, 'one failed and one waiting sitting per strategy');
+        $this->assertNotEmpty($notvalid);
+
+        // Far from the truth, globally and on every scale.
+        foreach ($notvalid as $attemptid) {
+            $trace = json_decode((string) $DB->get_field('local_catquizlab_attempt', 'tracejson', ['id' => $attemptid]), true);
+            if (isset($trace['finaltheta'])) {
+                $trace['finaltheta'] += 5.0;
+            }
+            foreach ($trace['scaleabilities'] ?? [] as $scaleid => $theta) {
+                $trace['scaleabilities'][$scaleid] = $theta - 5.0;
+            }
+            $json = json_encode($trace);
+            $DB->update_record('local_catquizlab_attempt', (object) (['id' => $attemptid, 'tracejson' => $json,
+                'tracebytes' => strlen($json)] + trace_digest::fields($json)));
+        }
+
+        $render = function () use ($tabs, $filter): array {
+            $pages = [];
+            foreach ($tabs as $tab) {
+                results_query::reset_caches();
+                results_export::reset_caches();
+                $html = (new \local_catquizlab\output\results_page(new results_query($filter), $tab, $filter))
+                    ->render_tab();
+                // What differs on every rendering anyway: element ids and form keys, the time of the export, the
+                // embedded copies of a figure for download and their file names (the figure itself is compared
+                // inline). And the notes that name the sittings left out ("Not shown: 18 of 40 sittings …") and the
+                // denominators of the scale results (coverage and exposure: "33 / 65 … excluded — from a sitting that
+                // is not valid: 32 / 65"; detection: "valid sittings: 3 / 8"): saying what is excluded is their job.
+                $html = preg_replace('/[0-9a-f]{12,}/', '#', $html);
+                $html = preg_replace('/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[+-]\d{2}:\d{2}|\d{8}-\d{6}/', 'T', $html);
+                $html = preg_replace('/base64,[A-Za-z0-9+\/=]+/', 'base64,', $html);
+                $html = preg_replace(['~<div[^>]*data-region="catquizlab-plot-note">Not shown[^<]*</div>~',
+                    '~<div[^>]*data-region="catquizlab-(scalecoverage|exposure|mode-coverage)">[^<]*</div>~'], '', $html);
+                // The spread table puts the figures before and after the validity filter side by side (#112, before/after
+                // diagnosis): its rows "valid only" are compared on their own, its rows "all collected" are meant to move.
+                if (preg_match('~<table[^>]*data-region="catquizlab-spread".*?</table>~s', $html, $table)) {
+                    foreach (preg_split('~<tr~', $table[0]) as $row) {
+                        $set = strpos($row, get_string('spread:set_valid', 'local_catquizlab')) !== false ? 'valid'
+                            : (strpos($row, get_string('spread:set_all', 'local_catquizlab')) !== false ? 'all' : '');
+                        if ($set !== '') {
+                            $pages['spread ' . $set][] = $row;
+                        }
+                    }
+                    $html = str_replace($table[0], '', $html);
+                }
+                // The detection summary says, per row, the scale results it used out of those with an administered item
+                // (#112: n, denominator, share): the denominator counts the excluded ones too; the n is compared.
+                $html = preg_replace_callback(
+                    '~<table[^>]*data-region="catquizlab-mode-summary".*?</table>~s',
+                    static fn(array $t): string => preg_replace(
+                        '~(<td class="cell c5"[^>]*>)(\d+) / \d+ \([^)]*\)~',
+                        '$1$2',
+                        $t[0]
+                    ),
+                    $html
+                );
+                $pages[$tab] = $html;
+            }
+            return $pages;
+        };
+        $before = $render();
+        $this->assertNotEmpty($before['spread valid'] ?? [], 'the spread table is there');
+
+        // Sensitive: with every sitting selected, the far estimates do show.
+        results_query::reset_caches();
+        $all = (new results_query(['validity' => 'all'] + $filter))->overview();
+        results_query::reset_caches();
+        $valid = (new results_query($filter))->overview();
+        $this->assertNotEquals(json_encode($valid), json_encode($all), 'the far estimates would move the overview');
+
+        [$deletesql, $deleteparams] = $DB->get_in_or_equal(array_merge($notvalid, array_map('intval', $technical)));
+        $DB->delete_records_select('local_catquizlab_attempt', "id $deletesql", $deleteparams);
+        $after = $render();
+
+        $this->assertNotEquals($before['spread all'], $after['spread all'], 'the rows "all collected" do show the far estimates');
+        $this->assertSame($before['spread valid'], $after['spread valid'], 'the rows "valid only" do not');
+        foreach ($tabs as $tab) {
+            $this->assertNotSame('', $before[$tab], $tab . ' renders');
+            $this->assertSame($before[$tab], $after[$tab], $tab . ': the page with the sittings that are not valid is the'
+                . ' page without them (strategies: ' . implode(', ', $playable) . ')');
+        }
+    }
+
+    /**
+     * The selection is named alike everywhere (#115 AK-PROV-03): the validity shown and the rule that decides are the
+     * same on the page, in the CSV and JSON metadata, in every figure's own metadata and in the reproduction package.
+     *
+     * A selection that is not the default — the invalid ones, judged by the engine — so that a place that forgot the
+     * filter and fell back to the default would show.
+     *
+     * @return void
+     */
+    public function test_the_selection_is_named_alike_everywhere(): void {
+        $this->resetAfterTest();
+        $this->setAdminUser();
+        [$experimentid] = $this->experiment();
+        $filter = ['experimentid' => $experimentid, 'validity' => 'invalid', 'validityrule' => 'engine'];
+        $wanted = ['invalid', 'engine'];
+        $named = static fn(array $f): array => [$f['validity'] ?? null, $f['validityrule'] ?? null];
+
+        results_query::reset_caches();
+        $csv = results_export::metadata(new results_query($filter), results_export::LEVEL_ATTEMPT, true);
+        $this->assertSame($wanted, $named($csv['filter']), 'the CSV metadata');
+        results_query::reset_caches();
+        $json = json_decode(results_export::to_json(new results_query($filter), results_export::LEVEL_ATTEMPT), true);
+        $this->assertSame($wanted, $named($json['metadata']['filter']), 'the JSON metadata');
+        results_query::reset_caches();
+        $subscales = results_export::metadata(new results_query($filter), results_export::LEVEL_SUBSCALE, true);
+        $this->assertSame($wanted, $named($subscales['filter']), 'the subscale metadata');
+
+        $analysis = reproducibility::analysis($experimentid, $filter);
+        $this->assertSame($wanted, [$analysis['validityshown'], $analysis['validityrule']], 'the package');
+        $this->assertSame($wanted, $named($analysis['filter']), 'the package filter');
+
+        // Every figure of every tab carries its selection in its own metadata.
+        $figures = 0;
+        foreach (['overview', 'global', 'subscales', 'deficits', 'robustness', 'testflow'] as $tab) {
+            results_query::reset_caches();
+            $html = (new \local_catquizlab\output\results_page(new results_query($filter), $tab, $filter))->render_tab();
+            preg_match_all('~<metadata>(.*?)</metadata>~s', $html, $found);
+            foreach ($found[1] as $meta) {
+                $settings = json_decode(html_entity_decode($meta, ENT_QUOTES | ENT_HTML5), true);
+                $this->assertIsArray($settings, $tab . ': readable metadata');
+                $this->assertSame($wanted, $named($settings['filters'] ?? []), $tab . ': figure '
+                    . ($settings['kind'] ?? '?'));
+                $figures++;
+            }
+        }
+        $this->assertGreaterThan(0, $figures, 'figures were drawn');
+
+        // The page: the analysis basis marks the selection and the rule as the current ones.
+        results_query::reset_caches();
+        $basis = (new \local_catquizlab\output\results_page(new results_query($filter), 'overview', $filter))
+            ->render_provenance($experimentid);
+        foreach ($wanted as $value) {
+            $this->assertStringContainsString('<strong>' . get_string('validity:switch_' . $value, 'local_catquizlab')
+                . '</strong>', $basis, 'the page marks ' . $value);
+        }
+    }
 }

@@ -317,6 +317,8 @@ final class situation_test extends \advanced_testcase {
         $this->setAdminUser();
 
         set_config('pathtophp', '');
+        // The real wizard, not an assumption another test class left behind.
+        \local_catquizlab\local\setup_wizard::assume_ready_for_testing(null);
 
         $ids = [];
         foreach (\local_catquizlab\local\setup_wizard::state()['stages'] as $stage) {

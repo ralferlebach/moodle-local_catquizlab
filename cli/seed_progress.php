@@ -24,6 +24,7 @@
  * Options: --state=running|calculating|blocked|finished|empty|parallel. Prints
  * PROGRESS_<STATE>_EXPERIMENTID=<id>. --state=overview seeds three experiments for "All experiments" (#158),
  * --state=library 55 planned ones for the A–Z order (#153); they print OVERVIEW_* and LIBRARY_* lines.
+ * --state=stopped: the CLARA case, six runs of 1000 stopped with 1018 collected (#141, #158, #166).
  *
  * @package    local_catquizlab
  * @copyright  2026 Ralf Erlebach
@@ -46,8 +47,47 @@ use local_catquizlab\local\run_lifecycle;
 
 [$options] = cli_get_params(['state' => 'running']);
 $state = (string) $options['state'];
-if (!in_array($state, ['running', 'calculating', 'blocked', 'finished', 'empty', 'parallel', 'overview', 'library'], true)) {
-    cli_error('--state must be running, calculating, blocked, finished, empty, parallel, overview or library');
+if (
+    !in_array($state, ['running', 'calculating', 'blocked', 'finished', 'empty', 'parallel', 'overview', 'library',
+        'stopped'], true)
+) {
+    cli_error('--state must be running, calculating, blocked, finished, empty, parallel, overview, library or stopped');
+}
+
+// The CLARA case of 15.11.2026 (#141 DoD-CLARA-02, #158, #166): six runs of 1000 sittings, stopped by the operator
+// with 1018 collected — 997 in the third run, 21 in the sixth, none in the others. Stopped the real way
+// (experiment_stop::stop(), as "Stop experiment" does), so that every page reads what a stop leaves. Prints
+// STOPPED_EXPERIMENTID and STOPPED_RUNS=<id:collected,…> in run order.
+if ($state === 'stopped') {
+    $now = time();
+    $definition = experiment_definition::example_baseline();
+    // A name A–Z puts first, so that "All experiments" shows it on its first page wherever it runs.
+    $definition['name'] = '0 Stopped six ' . date('Ymd-His');
+    $experimentid = (int) experiment_service::save($definition)['id'];
+    $runs = [];
+    foreach ([0, 0, 997, 0, 0, 21] as $r => $collected) {
+        $strategy = $r % 2 ? 'fastest' : 'classic';
+        $runid = (int) $DB->insert_record('local_catquizlab_run', (object) ['experimentid' => $experimentid,
+            'cellkey' => 'strategy=' . $strategy . '|r' . $r, 'seed' => 1, 'replication' => 1,
+            'status' => registry::STATUS_RUNNING,
+            'manifestjson' => json_encode(['config' => ['strategy' => ['key' => $strategy],
+                'definition' => ['strategy' => $strategy]]]),
+            'usermodified' => 0, 'timecreated' => $now - HOURSECS, 'timemodified' => $now]);
+        $rows = [];
+        for ($i = 0; $i < 1000; $i++) {
+            $done = $i < $collected;
+            $rows[] = (object) ['runid' => $runid, 'personid' => 0,
+                'status' => $done ? attempt_scheduler::STATUS_COLLECTED : attempt_scheduler::STATUS_QUEUED,
+                'tries' => $done ? 1 : 0, 'runtimems' => $done ? 20000 : null, 'leaseexpires' => 0,
+                'nextruntime' => 0, 'timecreated' => $now - HOURSECS, 'timemodified' => $now];
+        }
+        $DB->insert_records('local_catquizlab_attempt', $rows);
+        $runs[] = $runid . ':' . $collected;
+    }
+    \local_catquizlab\local\experiment_stop::stop($experimentid);
+    cli_writeln('STOPPED_EXPERIMENTID=' . $experimentid);
+    cli_writeln('STOPPED_RUNS=' . implode(',', $runs));
+    exit(0);
 }
 
 // Issue #153: 55 planned experiments under one prefix, with umlauts, case, numbers and equal names, so the library,

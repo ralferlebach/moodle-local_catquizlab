@@ -16,11 +16,33 @@ cd /tmp && sudo -u www-data php /var/www/moodle/local/catquizlab/cli/diagnose.ph
 Der Befehl ändert nichts und gibt keine Tokens aus. Er zeigt:
 
 - den Zustand des Experiments und seiner Läufe: DigiTwins sowie eingeplante, laufende und gescheiterte Sitzungen;
+- **seit 0.7.69 für jeden Lauf mit wartender Arbeit, warum sie (nicht) gespielt wird** (#110, #133, #163), mit
+  denselben Bedingungen wie Reihe und Claim, in deren Reihenfolge, und was ihn freigibt (Tabelle unten);
 - warum nichts abspielbar ist (siehe Abschnitt 3);
 - den letzten Tick;
 - die Ausführungswarteschlange, mit verwaisten Einträgen;
 - offene Einrichtungsaufgaben, mit früheren Fehlversuchen;
 - Einrichtung, Worker-Einstellungen, Kapazität und Worker-Zustand.
+
+### Je Lauf: warum wartende Arbeit (nicht) gespielt wird (seit 0.7.69)
+
+Anlass: CLARA, 17.11.2026, drei Läufe „läuft“ mit 87 fälligen Sitzungen, kein Worker, kein Eintrag in der
+Ausführungsreihe. Aus den Tabellen allein ließ sich nur sagen, dass die Fehlerzahlen zum Schutzschalter *passen*.
+Die Zeile „Runs with sittings waiting or in play“ nennt die Zahl je Urteil, darunter jeden Lauf:
+
+| Urteil (`--json`: `verdict`) | Bedeutung | Was ihn freigibt |
+|---|---|---|
+| `deleting` | Das Experiment wird gelöscht. | nichts |
+| `not_runnable` | Der Lauf ist nicht bereit oder laufend (eingeplant, Entwurf, beendet …). | Experiment starten bzw. Einrichtung abwarten |
+| `paused_breaker` | Der Schutzschalter hat ihn nach Fehlern in Folge angehalten (Ursache, Zahl der gescheiterten). Die Reihe überspringt ihn. | auf der Seite des Laufs „Fehler zurücksetzen und fortsetzen“, wenn die Ursache behoben ist |
+| `paused_person` | Von Hand angehalten. | auf der Seite des Laufs fortsetzen |
+| `not_due` | Die Sitzungen warten eine Wiederholungspause ab (nächste Fälligkeit). | die Zeit |
+| `not_in_line` | Fällig, aber noch nicht in der Reihe. | der nächste Tick reiht das Experiment ein |
+| `in_line` | Fällig; das Experiment wartet hinter dem Halter der Reihe (oder niemand hält sie gerade). | das Ende des Halters bzw. der nächste Tick |
+| `claimable` | Das Experiment hält die Reihe: jetzt abholbar. | Worker (siehe „Workers“ weiter unten) |
+
+Der Befehl liest nur; `idle_diagnosis_test` spielt den CLARA-Fall nach (drei angehaltene Läufe, die Reihe nimmt sie
+nicht auf; nach der Freigabe eines Laufs `not_in_line`, nach dem nächsten Tick `claimable`).
 
 ## 2. Was der Tick jetzt selbst sagt
 

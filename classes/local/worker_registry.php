@@ -272,6 +272,8 @@ class worker_registry {
                 'status'       => self::STATUS_CRASHED,
                 'workerstate'  => 'stopped:process-gone',
                 'lasterror'    => get_string('worker:processgone', 'local_catquizlab', $row->pid),
+                // A worker that is gone plays nothing (#124: six crashed workers on CLARA still "held" a sitting).
+                'currentattempt' => 0,
                 'timemodified' => time(),
             ]);
             $released++;
@@ -327,6 +329,7 @@ class worker_registry {
             'status'       => $fatal ? self::STATUS_CRASHED : self::STATUS_STOPPED,
             'workerstate'  => 'stopped' . ($reason !== '' ? ':' . $reason : ''),
             'lasterror'    => $fatal ? 'fatal-error' : $worker->lasterror,
+            'currentattempt' => 0,
             'timemodified' => time(),
         ]);
 
@@ -457,6 +460,7 @@ class worker_registry {
             'id'           => $worker->id,
             'status'       => $error !== '' ? self::STATUS_CRASHED : self::STATUS_STOPPED,
             'lasterror'    => $error !== '' ? $error : null,
+            'currentattempt' => 0,
             'heartbeat'    => $now,
             'timemodified' => $now,
         ]);
@@ -500,6 +504,7 @@ class worker_registry {
                 'id'           => $worker->id,
                 'status'       => self::STATUS_CRASHED,
                 'lasterror'    => get_string('history:workerstopped', 'local_catquizlab'),
+                'currentattempt' => 0,
                 'timemodified' => $now,
             ]);
 
@@ -508,6 +513,21 @@ class worker_registry {
             // how a queue stops draining with nobody able to say why.
             $attempts += attempt_scheduler::release_lease((string) $worker->workerid);
         }
+
+        // A stopped or crashed worker plays nothing. Rows that stopped before 0.7.69 kept the sitting they last held
+        // (#124: six crashed workers on CLARA, no sitting running anywhere); the interface read them as working.
+        [$stoppedsql, $stoppedparams] = $DB->get_in_or_equal(
+            [self::STATUS_STOPPED, self::STATUS_CRASHED],
+            SQL_PARAMS_NAMED,
+            'gone'
+        );
+        $DB->set_field_select(
+            'local_catquizlab_worker',
+            'currentattempt',
+            0,
+            'status ' . $stoppedsql . ' AND currentattempt <> 0',
+            $stoppedparams
+        );
 
         return ['workers' => count($dead), 'attempts' => $attempts];
     }

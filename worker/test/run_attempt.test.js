@@ -54,6 +54,14 @@ test('parseEngineAttemptId reads attempt=N from a URL', () => {
     assert.strictEqual(worker.parseEngineAttemptId(''), 0);
 });
 
+test('the faults of the tests: lost request, lost response, slow response (#134, #110)', () => {
+    assert.deepStrictEqual(worker.parseFaults('lostresponse@5, lostrequest@9,slowresponse@12'), [
+        {kind: 'lostresponse', at: 5}, {kind: 'lostrequest', at: 9}, {kind: 'slowresponse', at: 12}]);
+    // Anything else is no fault: a real run sets none, a typo injects nothing.
+    assert.deepStrictEqual(worker.parseFaults('slowresponse@0,lost@3,slowresponse@x,'), []);
+    assert.deepStrictEqual(worker.parseFaults(''), []);
+});
+
 test('username/password follow the naming convention', () => {
     assert.strictEqual(worker.usernameFor(9), 'catlab_user_9');
     assert.strictEqual(worker.passwordFor(9, '!x'), '9!x');

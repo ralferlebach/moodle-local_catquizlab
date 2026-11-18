@@ -58,6 +58,40 @@ den Logs (Warnung), dem Grund-Filter der Laufseite und dem Export „Ausführung
   verlorene Anfrage → `notstored`; geprüft wird, dass jede Frage genau einmal
   gestellt und beantwortet wurde (36 Fragen, 36 verschiedene, je 2 Schritte).
 
+## Ein HTTP 500 finden (#110)
+
+Was zu einem fehlgeschlagenen Antwort-POST festgehalten wird, und wo:
+
+| Feld | Worker (Ausführung) | Moodle (`request_trace`) |
+|---|---|---|
+| Korrelations-ID | `error.json` (`correlationid`), jeder Webservice-Aufruf und jede Seite im Header `X-CatQuizLab-Correlation` | `correlationid` |
+| Testbearbeitung / Ausführung | `attemptid`, `execution` | `attemptid`, `execution` (Header `X-CatQuizLab-Attempt`) |
+| Engine-Versuch | `usage` (qubaid = `adaptivequiz_attempt.uniqueid`) und `slot` je Antwort; die Engine-Versuchs-ID selbst nach Abschluss in `engineattemptid` | – |
+| Worker | `workerid` | – |
+| bereits beantwortet | `answered` je Antwort | – |
+| Ziel, Status, Umleitungen | `chain` (Methode, Status, `Location`, Ziel, Fehlergrund) | `method`, `path` (Routing-Allowlist), `status` |
+| Beginn (ms), Dauer | `startedat` (ISO, Millisekunden, seit 0.7.68), `ms` | `time` (ISO, Millisekunden), `durationms` |
+| was auf dem Server geschah | Abgleich `stored`/`notstored`/… mit Reason-Code | `exception` (Klasse, Meldung ohne Geheimnisse), `fatal` (PHP-Fatal aus `error_get_last()`), `peakmb`, `memorylimit`, `queries`, `pid` |
+
+Der Weg zu einem 500er:
+
+1. **Laufseite → Versuchshistorie oder Export „Ausführungen“:** Reason-Code `submit_http_5xx`, Korrelations-ID,
+   `startedat`. Die Artefakte der Ausführung (`events.json`, `error.json`) haben die ganze Kette.
+2. **Moodle:** `moodledata/catquizlab/requests/JJJJ-MM-TT.jsonl` (UTC-Tag), Zeile mit derselben `correlationid`;
+   auf der Seite „Logs“ über das Feld Korrelations-ID zu filtern (Zeilen der Quelle `request`, ab Status 500 als Fehler). `exception` und `fatal` nennen die Ursache, wenn PHP sie noch
+   melden konnte.
+3. **PHP-Fehlerlog:** die Datei, die `error_log` in der `php.ini` des Webservers nennt; bei PHP-FPM die des Pools
+   (`php_admin_value[error_log]`, sonst das Log des FPM-Masters), bei mod_php das `ErrorLog` des Apache-VirtualHosts.
+   Zu finden über die Zeit und die `pid` aus der Zeile in 2. Eine Speichergrenze schreibt das Plugin zusätzlich als
+   eigene Zeile mit Request-ID dorthin (`docs/dev/log-datenschutz.md`).
+4. **Webserver:** Apache-Access-Log (Pfad, Status, mit `%D` die Dauer), Error-Log (`AH00161`: keine freien
+   Worker). Zeiten dort in der Zeitzone des Servers, in 1 und 2 in UTC.
+5. **Datenbank:** Fehler der Verbindung oder Sperren stehen im Log des Datenbankservers zur selben Zeit.
+
+Tests: `worker/test/submit.test.js` (jede Klasse im Browser, dazu Beginn in ms, Dauer, Kontext),
+`worker/test/run_attempt.test.js` („a web service call carries the trace headers, and no secret in them“),
+`tests/request_trace_test.php` (Zeile, Header-Pflicht, Redaktion, Speicher und Queries).
+
 ## Offen
 
 Kausalrekonstruktion repräsentativer 404/303 aus Lauf 51 (DoD 2) braucht die

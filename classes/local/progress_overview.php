@@ -148,7 +148,8 @@ class progress_overview {
         $out['states'] = [];
         foreach (
             [live_progress::RUNNING, live_progress::STARTING, live_progress::WAITING, live_progress::PAUSED,
-                live_progress::BLOCKED, live_progress::AGGREGATING, live_progress::FINISHED, live_progress::DRAFT] as $state
+                live_progress::BLOCKED, live_progress::AGGREGATING, live_progress::STOPPED, live_progress::FINISHED,
+                live_progress::DRAFT] as $state
         ) {
             $out['states'][] = ['state' => $state, 'count' => (int) ($states[$state] ?? 0),
                 'label' => get_string('progress:state' . $state, $component)];

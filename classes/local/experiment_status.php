@@ -285,7 +285,7 @@ class experiment_status {
         if ((int) ($runner['runs']['total'] ?? 0) === 0) {
             return $queued === execution_queue::WAITING ? 'queued' : ($preparing ? 'preparing' : 'planned');
         }
-        if ($runner['state'] === experiment_runner::STATE_STOPPED) {
+        if ($runner['state'] === experiment_runner::STATE_STOPPED || $state === live_progress::STOPPED) {
             return 'stopped';
         }
         if ($state === live_progress::BLOCKED || $held > 0 || $runner['state'] === experiment_runner::STATE_BLOCKED) {

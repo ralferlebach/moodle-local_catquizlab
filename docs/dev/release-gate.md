@@ -1,25 +1,33 @@
 # Release-Gate: was vor einem Release grün sein muss
 
-Stand: 0.7.41 (Re-Audit vom 16.10.2026).
+Stand: 0.7.69 (2026111603). Belegt zuletzt auf Commit 9bd6152 (0.7.67): alle 36 Jobs der drei Workflows grün
+(`ci-nachweis-9bd6152.md` in den Nachweisen zu 0.7.68). Neu in 0.7.69: der Worker-E2E spielt jeden Stack mit beiden
+Engine-Sätzen (6 Jobs, #136), und die Release-CI hat den Job „Moodle 5.2 → 5.3 in place“ (2 Jobs, #136).
 
 ## 1. Die Prüfungen und wann sie laufen
 
-| Workflow | Job | Push/PR auf `main` | Push auf andere Zweige | von Hand |
+| Workflow | Jobs | Push/PR auf `main` | Push auf andere Zweige | von Hand |
 |---|---|---|---|---|
-| Moodle Plugin Release CI (`moodle-release.yml`) | Lint, PHPDoc, Struktur; PHPUnit (4.5 und 5.2, MariaDB und PostgreSQL, PHP 8.2–8.3); Behat; **mit der gepinnten Engine** | ja | – | – |
-| Moodle Plugin CI (`moodle-ci.yml`) | dasselbe plus informative Linter, **mit der gepinnten Engine** | – | ja | – |
-| Interface end-to-end (`ui-e2e.yml`) | Moodle 4.5 + Engine-Set, ein Experiment über die Oberfläche, **alle** Playwright-Specs, Webserver mit `memory_limit=512M` | ja | – | ja |
-| Interface end-to-end (`ui-e2e.yml`), Job `screen-reader` | Filterleiste der Ergebnisseite je Stack mit NVDA (Windows) und VoiceOver (macOS), siehe `screenreader-ci.md` | ja | – | ja |
+| Moodle Plugin Release CI (`moodle-release.yml`) | Lint/PHPDoc/Struktur (PHP 8.2, 8.3); PHPUnit in 10 Zellen (4.5 mit PHP 8.2/8.3, 5.2 mit 8.3, 5.3 mit 8.3/8.4, je PostgreSQL und MariaDB); Behat (4.5, 5.2, 5.3); Upgrade 0.7.60 → dieser Commit in 6 Zellen (4.5/5.2/5.3 × PostgreSQL/MariaDB); alles **mit der gepinnten Engine** und mit R | ja | – | – |
+| Moodle Plugin CI (`moodle-ci.yml`) | dasselbe plus informative Linter | – | ja | – |
+| Interface end-to-end (`ui-e2e.yml`) | je Stack (4.5, 5.2, 5.3) ein Experiment über die Oberfläche, **alle** Playwright-Specs, danach das tiefe Löschen (#161); Webserver mit `memory_limit=512M` | ja | – | ja |
+| Interface end-to-end (`ui-e2e.yml`), Job `screen-reader` | NVDA (Windows) und VoiceOver (macOS) je Stack, siehe `screenreader-ci.md` | ja | – | ja |
 | Worker CI (`worker-e2e.yml`) | Werkzeugkette und Node-Tests | ja | ja | ja |
-| Worker CI (`worker-e2e.yml`) | End-to-end je Engine-Linie (Moodle 4.5 / Legacy, Moodle 5.2 / 1.3): Sittings je Strategie, langer CLASSIC- und ALLSUBS-Lauf, verlorene Antwort/Anfrage, 300 Sittings Last, Webserver mit 512M; danach **keine** 5xx und **kein** PHP-Fatal (`cli/request_report.php --max-5xx=0 --max-fatals=0`) | ja | – | ja |
+| Worker CI (`worker-e2e.yml`) | End-to-end je Stack (4.5 Legacy, 5.2, 5.3): Reihenfolge der Ausführungsreihe (#163), Sittings je Strategie, Trace unter Gleichzeitigkeit (#138), Löschen (#161), Ein-Klick-Start (#151), Stopp/Fortsetzen (#165/#166), langer CLASSIC- und ALLSUBS-Lauf, 300 Sittings Last, Log-Redaktion (#149); danach **keine** 5xx und **kein** PHP-Fatal | ja | – | ja |
 
 Für den Branch-Schutz von `main` gehören als Pflicht-Checks dazu:
 „CI complete (release)“, „Interface end-to-end (Playwright)“,
-„Worker end-to-end (legacy, needs the CAT engine)“ und
-„Worker end-to-end (moodle5, needs the CAT engine)“. Diese Einstellung liegt
-im Repository auf GitHub, nicht im Code.
+„Worker end-to-end (legacy, release engine set)“ und
+„Worker end-to-end (moodle5, release engine set)“ (bis 0.7.68: „… needs the CAT engine“; nach dem Push umbenennen).
+Diese Einstellung liegt im Repository auf GitHub, nicht im Code.
 
 ## 2. Engine-Set: Zweig und Commit
+
+Zwei Pinsätze: `.github/engine-pins.env` (`release`) für Release-CI und Worker-E2E, `.github/engine-pins-interface.env`
+(`candidate`, gepinnt auf CatQuiz #146) für das Interface-E2E und seit 0.7.69 zusätzlich für je einen Worker-E2E-Job
+je Stack („Worker end-to-end (legacy, candidate engine set)“ usw.). Der Kandidat wird zum Release-Satz, wenn seine
+Worker-E2E-Jobs grün sind (#136), nicht vorher. Jeder Job mit Engine schreibt „engine set …“ mit den drei Commits ins Log;
+der CI-Nachweis listet sie je Job.
 
 `.github/engine-pins.env` legt für beide Linien Zweig **und** Commit fest:
 local_catquiz, mod_adaptivequiz und adaptivequizcatmodel_catquiz, dazu
@@ -66,6 +74,31 @@ nur „No way to start the attempt was found“. Diese Lücke kam erst nach der
 Korrektur der Wurzeln zum Vorschein. Seitdem ist sie auch im Plugin abgefangen:
 `preflight` blockiert den Start mit Begründung, und `cli/e2e_prepare.php`
 bricht mit derselben Begründung ab.
+
+## 2b. Version, Savepoints und Upgrade (#167)
+
+- **Versionsnummer:** `version.php` trägt `JJJJMMTTNN` mit dem Tag der Auslieferung, die Release-Bezeichnung zählt
+  `0.7.x`. Die Nummer liegt nie unter dem höchsten Savepoint von `db/upgrade.php`, sonst lehnt Moodle den Code als
+  Downgrade ab (so geschehen mit 0.7.64 auf GitHub: `version` 2026111400, eigener Savepoint 2026111500).
+- **`tests/release_version_test.php`** prüft das bei jedem PHPUnit-Lauf: Version ≥ höchster Savepoint, jeder Block
+  speichert genau die Version, mit der er beginnt (`if ($oldversion < N)` … `savepoint(N)`), die Savepoints steigen in
+  der Reihenfolge, in der sie stehen, die installierte Testsite hat die Version des Codes.
+- **Upgrade-Job** (Release-CI und `moodle-ci.yml`): Installation von **0.7.60 (2026111400)**, dem Stand von CLARA, mit
+  Daten aus dem alten Code (eingerichteter Lauf, beendetes und gestopptes Experiment, technischer Fehler); dann der
+  neue Code, Upgrade, `cli/upgrade_check.php` vergleicht das Schema mit `db/install.xml` und liest die alten Daten;
+  ein zweites `upgrade.php` muss „No upgrade needed“ melden (STDERR mit `2>&1`). Auf PostgreSQL und MariaDB, Moodle
+  4.5/5.2/5.3.
+- **CLARA:** Der Weg ist derselbe wie im Upgrade-Job, weil er vom selben Stand ausgeht. Das Upgrade auf CLARA selbst
+  macht der Betrieb; davor und danach `cli/upgrade_check.php` (siehe dort).
+
+## 2c. Moodle 5.2 → 5.3 auf derselben Installation (#136, seit 0.7.69)
+
+Job `upgrade-moodle` der Release-CI, je PostgreSQL 17 und MariaDB 11.4: Moodle 5.2 mit Engine (5.x-Satz) und dem
+Plugin dieses Commits installieren, Daten schreiben (bereitgestelltes Experiment, fertig, blockiert, gestoppt wie auf
+CLARA, eine technisch gescheiterte Bearbeitung), `cli/upgrade_check.php --phase=before`; dann im selben Verzeichnis
+nur den Kern auf `MOODLE_503_STABLE` wechseln (config.php, moodledata, Datenbank, Plugin-Verzeichnisse bleiben),
+`admin/cli/upgrade.php`, `upgrade_check.php --phase=after` (Tabellen wie install.xml, keine Zeile verloren oder
+verändert, Läufe lesbar) und ein zweites Upgrade ohne Arbeit.
 
 ## 3. Keine stillen Skips im Gate
 

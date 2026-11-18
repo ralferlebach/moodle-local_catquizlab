@@ -209,6 +209,10 @@ test('in a browser: every answer the server gives is told apart (#134)', async(t
             }
             assert.strictEqual(submit.class, wanted, `${scenario}: ${nav.describeSubmit(submit)}`);
             assert.deepStrictEqual(submit.context, {qubaid: 7, slot: 3, answered: 2});
+            // What #110 asks of a failed answer: when it began to the millisecond, how long it took, the status.
+            assert.match(submit.startedat, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/, nav.describeSubmit(submit));
+            assert.ok(Number.isInteger(submit.ms) && submit.ms >= 0, nav.describeSubmit(submit));
+            assert.ok(nav.describeSubmit(submit).includes(` at ${submit.startedat} in `), nav.describeSubmit(submit));
             if (scenario === 'redirect' || scenario === 'elsewhere') {
                 assert.strictEqual(submit.chain[0].status, 303, nav.describeSubmit(submit));
                 assert.ok(submit.chain[0].location.includes('/mod/adaptivequiz/'), nav.describeSubmit(submit));

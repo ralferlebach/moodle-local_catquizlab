@@ -103,10 +103,13 @@ const SELF_TEST = args['self-test'] === true;
 // whether successful ones do too ('all', for explicit debugging only).
 const ARTEFACT_DIR = args['artefact-dir'] || '';
 const CAPTURE = args.capture === 'all' ? 'all' : 'failure';
-// For tests only (#134): faults injected into answer submissions, as
-// "lostresponse@3,lostrequest@5" — the third answer is processed by the server
-// but its response never reaches the browser; the fifth never reaches the
-// server. Empty in every real run.
+// For tests only (#134, #110): faults injected into answer submissions, as
+// "lostresponse@3,lostrequest@5,slowresponse@7" — the third answer is processed
+// by the server but its response never reaches the browser; the fifth never
+// reaches the server; the seventh is processed and its response held back until
+// after the worker has stopped waiting for it — past the wait for the navigation
+// and the wait for the next page, 2 × 30 s: the 56–65 s POSTs of CLARA (#110).
+// Empty in every real run.
 const FAULTS = parseFaults(process.env.CATQUIZLAB_FAULTS || '');
 const nav = require('./navigation.js');
 
@@ -474,7 +477,7 @@ async function playAttempt(browser, job) {
 }
 
 /**
- * The faults to inject, from "lostresponse@3,lostrequest@5" (#134, tests only).
+ * The faults to inject, from "lostresponse@3,lostrequest@5,slowresponse@7" (#134, #110, tests only).
  *
  * @param {string} spec The specification.
  * @returns {Array<{kind: string, at: number}>}
@@ -485,7 +488,7 @@ function parseFaults(spec) {
             const [kind, at] = part.split('@');
             return {kind, at: parseInt(at, 10)};
         })
-        .filter((fault) => ['lostresponse', 'lostrequest'].includes(fault.kind) && fault.at > 0);
+        .filter((fault) => ['lostresponse', 'lostrequest', 'slowresponse'].includes(fault.kind) && fault.at > 0);
 }
 
 /**
@@ -493,7 +496,10 @@ function parseFaults(spec) {
  *
  * Through the DevTools Fetch domain: a request failed at its request stage
  * never reaches the server; one failed at its response stage has been
- * processed there, and only the browser does not learn of it.
+ * processed there, and only the browser does not learn of it. A slow response
+ * has been processed too and is handed to the browser only after the worker
+ * has given up waiting (navigation, then page state): the worker sees a
+ * timeout, not a failure (#110).
  *
  * @param {object} page The Puppeteer page.
  * @param {Array<{kind: string, at: number}>} faults What to fail, by the number of the answer POST.
@@ -509,13 +515,25 @@ async function injectFaults(page, faults) {
     client.on('Fetch.requestPaused', async(event) => {
         const atresponse = event.responseStatusCode !== undefined || event.responseErrorReason !== undefined;
         let fail = false;
+        let slow = false;
         if (event.request.method === 'POST') {
             if (!atresponse) {
                 posts++;
                 fail = faults.some((fault) => fault.kind === 'lostrequest' && fault.at === posts);
             } else {
                 fail = faults.some((fault) => fault.kind === 'lostresponse' && fault.at === posts);
+                slow = faults.some((fault) => fault.kind === 'slowresponse' && fault.at === posts);
             }
+        }
+        if (slow) {
+            // A response within the two waits is simply taken, late: only beyond both is it lost to the worker.
+            const hold = 2 * NAV_TIMEOUT + 5000;
+            console.error(`Injected fault: slowresponse at answer POST ${posts}, held ${hold} ms`);
+            setTimeout(() => {
+                // By now the worker has given up on it and moved on: there may be nothing left to continue.
+                client.send('Fetch.continueResponse', {requestId: event.requestId}).catch(() => null);
+            }, hold);
+            return;
         }
         try {
             if (fail) {

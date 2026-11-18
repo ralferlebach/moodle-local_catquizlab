@@ -59,6 +59,12 @@ class live_progress {
     /** @var string Everything done. */
     public const FINISHED = 'finished';
 
+    /**
+     * @var string Nothing left to play because an operator closed what was open: stopped, not finished (#141, #158).
+     *      "All experiments" called the CLARA case — 1018 of 6000 collected, 4982 closed by the stop — "Finished".
+     */
+    public const STOPPED = 'stopped';
+
     /** @var int More runs than this and the per-run table starts folded (#125). */
     public const FOLD_RUNS = 8;
 
@@ -235,12 +241,19 @@ class live_progress {
         // Nothing left to play: collected, failed for good or closed by an operator. A run that ended
         // with a failed sitting used to stay "Waiting" for ever (#128).
         if ($totals['total'] > 0 && $totals['done'] + $totals['failed'] + $totals['cancelled'] >= $totals['total']) {
-            $aggregating = in_array(registry::STATUS_AGGREGATING, $statuses, true);
+            if (in_array(registry::STATUS_AGGREGATING, $statuses, true)) {
+                return ['state' => self::AGGREGATING, 'reason' => ''];
+            }
+            // Closed by a stop is not done: resuming plays it (#141, #158, #166).
+            if ($totals['cancelled'] > 0) {
+                return ['state' => self::STOPPED, 'reason' => get_string(
+                    'eta:stoppedleft',
+                    $component,
+                    $totals['cancelled']
+                )];
+            }
 
-            return [
-                'state'  => $aggregating ? self::AGGREGATING : self::FINISHED,
-                'reason' => '',
-            ];
+            return ['state' => self::FINISHED, 'reason' => ''];
         }
 
         // Actual work, not the existence of a worker somewhere. "Simulation

@@ -200,7 +200,11 @@ jobs:
           # Moodle deprecation/diagnostic output is not a valid GITHUB_OUTPUT record.
           # Keep the worker token out of public Actions logs; accept only expected keys.
           php local/catquizlab/cli/e2e_prepare.php --persons=1 \
-            | grep -E '^(experimentid|runid|attempts|token)=' >> "$GITHUB_OUTPUT"
+            | grep -E '^(experimentid|runid|attempts|token)=' > /tmp/prepare.out
+          # Masked as well (#149): with debug logging GitHub prints every step output ("Set output token = …").
+          token=$(sed -n 's/^token=//p' /tmp/prepare.out | head -n 1)
+          if [ -n "$token" ]; then echo "::add-mask::$token"; fi
+          cat /tmp/prepare.out >> "$GITHUB_OUTPUT"
 
       - name: Start the web server
         working-directory: ${{ matrix.webroot }}
