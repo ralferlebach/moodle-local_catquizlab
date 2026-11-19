@@ -83,13 +83,14 @@ function purgeCaches() {
 }
 
 /**
- * Shift the stored difficulty of activity A's items in the engine, attempts open (#136: a parameter change mid-test).
+ * Shift the stored difficulty of activity A's items in the engine and make one item nobody was asked yet inactive,
+ * attempts open (#136 AK 3: a parameter and item change mid-test).
  *
- * @returns {number} How many parameter rows changed.
+ * @returns {{changed: number, deactivated: number}} Parameter rows changed, the question made inactive.
  */
 function changeItems() {
     const out = execFileSync('php', [SEED, '--change-items', '--session=' + process.env.ENGINE_SESSION], {encoding: 'utf8'});
-    return JSON.parse(out.trim().split('\n').pop()).changed;
+    return JSON.parse(out.trim().split('\n').pop());
 }
 
 /**
@@ -239,4 +240,14 @@ function keep(dir, name, data) {
     fs.writeFileSync(pathlib.join(dir, name), JSON.stringify(data, null, 2));
 }
 
-module.exports = {session, report, attempt, purgeCaches, changeItems, login, openQuestion, answer, unharmed, keep};
+/**
+ * How far behind the engine's cached usage numbers of activity A are, at the end of a test (#136 AK 3).
+ *
+ * @returns {{items: number, behind: number, answersbehind: number, maxbehind: number, ahead: number}}
+ */
+function usageProbe() {
+    const out = execFileSync('php', [SEED, '--usage-probe', '--session=' + process.env.ENGINE_SESSION], {encoding: 'utf8'});
+    return JSON.parse(out.trim().split('\n').pop());
+}
+
+module.exports = {session, report, attempt, purgeCaches, changeItems, usageProbe, login, openQuestion, answer, unharmed, keep};

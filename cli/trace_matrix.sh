@@ -19,6 +19,11 @@
 #
 # The two settings are put back as they were when it ends, however it ends. Writes everything to $OUT. Run it on a
 # server like the production one and nowhere near real work: it plays real sittings with real workers.
+#
+# Fail closed since 0.7.72 (re-audit 19.11.2026): each cell is checked by trace_matrix_check.py — its files there and
+# readable, the smoke test passed, no 5xx, every answer request mapped onto its engine trace and every item selection
+# onto its selector span where the engine traces, no trace where it does not; then the whole matrix (every cell of
+# every strategy REPEAT times) and the comparison (no missing pair, no empty sample). Any finding: exit 1.
 set -u
 MOODLE="${MOODLE_ROOT:-/home/claude/moodle}"
 WORKERS="${WORKERS:-4}"
@@ -49,9 +54,9 @@ if [ "$REPEAT" -ge 2 ]; then
     order="$cells $(echo "$cells" | tr ' ' '\n' | tac | tr '\n' ' ')"
 fi
 
-printf '%-24s %-6s %-5s %-5s %-6s %-9s %-9s %-9s %-9s %-8s %-8s %-7s %s\n' cell result reqs 5xx cdp-to \
-    req-p50 req-p95 sel-p50 sel-p95 traces KiB webRSS linked
+printf '%-24s %-6s %s\n' cell result 'what the cell measured'
 n=0
+bad=0
 for cell in $order; do
     trace=${cell%%:*}
     debug=${cell##*:}
@@ -67,46 +72,39 @@ for cell in $order; do
         "$PHP" "$CLI/load_sampler.php" --seconds=$(( MINUTES * 60 + 600 )) ${STATUS_URL:+--status-url="$STATUS_URL"} \
             > "$OUT/$name-samples.jsonl" 2>/dev/null &
         sampler=$!
+        rm -f "$OUT/$name-smoke.json"
+        # --keep: the step's engine traces and the lab's records are read below, before the experiment is deleted
+        # (before 0.7.72 smoke.php deleted it first, and the traces with it).
         if timeout $(( MINUTES * 60 + 300 )) "$PHP" "$CLI/smoke.php" --strategy="$strategy" \
-            --persons=$(( WORKERS * PER )) --concurrency="$WORKERS" --minutes="$MINUTES" --require-all \
-            > "$OUT/$name.log" 2>&1; then result=PASS; else result=FAIL; fi
+            --persons=$(( WORKERS * PER )) --concurrency="$WORKERS" --minutes="$MINUTES" --require-all --keep \
+            --summary="$OUT/$name-smoke.json" > "$OUT/$name.log" 2>&1; then result=PASS; else result=FAIL; fi
         until=$(date +%s)
         kill "$sampler" 2>/dev/null; wait "$sampler" 2>/dev/null
         "$PHP" "$CLI/request_report.php" --from="$from" --until="$until" --json --raw="$OUT/$name-requests.csv" \
             > "$OUT/$name-requests.json" 2>/dev/null
-        echo "{\"cell\": \"$name\", \"trace\": $trace, \"debug\": \"$debug\", \"strategy\": \"$strategy\", \"cold\": $COLD, \"from\": $from, \"until\": $(date +%s), \"result\": \"pending\"}" \
+        echo "{\"cell\": \"$name\", \"trace\": $trace, \"debug\": \"$debug\", \"strategy\": \"$strategy\", \"cold\": $COLD, \"from\": $from, \"until\": $until, \"result\": \"$result\"}" \
             > "$OUT/$name-cell.json"
         "$PHP" "$CLI/trace_report.php" --from="$from" --until="$until" --json > "$OUT/$name-traces.json" 2>/dev/null
         "$PHP" "$CLI/trace_report.php" --from="$from" --until="$until" > "$OUT/$name-traces.txt" 2>/dev/null
-        line=$(python3 - "$OUT/$name-requests.json" "$OUT/$name-traces.json" "$OUT/$name-samples.jsonl" <<'PY'
-import json, sys
-def load(p):
-    try:
-        return json.load(open(p))
-    except (OSError, ValueError):
-        return {}
-r, t = load(sys.argv[1]), load(sys.argv[2])
-web = 0
-for l in open(sys.argv[3]):
-    try:
-        web = max(web, json.loads(l).get('webrssmb') or 0)
-    except ValueError:
-        pass
-kinds = t.get('kinds', {})
-nxt = kinds.get('next_item', {})
-sel = t.get('spans', {}).get('strategy:select_question', {})
-f = lambda d, k: ('%.0f' % d[k]) if k in d else '–'
-links = t.get('links', {})
-linked = sum(v for k, v in links.items() if k != 'none')
-print(r.get('requests', '–'), r.get('http5xx', '–'), t.get('capacitycauses', {}).get('submit_cdp_timeout', 0),
-      f(nxt, 'p50'), f(nxt, 'p95'), f(sel, 'p50'), f(sel, 'p95'), t.get('traces', 0), round(t.get('bytes', 0) / 1024),
-      web, '%d/%d' % (linked, t.get('traces', 0)))
-PY
-)
+        experiment=$(python3 -c 'import json,sys
+try: print(int(json.load(open(sys.argv[1])).get("experimentid") or 0))
+except Exception: print(0)' "$OUT/$name-smoke.json")
+        if [ "$experiment" -gt 0 ]; then
+            "$PHP" "$CLI/delete_experiment.php" --id="$experiment" > "$OUT/$name-deleted.txt" 2>&1
+        fi
+        # Fail closed: every file there and readable, every answer and selection mapped onto its trace (#164).
+        if line=$(python3 "$CLI/trace_matrix_check.py" cell "$OUT" "$name"); then :; else bad=$((bad + 1)); fi
         printf '%-24s %-6s %s\n' "trace$trace/debug$debug $strategy" "$result" "$line"
-        sed -i "s/\"result\": \"pending\"/\"result\": \"$result\"/" "$OUT/$name-cell.json"
+        sed 's/^/    /' "$OUT/$name-check.txt" | grep -v '^    clean$' || true
     done
 done
 echo "Everything in $OUT. The tables in $OUT/*-traces.txt have n, mean, sd and the 95 % interval per kind."
-# The comparison of the cells over every request (bootstrap intervals of the differences), report.md and report.json.
-python3 "$CLI/trace_matrix_compare.py" "$OUT"
+# The whole 2 x 2: every cell there REPEAT times for every strategy, each clean (trace_matrix_check.py).
+python3 "$CLI/trace_matrix_check.py" matrix "$OUT" "$STRATEGIES" "$REPEAT" || bad=$((bad + 1))
+# The comparison of the cells over every request (bootstrap intervals of the differences), report.md and report.json;
+# it fails on a missing pair or an empty sample.
+python3 "$CLI/trace_matrix_compare.py" "$OUT" || bad=$((bad + 1))
+if [ "$bad" -gt 0 ]; then
+    echo "FAIL: the trace matrix is not complete and clean ($bad finding(s) above; $OUT/*-check.txt, matrix-check.txt)."
+    exit 1
+fi

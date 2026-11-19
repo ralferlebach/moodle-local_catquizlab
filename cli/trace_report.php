@@ -55,7 +55,8 @@ $report = [
     'from' => $from, 'until' => $until,
     'tracing' => (bool) get_config('local_catquiz', 'attempttrace'),
     'debuglevel' => \local_catquizlab\local\debug_trace::level(),
-    'traces' => 0, 'kinds' => [], 'spans' => [], 'bytes' => 0, 'links' => [], 'debug' => [],
+    'traces' => 0, 'kinds' => [], 'spans' => [], 'bytes' => 0, 'links' => [], 'debug' => [], 'bysitting' => [],
+    'selections' => 0, 'unlinked' => [],
 ];
 $manager = $DB->get_manager();
 
@@ -85,8 +86,14 @@ if ($manager->table_exists('local_catquiz_trace')) {
                 $spanms[(string) $span['name']][] = (float) $span['ms'];
             }
         }
+        $selections = 0;
+        foreach ((array) (json_decode((string) $trace->spans, true) ?: []) as $span) {
+            if (($span['name'] ?? '') === 'strategy:select_question') {
+                $selections++;
+            }
+        }
         $traces[(int) $trace->id] = ['userid' => (int) $trace->userid, 'adaptiveattemptid' => (int) $trace->adaptiveattemptid,
-            'kind' => $kind, 'requestms' => $trace->requestms];
+            'kind' => $kind, 'requestms' => $trace->requestms, 'selections' => $selections];
     }
     $rs->close();
     foreach ($requestms as $kind => $values) {
@@ -98,8 +105,24 @@ if ($manager->table_exists('local_catquiz_trace')) {
         }
     }
     $links = live_correlation::link($traces);
-    foreach ($links as $link) {
+    foreach ($links as $id => $link) {
         $report['links'][$link['how']] = ($report['links'][$link['how']] ?? 0) + 1;
+        // Per lab sitting: its traces by kind and the selections they hold — what a check maps onto the sitting's
+        // answer requests (#164 re-audit 19.11.2026: request and selector spans mapped completely, not sampled).
+        $sitting = (string) (int) $link['labattemptid'];
+        $report['bysitting'][$sitting] = $report['bysitting'][$sitting] ?? ['engineattempt' => 0, 'kinds' => [],
+            'selections' => 0];
+        $report['bysitting'][$sitting]['engineattempt'] = (int) $traces[$id]['adaptiveattemptid'];
+        $kind = $traces[$id]['kind'];
+        $report['bysitting'][$sitting]['kinds'][$kind] = ($report['bysitting'][$sitting]['kinds'][$kind] ?? 0) + 1;
+        $report['bysitting'][$sitting]['selections'] += $traces[$id]['selections'];
+        if ($link['how'] === live_correlation::NONE) {
+            // A trace of no lab sitting: which kind, and whether its engine attempt still exists — the preparation's
+            // dry run (engine_dryrun) asks for one first item on an attempt it deletes again.
+            $report['unlinked'][] = ['trace' => $id, 'kind' => $traces[$id]['kind'],
+                'engineattempt' => (int) $traces[$id]['adaptiveattemptid'],
+                'exists' => $DB->record_exists('adaptivequiz_attempt', ['id' => (int) $traces[$id]['adaptiveattemptid']])];
+        }
     }
     $report['latest'] = [];
     foreach (array_slice(array_reverse($links, true), 0, max(0, (int) $options['rows']), true) as $id => $link) {
@@ -134,8 +157,19 @@ foreach (
     $report['debug'][$c]['bytes'] += strlen((string) $row->params) + strlen((string) $row->detail);
 }
 
+$report['selections'] = $report['spans']['strategy:select_question']['n'] ?? 0;
 if (!empty($options['json'])) {
-    echo json_encode($report, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES), "\n";
+    // Every map an object, also when empty: an empty PHP array is a JSON list, and a reader that expects a map broke on
+    // it (#164, re-audit 19.11.2026: "'list' object has no attribute 'get'").
+    $json = $report;
+    foreach (['kinds', 'spans', 'links', 'debug', 'executions', 'capacitycauses', 'bysitting'] as $key) {
+        $json[$key] = (object) ($json[$key] ?? []);
+    }
+    $json['bysitting'] = (object) array_map(
+        static fn(array $row): array => ['kinds' => (object) $row['kinds']] + $row,
+        $report['bysitting']
+    );
+    echo json_encode($json, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES), "\n";
     exit(0);
 }
 

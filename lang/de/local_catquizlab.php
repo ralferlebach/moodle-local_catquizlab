@@ -613,6 +613,7 @@ $string['exposure:engineinconsistent'] = 'keine Schritte, und die Zählung der E
 $string['exposure:enginelower'] = 'die Engine zählt auf einer Skala weniger Fragen, als gestellt wurden (Pilot- oder unbeantwortete Fragen)';
 $string['exposure:nomapping'] = 'der Versuchsdurchlauf hat keine Zuordnung von Fragen zu Skalen';
 $string['exposure:nosteps'] = 'nichts über die gestellten Fragen aufgezeichnet';
+$string['exposure:source'] = 'Gezählt aus den Items, die in den ausgewählten Bearbeitungen Schritt für Schritt tatsächlich verabreicht wurden. Nicht die Nutzungszahlen der Engine: Diese hält die Engine bis zu zehn Minuten im Cache und nutzt sie nur für die Itemauswahl (Pilot-Items); sie werden hier deshalb nie als aktuelle Exposition gezeigt.';
 $string['exposure:sourcepart'] = '{$a->source} — {$a->n} Bearbeitung(en)';
 $string['exposure:sources'] = 'Fragen je Skala gezählt aus: {$a}';
 $string['exposure:steps'] = 'den Schritten der Bearbeitungen selbst';

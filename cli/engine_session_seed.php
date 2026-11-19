@@ -27,7 +27,9 @@
  *
  * Item change (--change-items --session=FILE): the stored difficulty of every item of activity A's pool shifted by
  * +0.25 logit in the engine's item parameters, with attempts open — what an operator's recalibration does mid-test
- * (#136: "Parameter-/Itemwechsel"). Prints how many parameter rows changed.
+ * (#136: "Parameter-/Itemwechsel") — and the engine's caches invalidated as its own save does; and one item of A no one
+ * was asked yet made inactive in its scale through the engine's own call (#136 AK 3: no inadmissible question after a
+ * change). Prints {"changed": rows, "deactivated": question id}.
  *
  * Read-back (--report --session=FILE --user=ID): per activity, every attempt of that learner — id, state, questions
  * attempted, stop criterion and stop code where the version has them, standard error, ability — every question of its
@@ -46,11 +48,49 @@ require_once($CFG->libdir . '/clilib.php');
 require_once($CFG->dirroot . '/user/lib.php');
 
 [$options] = cli_get_params(['items' => 6, 'file' => '', 'report' => false, 'session' => '', 'user' => 0,
-    'change-items' => false, 'help' => false]);
+    'change-items' => false, 'usage-probe' => false, 'help' => false]);
 if ($options['help']) {
     echo "php cli/engine_session_seed.php [--items=6] [--file=PATH] | --report --session=FILE --user=ID"
-        . " | --change-items --session=FILE\n";
+        . " | --change-items --session=FILE | --usage-probe --session=FILE\n";
     exit(0);
+}
+
+/**
+ * The engine's runtime pool of activity A as the next question would see it (local_catquiz catscale::get_testitems(),
+ * from its application cache while that holds it), keyed by question id.
+ *
+ * @param array $session The seed's session file.
+ * @return array<int, object>
+ */
+function local_catquizlab_engine_session_pool(array $session): array {
+    global $DB;
+    $test = $DB->get_record('local_catquiz_tests', ['componentid' => (int) $session['activities']['A']['instance'],
+        'component' => 'mod_adaptivequiz'], 'id, catscaleid, contextid', MUST_EXIST);
+    return (new \local_catquiz\catscale((int) $test->catscaleid))->get_testitems((int) $test->contextid, true);
+}
+
+if ($options['usage-probe']) {
+    // How old the engine's usage numbers are (#136 AK 3): the runtime pool's answers per item as cached, against the
+    // same pool built anew from the database. The cache is purged for that, as an item change would: at the end of a
+    // test, never in the middle of one.
+    $session = json_decode((string) file_get_contents((string) $options['session']), true);
+    $cached = local_catquizlab_engine_session_pool($session);
+    \cache_helper::purge_by_event('changesintestitems');
+    $fresh = local_catquizlab_engine_session_pool($session);
+    $behind = [];
+    $ahead = 0;
+    foreach ($fresh as $id => $item) {
+        $was = (int) ($cached[$id]->attempts ?? 0);
+        $now = (int) ($item->attempts ?? 0);
+        if ($now > $was) {
+            $behind[(int) $id] = $now - $was;
+        } else if ($now < $was) {
+            $ahead++;
+        }
+    }
+    echo json_encode(['items' => count($fresh), 'behind' => count($behind), 'answersbehind' => array_sum($behind),
+        'maxbehind' => $behind ? max($behind) : 0, 'ahead' => $ahead]) . PHP_EOL;
+    exit($ahead === 0 ? 0 : 1);
 }
 
 if ($options['change-items']) {
@@ -58,7 +98,10 @@ if ($options['change-items']) {
     if (!$session || !$DB->get_manager()->table_exists('local_catquiz_itemparams')) {
         cli_error('--session=FILE: the file seeding wrote, on an installation with local_catquiz.');
     }
-    [$in, $params] = $DB->get_in_or_equal($session['activities']['A']['pool'] ?: [0], SQL_PARAMS_NAMED);
+    $pool = $session['activities']['A']['pool'] ?: [0];
+    // The runtime pool as the attempts see it now, warm in the engine's cache.
+    $warm = local_catquizlab_engine_session_pool($session);
+    [$in, $params] = $DB->get_in_or_equal($pool, SQL_PARAMS_NAMED);
     $changed = 0;
     $rows = $DB->get_records_select('local_catquiz_itemparams', "componentid {$in}", $params, 'id', 'id, difficulty');
     foreach ($rows as $row) {
@@ -66,8 +109,55 @@ if ($options['change-items']) {
             'difficulty' => round((float) $row->difficulty + 0.25, 4), 'timemodified' => time()]);
         $changed++;
     }
-    echo json_encode(['changed' => $changed]) . PHP_EOL;
-    exit($changed > 0 ? 0 : 1);
+    // What the engine's own save of parameters does after writing them (model_item_param_list): its caches of items
+    // and parameters, the runtime pool among them, are invalidated by event (#136 AK 3).
+    \cache_helper::purge_by_event('changesinitemparams');
+    \cache_helper::purge_by_event('changesintestitems');
+    // And one item of A nobody was asked yet made inactive in its scale, through the engine's own call — the one its
+    // item table's switch makes (execute_method_from_webservice): from now on it must never be asked.
+    $asked = $DB->get_fieldset_sql(
+        "SELECT DISTINCT qa.questionid
+           FROM {adaptivequiz_attempt} aa
+           JOIN {question_attempts} qa ON qa.questionusageid = aa.uniqueid
+          WHERE aa.instance = ?",
+        [(int) $session['activities']['A']['instance']]
+    );
+    require_once($CFG->dirroot . '/local/catquiz/lib.php');
+    $deactivated = 0;
+    foreach (array_diff($pool, array_map('intval', $asked)) as $questionid) {
+        $item = $DB->get_record_select(
+            'local_catquiz_items',
+            'componentid = ? AND componentname = ?',
+            [$questionid, 'question'],
+            'id, catscaleid',
+            IGNORE_MULTIPLE
+        );
+        if ($item && method_exists('\\local_catquiz\\catscale', 'add_or_update_testitem_to_scale')) {
+            \local_catquiz\catscale::add_or_update_testitem_to_scale(
+                (int) $item->catscaleid,
+                (int) $questionid,
+                LOCAL_CATQUIZ_TESTITEM_STATUS_INACTIVE,
+                'question'
+            );
+            $deactivated = (int) $questionid;
+            break;
+        }
+    }
+    // The runtime pool right after the change, as the next question will see it: the inactive item gone, every
+    // difficulty the new one — not what the warm cache held (#136 AK 3: no stale pool after a change).
+    $after = local_catquizlab_engine_session_pool($session);
+    $stale = 0;
+    foreach ($after as $item) {
+        // The parameter row the pool says is the item's active one, as stored now.
+        $stored = $DB->get_field('local_catquiz_itemparams', 'difficulty', ['id' => (int) ($item->activeparamid ?? 0)]);
+        if ($stored !== false && abs((float) $item->difficulty - (float) $stored) > 1e-6) {
+            $stale++;
+        }
+    }
+    echo json_encode(['changed' => $changed, 'deactivated' => $deactivated, 'warmpool' => count($warm),
+        'pool' => count($after), 'inactiveinpool' => isset($after[$deactivated]), 'staledifficulties' => $stale,
+        'inactivewaspooled' => isset($warm[$deactivated])]) . PHP_EOL;
+    exit($changed > 0 && $deactivated > 0 && !isset($after[$deactivated]) && $stale === 0 ? 0 : 1);
 }
 
 if ($options['report']) {

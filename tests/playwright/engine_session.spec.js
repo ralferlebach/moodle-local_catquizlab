@@ -21,7 +21,8 @@
  * on answering A and B in turns. Learner 2, a session of their own, answers A in between. Half-way the caches are purged
  * (purge_caches.php); then, with every attempt open, the test waits TTL_WAIT_SECONDS (the acceptance job: 610 s, past
  * the engine's 600-second cache lifetime), shifts the stored difficulty of activity A's items (a recalibration while
- * attempts are open) and goes on. Every attempt is read back from the server after every step:
+ * attempts are open) and makes one item of A nobody was asked yet inactive, both through the engine's own invalidation,
+ * and goes on: the inactive item is never asked after it (#136 AK 3). Every attempt is read back from the server after every step:
  * - the same attempt and question usage throughout (never restarted by the other one);
  * - every answer given stored, none more, nothing asked before lost or changed;
  * - no question asked twice in an attempt, every question from that activity's pool (no question of the other one);
@@ -63,6 +64,9 @@ test('two attempts in one session, a second learner, purge and TTL: nothing cros
     const state = {'1A': 'question', '1B': 'question', '2A': 'question'};
     const who = {'1A': [one, 'A', p1A], '1B': [one, 'B', p1B], '2A': [two, 'A', p2A]};
     const log = [];
+    // The item made inactive mid-test, and how many questions each attempt of A held when it was (#136 AK 3).
+    let inactive = 0;
+    const atChange = {};
 
     const check = (label) => {
         for (const key of Object.keys(who)) {
@@ -72,6 +76,11 @@ test('two attempts in one session, a second learner, purge and TTL: nothing cros
             const [learner, activity] = who[key];
             const now = aq.attempt(learner.id, activity);
             aq.unharmed(now, last[key], given[key], `${label}: learner ${learner.id} in ${activity}`);
+            if (inactive && activity === 'A') {
+                const since = now.questions.slice(atChange[key] || 0).map((q) => q.questionid);
+                expect(since, `${label}: learner ${learner.id} in A never asked the inactive item ${inactive}`)
+                    .not.toContain(inactive);
+            }
             last[key] = now;
         }
         log.push({step: label, given: {...given}, attempts: Object.fromEntries(Object.entries(last)
@@ -116,8 +125,18 @@ test('two attempts in one session, a second learner, purge and TTL: nothing cros
         check(`after ${TTL} s with every attempt open`);
     }
     // The items' parameters changed with every attempt open: the attempts go on, nothing crosses.
-    expect(aq.changeItems(), 'item parameters of A changed').toBeGreaterThan(0);
-    check('after the item parameters of A changed');
+    const change = aq.changeItems();
+    expect(change.changed, 'item parameters of A changed').toBeGreaterThan(0);
+    expect(change.deactivated, 'an item of A nobody was asked made inactive').toBeGreaterThan(0);
+    // The engine's runtime pool right after it, as the next question sees it: the item gone, no difficulty stale.
+    expect(change.inactivewaspooled, 'the item was in the warm pool before').toBe(true);
+    expect(change.inactiveinpool, 'the inactive item is out of the pool at once').toBe(false);
+    expect(change.staledifficulties, 'no difficulty in the pool older than the change').toBe(0);
+    for (const key of ['1A', '2A']) {
+        atChange[key] = last[key] ? last[key].questions.length : 0;
+    }
+    inactive = change.deactivated;
+    check('after the item parameters of A changed and one of its items was made inactive');
     for (let round = 0; round < items + 2 && Object.values(state).some((v) => v !== 'finished'); round++) {
         await step('1B');
         await step('1A');
@@ -140,7 +159,12 @@ test('two attempts in one session, a second learner, purge and TTL: nothing cros
         last[key] = end;
     }
     check('end');
-    aq.keep(OUT, 'readings.json', {session: s.activities, learners: s.learners.map((l) => l.id), ttl: TTL, log});
+    // How old the engine's usage numbers were at the end (#136 AK 3): measured, kept, never shown as current. They only
+    // lag — the cache never holds more answers than the database.
+    const usage = aq.usageProbe();
+    expect(usage.ahead, 'no cached usage number ahead of the database').toBe(0);
+    aq.keep(OUT, 'readings.json', {session: s.activities, learners: s.learners.map((l) => l.id), ttl: TTL, log, change,
+        usage});
     aq.keep(OUT, 'final.json', {one: aq.report(one.id), two: aq.report(two.id)});
     await ctx1.close();
     await ctx2.close();

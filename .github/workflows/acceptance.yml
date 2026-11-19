@@ -202,6 +202,12 @@ jobs:
         working-directory: ${{ env.CORE_ROOT }}
         run: php admin/cli/cfg.php --component=local_catquiz --name=attempttrace --set=1
 
+      # The verdict of a step against every case it must tell apart (re-audit 19.11.2026): pass, capacity, and each
+      # failure — 5xx, fatal, failed, stalled, held back, unfinished, none valid, a check of smoke.php.
+      - name: Issue 110 — the step verdict's self-test
+        working-directory: ${{ env.MOODLE_ROOT }}
+        run: python3 local/catquizlab/cli/load_step_verdict.py --self-test
+
       - name: Issue 110 — ${{ matrix.mode }} at 1, 5, 12, 25 and 50 workers
         working-directory: ${{ env.MOODLE_ROOT }}
         timeout-minutes: 300
@@ -277,6 +283,14 @@ jobs:
 
       # Same code, engine, pool shape, seeds (the smoke experiment's fixed seed), worker limit and server in every
       # cell; ABCD then DCBA; cold: caches purged before each cell.
+      # Fail closed, proven first: every failure case of a cell, the matrix and the comparison on made-up files
+      # (re-audit 19.11.2026: a parser error, a list for a map, a missing cell, an empty sample, missing files).
+      - name: Issue 164 — the checks' self-tests
+        working-directory: ${{ env.MOODLE_ROOT }}
+        run: |
+          python3 local/catquizlab/cli/trace_matrix_check.py --self-test
+          python3 local/catquizlab/cli/trace_matrix_compare.py --self-test
+
       - name: Issue 164 — the 2 × 2 matrix, FASTEST and HIGHESTSUB, ABCD then DCBA
         working-directory: ${{ env.MOODLE_ROOT }}
         timeout-minutes: 240
@@ -291,8 +305,10 @@ jobs:
           OUT: ${{ github.workspace }}/evidence/trace-matrix
         run: |
           set -o pipefail
-          bash local/catquizlab/cli/trace_matrix.sh | tee "$GITHUB_WORKSPACE/evidence-trace.txt"
-          cat "$OUT/report.md" >> "$GITHUB_STEP_SUMMARY"
+          rc=0
+          bash local/catquizlab/cli/trace_matrix.sh | tee "$GITHUB_WORKSPACE/evidence-trace.txt" || rc=$?
+          cat "$OUT/report.md" >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
+          exit $rc"
 
       - name: Issue 164 — a trace table of 200 000 rows, retention, no secret in a trace
         working-directory: ${{ env.MOODLE_ROOT }}

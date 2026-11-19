@@ -6,6 +6,67 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.7.72] — 2026-11-19 — Version 2026111901. The critical-friend re-audit of 19.11.2026 on ca851469: load steps judged from what they left (#110), the trace matrix fail-closed (#164), the engine's item freshness tested and judged (#136 AK 3), every output compared (#136 AK 5)
+
+No database change. One new string (EN/DE).
+
+### #110 — every step of the load matrix judged from its evidence
+- On ca851469 "control" failed in all five steps with every sitting collected, and "allsubs" at 50 workers failed with
+  all 50 collected and valid. Correlated from the artefacts: control's design ended every sitting after four questions
+  with SE ≈ 1.02 above its `se_max` 1.0 — invalid by definition, "Results report no observations"; allsubs@50 had 42 of
+  50 in the 40 minutes, the other eight still answering and collected 35 s later, on a 4-vCPU runner at 100 % CPU (p95
+  of the requests 0.7 s at 5 workers, 23.5 s at 50). A test design error and the runner's capacity — no 5xx, no fatal,
+  no failed sitting.
+- `cli/smoke.php --summary=FILE` (with `--stall`): what the test came to, however it ends — queued, collected and
+  failed at the limit and after it, every sitting open at the limit with its answers so far and the seconds since the
+  last one, held back, still in play, the validity of every collected sitting, the verdict.
+- `cli/load_step_verdict.py`: PASS, CAPACITY (every sitting collected and valid, nothing failed, stalled, held back or
+  left in play, some only after the limit — not at 1 or 5 workers) or FAIL with reasons; the safe load per mode in
+  `safe-load.txt`; a self-test of 20 cases, run before every load job. Invalid sittings are counted and named; a step
+  fails only when none is valid. The verdict, the smoke summary and the step's engine traces are in `matrix.jsonl`.
+- The control mode's `se_max` is 1.5: still four questions, valid by the engine's definition.
+- `cli/load_matrix.sh` and `cli/trace_matrix.sh` play with `--keep`, read the step's engine traces and records, then
+  delete it (`cli/delete_experiment.php`, new): `smoke.php` deleted the engine traces with the experiment before the
+  report read them.
+
+### #164 — the trace matrix fails closed
+- `cli/trace_report.php --json`: every map an object, also when empty (an empty PHP array became a JSON list, and the
+  matrix's inline Python broke on it, printed the traceback and went on); per lab sitting its traces by kind and the
+  item selections in them (`bysitting`); every trace of no lab sitting with whether its engine attempt still exists
+  (`unlinked`); the selections in all.
+- `cli/trace_matrix_check.py` (new): each cell — files there and readable, smoke passed, no 5xx/fatal, maps as maps; no
+  trace with tracing off; with it on every answer request mapped onto exactly one next_item/complete trace, the first
+  request onto one first_item trace, every item selection onto its selector span, every trace linked except the
+  preparation's dry run — and the whole 2 × 2 of every strategy REPEAT times. 24 failure cases as a self-test.
+- `cli/trace_matrix_compare.py`: a missing pair, an empty sample, an unreadable file or a list for a map is a problem in
+  the report and exit 1 (it skipped a missing pair before); a self-test of 4 cases.
+- `cli/trace_matrix.sh`: the inline Python replaced by the check; any finding fails the job. `acceptance.yml` runs the
+  self-tests before the matrix and keeps the report in the job summary whatever the outcome.
+
+### #136 AK 3 — what the engine knows of its items, and how old
+- `cli/engine_session_seed.php --change-items` reads the engine's runtime pool warm, shifts every difficulty of
+  activity A with the invalidation the engine's own save triggers, makes one item nobody was asked inactive through
+  the engine's own call (`catscale::add_or_update_testitem_to_scale()`), and reads the pool again: the item was in it,
+  is out of it at once, no difficulty older than the change. `engine_session.spec.js` then checks that no later
+  question of either learner in A is that item.
+- `--usage-probe` at the end: the pool's usage numbers as cached against the same pool built from the database — how
+  many items, how many answers behind (locally: 3 of 19 items, 6 answers); never ahead.
+- `docs/dev/engine-aktualitaet.md`: the four sources of the engine's item data, how old each can be (runtime pool until
+  an item/parameter/scale event; usage numbers and the question bank's hidden/draft up to 600 s; the personal history
+  until the person's next attempt start), what each feeds (balancing — not playable in the lab — and pilot items; the
+  lastplayed penalty), and what the lab shows.
+- The exposure block of the results says where its numbers come from: the sittings' own steps, never the engine's
+  cached usage counts (`exposure:source`, EN/DE).
+
+### #136 AK 5 — every output says the same
+- `cli/smoke.php` compares, in every smoke run (Worker CI with both engine sets on every stack, the load matrix), under
+  the filters "valid" and "all": the analysis the tables read, the CSV and JSON exports of the sittings and of the scale
+  results, and the plots of the overview and global tabs as rendered. The same filtered sample; per sitting validity
+  state and verdicts, SE, TI@n, the engine's end (finished, end code, terminal code), the limits broken
+  (`max_questions_exceeded` among them), the engine's productive count against its own record; per scale result the
+  items administered against the steps (the actual scale exposure); the plots' points against the analysis. Any
+  difference fails the run.
+
 ## [0.7.71] — 2026-11-18 — Version 2026111802. The final round of the re-audit of 18.11.2026: an acceptance workflow for #110, #136, #137, #149, #163 and #164, the complete R re-analysis (#157), the single-subscale mode plot (#144), one read-only inventory, a release manifest of every gate job, skips checked
 
 No database change. One behaviour fixed (run reset, below); everything else is new evidence and its tooling.

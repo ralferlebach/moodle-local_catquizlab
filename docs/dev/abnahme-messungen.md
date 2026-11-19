@@ -1,4 +1,4 @@
-# Abnahmemessungen: welcher Nachweis welches Issue belegt (0.7.71)
+# Abnahmemessungen: welcher Nachweis welches Issue belegt (0.7.71, nachgeschärft in 0.7.72)
 
 Seit 0.7.71 gehört der Workflow **Acceptance measurements** (`.github/workflows/acceptance.yml`) zum Release-Gate
 (`release-gate.md`). Er läuft bei jedem Push und Pull Request auf `main` und von Hand; jeder Job lädt hoch, was er
@@ -54,8 +54,35 @@ verloren gehen und eine Antwort zu spät kommen; jede muss abgeglichen werden, n
 scheitert bei einer nicht zu Ende gespielten Bearbeitung, einer 5xx-Antwort oder einem PHP-Fatal. Die Selektorzeit
 (`strategy:select_question`) liest `cli/trace_report.php` aus den Engine-Traces des Jobs.
 
-Lokal: Skripte und Auswertung auf diesem Rechner mit kleinen Stufen geprüft; die Messreihe selbst (bis 50 Worker) läuft
-nur auf GitHub. Ergebnisse gibt es erst nach dem Push — dieses Dokument behauptet keine.
+**Seit 0.7.72 (Re-Audit 19.11.2026): das Urteil je Stufe aus dem, was die Stufe hinterlässt**, nicht aus dem Exitcode
+von `smoke.php` allein (`cli/load_step_verdict.py`, Selbsttest vor jeder Messreihe). `smoke.php --summary` schreibt je
+Stufe: Bearbeitungen in der Warteschlange, an der Zeitgrenze gesammelt/gescheitert/offen, jede offene mit ihren Antworten
+bis dahin und den Sekunden seit der letzten, nach der Grenze gesammelt/gescheitert/zurückgehalten/noch im Spiel, die
+Gültigkeit jeder gesammelten Bearbeitung und das Urteil der Prüfungen. Daraus:
+
+- **PASS** — alles in der Zeit gesammelt, mindestens eine gültig, kein 5xx, kein Fatal;
+- **CAPACITY** — alles gesammelt und gültig, kein 5xx/Fatal, keine gescheitert, keine hängend (Antwort jünger als
+  `STALL`, 300 s), keine zurückgehalten, keine danach noch im Spiel — nur einige erst nach der Grenze: die Maschine war
+  voll, das Plugin hat nicht versagt. Wird mit Zahlen berichtet, die sichere Last je Modus steht in `safe-load.txt`. Bei 1
+  oder 5 Workern ist das keine Last: dann FAIL;
+- **FAIL** — alles andere, mit Gründen.
+
+Ungültige Bearbeitungen werden gezählt und genannt (`validity` je Stufe); ein Fehler sind sie nur, wenn keine einzige
+gültig ist. Der Job scheitert bei einem FAIL.
+
+Befund auf ca851469 (0.7.71, Lauf 44453835263), aus den Artefakten korreliert:
+- *control* (FAIL in allen Stufen, jede Bearbeitung gesammelt): Das Design der Stufe beendete jede Bearbeitung nach vier
+  Fragen mit SE ≈ 1,02 über `se_max` 1,0 — jede ungültig, also „Results report no observations“. Ein Fehler des
+  Testdesigns, nicht des Plugins; seit 0.7.72 `se_max` 1,5 (gültig nach Definition der Engine, weiter kurz).
+- *allsubs@50* (FAIL nach 2 439 s, 50 gesammelt): 42 in den 40 Minuten, 8 noch beim Antworten, alle 8 innerhalb von 35 s
+  nach der Grenze gesammelt, alle 50 gültig, kein 5xx/Fatal; CPU ab 12 Workern bei 100 %, p95 der Anfragen von 0,7 s
+  (5 Worker) auf 23,5 s (50 Worker). Kapazität des 4-vCPU-Runners, kein Defekt — heute CAPACITY.
+- *classic*, *highestsub*: alle Stufen PASS; je eine ungültige Bearbeitung bei classic@25/@50 (extremer Twin, SE 0,41
+  nach 102 Items, `noremainingquestions`) — gezählt, kein Fehler.
+
+Die Engine-Traces jeder Stufe liest `trace_report.php` jetzt, solange die Stufe noch existiert (`--keep`, danach
+`cli/delete_experiment.php`); vorher löschte `smoke.php` sie mit dem Experiment, und die Selektorzeit kam aus fast keinem
+Trace. Lokal (4.5, control mit 1 und 2 Workern): PASS, „every step passed up to 2 worker(s)“.
 
 **Historischer Nachweisverzicht.** Die Original-Logs der HTTP-500-Vorfälle auf CLARA (Oktober 2026) liegen dem Entwickler
 nicht vor. Ihre Ursache wird deshalb nicht nachträglich rekonstruiert. Belegt wird stattdessen der heutige Stand unter
@@ -87,6 +114,21 @@ geführt; hier wird nur gemessen.
 Lokal: Sitzungstest mit Purge und Itemänderung **PASS** (Moodle 4.5, ohne TTL-Wartezeit); die Migrationsphasen lokal
 geprüft. Alle sechs Stack-/Satz-Kombinationen, die TTL-Wartezeit und die Kostenmatrix laufen nur auf GitHub.
 
+**Seit 0.7.72 (Re-Audit 19.11.2026):**
+- **AK 3** — Expositionskontrolle und Aktualität: `engine-aktualitaet.md` (Quellen, Alter, Wirkung; Item inaktiv und
+  Parameter geändert bei offenen Versuchen: aus dem Pool sofort, nie mehr gefragt; Alter der Nutzungszahlen gemessen).
+- **AK 5** — jede Ausgabe sagt dasselbe: `smoke.php` vergleicht in jedem Smoke-Lauf (Worker-CI, beide Engine-Sätze, alle
+  Stacks; Lastmatrix) unter den Filtern „valid“ und „all“ die Analyse (was die Tabellen zeigen), den CSV- und den
+  JSON-Export der Bearbeitungen und der Skalenergebnisse und die Plots der Übersicht und des Global-Tabs, wie sie
+  gerendert werden: dieselbe gefilterte Stichprobe; je Bearbeitung Gültigkeitszustand und Urteile (einheitlich, Engine,
+  statistisch), SE, TI@n, Ende der Engine (fertig, Endcode, Terminalcode), gebrochene Grenzen (darunter
+  `max_questions_exceeded`), Zahl der Engine gegen ihren eigenen Datensatz; je Skalenergebnis die verabreichten Items
+  gegen die Schritte (tatsächliche Skalenexposition); die Punkte der Plots gegen die Analyse. Jede Abweichung lässt den
+  Lauf scheitern. Lokal mit FASTEST, ALLSUBS und CLASSIC: alles gleich.
+- **DoD 2** — die Worker-CI auf ca851469 (Lauf 44453835100) ist vollständig grün, alle sieben Jobs inklusive Moodle 5.3
+  mit beiden Engine-Sätzen; das Release-Manifest desselben Commits fasst 45 Jobs aus allen vier Workflows zusammen,
+  nichts fehlt, kein Widerspruch.
+
 ## #164 im Einzelnen
 
 `cli/trace_matrix.sh` spielt die vier Zellen (`attempttrace` 0/1 × `debuglevel` off/trace) mit FASTEST und HIGHESTSUB,
@@ -103,8 +145,28 @@ Wert ausgegeben), legt 200 000 Tracezeilen über 30 Tage an, misst das Lesen ein
 samt Abfrageplan (Index auf `timecreated`, kein Scan der ganzen Tabelle), lässt die Aufbewahrungs-Task der Engine mit
 14 Tagen laufen (nichts Älteres darf bleiben) und räumt auf.
 
-Lokal: `trace_volume_check.php` und der Vergleich (mit synthetischen Zellen) geprüft; die Matrix selbst läuft nur auf
-GitHub.
+**Seit 0.7.72 fail-closed (Re-Audit 19.11.2026).** Auf ca851469 war der Job grün, obwohl die Auswertung jeder Zelle mit
+`AttributeError: 'list' object has no attribute 'get'` abbrach (eine leere PHP-Map wurde als JSON-Liste geschrieben),
+eine gescheiterte Zelle nur notiert wurde, der Vergleich fehlende Paare übersprang — und `smoke.php` das Experiment samt
+Engine-Traces löschte, bevor der Bericht sie las (1–2 Selektor-Spans gegen 240 Antworten). Jetzt:
+
+- `trace_report.php --json` schreibt jede Map als Objekt und je Lab-Bearbeitung die Traces nach Art und die Selektionen
+  darin (`bysitting`), dazu jeden Trace ohne Lab-Bearbeitung (`unlinked`) mit der Angabe, ob sein Engine-Versuch noch
+  existiert;
+- jede Zelle wird mit `--keep` gespielt, gelesen, dann gelöscht;
+- `cli/trace_matrix_check.py` prüft jede Zelle: Dateien da und lesbar, Smoke bestanden, kein 5xx/Fatal, Maps als Maps;
+  Tracing aus → kein Trace; Tracing an → jede Antwortanfrage (attempt.php POST) einer Bearbeitung auf genau einen
+  next_item-/complete-Trace, ihr erster Aufruf auf genau einen first_item-Trace, jede Itemwahl auf ihren
+  `strategy:select_question`-Span, jeder Trace einer Bearbeitung zugeordnet außer dem Trockenlauf der Vorbereitung
+  (`engine_dryrun`: first_item auf einem zurückgerollten Engine-Versuch); dann die ganze Matrix (jede Zelle jeder
+  Strategie REPEAT-mal);
+- `trace_matrix_compare.py` scheitert an fehlendem Paar, leerer Stichprobe, nicht lesbarer Datei, Liste statt Map;
+- jeder Fehlerfall als Selbsttest (`--self-test` beider Skripte, 24 bzw. 4 Fälle), im Job vor der Matrix;
+- der Job scheitert bei jedem Befund.
+
+Lokal (4.5, FASTEST, 2 Worker, eine Wiederholung): alle vier Zellen sauber, je 40 Antworten auf 40 next_item-/
+complete-Traces, 41 Selektor-Spans auf 41 Itemwahlen, 1 Trockenlauf-Trace; der Vergleich vollständig. Die volle Matrix
+(FASTEST und HIGHESTSUB, 4 Worker × 3, ABCD/DCBA, kalt und warm) läuft auf GitHub.
 
 ## #157, #144, #149
 

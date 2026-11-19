@@ -613,6 +613,7 @@ $string['exposure:engineinconsistent'] = 'no steps, and the engine\'s counts do 
 $string['exposure:enginelower'] = 'the engine counts fewer items on a scale than were administered (pilot or unanswered items)';
 $string['exposure:nomapping'] = 'the run has no assignment of items to scales';
 $string['exposure:nosteps'] = 'nothing recorded of the items administered';
+$string['exposure:source'] = 'Counted from the items administered in the selected sittings, step by step, as they were played. Not the engine\'s own usage counts: the engine keeps those for up to ten minutes in its cache and uses them only to choose items (pilot items), so they are never shown here as current exposure.';
 $string['exposure:sourcepart'] = '{$a->source} — {$a->n} sitting(s)';
 $string['exposure:sources'] = 'Items per scale counted from: {$a}';
 $string['exposure:steps'] = 'the sittings\' own steps';

@@ -56,6 +56,8 @@ use local_catquizlab\local\worker_registry;
     'minutes'  => 5,
     'minanswers' => 15,
     'keep'     => false,
+    'summary'  => '',
+    'stall'    => 300,
     'list-strategies' => false,
     'provisioning-only' => false,
     'case' => '',
@@ -71,6 +73,16 @@ use local_catquizlab\local\worker_registry;
     'watch-page' => '',
     'pairs' => '',
 ], ['h' => 'help']);
+
+// What --summary=FILE says, written however the test ends (a cli_error() included): verdict "error" unless a later
+// step set another.
+$GLOBALS['smokesummary'] = ['verdict' => 'error', 'validity' => []];
+if ((string) $options['summary'] !== '') {
+    $summaryfile = (string) $options['summary'];
+    register_shutdown_function(static function () use ($summaryfile): void {
+        file_put_contents($summaryfile, json_encode($GLOBALS['smokesummary'], JSON_UNESCAPED_SLASHES) . "\n");
+    });
+}
 
 if ($options['help']) {
     cli_writeln(<<<EOT
@@ -97,6 +109,12 @@ Options:
   --expect-recovered-reasons=CODE:N,…  And exactly N reconciliations with each of these reason codes, e.g.
                        submit_cdp_timeout:2 — one per injected slow response, not a loop of timeouts (#110).
   --keep               Leave the experiment behind for inspection.
+  --summary=FILE       What the test came to, as JSON in FILE, however it ends: the experiment, sittings queued,
+                       collected and failed at the time limit and after it, every sitting not finished at the limit with
+                       its answers so far and how long since its last answer, the validity of every collected sitting,
+                       and the verdict (pass, deadline, tooshort, noobservations, or error). For the load and trace
+                       matrices (#110, #164 re-audit 19.11.2026), which classify a step from it.
+  --stall=300          With --summary: a sitting with no answer for this many seconds at the time limit is stalled.
   --pool=N             Items in the pool, over three subscales (default: twice the answer floor); for the
                        engine's cost per pool size (#136 DoD 3).
   --budget=G1,G2,S1,S2,SE1,SE2
@@ -310,6 +328,7 @@ if ($options['case'] === '102') {
 
 $experimentid = (int) experiment_service::save($definition)['id'];
 step('Defined experiment ' . $experimentid . '.', $started);
+smoke_summary(['experimentid' => $experimentid, 'strategy' => $strategy]);
 
 // 3. Prepare, in one action, as a person would.
 $started = microtime(true);
@@ -388,6 +407,7 @@ if ($queued === 0) {
     cli_error('No attempts were queued.');
 }
 step($queued . ' attempts queued.');
+smoke_summary(['queued' => $queued]);
 
 // Every run exactly its planned twins, each once, each with one sitting (#116):
 // a setup done twice at once used to store every twin twice and give each copy
@@ -554,6 +574,33 @@ foreach ($unfinished as $sitting) {
     ));
 }
 $notfinished = count($unfinished);
+// Where each one stood at the limit: its answers so far and how long since the last (#110, re-audit 19.11.2026): a
+// sitting still answering is slow, one that stopped answering is stalled — two different findings.
+$atlimit = [];
+foreach ($unfinished as $sitting) {
+    $engine = $DB->get_record_sql(
+        'SELECT aa.id, aa.questionsattempted, aa.timemodified
+           FROM {local_catquizlab_person} p
+           JOIN {adaptivequiz_attempt} aa ON aa.userid = p.moodleuserid
+          WHERE p.id = (SELECT personid FROM {local_catquizlab_attempt} WHERE id = ?)
+       ORDER BY aa.id DESC',
+        [$sitting->id],
+        IGNORE_MULTIPLE
+    );
+    $atlimit[] = ['sitting' => (int) $sitting->id, 'status' => (int) $sitting->status,
+        'answered' => $engine ? (int) $engine->questionsattempted : null,
+        'idleseconds' => $engine ? time() - (int) $engine->timemodified : null];
+    cli_writeln(sprintf(
+        '    at the limit: sitting %d, %s answered, last answer %s',
+        $sitting->id,
+        $engine ? (string) (int) $engine->questionsattempted : 'nothing',
+        $engine ? (time() - (int) $engine->timemodified) . ' s ago' : 'never'
+    ));
+}
+$stall = max(1, (int) $options['stall']);
+smoke_summary(['atlimit' => ['collected' => $collected, 'failed' => $failed, 'notfinished' => $notfinished,
+    'stalled' => count(array_filter($atlimit, static fn(array $a): bool => $a['idleseconds'] === null
+        || $a['idleseconds'] >= $stall)), 'sittings' => $atlimit], 'stallseconds' => $stall]);
 
 // Everything above is the state at the time limit; everything below checks the sittings against each other and must
 // not check a moving run (gate 12.11.2026): the workers kept playing after the limit, a sitting was collected between
@@ -581,6 +628,8 @@ if ($notfinished > 0) {
         $collected,
         $failed
     ), $started);
+    smoke_summary(['afterlimit' => ['collected' => $collected, 'failed' => $failed, 'held' => count($held),
+        'inplay' => $inplay, 'seconds' => (int) round(microtime(true) - $started)]]);
 }
 
 // Every execution counts, not only the final state (#100). A navigation failure
@@ -900,6 +949,23 @@ if ($disagreements !== []) {
     cli_error('A sitting ends differently in different places (#123).');
 }
 
+// Every place that shows a sitting says the same of it (#136 AK 5, re-audit 19.11.2026), under the dashboard's filter
+// and with every sitting: the analysis the tables read, the CSV and the JSON export of the sittings and of the scale
+// results, and the plots as drawn — validity, SE, TI@n, the engine's end, the limits broken, the engine's count, the
+// items given per scale (the actual scale exposure, from the steps) — against this engine, whichever set is installed.
+$started = microtime(true);
+$outputs = smoke_outputs_agree($experimentid);
+step('Outputs compared (analysis and tables, CSV, JSON, plots; filters valid and all): '
+    . ($outputs['problems'] === [] ? 'all agree, ' . $outputs['facts'] . '.' : count($outputs['problems'])
+    . ' disagreement(s).'), $started);
+smoke_summary(['outputs' => $outputs]);
+if ($outputs['problems'] !== []) {
+    foreach (array_slice($outputs['problems'], 0, 40) as $line) {
+        cli_writeln('  DISAGREES: ' . $line);
+    }
+    cli_error('A sitting is shown differently in different outputs (#136 AK 5).');
+}
+
 // The same items in every strategy cell of a replication (#154 DoD4): on this real setup, its runs provisioned in
 // parallel by the workers, every pool keyed and every group of runs that must share a pool sharing it to the bit.
 $started = microtime(true);
@@ -982,13 +1048,16 @@ if ($probe !== null) {
 }
 
 if (!empty($options['require-all']) && $notfinished > 0) {
+    smoke_summary(['verdict' => 'deadline']);
     cli_error($notfinished . ' of ' . $queued . ' sittings did not finish in ' . (int) $options['minutes']
         . ' minutes (listed above).');
 }
 if ($tooshort) {
+    smoke_summary(['verdict' => 'tooshort']);
     cli_error('Attempts answered fewer than ' . $minanswers . ' questions (shortest: ' . $shortest . ').');
 }
 if ($noobservations) {
+    smoke_summary(['verdict' => 'noobservations']);
     cli_error('Results report no observations.');
 }
 
@@ -1000,10 +1069,21 @@ if (empty($options['keep'])) {
     step('Cleaned up.');
 }
 
+smoke_summary(['verdict' => 'pass', 'collected' => $collected, 'withestimate' => $withestimate, 'results' => $results]);
 cli_writeln('');
 cli_writeln('PASS: ' . $collected . ' attempts played, ' . $withestimate
     . ' with estimates, ' . $results . ' result rows.');
 exit(0);
+
+/**
+ * Add to what --summary=FILE will say; the file is written when the test ends, however it ends.
+ *
+ * @param array $fields Fields to set.
+ * @return void
+ */
+function smoke_summary(array $fields): void {
+    $GLOBALS['smokesummary'] = $fields + ($GLOBALS['smokesummary'] ?? []);
+}
 
 /**
  * Sittings of this experiment already being played or collected.
@@ -1025,6 +1105,187 @@ function smoke_work_taken(int $experimentid): int {
             'collected'    => attempt_scheduler::STATUS_COLLECTED,
         ]
     );
+}
+
+/**
+ * Every collected sitting as each output shows it, compared (#136 AK 5): the analysis (what the tables show), the CSV
+ * and the JSON export of the sittings and of the scale results, and the plots of the overview, the global tab and the
+ * subscale tab as rendered — under the filters "valid" (the dashboard's) and "all".
+ *
+ * Compared: the filtered sample (the same sittings in analysis, CSV and JSON); per sitting validity state and verdicts,
+ * SE, TI@n, the engine's end (finished, end code, terminal code), the limits it broke (max_questions_exceeded among
+ * them), the engine's productive count against its own record; per scale result the items administered against the
+ * steps (the actual scale exposure); the plots' points against the analysis.
+ *
+ * @param int $experimentid The smoke experiment.
+ * @return array{problems: string[], facts: string}
+ */
+function smoke_outputs_agree(int $experimentid): array {
+    global $DB, $PAGE;
+
+    $problems = [];
+    $facts = [];
+    $same = static fn($a, $b): bool => ($a === null || $a === '') ? ($b === null || $b === '')
+        : (is_numeric($a) && is_numeric($b) ? abs((float) $a - (float) $b) < 1e-9 : (string) $a === (string) $b);
+    $parsecsv = static function (string $csv): array {
+        $lines = array_values(array_filter(explode("\n", $csv), static fn(string $l): bool => $l !== ''));
+        $head = str_getcsv(array_shift($lines), ',', '"', '');
+        return array_map(static fn(string $l): array => array_combine($head, str_getcsv($l, ',', '"', '')), $lines);
+    };
+    $engineitems = [];
+    if ($DB->get_manager()->table_exists('local_catquiz_attempts')) {
+        $engineitems = $DB->get_records_sql_menu(
+            "SELECT a.id, e.number_of_testitems_used
+               FROM {local_catquizlab_attempt} a
+               JOIN {local_catquizlab_run} r ON r.id = a.runid
+               JOIN {local_catquiz_attempts} e ON e.attemptid = a.engineattemptid
+                    AND e.component IN ('adaptivequiz', 'mod_adaptivequiz')
+              WHERE r.experimentid = ?",
+            [$experimentid]
+        );
+    }
+    $fields = ['validitystate', 'valid', 'uniformvalid', 'enginevalid', 'statisticalvalid', 'se', 'nitems',
+        'enginefinished', 'designstopreached', 'endreasoncode', 'contractviolations', 'productiveitems', 'esttheta',
+        'truetheta'];
+    foreach (['valid', 'all'] as $validity) {
+        $filter = ['experimentid' => $experimentid, 'validity' => $validity];
+        $query = new \local_catquizlab\local\results_query($filter);
+        $analysis = [];
+        foreach ($query->each_observation() as $o) {
+            $analysis[(int) $o['attemptid']] = $o;
+        }
+        $export = \local_catquizlab\local\results_export::class;
+        $csvrows = $parsecsv($export::to_csv($export::dataset($query, $export::LEVEL_ATTEMPT)));
+        $csv = array_combine(array_map(static fn(array $r): int => (int) $r['attemptid'], $csvrows), $csvrows) ?: [];
+        $jsonrows = json_decode($export::to_json($query, $export::LEVEL_ATTEMPT), true)['data'] ?? [];
+        $json = array_combine(array_map(static fn(array $r): int => (int) $r['attemptid'], $jsonrows), $jsonrows) ?: [];
+        $ids = array_keys($analysis);
+        sort($ids);
+        foreach (['CSV' => $csv, 'JSON' => $json] as $name => $rows) {
+            $theirs = array_keys($rows);
+            sort($theirs);
+            if ($theirs !== $ids) {
+                $problems[] = "{$validity}: the analysis holds " . count($ids) . " sitting(s), the {$name} export "
+                    . count($theirs) . ' — not the same sample';
+            }
+        }
+        foreach ($analysis as $id => $o) {
+            foreach ($fields as $field) {
+                $values = ['analysis' => is_bool($o[$field] ?? null) ? (int) $o[$field] : ($o[$field] ?? null),
+                    'csv' => $csv[$id][$field] ?? null, 'json' => is_bool($json[$id][$field] ?? null)
+                    ? (int) $json[$id][$field] : ($json[$id][$field] ?? null)];
+                if (is_array($values['analysis'])) {
+                    $values['analysis'] = implode(';', $values['analysis']);
+                }
+                if (!$same($values['analysis'], $values['csv']) || !$same($values['analysis'], $values['json'])) {
+                    $problems[] = "{$validity}: sitting {$id} {$field}: " . json_encode($values);
+                }
+            }
+            foreach (['finaltiatn', 'finalti', 'engineverdict', 'terminalreasoncode'] as $field) {
+                if (!$same($csv[$id][$field] ?? null, $json[$id][$field] ?? null)) {
+                    $problems[] = "{$validity}: sitting {$id} {$field}: CSV " . json_encode($csv[$id][$field] ?? null)
+                        . ', JSON ' . json_encode($json[$id][$field] ?? null);
+                }
+            }
+            $enginecount = isset($engineitems[$id]) && $o['productiveitems'] !== null;
+            if ($enginecount && (int) $engineitems[$id] !== (int) $o['productiveitems']) {
+                $problems[] = "{$validity}: sitting {$id}: the engine's record counts {$engineitems[$id]} item(s), "
+                    . "the analysis {$o['productiveitems']}";
+            }
+        }
+        // Scale results: CSV and JSON alike, and the items given per scale as the steps count them.
+        $subscsv = $parsecsv($export::to_csv($export::dataset($query, $export::LEVEL_SUBSCALE)));
+        $subsjson = json_decode($export::to_json($query, $export::LEVEL_SUBSCALE), true)['data'] ?? [];
+        if (count($subscsv) !== count($subsjson)) {
+            $problems[] = "{$validity}: " . count($subscsv) . ' scale result(s) in the CSV, ' . count($subsjson) . ' in the JSON';
+        }
+        $key = static fn(array $r): string => $r['attemptid'] . ':' . $r['category'] . ':' . $r['subscale'];
+        $byjson = [];
+        foreach ($subsjson as $r) {
+            $byjson[$key($r)] = $r;
+        }
+        $given = [];
+        foreach ($subscsv as $r) {
+            foreach (['items', 'localse', 'estdelta', 'scalevalid', 'validitystate'] as $field) {
+                if (array_key_exists($field, $r) && !$same($r[$field], $byjson[$key($r)][$field] ?? null)) {
+                    $problems[] = "{$validity}: scale result {$key($r)} {$field}: CSV " . json_encode($r[$field])
+                        . ', JSON ' . json_encode($byjson[$key($r)][$field] ?? null);
+                }
+            }
+            if ((int) $r['items'] > 0) {
+                $given[(int) $r['attemptid']][] = (int) $r['items'];
+            }
+        }
+        $steps = [];
+        $steprows = $export::dataset($query, $export::LEVEL_STEP)['rows'];
+        foreach ($steprows as $step) {
+            if (!empty($step['subscaleid'])) {
+                $steps[(int) $step['attemptid']][(int) $step['subscaleid']] =
+                    ($steps[(int) $step['attemptid']][(int) $step['subscaleid']] ?? 0) + 1;
+            }
+        }
+        foreach ($steps as $id => $byscale) {
+            $fromsteps = array_values($byscale);
+            sort($fromsteps);
+            $exported = $given[$id] ?? [];
+            sort($exported);
+            // With every scale result ("all") the two are the same; under "valid" an invalid scale result is not
+            // exported, so what is exported is a part of what the steps count.
+            $part = $exported;
+            foreach ($fromsteps as $n) {
+                $at = array_search($n, $part, true);
+                if ($at !== false) {
+                    unset($part[$at]);
+                }
+            }
+            $differs = $validity === 'all' ? $fromsteps !== $exported : $part !== [];
+            if (isset($given[$id]) && $differs) {
+                $problems[] = "{$validity}: sitting {$id}: items per scale from the steps " . json_encode($fromsteps)
+                    . ', in the scale results ' . json_encode($exported);
+            }
+        }
+        $facts[] = "{$validity}: " . count($ids) . ' sitting(s), ' . count($subscsv) . ' scale result(s)';
+
+        // The plots as drawn, for the dashboard's filter: the points against the analysis.
+        if ($validity !== 'valid') {
+            continue;
+        }
+        if (!$PAGE->has_set_url()) {
+            $PAGE->set_context(\context_system::instance());
+            $PAGE->set_url('/local/catquizlab/results.php');
+        }
+        $withse = array_filter($analysis, static fn(array $o): bool => $o['se'] !== null);
+        $withestimate = array_filter($analysis, static fn(array $o): bool => $o['esttheta'] !== null);
+        $expected = [
+            'overview' => array_map(static fn(array $o): array => [(float) $o['nitems'], (float) $o['se']], $withse),
+            'global' => array_map(static fn(array $o): array => [(float) $o['truetheta'], (float) $o['esttheta']], $withestimate),
+        ];
+        foreach ($expected as $tab => $points) {
+            $html = (new \local_catquizlab\output\results_page($query, $tab, $filter))->render_tab();
+            $svg = explode('</svg>', substr($html, (int) strpos($html, '<svg ')))[0];
+            preg_match_all('/data-x="([^"]*)" data-y="([^"]*)" data-count="(\d+)"/', $svg, $m, PREG_SET_ORDER);
+            $drawn = [];
+            foreach ($m as [, $x, $y, $n]) {
+                for ($i = 0; $i < (int) $n; $i++) {
+                    $drawn[] = [(float) $x, (float) $y];
+                }
+            }
+            $points = array_values($points);
+            usort($points, static fn($a, $b) => $a <=> $b);
+            usort($drawn, static fn($a, $b) => $a <=> $b);
+            $ok = count($points) === count($drawn);
+            foreach ($points as $i => $p) {
+                $ok = $ok && abs($p[0] - $drawn[$i][0]) < 5e-3 && abs($p[1] - $drawn[$i][1]) < 5e-3;
+            }
+            if (!$ok) {
+                $problems[] = "valid: the first plot of the {$tab} tab draws " . count($drawn) . ' point(s), the analysis has '
+                    . count($points) . ' — or they lie elsewhere';
+            }
+        }
+        $facts[] = 'plots of overview and global tab, ' . implode(' and ', array_map('count', $expected)) . ' point(s)';
+    }
+
+    return ['problems' => $problems, 'facts' => implode('; ', $facts)];
 }
 
 /**
@@ -1113,6 +1374,8 @@ function smoke_ends_agree(int $experimentid): array {
         if (count(array_unique($lengths)) > 1) {
             $out[] = 'sitting ' . $id . ' length: ' . json_encode($lengths);
         }
+        $state = (string) $observation['validitystate'];
+        $GLOBALS['smokesummary']['validity'][$state] = ($GLOBALS['smokesummary']['validity'][$state] ?? 0) + 1;
         cli_writeln(sprintf(
             '    sitting %d: engine status %s, host %s, stop text "%s" -> %s -> %s; %d items, SE %s, %s',
             $id,

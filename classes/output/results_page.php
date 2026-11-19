@@ -4147,7 +4147,15 @@ class results_page {
         $chart->set_points($points)
             ->set_description(get_string('chart:pointisitem', $component));
 
-        return \local_catquizlab\output\accessible_table::render($table) . $chart->render();
+        // Where these numbers come from (#136 AK 3): the sittings' own steps — not the engine's usage counts, which it
+        // caches for up to ten minutes and which are therefore never shown here as if they were current.
+        return \local_catquizlab\output\accessible_table::render($table)
+            . \html_writer::div(
+                get_string('exposure:source', $component),
+                'small text-muted mb-2',
+                ['data-region' => 'catquizlab-exposure-source']
+            )
+            . $chart->render();
     }
 
     /**

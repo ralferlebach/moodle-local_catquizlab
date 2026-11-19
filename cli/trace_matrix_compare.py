@@ -35,7 +35,9 @@ retries) is not in these numbers: the server measures its own time; the worker's
 
     python3 cli/trace_matrix_compare.py /tmp/catquizlab-trace-matrix
 
-Writes OUT/report.json and OUT/report.md.
+Writes OUT/report.json and OUT/report.md. Fails closed since 0.7.72 (re-audit 19.11.2026): a cell without its request
+rows or with no answer request, a file that does not parse, a map written as a list, and a pair of cells an effect
+needs but does not have are problems, listed in the report, and the exit code is 1.
 """
 
 import csv
@@ -49,13 +51,31 @@ import sys
 
 RESAMPLES = 2000
 
+PROBLEMS = []
+
 
 def load_json(path):
     try:
         with open(path) as f:
-            return json.load(f)
-    except (OSError, ValueError):
+            value = json.load(f)
+    except (OSError, ValueError) as e:
+        PROBLEMS.append(f'{os.path.basename(path)}: {e}')
         return {}
+    if not isinstance(value, dict):
+        PROBLEMS.append(f'{os.path.basename(path)}: not an object')
+        return {}
+    return value
+
+
+def as_map(value, where):
+    """A map, or an empty one and a problem: a list where a map belongs is a broken report, not an empty one."""
+    if isinstance(value, dict):
+        return value
+    if value not in (None, [], {}):
+        PROBLEMS.append(f'{where}: a {type(value).__name__} where a map belongs')
+    elif isinstance(value, list):
+        PROBLEMS.append(f'{where}: a list where a map belongs')
+    return {}
 
 
 def quantile(values, q):
@@ -105,7 +125,7 @@ def cell(out, prefix):
     try:
         rows = list(csv.DictReader(open(f'{out}/{prefix}-requests.csv')))
     except OSError:
-        pass
+        PROBLEMS.append(f'{prefix}: request rows missing')
     allms = [float(r['durationms']) for r in rows if r['durationms'] not in ('', '-1')]
     answers = [float(r['durationms']) for r in rows
                if r['page'].endswith('/attempt.php') and r['method'] == 'POST' and r['durationms'] not in ('', '-1')]
@@ -117,8 +137,10 @@ def cell(out, prefix):
     except OSError:
         pass
     m = re.findall(r'(\d+) collected, (\d+) failed', log)
-    sel = (traces.get('spans') or {}).get('strategy:select_question') or {}
-    dbg = traces.get('debug') or {}
+    if not answers:
+        PROBLEMS.append(f'{prefix}: no answer request')
+    sel = as_map(traces.get('spans'), f'{prefix} spans').get('strategy:select_question') or {}
+    dbg = as_map(traces.get('debug'), f'{prefix} debug')
     status = {}
     for r in rows:
         status[r['status']] = status.get(r['status'], 0) + 1
@@ -142,7 +164,7 @@ def cell(out, prefix):
         'selector': {k: sel.get(k) for k in ('n', 'mean', 'p50', 'p95', 'p99', 'ci95')} if sel else None,
         'traces': traces.get('traces'), 'trace_bytes': traces.get('bytes'),
         'tracing': traces.get('tracing'),
-        'cdp_timeouts': (traces.get('capacitycauses') or {}).get('submit_cdp_timeout', 0),
+        'cdp_timeouts': as_map(traces.get('capacitycauses'), f'{prefix} capacitycauses').get('submit_cdp_timeout', 0),
         'debug_log': dbg,
         'sittings': {'collected': int(m[-1][0]), 'failed': int(m[-1][1])} if m else None,
         'cpu_percent_mean': round(statistics.mean([x['cpupercent'] for x in s if x.get('cpupercent') is not None]), 1)
@@ -169,6 +191,7 @@ def main(out):
         ]:
             xa, xb = by.get(a, []), by.get(b, [])
             if not xa or not xb:
+                PROBLEMS.append(f'{strategy}: "{label}" without both cells ({len(xa)} and {len(xb)} answer requests)')
                 continue
             seed = sum(map(ord, label + strategy))
             dmed = bootstrap_diff(xa, xb, statistics.median, seed)
@@ -189,7 +212,10 @@ def main(out):
                            'selector_share_of_median': round(c['selector']['p50'] / c['answers']['p50'], 3)})
     for c in cells:
         c.pop('_answers')
-    report = {'cells': cells, 'effects': effects, 'selector_shares': shares, 'resamples': RESAMPLES}
+    if not cells:
+        PROBLEMS.append('no cell')
+    report = {'cells': cells, 'effects': effects, 'selector_shares': shares, 'resamples': RESAMPLES,
+              'problems': PROBLEMS}
     with open(f'{out}/report.json', 'w') as f:
         json.dump(report, f, indent=2)
 
@@ -225,10 +251,59 @@ def main(out):
     md += ['', 'What these numbers do not contain: time a request spends outside the server (the worker\'s browser, '
            'CDP, navigation, retries). The worker\'s CDP timeouts are counted per cell; a request the server never saw '
            'has no line here. No effect is claimed where its interval contains 0.']
+    if PROBLEMS:
+        md += ['', '## Problems: this report is not complete', ''] + [f'- {p}' for p in PROBLEMS]
     with open(f'{out}/report.md', 'w') as f:
         f.write('\n'.join(md) + '\n')
     print('\n'.join(md))
+    return 1 if PROBLEMS else 0
+
+
+def self_test():
+    """A clean 2 x 2 compares with exit 0; a missing cell, a list for a map, an empty request file each with exit 1."""
+    import contextlib
+    import io
+    import shutil
+    import tempfile
+
+    def build(out, skip=None, spans=None, empty=None):
+        for i, (trace, debug) in enumerate([(0, 'off'), (1, 'off'), (0, 'trace'), (1, 'trace')]):
+            name = f'{i}-trace{trace}-debug{debug}-fastest'
+            if name == skip:
+                continue
+            with open(f'{out}/{name}-cell.json', 'w') as f:
+                json.dump({'cell': name, 'trace': trace, 'debug': debug, 'strategy': 'fastest', 'result': 'PASS'}, f)
+            with open(f'{out}/{name}-requests.csv', 'w') as f:
+                f.write('unixms,page,method,status,durationms\n')
+                if name != empty:
+                    for k in range(20):
+                        f.write(f'{k},/mod/adaptivequiz/attempt.php,POST,200,{100 + k + 5 * trace}\n')
+            with open(f'{out}/{name}-traces.json', 'w') as f:
+                json.dump({'traces': 0, 'spans': spans if spans is not None and trace else {}, 'debug': {},
+                           'capacitycauses': {}}, f)
+            with open(f'{out}/{name}-samples.jsonl', 'w') as f:
+                f.write('{"cpupercent": 10, "writtenmb": 1}\n{"cpupercent": 20, "writtenmb": 2}\n')
+
+    cases = [('clean', {}, 0), ('a cell missing', {'skip': '3-trace1-debugtrace-fastest'}, 1),
+             ('spans a list', {'spans': []}, 1), ('no answer request', {'empty': '1-trace1-debugoff-fastest'}, 1)]
+    bad = 0
+    for label, change, expect in cases:
+        out = tempfile.mkdtemp()
+        try:
+            build(out, **change)
+            PROBLEMS.clear()
+            with contextlib.redirect_stdout(io.StringIO()):
+                got = main(out)
+        finally:
+            shutil.rmtree(out)
+        ok = got == expect
+        bad += not ok
+        print(('ok   ' if ok else 'FAIL ') + f'{label}: exit {got} — {"; ".join(PROBLEMS) or "no problem"}')
+    print(f'{len(cases) - bad} of {len(cases)} cases as expected.')
+    return 0 if bad == 0 else 1
 
 
 if __name__ == '__main__':
-    main(sys.argv[1] if len(sys.argv) > 1 else '/tmp/catquizlab-trace-matrix')
+    if sys.argv[1:2] == ['--self-test']:
+        sys.exit(self_test())
+    sys.exit(main(sys.argv[1] if len(sys.argv) > 1 else '/tmp/catquizlab-trace-matrix'))
