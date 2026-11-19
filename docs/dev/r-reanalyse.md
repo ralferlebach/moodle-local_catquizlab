@@ -3,7 +3,8 @@
 Code: `research/run_all.R`, `research/R/*.R` (Basis-R ≥ 4.1, keine Pakete), im Forschungsdatenpaket unter
 `reanalysis/`. Referenz: `classes/local/research_reference.php` schreibt `reference/dashboard.csv` mit denselben
 Aufrufen, die die Ergebnisseite macht. Test: `research_package_test::test_the_r_reanalysis_reproduces_the_dashboard`.
-CI: `moodle-ci.yml`, Job PHPUnit, R 4.3.3 gepinnt, `CATQUIZLAB_REQUIRE_R=1`. Seit 0.7.61.
+CI: `moodle-ci.yml` und `moodle-release.yml`, Job PHPUnit, R 4.3.3 gepinnt, `CATQUIZLAB_REQUIRE_R=1`. Seit 0.7.61; vollständig
+(ohne NOT_REPRODUCED) seit 0.7.71.
 
 ## Ablauf
 
@@ -49,9 +50,12 @@ Zeigen die Zeilen selbst; `attempts` und die übrigen Tabellen sind sie. Keine a
 
 | Anzeige | Definition | R-Funktion | Stand |
 |---|---|---|---|
-| Lokale Genauigkeit | über gültige Skalenergebnisse gezählter Testbearbeitungen (Filter „valid“; bei „all“ alle mit Item oder unbekannter Zahl): n, Bias = Mittel(estdelta−truedelta), RMSE, MAE, Pearson(truedelta, estdelta), mittlerer lokaler SE, Anteil innerhalb 1/2 SE (unter denen mit SE), Zahl mit SE | `local_summary` | verglichen |
+| Lokale Genauigkeit | über gültige Skalenergebnisse gezählter Testbearbeitungen (Filter „valid“; bei „all“ alle mit Item oder unbekannter Zahl; bei „invalid“/„unknown“ die Skalenergebnisse in diesem Zustand aller Testbearbeitungen mit Subskalen-Zuordnung, gültig oder nicht, mit Item oder unbekannter Zahl): n, Bias = Mittel(estdelta−truedelta), RMSE, MAE, Pearson(truedelta, estdelta), mittlerer lokaler SE, Anteil innerhalb 1/2 SE (unter denen mit SE), Zahl mit SE | `local_summary` | verglichen |
 | Je Kategorie, je Subskala | dito gruppiert | `subscale_figures` | verglichen |
-| Skalenabdeckung, Streuung, Itemklassen, Itemplots | Zählkette der Skalenergebnisse | – | **nicht nachgerechnet** |
+| Skalenabdeckung | über alle Testbearbeitungen der Auswahl mit Subskalen-Zuordnung, gültig oder nicht: Testbearbeitungen; Skalenergebnisse mit verabreichtem Item = Skalenergebnisse mit Item + Subskalen, die laut `steps` ⋈ `items.assignedcatscaleid` ⋈ `scale_maps` (Ebene subscale) ein Item bekamen, aber keine Schätzung haben; einbezogen (gültig im Filterzustand); aus ungültigen Testbearbeitungen; ohne Schätzung; Itemzahl unbekannt; ohne Item. Zählkette: aus gültigen Testbearbeitungen → gepaart → gültig → mit SE; Gründe des Ausschlusses (`scalereasons`, leer = „engine“) | `coverage_figures`, `administered_scales` | verglichen |
+| Streuung je Strategie | alle und gültige Skalenergebnisse: n, SD (n−1) der wahren und geschätzten Abweichung, Verhältnis, Korrelation (Varianz > 1e-12), RMSE, Bias | `spread_of` | verglichen |
+| Itemklassen | lokale Genauigkeit je Klasse 0, 1, 2, 3–4, 5+, unbekannt (verabreichte Items der Skala) | `item_class`, `subscale_figures` | verglichen |
+| Itemplots | Fehler und lokaler SE gegen die Items der Skala | `write_plot_data` | Plotdaten `subscales_items.csv` (alle Punkte) |
 
 ### Mode-specific detection
 
@@ -61,7 +65,7 @@ Zeigen die Zeilen selbst; `attempts` und die übrigen Tabellen sind sie. Keine a
 | Wahre Ziele | Subskalen mit wahrer Fähigkeit − globaler ≤ −0,5 (Defizit) bzw. ≥ 0,5 (Stärke); „relevant“ ohne Definition | `detection_sittings` | verglichen |
 | Je Modus gegen die Wahrheit | gültige Skalenergebnisse mit Item: Bias, RMSE, MAE, Korrelation (Summenform, Varianz > 1e-12), Ziel-RMSE, Recall = TP/wahre Ziele, Precision, F1, Spearman/Top-1/Top-3/nDCG@3 auf orientierten Werten (Stärke umgedreht), Mittel über die Testbearbeitungen | `evaluate_sittings` | verglichen |
 | Gegen jede Baseline | derselbe Twin unter denselben Bedingungen (Experiment, Ebene, Modell, Variante, Störstärke, Stratum, Stärke); erste Testbearbeitung je Schlüssel gilt; gepaart, auf gemeinsamen Skalen, ungepaart; mittlere Differenz der mittleren absoluten Fehler | `compare_with` | verglichen |
-| Skalenergebnisse mit Item | zählt auch Ergebnisse ohne Schätzung, die das Paket nicht enthält | – | **NOT_REPRODUCED** |
+| Skalenergebnisse mit Item | je Testbearbeitung die Subskalen, die ein Item bekamen, aus `steps` ⋈ `items.assignedcatscaleid` ⋈ `scale_maps` — auch ohne Schätzung | `administered_scales` | verglichen |
 
 ### Robustness
 
@@ -78,7 +82,7 @@ Zeigen die Zeilen selbst; `attempts` und die übrigen Tabellen sind sie. Keine a
 |---|---|---|---|
 | Erreichbarkeit des Präzisionsziels | benötigt 1/SE_Ziel², erreicht 1/SE²; erreicht ≥ benötigt → reached; sonst gestoppt → stoppedearly; sonst Testlänge ≥ Maximum → budgetexhausted; sonst missed; ohne Ziel oder SE unknown | `testflow_figures` | verglichen |
 | Eine Testbearbeitung Schritt für Schritt | Schätzung, SE, Information je Schritt | – | nur Daten (`steps`) |
-| Vergleich der Verläufe | Twins nebeneinander | – | **nicht nachgerechnet** |
+| Vergleich der Verläufe | je gezählte Testbearbeitung: Schrittzahl, Schätzung und SE nach jedem Schritt | `flow_figures` | verglichen; Plotdaten `testflow_flows.csv` |
 
 ## Toleranz
 
@@ -88,18 +92,34 @@ ausmachen: 1,5e-6. Prozente (vom Dashboard nicht gerundet): 1e-9 relativ.
 
 ## Nachweis
 
-- Sauberer Lauf: 2PL und GPCM, 3 Strategien, 2 Replikationen, 2 Poolvarianten, 2 Strata, Testlängen 12–18 über alle
-  vier Subskalen, gültige und ungültige Testbearbeitungen, Twins ohne Testbearbeitung: kein FAIL; je Familie (Bias,
-  RMSE, Gini, lokaler RMSE, Robustheitsdifferenz, lokaler Robustheits-RMSE, Spearman, Top-3, nDCG@3, Erreichbarkeit)
-  mindestens ein Wert, der auf beiden Seiten nicht leer ist und PASS hat. Mit Strategien jeder Erkennungsrolle
-  (lowestsub, highestsub, relsubs, allsubs, classic): 681 und 1 009 Kennzahlen, alle PASS.
-- Absichtlicher Fehler: Schätzung einer gezählten Testbearbeitung +0,5 Logit, Manifest angepasst → FAIL beim Bias,
-  Paketprüfung grün. Eine Zeile aus `steps.csv` entfernt → FAIL der Paketprüfung.
+`research_package_test::test_the_r_reanalysis_reproduces_the_dashboard` (seit 0.7.71, #157):
+
+| Fall | Modell | Strategien | Skalen × Items | Testlänge | Filter |
+|---|---|---|---|---|---|
+| Modi mit Baselines | 2PL | lowestsub, allsubs, classic | 2 × 2 × 10 | 12–18 | valid, all, invalid, unknown |
+| Modi mit Baselines | GPCM | highestsub, relsubs, allsubs | 2 × 2 × 10 | 12–18 | valid, all |
+| ohne Baseline | 2PL | lowestsub, highestsub, classic | 2 × 2 × 10 | 12–18 | valid |
+| eine Subskala | 2PL | lowestsub, allsubs, classic | 1 × 1 × 20 | 12–18 | valid, all |
+| 625-Fragen-Run | GPCM | allsubs | 5 × 5 × 25 | 625 | valid |
+
+Jeweils 2 Replikationen, Twins ohne Testbearbeitung, ungültige Testbearbeitungen (Fehlerende, keine Endschätzung) und
+im ersten Fall eine Testbearbeitung ohne Aufzeichnung der Fragen (Zustand „unknown“). Geprüft: jede Zeile des
+Vergleichs PASS, kein NOT_REPRODUCED, `coverage.csv` ohne „not reproduced“; je Familie (Bias, RMSE, Exposition, lokale
+Genauigkeit, Itemklassen, Abdeckung, Zählkette, Streuung, Erreichbarkeit, Verläufe; mit zwei Poolvarianten
+Robustheit; mit Modus und Baseline Erkennung inkl. Skalenergebnissen mit Item) ein Wert, der auf beiden Seiten nicht
+leer ist.
+
+Verfälschungen (Manifest jeweils angepasst, damit die Paketprüfung grün bleibt), je in 2PL und GPCM:
+
+- Bias: Schätzung einer gezählten Testbearbeitung +0,5 Logit → FAIL beim Bias, Exit 1.
+- Step: Schätzung nach einem Schritt einer gezählten Testbearbeitung +0,5 Logit → FAIL im Verlaufsvergleich, Exit 1.
+- Join: `scale_maps` des ersten Laufs zeigt auf Engine-Skalen, denen kein Item zugeordnet ist → FAIL bei den
+  Skalenergebnissen mit Item bzw. der Abdeckung, Exit 1.
+- Eine Zeile aus `steps.csv` entfernt (Manifest nicht angepasst) → FAIL der Paketprüfung.
 
 ## Grenzen
 
-- Nicht nachgerechnet: die Zahl der Skalenergebnisse mit Item in der Erkennungstabelle (NOT_REPRODUCED im Vergleich),
-  Skalenabdeckung/Streuung/Itemklassen und Vergleich der Verläufe („not reproduced“ in `coverage.csv`).
-- Filter „invalid“ und „unknown“ für die Subskalen: nicht unterstützt (die Subskalenzeilen tragen keinen Zustand);
-  die Subskalen-Kennzahlen fehlen dann und werden als FAIL gemeldet, nicht als PASS.
+- Robustheit rechnet, wie das Dashboard, immer mit gültigen Skalenergebnissen gültiger Testbearbeitungen, unabhängig
+  vom Filter.
+- SE je Schritt steht im Paket nur, wo die Engine-Information berechnet wurde; sonst ist er auf beiden Seiten leer.
 - TI@n je Schritt ist im Paket nur, wo seine Berechnung in die Zeitgrenze passt (`manifest.json` → `tiatn`).

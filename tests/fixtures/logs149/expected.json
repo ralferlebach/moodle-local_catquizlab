@@ -1,0 +1,53 @@
+{
+  "files": {
+    "apache2/access.log": {
+      "categories": {
+        "password": 1,
+        "session": 1,
+        "token or key": 1
+      },
+      "fatallineswithquery": 0,
+      "lineswithsecrets": 3,
+      "untimed": 0
+    },
+    "apache2/access.log.1.gz": {
+      "categories": {
+        "e-mail address": 1,
+        "session": 1
+      },
+      "fatallineswithquery": 0,
+      "lineswithsecrets": 2,
+      "untimed": 0
+    },
+    "apache2/error.log": {
+      "categories": {
+        "session": 2,
+        "token or key": 1
+      },
+      "fatallineswithquery": 3,
+      "lineswithsecrets": 3,
+      "untimed": 0
+    },
+    "php/error.log": {
+      "categories": {
+        "token or key": 2
+      },
+      "fatallineswithquery": 1,
+      "lineswithsecrets": 2,
+      "untimed": 1
+    }
+  },
+  "total": {
+    "categories": {
+      "e-mail address": 1,
+      "password": 1,
+      "session": 4,
+      "token or key": 4
+    },
+    "files": 4,
+    "first": "2026-11-04T23:59:59Z",
+    "last": "2026-11-07T13:00:00Z",
+    "lines": 14,
+    "lineswithsecrets": 10
+  }
+}

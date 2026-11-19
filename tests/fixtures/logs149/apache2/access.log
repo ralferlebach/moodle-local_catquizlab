@@ -1,0 +1,4 @@
+10.0.0.5 - - [06/Nov/2026:09:15:02 +0100] "GET /local/catquizlab/logs.php?runid=51&download=1&ses%73key=S3CR3T149sesskeyD HTTP/1.1" 200 5120 "-" "Mozilla/5.0"
+10.0.0.5 - - [06/Nov/2026:09:15:03 +0100] "GET /local/catquizlab/index.php HTTP/1.1" 200 812 "-" "Mozilla/5.0"
+10.0.0.6 - - [06/Nov/2026:09:40:00 +0100] "GET /login/index.php?username=alice&password=S3CR3T149passwordE HTTP/1.1" 303 0 "-" "curl/8"
+10.0.0.6 - - [06/Nov/2026:09:41:10 +0100] "GET /webservice/rest/server.php?wstoken=S3CR3T149wstokenF&wsfunction=core_user_get_users HTTP/1.1" 200 90 "-" "curl/8"

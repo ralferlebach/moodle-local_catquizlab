@@ -408,8 +408,9 @@ class results_export {
         // is certain. Where it is from, why it is not known, its diagnostic
         // class, and the engine's count of answered items beside it.
         'itemssource', 'itemsreason', 'itemclass', 'itemsanswered',
-        // In the figures or not (#115): a valid scale result of a valid sitting.
-        'valid',
+        // In the figures or not (#115): a valid scale result of a valid sitting; and its state, by which the filters
+        // "invalid" and "unknown" select (#157, 0.7.71).
+        'valid', 'validitystate',
     ];
 
     /** @var array<int, array> Ability distribution and range by run, for this request. */

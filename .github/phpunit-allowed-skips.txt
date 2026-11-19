@@ -1,0 +1,9 @@
+# Tests the release PHPUnit jobs may skip, each with the reason (re-audit 18.11.2026, gate 3: skips checked).
+# Read by .github/scripts/phpunit-skips.py after every release PHPUnit job; a skip not listed here fails the job.
+#
+# Format: class | testdox sentence (a trailing * matches every data set) | why it may skip in the release jobs
+#
+# Empty on purpose. The release jobs install the pinned engine (local_catquiz, mod_adaptivequiz, catmodel), R 4.3.3,
+# Node and PHP 8.2 to 8.4: every engine-, R-, Node- and PHP-dependent test has what it needs. The last skip of this
+# gate was the R re-analysis without R (Release CI of 15.11.2026: "Skipped: 1" in each of the ten jobs); since R is
+# installed and CATQUIZLAB_REQUIRE_R is set, that test fails instead of skipping.

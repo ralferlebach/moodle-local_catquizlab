@@ -6,6 +6,100 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.7.71] — 2026-11-18 — Version 2026111802. The final round of the re-audit of 18.11.2026: an acceptance workflow for #110, #136, #137, #149, #163 and #164, the complete R re-analysis (#157), the single-subscale mode plot (#144), one read-only inventory, a release manifest of every gate job, skips checked
+
+No database change. One behaviour fixed (run reset, below); everything else is new evidence and its tooling.
+
+### Release gate (re-audit 18.11.2026, sections 3 and 4)
+- New workflow **Acceptance measurements** (`.github/workflows/acceptance.yml`), part of the gate with Release CI,
+  Worker CI and Interface end-to-end: jobs `scheduler` (#163, #149), `load` (#110), `trace` (#164), `engine-session`,
+  `engine-migration`, `engine-bench` (#136/#137) and `manifest`. Every job uploads what it measured and fails on a
+  broken condition. Setup in `.github/scripts/acceptance-setup.sh` (Moodle, the pinned engine set, Apache + PHP-FPM
+  with `memory_limit=512M`, mod_status).
+- **Release manifest** (`.github/scripts/release-manifest.sh`): per job the plugin commit and version, Moodle branch,
+  commit and version, the engine set with local_catquiz, mod_adaptivequiz, catmodel and wunderbyte_table, PHP, web
+  server, database, Node, npm, browsers, OS. Written by every job of all four workflows (artefacts `manifest-…`); the
+  job `manifest` of the acceptance workflow puts them into one `release-manifest.json`, the other workflows' once their
+  runs on the same commit have finished, and names what is missing. Fails when a job tested another plugin commit.
+- **Skips checked**: the release PHPUnit jobs run with `--fail-on-incomplete --testdox`; `.github/scripts/phpunit-skips.py`
+  reads every skipped test by name and fails the job unless `.github/phpunit-allowed-skips.txt` lists it with a reason.
+  The list is empty (the last skip of the gate was the R re-analysis without R).
+- **VoiceOver**: the three VoiceOver jobs, of which GitHub repeatedly started none or only some ("not acquired by
+  Runner"), are one job on one macOS machine that walks the three stacks' pages in turn and fails after all of them
+  (`screen-reader-voiceover`); NVDA stays a matrix of three.
+- **One read-only inventory** (`cli/acceptance_inventory.php`, `classes/local/acceptance_inventory.php`): plugin
+  version and schema, status sums, due versus actually claimable, holder and order of the execution line, the circuit
+  breaker's pause reason from the run manifest, worker/claim/lease contradictions, orphans and duplicates, collected/
+  cancelled/failed disjoint, result, provenance and export counts, task state and the last dispatch diagnosis; counts
+  its own database writes (must be 0). Text or `--json`.
+
+### #163 — the scheduler under real parallelism
+- `cli/scheduler_check.php`: five experiments (a backlog of 1 200 due sittings held by the circuit breaker, A and B with
+  two runs, S, C held by the breaker), 11 and 25 real workers, PostgreSQL and MariaDB; A stopped while it plays and
+  resumed, C released while B holds the line, S stopped while it plays; 30 minutes of polling on a fake clock in which
+  nothing may change; S resumed and played to the end. Every 3 s: one holder at most, nothing in play beside it, the
+  backlog untouched, stopped means out of the line. At the end every sitting collected once, the backlog never started
+  and closed by its stop, the line empty, the inventory without contradiction. It does what the pipeline tick does
+  every minute — including collecting traces that arrive after their sitting ended (#138) — and waits for those.
+- `cli/claim_bench.php` in the same job: the claim's query budget and its plan, 11 and 25 claimers.
+
+### #110 — load, faults, resources
+- `cli/load_matrix.sh`: per mode (CLASSIC, ALLSUBS, HIGHESTSUB, a short control mode) 1/5/12/25/50 real workers; a
+  fault step at 12 workers (a lost response, a lost request, a response too late per sitting; nothing answered twice);
+  every step's figures in `matrix.jsonl`; fails on a sitting not played to the end, a 5xx or a PHP fatal.
+- `cli/load_sampler.php`: CPU busy and I/O wait, disk MB, browser processes and memory, Apache busy/idle (mod_status),
+  database connections and waiting sessions. `cli/request_report.php --raw`: every request with its duration;
+  duration statistics.
+- `docs/dev/abnahme-messungen.md`: what each job shows, what ran locally, and the wording of the historical waiver for
+  the original HTTP-500 logs, which are not available.
+
+### #136 / #137 — the engine in the browser
+- `tests/playwright/engine_session.spec.js` with `cli/engine_session_seed.php`: two attempts in one session, a second
+  learner, purge, the cache's TTL waited out (610 s in CI), and — new — the stored difficulty of one activity's items
+  shifted with attempts open (`--change-items`); the engine's record of every attempt counts the items the activity
+  counts. On every stack and both engine sets.
+- `tests/playwright/engine_migration.spec.js`: attempts left open across the in-place upgrade release → candidate.
+- `cli/engine_bench.sh`: a sitting's cost by length (10/50/100/150) and pool (100/500/1000), release against candidate.
+- `tests/playwright/support/adaptivequiz.js`: sign-in tried up to three times when the login page answers "Invalid
+  login" for the right password (a stale form token on a cold, recorded page), with the page's message when it fails.
+  The seed fails when it cannot write its file, instead of leaving an older one to be read.
+
+### #144 — the mode plot with one shared subscale
+- `tests/playwright/mode_single_subscale.spec.js`, `cli/seed_modes.php --single`: two shared subscales (ten points)
+  and exactly one (five points); signed errors, zero axes, 45° line through (0; 0), tooltips, keyboard, and SVG, PNG,
+  PDF, CSV, JSON from the same points. `scatter_chart::add_zero_axes()` draws both zero axes (`data-region`
+  `zero-axis-x`/`zero-axis-y`, `identity-line`).
+- `tests/mode_plot_language_test.php`: every string of the plot in German, not English, with the same placeholders.
+
+### #149 — logs already written
+- `cli/scan_logs_for_secrets.php` (`classes/local/log_scan.php`): the operator's scan of existing logs (also rotated
+  and gzip), counts, categories and hours only, never a value; `--redact-to` writes a copy without values. Tested on
+  synthetic logs of every format (`tests/fixtures/logs149`, `log_scan_test`, acceptance job `scheduler`).
+  `docs/dev/log-datenschutz.md`: the operator's process, or an explicit risk waiver.
+
+### #157 — the R re-analysis, complete
+- Recomputed from the raw tables, no longer "not reproduced": the scale results with an administered item (steps ⋈
+  items' assigned engine scale ⋈ the new package table `scale_maps`, so also those the engine gave no estimate), scale
+  coverage and its counting chain, the reasons a scale result was left out, the spread per strategy, the item count
+  classes, and the comparison of flows (every counted sitting's estimate and SE after each step); plot data for the
+  item plots and the flows. The validity filters `invalid` and `unknown` are supported for the subscales
+  (`estimated_profiles.validitystate`). Robustness uses valid scale results of valid sittings whatever the filter, as
+  the dashboard does.
+- `research_package_test`: 2PL and GPCM, with and without a baseline, one subscale only, 625-question sittings, two
+  replications, valid/invalid/unknown sittings; filters valid, all, invalid, unknown; every row PASS, nothing
+  NOT_REPRODUCED; a bias, a changed step and a broken scale-map join each turn it red.
+- The package writes `scale_maps` last, in the codebook's order (the manifest listed it before `attempts`).
+
+### Fixed
+- **Worker CI on 995b4a7 (0.7.70), legacy, both engine sets: FASTEST "No attempt was played to completion".** The
+  smoke test found two workers "already running" — the last of the step before, which leave when the queue is empty —
+  and started none; nobody took the queued sitting for four minutes. `cli/smoke.php` now does while it waits what the
+  pipeline tick does every minute: reaps workers whose process is gone and fills the free slots.
+- **A run reset left the twins' claims and the attempt history behind.** Provisioned again, every twin was found
+  "provisioned before" and the history mixed two lives of the run. Reset and its preview now include them, deletion
+  removes them, and a claim whose person is gone is replaced (`run_lifecycle`, `run_cleanup`, `person_generator`,
+  `tests/run_reset_claims_test.php`).
+
 ## [0.7.70] — 2026-11-18 — Version 2026111801. The lab's deletions against a crossed running attempt (adaptivequizcatmodel_catquiz #11), taken over; a drowned-out VoiceOver announcement asked again
 
 No database change, no change of behaviour.

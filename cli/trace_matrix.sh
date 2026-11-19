@@ -29,6 +29,7 @@ COLD="${COLD:-0}"
 MINUTES="${MINUTES:-30}"
 OUT="${OUT:-/tmp/catquizlab-trace-matrix}"
 PHP="${PHP:-php}"
+STATUS_URL="${STATUS_URL:-}"
 CLI="$MOODLE/local/catquizlab/cli"
 CFG="$MOODLE/admin/cli/cfg.php"
 mkdir -p "$OUT"
@@ -63,14 +64,18 @@ for cell in $order; do
     for strategy in $STRATEGIES; do
         name="$n-trace$trace-debug$debug-$strategy"
         from=$(date +%s)
-        "$PHP" "$CLI/load_sampler.php" --seconds=$(( MINUTES * 60 + 600 )) > "$OUT/$name-samples.jsonl" 2>/dev/null &
+        "$PHP" "$CLI/load_sampler.php" --seconds=$(( MINUTES * 60 + 600 )) ${STATUS_URL:+--status-url="$STATUS_URL"} \
+            > "$OUT/$name-samples.jsonl" 2>/dev/null &
         sampler=$!
         if timeout $(( MINUTES * 60 + 300 )) "$PHP" "$CLI/smoke.php" --strategy="$strategy" \
             --persons=$(( WORKERS * PER )) --concurrency="$WORKERS" --minutes="$MINUTES" --require-all \
             > "$OUT/$name.log" 2>&1; then result=PASS; else result=FAIL; fi
         until=$(date +%s)
         kill "$sampler" 2>/dev/null; wait "$sampler" 2>/dev/null
-        "$PHP" "$CLI/request_report.php" --from="$from" --until="$until" --json > "$OUT/$name-requests.json" 2>/dev/null
+        "$PHP" "$CLI/request_report.php" --from="$from" --until="$until" --json --raw="$OUT/$name-requests.csv" \
+            > "$OUT/$name-requests.json" 2>/dev/null
+        echo "{\"cell\": \"$name\", \"trace\": $trace, \"debug\": \"$debug\", \"strategy\": \"$strategy\", \"cold\": $COLD, \"from\": $from, \"until\": $(date +%s), \"result\": \"pending\"}" \
+            > "$OUT/$name-cell.json"
         "$PHP" "$CLI/trace_report.php" --from="$from" --until="$until" --json > "$OUT/$name-traces.json" 2>/dev/null
         "$PHP" "$CLI/trace_report.php" --from="$from" --until="$until" > "$OUT/$name-traces.txt" 2>/dev/null
         line=$(python3 - "$OUT/$name-requests.json" "$OUT/$name-traces.json" "$OUT/$name-samples.jsonl" <<'PY'
@@ -99,6 +104,9 @@ print(r.get('requests', '–'), r.get('http5xx', '–'), t.get('capacitycauses',
 PY
 )
         printf '%-24s %-6s %s\n' "trace$trace/debug$debug $strategy" "$result" "$line"
+        sed -i "s/\"result\": \"pending\"/\"result\": \"$result\"/" "$OUT/$name-cell.json"
     done
 done
 echo "Everything in $OUT. The tables in $OUT/*-traces.txt have n, mean, sd and the 95 % interval per kind."
+# The comparison of the cells over every request (bootstrap intervals of the differences), report.md and report.json.
+python3 "$CLI/trace_matrix_compare.py" "$OUT"

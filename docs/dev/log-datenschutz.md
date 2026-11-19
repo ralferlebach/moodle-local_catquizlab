@@ -36,10 +36,56 @@ Worker `worker/navigation.js` mit derselben Namensliste `worker/log_params.json`
   - **Probe:** `cli/probe_log_secrets.php` sendet als temporärer Manager Anfragen mit einem Probewert, getraced wie die des Workers. Der Probewert steckt in jeder Schreibweise jedes gelisteten Namens, je zweimal, dazu in einem unbekannten Parameter, einer E-Mail-Adresse, einem Zeilenumbruch, einem Fragment und einem POST-Rumpf.
   - **Prüfung:** Danach liest die Probe alles, was das Plugin seitdem geschrieben hat, Dateien und Log-Tabellen. Der Wert darf nirgends stehen. Die Trace-Zeilen der Probe müssen vorhanden sein, sonst gilt nichts als gezeigt.
   - **Ganzer Lauf:** `cli/scan_logs_for_secrets.php --all` liest alle Request-Traces und Worker-Logs des E2E-Laufs auf geheime Parameter mit Wert.
-- **Produktive Altlogs** (vor 0.7.56 enthielt die Fatal-Zeile die ganze Query):
-  - `cli/scan_logs_for_secrets.php --file=…` zählt je Datei, welche geheimen Namen mit Wert vorkommen und in welchen Zeilen, nie die Werte.
-  - `--redact-to=DIR` schreibt eine bereinigte Kopie.
-  - Ob Zugangsdaten ersetzt werden müssen, entscheidet der Betrieb nach dem Befund.
+- **Produktive Altlogs** (vor 0.7.56 enthielt die Fatal-Zeile die ganze Query): siehe „Bestands-Scan“ unten.
+
+## Bestands-Scan alter Logs (#149, seit 0.7.71)
+
+Neuer Code redigiert. Daraus folgt nicht, dass Logdateien von früher sauber sind. Der Bestands-Scan klärt das, ohne
+dass ein Log oder ein Wert den Server verlässt.
+
+**Wer:** der Betrieb, auf dem Server, unter dessen Kontrolle. Kein Log geht in ein Issue, in die CI oder an Dritte.
+
+**Was er tut:** `cli/scan_logs_for_secrets.php` liest die angegebenen Dateien oder ganze Verzeichnisse, auch rotierte
+und gzip-Dateien. Er zählt Zeilen mit geheimen Parametern samt Wert und ordnet sie zu:
+
+- nach **Kategorie:** Sitzung (`sesskey`, `MoodleSession`), Token oder Schlüssel, Passwort, E-Mail-Adresse;
+- nach **Zeitfenster:** erste und letzte Zeile je Kategorie und die betroffenen Stunden (UTC). Gelesen werden die
+  Zeitformate von Apache-Fehlerlog, Zugriffslog, PHP-Fehlerlog und ISO 8601; Zeilen ohne lesbare Zeit zählt er
+  getrennt.
+
+Im Bericht stehen nur Zahlen, Kategorien, Namen, Zeilennummern und Stunden, **nie ein Wert**.
+
+```
+sudo -u www-data php local/catquizlab/cli/scan_logs_for_secrets.php \
+    --dir=/var/log/apache2,/var/log/php --all --json > /root/scan-149.json
+```
+
+Exit-Code 0: nichts gefunden; 3: gefunden; 1: eine Datei war nicht lesbar.
+
+**Geprüft in der CI:** Die Abnahmemessungen (`acceptance.yml`, Job „Issue 163 — scheduler, 11 real workers
+(pgsql)“, Schritt „Issue 149 — scan of existing logs“) scannen synthetische Logs (`tests/fixtures/logs149/`, alle
+Formate, rotiert und gzip) mit genau diesem Befehl: Exit-Code 3, Zählungen, Kategorien und Stunden wie in
+`expected.json`, kein Wert im Bericht (Artefakt `catquizlab-acceptance-scheduler-pgsql-11`, Datei `log-scan-149.json`).
+Dieselben Fälle prüft `log_scan_test` in jedem PHPUnit-Job der Release-CI.
+
+**Bei einem Befund (Betreiberprozess):**
+
+1. Die gefundenen Zeitfenster gegen die Sitzungs- und Token-Lebensdauer halten. Abgelaufene Sitzungsschlüssel sind
+   wertlos, Webservice-Tokens und Passwörter nicht.
+2. Betroffene Webservice-Tokens neu erzeugen, betroffene Passwörter zurücksetzen. Personen informieren, wenn die
+   Datenschutzvorgaben der Einrichtung das verlangen.
+3. Die Logdateien ersetzen: `--redact-to=DIR` schreibt eine Kopie ohne Werte. Das Original wird nach den Regeln der
+   Einrichtung gelöscht oder ersetzt; das Plugin löscht keine Server-Logs.
+4. Den Bericht (nur Zahlen) und die getroffenen Maßnahmen zum Issue legen.
+
+**Oder: ausdrücklicher Risikoverzicht.** Der Betrieb kann den Scan auch nicht durchführen und das Risiko tragen. Das
+wird dann so festgehalten, als Verzicht und nicht als Bereinigung:
+
+> Risikoverzicht #149 (Betreiber): Die Server-Logs von `<Installation>` aus der Zeit vor 0.7.56 wurden **nicht** auf
+> frühere vertrauliche Einträge geprüft. Begründung: `<z. B. Logs nach 14 Tagen rotiert und gelöscht / kein Zugriff>`.
+> Damit ist **nicht** gesagt, dass alte Logs frei von Zugangsdaten sind. Datum, Name, Rolle.
+
+Ein SQL-Bericht kann das nicht ersetzen: Die Altlogs sind Dateien, keine Tabellen.
 
 ## Diagnose bleibt möglich (AK5)
 

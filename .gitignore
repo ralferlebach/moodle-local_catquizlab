@@ -48,7 +48,11 @@ tests/screenreader/snapshot/
 tests/screenreader/artifacts/
 tests/screenreader/report/
 tests/screenreader/test-results/
+tests/screenreader/snapshots/
+tests/screenreader/out/
 
 # The deep deletion run of the interface E2E (tests/playwright/deep_delete.spec.js)
 tests/playwright/artifacts-deep-delete/
+# The engine migration test's session between its two phases (acceptance.yml): cookies, never committed.
+tests/playwright/engine-migration/
 tests/playwright/report-deep-delete/

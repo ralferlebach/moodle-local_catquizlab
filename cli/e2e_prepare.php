@@ -45,6 +45,8 @@ use local_catquizlab\local\run_orchestrator;
     [
         'help'    => false,
         'persons' => 1,
+        'replications' => 1,
+        'items' => '',
         'name'    => 'Worker E2E',
         'verify'  => false,
         'runid'   => 0,
@@ -70,6 +72,9 @@ Verification:
 
 Options:
   --persons=N  Simulated persons, and therefore attempts (default 1).
+  --replications=N  Runs of the experiment (default 1); every run is provisioned and queued, and printed as
+               runid=… (the first) and runids=a,b,… (all).
+  --items=MIN,MAX  Questions per sitting (default 2,4).
   --name=TEXT  Experiment name (default "Worker E2E").
   -h, --help   Show this help.
 TXT);
@@ -82,7 +87,9 @@ if ($options['verify']) {
 
 exit(local_catquizlab_e2e_prepare(
     (string) $options['name'],
-    max(1, (int) $options['persons'])
+    max(1, (int) $options['persons']),
+    max(1, (int) $options['replications']),
+    (string) $options['items']
 ));
 
 /**
@@ -136,9 +143,11 @@ function local_catquizlab_e2e_verify(int $runid): int {
  *
  * @param string $name The experiment name.
  * @param int $persons The number of simulated persons.
+ * @param int $replications The number of runs.
+ * @param string $items Questions per sitting as "MIN,MAX", '' for 2 to 4.
  * @return int Exit code: 0 on success, 1 when the environment is not ready.
  */
-function local_catquizlab_e2e_prepare(string $name, int $persons): int {
+function local_catquizlab_e2e_prepare(string $name, int $persons, int $replications = 1, string $items = ''): int {
     global $DB;
 
     if (!environment::engine_available() || !environment::adaptivequiz_available()) {
@@ -157,6 +166,7 @@ function local_catquizlab_e2e_prepare(string $name, int $persons): int {
     $definition = experiment_definition::example_baseline();
     $definition['name'] = $name . ' ' . time();
     $definition['persons']['count'] = $persons;
+    $definition['replications'] = $replications;
     // A pool small enough to materialise quickly; the job is about the worker
     // path, not about the size of the item bank.
     $definition['pool']['scales'] = [
@@ -169,6 +179,15 @@ function local_catquizlab_e2e_prepare(string $name, int $persons): int {
         'subscale' => ['minitems' => 1, 'maxitems' => 2],
         'se'       => ['min' => 0.35, 'max' => 1.0],
     ];
+    if (preg_match('/^(\d+),(\d+)$/', $items, $m)) {
+        // Longer sittings: a pool large enough for them, and no early stop on precision.
+        $definition['budgets']['global'] = ['minitems' => (int) $m[1], 'maxitems' => (int) $m[2]];
+        $definition['budgets']['subscale'] = ['minitems' => 1, 'maxitems' => (int) $m[2]];
+        $definition['budgets']['se'] = ['min' => 0.01, 'max' => 1.0];
+        // A strategy that keeps to the budget: the classical test plays its whole pool whatever the maximum (#104).
+        $definition['strategy'] = 'fastest';
+        $definition['pool']['scales']['itemspersubscale'] = max(5, (int) ceil(2 * (int) $m[2] / 4));
+    }
 
     $saved = experiment_service::save($definition);
     if (empty($saved['valid'])) {
@@ -177,7 +196,8 @@ function local_catquizlab_e2e_prepare(string $name, int $persons): int {
     }
     $experimentid = (int) $saved['id'];
     $sweep = experiment_service::create_sweep($experimentid);
-    $runid = (int) reset($sweep['runs']);
+    $runids = array_map('intval', array_values($sweep['runs']));
+    $runid = (int) reset($runids);
 
     // The course the experiment lives in. Provisioning creates one when the
     // setting points nowhere, and on a fresh CI installation it points nowhere
@@ -195,37 +215,41 @@ function local_catquizlab_e2e_prepare(string $name, int $persons): int {
         fwrite(STDERR, 'experiment course: ' . $courseid . PHP_EOL);
     }
 
-    $setup = run_orchestrator::setup($runid, [
-        'questioncategoryid' => local_catquizlab_e2e_question_category(),
-    ]);
-    if (empty($setup['ok'])) {
-        // One line, no colons in the key, nothing a workflow will try to parse
-        // as an output assignment: the previous message broke $GITHUB_OUTPUT
-        // and the job reported a parse error instead of the failure.
-        cli_writeln('setup_error=' . str_replace(
-            ["\n", "\r"],
-            ' ',
-            (string) ($setup['reason'] ?? 'unknown')
-        ));
-        return 1;
-    }
+    $queued = 0;
+    foreach ($runids as $id) {
+        $setup = run_orchestrator::setup($id, [
+            'questioncategoryid' => local_catquizlab_e2e_question_category(),
+        ]);
+        if (empty($setup['ok'])) {
+            // One line, no colons in the key, nothing a workflow will try to parse
+            // as an output assignment: the previous message broke $GITHUB_OUTPUT
+            // and the job reported a parse error instead of the failure.
+            cli_writeln('setup_error=' . str_replace(
+                ["\n", "\r"],
+                ' ',
+                (string) ($setup['reason'] ?? 'unknown')
+            ));
+            return 1;
+        }
 
-    $queued = $DB->count_records('local_catquizlab_attempt', ['runid' => $runid]);
-    if ($queued === 0) {
-        attempt_scheduler::schedule($runid);
-        $queued = $DB->count_records('local_catquizlab_attempt', ['runid' => $runid]);
-    }
-    if ($queued === 0) {
-        cli_writeln('setup_error=no-attempts-queued');
-        return 1;
-    }
+        $count = $DB->count_records('local_catquizlab_attempt', ['runid' => $id]);
+        if ($count === 0) {
+            attempt_scheduler::schedule($id);
+            $count = $DB->count_records('local_catquizlab_attempt', ['runid' => $id]);
+        }
+        if ($count === 0) {
+            cli_writeln('setup_error=no-attempts-queued');
+            return 1;
+        }
+        $queued += $count;
 
-    // Ready, or the queue holds everything back. Sittings of a run that is only
-    // scheduled are counted as blocked, not claimable, so the worker connected,
-    // authenticated, asked for work and was correctly told there was none —
-    // which reads as an empty queue rather than as a run that was never let go.
-    if ((int) $DB->get_field('local_catquizlab_run', 'status', ['id' => $runid]) !== registry::STATUS_READY) {
-        \local_catquizlab\local\run_lifecycle::set_status($runid, registry::STATUS_READY, 'e2e_prepared');
+        // Ready, or the queue holds everything back. Sittings of a run that is only
+        // scheduled are counted as blocked, not claimable, so the worker connected,
+        // authenticated, asked for work and was correctly told there was none —
+        // which reads as an empty queue rather than as a run that was never let go.
+        if ((int) $DB->get_field('local_catquizlab_run', 'status', ['id' => $id]) !== registry::STATUS_READY) {
+            \local_catquizlab\local\run_lifecycle::set_status($id, registry::STATUS_READY, 'e2e_prepared');
+        }
     }
 
     $token = local_catquizlab_e2e_token();
@@ -237,6 +261,7 @@ function local_catquizlab_e2e_prepare(string $name, int $persons): int {
     // Key=value lines, so a workflow can read them straight into its outputs.
     cli_writeln('experimentid=' . $experimentid);
     cli_writeln('runid=' . $runid);
+    cli_writeln('runids=' . implode(',', $runids));
     cli_writeln('attempts=' . $queued);
     cli_writeln('token=' . $token);
 

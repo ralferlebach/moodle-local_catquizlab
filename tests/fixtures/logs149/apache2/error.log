@@ -1,0 +1,5 @@
+[Wed Nov 05 10:00:00.123456 2026] [php:error] [pid 811] [client 10.0.0.5:51000] PHP Fatal error:  Allowed memory size of 536870912 bytes exhausted (tried to allocate 20480 bytes) in /var/www/moodle/question/engine/lib.php on line 120
+[Wed Nov 05 10:00:00.200000 2026] [php:notice] [pid 811] local_catquizlab memory: phase=basis peak=512MB limit=512MB phases=start=20MB url=/local/catquizlab/results.php?experimentid=4&tab=global&sesskey=S3CR3T149sesskeyA experimentid=4 tab=global
+[Wed Nov 05 11:20:13.000001 2026] [php:notice] [pid 812] local_catquizlab memory: phase=export peak=498MB limit=512MB phases=start=20MB url=/local/catquizlab/results.php?experimentid=4&action=researchpackage&sesskey=S3CR3T149sesskeyB experimentid=4
+[Wed Nov 05 11:21:00.000000 2026] [core:notice] [pid 700] AH00094: Command line: '/usr/sbin/apache2'
+[Thu Nov 06 08:05:44.000000 2026] [php:notice] [pid 901] local_catquizlab memory: phase=basis peak=511MB limit=512MB phases=start=20MB url=/local/catquizlab/runs.php?experimentid=7&token=S3CR3T149tokenC experimentid=7

@@ -602,6 +602,23 @@ jobs:
           retention-days: 14
           if-no-files-found: warn
 
+      # Gate 3 (re-audit 18.11.2026): what this job tested, every component with its version and commit.
+      - name: Release manifest of this job
+        if: always()
+        env:
+          CORE_ROOT: ${{ github.workspace }}/${{ matrix.coreroot }}
+          MOODLE_ROOT: ${{ github.workspace }}/${{ matrix.dirroot }}
+          JOB_NAME: "worker-e2e ${{ matrix.stack }} ${{ matrix.pins }}"
+        run: |
+          mkdir -p manifest
+          bash plugin/.github/scripts/release-manifest.sh > "manifest/manifest-worker-e2e-${{ matrix.stack }}-${{ matrix.pins }}.json"
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: manifest-worker-e2e-${{ matrix.stack }}-${{ matrix.pins }}
+          path: manifest
+          retention-days: 90
+
       - name: Collect logs on failure
         if: failure()
         run: |

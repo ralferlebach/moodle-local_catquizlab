@@ -367,6 +367,23 @@ jobs:
           retention-days: 14
           if-no-files-found: warn
 
+      # Gate 3 (re-audit 18.11.2026): what this job tested, every component with its version and commit.
+      - name: Release manifest of this job
+        if: always()
+        env:
+          CORE_ROOT: ${{ github.workspace }}/${{ matrix.coreroot }}
+          MOODLE_ROOT: ${{ github.workspace }}/${{ matrix.dirroot }}
+          JOB_NAME: "ui-e2e ${{ matrix.stack }}"
+        run: |
+          mkdir -p manifest
+          bash plugin/.github/scripts/release-manifest.sh > "manifest/manifest-ui-e2e-${{ matrix.stack }}.json"
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: manifest-ui-e2e-${{ matrix.stack }}
+          path: manifest
+          retention-days: 90
+
   # #122 DoD 3: the filter bar with real screen readers. NVDA runs only on
   # Windows and VoiceOver only on macOS, while Moodle runs here on Linux: every
   # stack's interface run above keeps its results page as Moodle rendered it
@@ -376,19 +393,15 @@ jobs:
   # each control with its name, its role and the value it shows. JAWS has no
   # automation interface that Guidepup can drive and is not tested.
   screen-reader:
-    name: "Screen reader (${{ matrix.reader }}, ${{ matrix.stack }})"
+    name: "Screen reader (nvda, ${{ matrix.stack }})"
     needs: ui-e2e
     if: ${{ !cancelled() }}
-    runs-on: ${{ matrix.os }}
+    runs-on: windows-2025
     timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
         stack: [legacy, moodle5, moodle53]
-        reader: [nvda, voiceover]
-        include:
-          - { reader: nvda, os: windows-2025, browser: chromium }
-          - { reader: voiceover, os: macos-15, browser: webkit }
     defaults:
       run:
         shell: bash
@@ -413,25 +426,125 @@ jobs:
       - name: Set up the machine for screen reader automation
         run: npx guidepup setup --ci
 
-      - name: Install ${{ matrix.reader }} for Guidepup
-        run: npx guidepup install ${{ matrix.reader }}
+      - name: Install nvda for Guidepup
+        run: npx guidepup install nvda
 
       - name: Install the browser
-        run: npx playwright install ${{ matrix.browser }}
+        run: npx playwright install chromium
 
-      - name: Walk the filter bar with ${{ matrix.reader }}
+      - name: Walk the filter bar with nvda
         env:
-          SR: ${{ matrix.reader }}
+          SR: nvda
         run: npx playwright test
 
       - name: Upload what the screen reader said
         if: always()
         uses: actions/upload-artifact@v6
         with:
-          name: catquizlab-screenreader-${{ matrix.reader }}-${{ matrix.stack }}
+          name: catquizlab-screenreader-nvda-${{ matrix.stack }}
           path: |
             tests/screenreader/artifacts
             tests/screenreader/report
             tests/screenreader/test-results
+          retention-days: 14
+          if-no-files-found: warn
+
+  # VoiceOver: one macOS machine for all three stacks, one after the other.
+  # Three macOS jobs at once lost one to GitHub's capacity again and again
+  # (fd478bd twice, 995b4a7 once, always "The job was not acquired by Runner of
+  # type hosted even after multiple attempts" — not one step ran), while the
+  # other two got a machine one after the other. One job asks for one machine.
+  # Every stack is still walked in full, with its own snapshot, its own report
+  # and its own artefact; the job fails when any stack fails, after all three.
+  screen-reader-voiceover:
+    name: "Screen reader (voiceover, legacy + moodle5 + moodle53)"
+    needs: ui-e2e
+    if: ${{ !cancelled() }}
+    runs-on: macos-15
+    timeout-minutes: 75
+    defaults:
+      run:
+        shell: bash
+        working-directory: tests/screenreader
+    steps:
+      - name: Check out the plugin
+        uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+
+      - name: The results pages the interface runs kept (all three stacks)
+        uses: actions/download-artifact@v7
+        with:
+          pattern: screenreader-snapshot-*
+          path: tests/screenreader/snapshots
+
+      - name: Install the test's dependencies (pinned in package-lock.json)
+        run: npm ci --no-audit --no-fund
+
+      - name: Set up the machine for screen reader automation
+        run: npx guidepup setup --ci
+
+      - name: Install voiceover for Guidepup
+        run: npx guidepup install voiceover
+
+      - name: Install the browser
+        run: npx playwright install webkit
+
+      - name: Walk the filter bar with voiceover, stack by stack
+        env:
+          SR: voiceover
+        run: |
+          failed=""
+          for stack in legacy moodle5 moodle53; do
+            echo "::group::VoiceOver on $stack"
+            rm -rf snapshot artifacts report test-results
+            if [ ! -d "snapshots/screenreader-snapshot-$stack" ]; then
+              echo "::error::No results page from the interface run on $stack"
+              failed="$failed $stack"
+              echo "::endgroup::"
+              continue
+            fi
+            cp -R "snapshots/screenreader-snapshot-$stack" snapshot
+            if ! npx playwright test; then
+              failed="$failed $stack"
+            fi
+            mkdir -p "out/$stack"
+            for d in artifacts report test-results; do
+              if [ -e "$d" ]; then mv "$d" "out/$stack/"; fi
+            done
+            echo "::endgroup::"
+          done
+          if [ -n "$failed" ]; then
+            echo "::error::VoiceOver failed on:$failed"
+            exit 1
+          fi
+          echo "VoiceOver passed on legacy, moodle5 and moodle53"
+
+      - name: Upload what the screen reader said (legacy)
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: catquizlab-screenreader-voiceover-legacy
+          path: tests/screenreader/out/legacy
+          retention-days: 14
+          if-no-files-found: warn
+
+      - name: Upload what the screen reader said (moodle5)
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: catquizlab-screenreader-voiceover-moodle5
+          path: tests/screenreader/out/moodle5
+          retention-days: 14
+          if-no-files-found: warn
+
+      - name: Upload what the screen reader said (moodle53)
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: catquizlab-screenreader-voiceover-moodle53
+          path: tests/screenreader/out/moodle53
           retention-days: 14
           if-no-files-found: warn

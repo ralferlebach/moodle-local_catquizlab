@@ -626,6 +626,17 @@ class scatter_chart {
     }
 
     /**
+     * Add the zero axes x = 0 and y = 0, where 0 is in range: for signed values, where the sign is the reading (#144).
+     *
+     * @return self
+     */
+    public function add_zero_axes(): self {
+        $this->references[] = ['kind' => 'zero', 'label' => ''];
+
+        return $this;
+    }
+
+    /**
      * Add a horizontal reference line.
      *
      * @param float $y The y value.
@@ -862,10 +873,36 @@ class scatter_chart {
 
         // Reference lines, drawn under the points.
         foreach ($this->references as $reference) {
-            if ($reference['kind'] === 'identity') {
+            if ($reference['kind'] === 'zero') {
+                // Thin and grey: a frame of reference for the sign, beneath the identity line and the points.
+                if ($bounds['xmin'] < 0 && $bounds['xmax'] > 0) {
+                    $svg .= str_replace('/>', ' data-region="zero-axis-x"/>', $this->line(
+                        $sx(0.0),
+                        self::MARGIN_TOP,
+                        $sx(0.0),
+                        self::MARGIN_TOP + $plotheight,
+                        '#888',
+                        1
+                    ));
+                }
+                if ($bounds['ymin'] < 0 && $bounds['ymax'] > 0) {
+                    $svg .= str_replace('/>', ' data-region="zero-axis-y"/>', $this->line(
+                        self::MARGIN_LEFT,
+                        $sy(0.0),
+                        self::MARGIN_LEFT + $plotwidth,
+                        $sy(0.0),
+                        '#888',
+                        1
+                    ));
+                }
+            } else if ($reference['kind'] === 'identity') {
                 $lo = max($bounds['xmin'], $bounds['ymin']);
                 $hi = min($bounds['xmax'], $bounds['ymax']);
-                $svg .= $this->line($sx($lo), $sy($lo), $sx($hi), $sy($hi), '#c0392b', 1.5, '6,4');
+                $svg .= str_replace(
+                    '/>',
+                    ' data-region="identity-line"/>',
+                    $this->line($sx($lo), $sy($lo), $sx($hi), $sy($hi), '#c0392b', 1.5, '6,4')
+                );
                 $svg .= $this->text(
                     $sx($hi) - 4,
                     $sy($hi) - 6,

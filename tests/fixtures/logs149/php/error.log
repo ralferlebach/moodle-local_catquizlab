@@ -1,0 +1,3 @@
+[07-Nov-2026 14:00:00 Europe/Berlin] PHP Warning:  local_catquizlab memory: phase=basis peak=400MB limit=512MB phases=start=20MB url=/local/catquizlab/attempt.php?attempt=9&secret=S3CR3T149secretH
+[07-Nov-2026 14:00:05 UTC] PHP Notice:  Undefined index: foo in /var/www/moodle/lib/weblib.php on line 3
+untimed line: /local/catquizlab/run.php?runid=1&apikey=S3CR3T149apikeyI

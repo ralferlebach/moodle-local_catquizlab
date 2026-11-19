@@ -224,10 +224,33 @@ jobs:
 
       # --testdox: every test by name in the log, so that a test named as evidence in an issue can be found as run and
       # passed on exactly this commit (re-audit 17.11.2026: an existing test file alone is no evidence).
+      # An incomplete test fails the job; a skipped one is checked in the next step against the allow list.
       - name: PHPUnit – all tests
-        run: moodle-plugin-ci phpunit --fail-on-warning --testdox
+        run: |
+          set -o pipefail
+          moodle-plugin-ci phpunit --fail-on-warning --fail-on-incomplete --testdox 2>&1 | tee "$GITHUB_WORKSPACE/phpunit.log"
         env:
           CATQUIZLAB_REQUIRE_R: '1'
+
+      # Gate 3 (re-audit 18.11.2026): every test that did not run, by name, each with the reason it may skip in this
+      # job (.github/phpunit-allowed-skips.txt); any other skip fails the gate.
+      - name: Skips checked
+        if: always()
+        run: |
+          python3 plugin/.github/scripts/phpunit-skips.py "$GITHUB_WORKSPACE/phpunit.log" \
+              plugin/.github/phpunit-allowed-skips.txt "$GITHUB_WORKSPACE/phpunit-skips.json" \
+              "phpunit ${{ matrix.moodle }} ${{ matrix.php }} ${{ matrix.db.engine }}"
+
+      - name: Release manifest of this job
+        if: always()
+        env:
+          JOB_NAME: "release-phpunit ${{ matrix.moodle }} ${{ matrix.php }} ${{ matrix.db.engine }}"
+        run: |
+          mkdir -p manifest
+          bash plugin/.github/scripts/release-manifest.sh \
+              > "manifest/manifest-release-phpunit-${{ matrix.moodle }}-${{ matrix.php }}-${{ matrix.db.engine }}.json"
+          cp "$GITHUB_WORKSPACE/phpunit-skips.json" \
+              "manifest/phpunit-skips-${{ matrix.moodle }}-${{ matrix.php }}-${{ matrix.db.engine }}.json" 2>/dev/null || true
 
       - name: Keep the engine manifest
         if: always()
@@ -237,6 +260,13 @@ jobs:
           path: ${{ github.workspace }}/engine-manifest.txt
           retention-days: 30
           if-no-files-found: warn
+
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: manifest-release-phpunit-${{ matrix.moodle }}-${{ matrix.php }}-${{ matrix.db.engine }}
+          path: manifest
+          retention-days: 90
 
   behat:
     name: "Behat (${{ matrix.moodle }} / PHP ${{ matrix.php }} / Chrome)"
@@ -336,6 +366,20 @@ jobs:
           path: ${{ github.workspace }}/engine-manifest.txt
           retention-days: 30
           if-no-files-found: warn
+
+      - name: Release manifest of this job
+        if: always()
+        env:
+          JOB_NAME: "release-behat ${{ matrix.moodle }} ${{ matrix.php }}"
+        run: |
+          mkdir -p manifest
+          bash plugin/.github/scripts/release-manifest.sh > "manifest/manifest-release-behat-${{ matrix.moodle }}.json"
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: manifest-release-behat-${{ matrix.moodle }}
+          path: manifest
+          retention-days: 90
 
   # Issue 167: the upgrade from what the live installation runs (0.7.60, 2026111400) to this commit, on every
   # Moodle and database of the matrix, with data written by 0.7.60's own code, checked by cli/upgrade_check.php

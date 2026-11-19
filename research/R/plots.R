@@ -23,6 +23,19 @@ write_plot_data <- function(out, a, p) {
   utils::write.csv(s[, intersect(c("attemptid", "runid", "strategy", "category", "subscale", "truedelta", "estdelta",
                                    "error", "localse"), names(s))],
                    file.path(out, "plotdata", "subscales_deltas.csv"), row.names = FALSE)
+  # The item plots of the subscales tab (#113): error and local SE against the items the scale was given, every
+  # selected scale result with a known count (the dashboard samples at most 2 000).
+  known <- !is.na(s$items)
+  utils::write.csv(data.frame(attemptid = s$attemptid[known], category = s$category[known],
+                              subscale = s$subscale[known], items = s$items[known], error = s$error[known],
+                              localse = s$localse[known]),
+                   file.path(out, "plotdata", "subscales_items.csv"), row.names = FALSE)
+  # Comparison of flows: every counted sitting's estimate and SE after each step.
+  st <- p$tables$steps
+  st <- st[st$attemptid %in% a$attemptid, , drop = FALSE]
+  utils::write.csv(st[order(st$attemptid, st$step), intersect(c("attemptid", "runid", "strategy", "step", "esttheta",
+                                                                "se"), names(st))],
+                   file.path(out, "plotdata", "testflow_flows.csv"), row.names = FALSE)
 
   if (!isTRUE(capabilities("png"))) {
     message("No PNG device: point data written, plots not drawn.")

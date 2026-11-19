@@ -35,6 +35,24 @@ class log_scan {
     /** @var int How many line numbers a report lists per file. */
     public const MAX_LINENUMBERS = 200;
 
+    /** @var int How many hours a report lists per category and file. */
+    public const MAX_HOURS = 2000;
+
+    /** @var string A session: sesskey, the session cookie, a session id. */
+    public const CATEGORY_SESSION = 'session';
+
+    /** @var string An access credential that is not a password: tokens, keys, signatures, codes. */
+    public const CATEGORY_TOKEN = 'token or key';
+
+    /** @var string A password. */
+    public const CATEGORY_PASSWORD = 'password';
+
+    /** @var string Personal data: an e-mail address. */
+    public const CATEGORY_EMAIL = 'e-mail address';
+
+    /** @var string Any other secret name the redactor knows. */
+    public const CATEGORY_OTHER = 'other secret';
+
     /**
      * Look through one log file, plain or gzip.
      *
@@ -43,12 +61,15 @@ class log_scan {
      * @param string $file The file.
      * @param bool $all Every line, not only catquizlab's.
      * @param string $redactto A directory to write a copy without the values to; '' for none.
-     * @return array file, lines, fatallines, fatallineswithquery, lineswithsecrets, names (name => count), firstline,
-     *     lastline, linenumbers, redactedcopy, and error when the file could not be read.
+     * @return array file, lines, fatallines, fatallineswithquery, lineswithsecrets, names (name => count), categories
+     *     (category => lines), windows (category => first, last, hours: 'YYYY-MM-DD HH:00 UTC' => lines), untimed
+     *     (lines with a secret but no time the scan could read), firstline, lastline, linenumbers, redactedcopy, and
+     *     error when the file could not be read. Never a value.
      */
     public static function scan_file(string $file, bool $all = false, string $redactto = ''): array {
         $entry = ['file' => $file, 'lines' => 0, 'fatallines' => 0, 'fatallineswithquery' => 0, 'lineswithsecrets' => 0,
-            'names' => [], 'firstline' => null, 'lastline' => null, 'linenumbers' => [], 'redactedcopy' => null];
+            'names' => [], 'categories' => [], 'windows' => [], 'untimed' => 0, 'firstline' => null, 'lastline' => null,
+            'linenumbers' => [], 'redactedcopy' => null];
         $gzip = (bool) preg_match('/\.gz$/', $file);
         $in = is_readable($file) ? ($gzip ? gzopen($file, 'rb') : fopen($file, 'rb')) : false;
         if (!$in) {
@@ -75,6 +96,25 @@ class log_scan {
                 foreach ($names as $name => $count) {
                     $entry['names'][$name] = ($entry['names'][$name] ?? 0) + $count;
                 }
+                $time = self::line_time($line);
+                $entry['untimed'] += $time === null ? 1 : 0;
+                $categories = [];
+                foreach (array_keys($names) as $name) {
+                    $categories[self::category((string) $name)] = true;
+                }
+                foreach (array_keys($categories) as $category) {
+                    $entry['categories'][$category] = ($entry['categories'][$category] ?? 0) + 1;
+                    if ($time !== null) {
+                        $window = $entry['windows'][$category] ?? ['first' => $time, 'last' => $time, 'hours' => []];
+                        $window['first'] = min($window['first'], $time);
+                        $window['last'] = max($window['last'], $time);
+                        $hour = gmdate('Y-m-d H:00', $time) . ' UTC';
+                        if (isset($window['hours'][$hour]) || count($window['hours']) < self::MAX_HOURS) {
+                            $window['hours'][$hour] = ($window['hours'][$hour] ?? 0) + 1;
+                        }
+                        $entry['windows'][$category] = $window;
+                    }
+                }
                 $entry['firstline'] = $entry['firstline'] ?? $number;
                 $entry['lastline'] = $number;
                 if (count($entry['linenumbers']) < self::MAX_LINENUMBERS) {
@@ -93,8 +133,103 @@ class log_scan {
             fclose($out);
         }
         ksort($entry['names']);
+        ksort($entry['categories']);
+        ksort($entry['windows']);
+        foreach ($entry['windows'] as $category => $window) {
+            ksort($window['hours']);
+            $window['first'] = gmdate('Y-m-d\\TH:i:s\\Z', $window['first']);
+            $window['last'] = gmdate('Y-m-d\\TH:i:s\\Z', $window['last']);
+            $entry['windows'][$category] = $window;
+        }
 
         return $entry;
+    }
+
+    /**
+     * The log files under a directory, rotated and gzip ones included, sorted: *.log, *.log.N, *.gz, *_log, *.txt.
+     *
+     * @param string $dir The directory.
+     * @return string[]
+     */
+    public static function files_in(string $dir): array {
+        $files = [];
+        if (!is_dir($dir)) {
+            return [$dir];
+        }
+        $iterator = new \RecursiveIteratorIterator(new \RecursiveDirectoryIterator(
+            $dir,
+            \FilesystemIterator::SKIP_DOTS | \FilesystemIterator::FOLLOW_SYMLINKS
+        ));
+        foreach ($iterator as $file) {
+            if ($file->isFile() && preg_match('/(\\.log(\\.\\d+)?|\\.gz|_log|\\.txt)$/', $file->getFilename())) {
+                $files[] = $file->getPathname();
+            }
+        }
+        sort($files);
+
+        return $files;
+    }
+
+    /**
+     * The category of a secret name as secret_names() returns it.
+     *
+     * @param string $name A normalised name, or "(e-mail address)".
+     * @return string One of the CATEGORY_ constants.
+     */
+    public static function category(string $name): string {
+        if ($name === '(e-mail address)' || strpos($name, 'mail') !== false) {
+            return self::CATEGORY_EMAIL;
+        }
+        if (preg_match('/sesskey|moodlesession|sessionid|^sid$|cookie/', $name)) {
+            return self::CATEGORY_SESSION;
+        }
+        if (preg_match('/pass|^pw$|^pwd$/', $name)) {
+            return self::CATEGORY_PASSWORD;
+        }
+        if (preg_match('/token|key|secret|signature|credential|auth|code|otp|pin/', $name)) {
+            return self::CATEGORY_TOKEN;
+        }
+
+        return self::CATEGORY_OTHER;
+    }
+
+    /**
+     * When a log line was written, as far as its format says: Apache error log ("[Wed Nov 05 10:00:00.123456 2026]"),
+     * Apache/Nginx access log ("[05/Nov/2026:10:00:00 +0100]"), PHP error log ("[05-Nov-2026 10:00:00 UTC]"), syslog
+     * with a year-less date is not read (no year), ISO 8601 ("2026-11-05T10:00:00Z", "2026-11-05 10:00:00").
+     *
+     * @param string $line The line.
+     * @return int|null Unix time, or null when the line has no time the scan can read.
+     */
+    public static function line_time(string $line): ?int {
+        $patterns = [
+            // Apache error log; fractions of a second are dropped.
+            '/\\[(?:[A-Z][a-z]{2} )?([A-Z][a-z]{2}) (\\d{1,2}) (\\d{2}:\\d{2}:\\d{2})(?:\\.\\d+)? (\\d{4})\\]/' => 'error',
+            // Access log.
+            '/\\[(\\d{2})\\/([A-Z][a-z]{2})\\/(\\d{4}):(\\d{2}:\\d{2}:\\d{2}) ([+-]\\d{4})\\]/' => 'access',
+            // PHP error log.
+            '/\\[(\\d{2})-([A-Z][a-z]{2})-(\\d{4}) (\\d{2}:\\d{2}:\\d{2})(?: ([A-Za-z_\\/+\\-0-9]+))?\\]/' => 'php',
+            // ISO 8601.
+            '/(\\d{4}-\\d{2}-\\d{2})[T ](\\d{2}:\\d{2}:\\d{2})(?:\\.\\d+)?(Z|[+-]\\d{2}:?\\d{2})?/' => 'iso',
+        ];
+        foreach ($patterns as $pattern => $kind) {
+            if (!preg_match($pattern, $line, $m)) {
+                continue;
+            }
+            $text = match ($kind) {
+                'error' => "{$m[2]} {$m[1]} {$m[4]} {$m[3]} UTC",
+                'access' => "{$m[1]} {$m[2]} {$m[3]} {$m[4]} {$m[5]}",
+                'php' => "{$m[1]} {$m[2]} {$m[3]} {$m[4]} " . (($m[5] ?? '') !== '' ? $m[5] : 'UTC'),
+                'iso' => "{$m[1]} {$m[2]} " . (($m[3] ?? '') !== '' ? $m[3] : 'UTC'),
+            };
+            try {
+                return (new \DateTimeImmutable($text))->getTimestamp();
+            } catch (\Exception $e) {
+                return null;
+            }
+        }
+
+        return null;
     }
 
     /**

@@ -1,7 +1,8 @@
 # Screenreader in der CI (#122 DoD 3, #143 AK7, #144 AK9; seit 0.7.65 #153 AK8, #159 DoD5)
 
 Seit 0.7.62. Code: `tests/playwright/screenreader_snapshot.spec.js` (Linux, Moodle), `tests/screenreader/`
-(Windows/macOS, Screenreader), Job `screen-reader` in `.github/workflows/ui-e2e.yml`.
+(Windows/macOS, Screenreader), Jobs `screen-reader` (NVDA) und `screen-reader-voiceover` in
+`.github/workflows/ui-e2e.yml`.
 
 ## Was geprüft wird
 
@@ -12,8 +13,19 @@ Zwei Stellen der Ergebnisseite mit einem **echten Screenreader**:
 | NVDA (von Guidepup gepinnte Fassung, derzeit 2026.2) | Windows (`windows-2025`) | Chromium |
 | VoiceOver | macOS (`macos-15`) | WebKit |
 
-Je Moodle-Stack des Interface-Laufs (4.5, 5.2, 5.3) und je Screenreader ein Job, also sechs. Der Screenreader läuft,
-die Tastatureingaben gehen über ihn an den Browser (Guidepup), und der Test hält fest, was er dabei sagt.
+Geprüft wird je Moodle-Stack des Interface-Laufs (4.5, 5.2, 5.3) und je Screenreader, also sechsmal:
+
+- **NVDA:** drei Jobs, einer je Stack.
+- **VoiceOver (seit 0.7.71):** ein macOS-Job, der die drei Stacks nacheinander prüft, je mit eigenem Snapshot, eigenem
+  Bericht und eigenem Artefakt (`catquizlab-screenreader-voiceover-<stack>`). Er schlägt fehl, wenn ein Stack
+  fehlschlägt, und zwar erst nach allen dreien.
+
+Warum ein Job: Drei macOS-Jobs zugleich verloren auf fd478bd (zweimal) und 995b4a7 je einen an GitHubs Kapazität. Die
+Meldung war „The job was not acquired by Runner of type hosted even after multiple attempts“, und kein Schritt lief.
+Die beiden anderen bekamen ihre Maschine nacheinander. Ein Job braucht nur eine Maschine.
+
+Der Screenreader läuft, die Tastatureingaben gehen über ihn an den Browser (Guidepup), und der Test hält fest, was er
+dabei sagt.
 
 **Filterleiste** (sechs Faktor-Menüs, „Apply“, „Reset filter“): Der Test geht die Leiste mit der Tastatur durch und
 fragt nach jeder Taste die Seite, welches Element den Fokus hat. Für jedes Element muss das Gesagte enthalten:

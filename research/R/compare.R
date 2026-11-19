@@ -11,15 +11,13 @@
 # after pre-rounding, R to the nearest representable), so one unit in the 6th decimal can differ at a rounding
 # boundary: 1.5e-6. Percentages are not rounded by the dashboard: 1e-9 relative. Never more.
 
-not_reproduced <- data.frame(
-  tab = c("detection"),
-  metric = c("scaleswithitems"),
-  reason = c(paste("Scale results with an administered item include those the engine gave no estimate for; the package",
-                   "holds only estimated subscale results, so this count is not recomputed.")),
-  stringsAsFactors = FALSE)
+# Figures this version does not recompute: none since 0.7.71 (#157). Kept as the place where such a figure would be
+# named, with its reason — never silently passed.
+not_reproduced <- data.frame(tab = character(0), metric = character(0), reason = character(0), stringsAsFactors = FALSE)
 
 tolerance_of <- function(stat, metric) {
   ifelse(stat %in% c("count", "n", "units", "withestimate", "itemsused", "unused", "nwithse") |
+           (metric %in% c("spreadall", "spreadvalid") & stat == "n") |
            metric %in% c("verdict", "sittings", "runs", "people") |
            (metric == "localn"), 0,
          ifelse(stat == "percent", NA, 1.5e-6))
@@ -44,12 +42,12 @@ compare_figures <- function(reference, ours) {
   tol <- tolerance_of(out$stat, out$metric)
   rel <- out$stat == "percent"
   out$tolerance <- ifelse(rel, 1e-9 * pmax(1, abs(out$expected)), tol)
-  out$status <- "FAIL"
+  out$status <- rep("FAIL", nrow(out))
   bothna <- out$inreference & out$inR & is.na(out$expected) & is.na(out$actual)
   within <- out$inreference & out$inR & !is.na(out$expected) & !is.na(out$actual) &
     abs(out$difference) <= out$tolerance
   out$status[bothna | within] <- "PASS"
-  out$note <- ""
+  out$note <- rep("", nrow(out))
   out$note[out$inreference & !out$inR] <- "shown by the dashboard, not recomputed"
   out$note[!out$inreference & out$inR] <- "recomputed, not shown by the dashboard"
   out$note[out$inreference & out$inR & xor(is.na(out$expected), is.na(out$actual))] <- "missing on one side"

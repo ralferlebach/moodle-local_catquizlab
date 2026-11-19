@@ -266,11 +266,18 @@ class person_generator {
                 $claims = $DB->get_records_menu('local_catquizlab_twinclaim', ['runid' => $runid], '', 'twinid, personid');
             }
             $claim = isset($claims[$twinid]) ? (object) ['personid' => (int) $claims[$twinid]] : null;
+            $existing = $claim ? $DB->get_record('local_catquizlab_person', ['id' => $claim->personid]) : null;
+            if ($claim && !$existing) {
+                // A claim whose person is gone (left by a reset before 0.7.71) claims nothing: it goes, and the twin
+                // is stored again below, instead of being counted as provisioned while no person exists.
+                $DB->delete_records('local_catquizlab_twinclaim', ['runid' => $runid, 'twinid' => $twinid]);
+                unset($claims[$twinid]);
+                $claim = null;
+            }
             if ($claim) {
                 // Provisioned before: the same person is used again — if it is
                 // the same person. Ground truth is never changed silently.
-                $existing = $DB->get_record('local_catquizlab_person', ['id' => $claim->personid]);
-                if ($existing && !self::same_truth($existing, $record)) {
+                if (!self::same_truth($existing, $record)) {
                     throw new \moodle_exception('twinmismatch', 'local_catquizlab', '', (object) [
                         'twin' => $twinid, 'run' => $runid,
                     ]);

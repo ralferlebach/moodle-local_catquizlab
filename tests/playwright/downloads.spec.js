@@ -192,9 +192,9 @@ test('the research data package downloads and holds what its manifest says (#156
     await page.waitForLoadState('networkidle');
     expect(page.url()).toContain('tab=export');
     await expect(page.locator('#catquizlab-research-package')).toBeVisible();
-    // The size before the download: a row per table and the total.
+    // The size before the download: a row per table (twelve since scale_maps, #157) and the total.
     const forecast = page.locator('[data-region="catquizlab-package-forecast"]');
-    await expect(forecast.locator('tbody tr')).toHaveCount(12);
+    await expect(forecast.locator('tbody tr')).toHaveCount(13);
 
     // Downloaded by its button (POST, session key), unpacked with the system's unzip, every table checked against
     // the manifest: header, checksum.

@@ -32,6 +32,8 @@ detection_sittings <- function(p, threshold) {
   s <- p$tables$estimated_profiles
   s <- s[!is.na(s$items) & s$items > 0, , drop = FALSE]
   s$key <- paste(int_text(s$category), int_text(s$subscale), sep = ":")
+  # Scale results with an administered item, estimated or not: from the steps (#157, 0.7.71).
+  given <- administered_scales(p)$count
   byattempt <- split(seq_len(nrow(s)), s$attemptid)
   byperson <- split(seq_len(nrow(profiles)), paste(profiles$runid, profiles$personid))
   lapply(seq_len(nrow(a)), function(i) {
@@ -46,7 +48,8 @@ detection_sittings <- function(p, threshold) {
     keep <- valid & !is.na(rows$valid) & rows$valid == 1
     twin <- txt(row$twinid)
     list(role = roles[[row$strategy]], strategy = row$strategy, attemptid = row$attemptid, valid = valid,
-         withitems = nrow(rows), truth = truth,
+         withitems = if (is.na(given[as.character(row$attemptid)])) 0 else unname(given[as.character(row$attemptid)]),
+         truth = truth,
          pairkey = if (twin == "") "" else paste(int_text(row$experimentid), txt(row$tier), txt(row$model),
                                                  txt(row$variant), php_number_text(row$strength), txt(row$stratum),
                                                  txt(row$severity), twin, sep = "|"),
@@ -175,8 +178,7 @@ detection_figures <- function(p, threshold = detection_threshold) {
     out <- data.frame(tab = "detection", section = "summary", groupby = "mode",
                       group = paste(mode, compared, baseline, pairing, sep = "|"), metric = columns, stat = "value",
                       value = as.numeric(unlist(values)), stringsAsFactors = FALSE)
-    # Not recomputed: the dashboard counts scale results without an estimate too, which the package does not hold.
-    out[out$metric != "scaleswithitems", , drop = FALSE]
+    out
   }
   out <- list()
   for (target in targets_all) {

@@ -33,10 +33,11 @@ against the whole pool (`items`). See `coverage.csv` for the full list.
 different order and round half-way cases differently, so they may differ by one unit in the 6th decimal: 1.5e-6.
 Percentages: 1e-9 relative.
 
-**Not reproduced in this version** (never PASS): the count of scale results with an administered item in the
-detection table (it includes results without an estimate, which the package does not hold) is NOT_REPRODUCED; scale
-coverage, spread and item classes of the subscales tab and the comparison of flows are listed in `coverage.csv` as
-not reproduced.
+**Everything is recomputed** (since 0.7.71): no figure is NOT_REPRODUCED. The scale results with an administered
+item — also those without an estimate — are counted from the steps, the items' assigned engine scales and the scale
+maps; scale coverage, spread, item classes and the comparison of flows are compared like every other figure, under
+every validity filter (valid, all, invalid, unknown). Robustness uses valid scale results of valid sittings, as the
+dashboard does, whatever the filter.
 
 ## Deutsch
 
@@ -67,6 +68,9 @@ definiert; Stopp-Erfolg über alle Testbearbeitungen, gültig oder nicht; Exposi
 Summationsreihenfolge und Rundung von Halbfällen unterscheiden sich, daher bis zu einer Einheit in der 6. Stelle:
 1,5e-6. Prozente: 1e-9 relativ.
 
-**In dieser Version nicht nachgerechnet** (nie PASS): die Zahl der Skalenergebnisse mit Item in der Erkennungstabelle
-(sie enthält Ergebnisse ohne Schätzung, die das Paket nicht hat) ist NOT_REPRODUCED; Skalenabdeckung, Streuung und
-Itemklassen des Subskalen-Tabs sowie der Vergleich der Verläufe stehen in `coverage.csv` als nicht nachgerechnet.
+**Alles wird nachgerechnet** (seit 0.7.71): keine Kennzahl ist NOT_REPRODUCED. Die Skalenergebnisse mit verabreichtem
+Item — auch ohne Schätzung — werden aus den Schritten, den zugeordneten Engine-Skalen der Items und den Skalenzuordnungen
+gezählt; Skalenabdeckung, Streuung, Itemklassen und Verlaufsvergleich werden wie jede andere Kennzahl verglichen, unter
+jedem Gültigkeitsfilter (valid, all, invalid, unknown). Robustheit rechnet, wie das Dashboard, immer mit gültigen
+Skalenergebnissen gültiger Testbearbeitungen.
+

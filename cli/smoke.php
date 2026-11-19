@@ -64,6 +64,7 @@ use local_catquizlab\local\worker_registry;
     'expect-recovered' => 0,
     'expect-recovered-reasons' => '',
     'budget' => '',
+    'pool' => 0,
     'require-all' => false,
     'strategies' => '',
     'eta-probe' => '',
@@ -96,6 +97,8 @@ Options:
   --expect-recovered-reasons=CODE:N,…  And exactly N reconciliations with each of these reason codes, e.g.
                        submit_cdp_timeout:2 — one per injected slow response, not a loop of timeouts (#110).
   --keep               Leave the experiment behind for inspection.
+  --pool=N             Items in the pool, over three subscales (default: twice the answer floor); for the
+                       engine's cost per pool size (#136 DoD 3).
   --budget=G1,G2,S1,S2,SE1,SE2
                        The run's budgets instead of the smoke defaults (#123):
                        global min/max items, subscale min/max items, SE min/max.
@@ -246,6 +249,10 @@ $subscales = 3;
 // current estimate, so a pool sized exactly to the answer count runs out of
 // suitable items well before it runs out of items.
 $peritem = max(12, (int) ceil(($minanswers * 2) / $subscales));
+if ((int) $options['pool'] > 0) {
+    $peritem = max(1, (int) ceil((int) $options['pool'] / $subscales));
+    step('Pool: ' . ($peritem * $subscales) . ' items over ' . $subscales . ' subscales (--pool).');
+}
 $definition['pool']['scales'] = [
     'categories'       => 1,
     'subcategories'    => $subscales,
@@ -480,9 +487,18 @@ if ($probe !== null && (string) $options['watch-page'] !== '') {
 $started = microtime(true);
 $collected = 0;
 $failed = 0;
+$kicked = time();
 while (time() < $deadline) {
     sleep(5);
     $probe?->take($experimentid);
+    // What the pipeline tick does every minute (Worker CI on 995b4a7, legacy: the two workers "already running" were
+    // the last of an earlier step's, on their way out; nobody took the queued sitting for four minutes): dead workers
+    // reaped, free slots filled.
+    if (time() - $kicked >= 60) {
+        $kicked = time();
+        worker_registry::reap();
+        worker_launcher::launch_pool(worker_launcher::config_from_settings());
+    }
 
     $collected = $DB->count_records_select(
         'local_catquizlab_attempt',

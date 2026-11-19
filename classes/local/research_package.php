@@ -65,6 +65,7 @@ class research_package {
             'enginevalid', 'engineverdict', 'engineverdictavailable', 'engineunknownreason', 'enginefinished',
             'designstopreached', 'stopreached', 'contractviolations', 'terminalreasoncode'],
         'analysis_population' => ['attemptid', 'runid', 'inpopulation', 'reason'],
+        'scale_maps' => ['runid', 'catscaleid', 'parentcatscaleid', 'level', 'category', 'subscale', 'nodekey'],
     ];
 
     /** @var array<string, array> Open table streams while a package is written. */
@@ -100,6 +101,37 @@ class research_package {
         }
 
         return $out;
+    }
+
+    /**
+     * The scale maps of the runs, one row per engine scale.
+     *
+     * @param int[] $runids The runs.
+     * @return \Generator<array>
+     */
+    protected static function scale_maps(array $runids): \Generator {
+        global $DB;
+
+        foreach (array_chunk($runids, 500) as $chunk) {
+            [$insql, $params] = $DB->get_in_or_equal($chunk, SQL_PARAMS_NAMED, 'sm');
+            $rs = $DB->get_recordset_select(
+                'local_catquizlab_scalemap',
+                "runid {$insql}",
+                $params,
+                'runid, id',
+                'id, runid, catscaleid, parentcatscaleid, level, categoryindex, subscaleindex, nodekey'
+            );
+            foreach ($rs as $row) {
+                yield ['runid' => (int) $row->runid, 'catscaleid' => (int) $row->catscaleid,
+                    'parentcatscaleid' => $row->parentcatscaleid === null ? null : (int) $row->parentcatscaleid,
+                    'level' => [scale_provisioner::LEVEL_ROOT => 'global', scale_provisioner::LEVEL_CATEGORY => 'category',
+                        scale_provisioner::LEVEL_SUBSCALE => 'subscale'][(int) $row->level] ?? (string) $row->level,
+                    'category' => $row->categoryindex === null ? null : (int) $row->categoryindex,
+                    'subscale' => $row->subscaleindex === null ? null : (int) $row->subscaleindex,
+                    'nodekey' => (string) $row->nodekey];
+            }
+            $rs->close();
+        }
     }
 
     /**
@@ -162,6 +194,7 @@ class research_package {
             }
             $tables['validity'] = $tables['attempts'];
             $tables['analysis_population'] = $tables['attempts'];
+            $tables['scale_maps'] = $DB->count_records_select('local_catquizlab_scalemap', "runid {$insql}", $params);
         }
         $rows = (int) array_sum($tables);
 
@@ -309,6 +342,12 @@ class research_package {
                 $zip,
                 $manifest
             );
+            // Last, in the codebook's order. Which engine scale is which scale of the design, per run: what joins an
+            // administered item (items.assignedcatscaleid) to its subscale, also where the engine gave that subscale no
+            // estimate (#157).
+            self::table('scale_maps', self::scale_maps($runids), $zip, $manifest);
+            // The dashboard's figures, under the same engine information setting as the steps table (the flows).
+            $reference = research_reference::figures($filter);
         } finally {
             results_export::$engineinfo = $previous;
             foreach (array_keys(self::$open) as $table) {
@@ -323,7 +362,7 @@ class research_package {
             $zip,
             'reference/dashboard.csv',
             research_reference::COLUMNS,
-            research_reference::figures($filter),
+            $reference,
             $manifest
         );
         $codebookrows = [];

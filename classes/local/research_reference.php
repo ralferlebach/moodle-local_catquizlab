@@ -105,7 +105,38 @@ class research_reference {
                 self::local('subscales', $groupby, $groupby, (string) $group['group'], $group);
             }
         }
+        // By how many items the scale was given (#113), the item classes table (#157, 0.7.71).
+        foreach (local_analysis::by_item_class($rows) as $class) {
+            self::local('subscales', 'itemclass', 'itemclass', (string) $class['class'], $class);
+        }
         unset($rows);
+        // What went in of what there was: the counting chain and the spread per strategy (#112, #157).
+        $coverage = $query->scale_coverage();
+        $counts = ['sittings', 'measured', 'included', 'frominvalid', 'unestimated', 'unknownitems', 'withoutitems'];
+        foreach ($counts as $count) {
+            self::add('subscales', 'coverage', '', '', $count, 'count', $coverage[$count] ?? 0);
+        }
+        foreach (['fromvalid', 'paired', 'valid', 'withse'] as $count) {
+            self::add('subscales', 'coverage', 'chain', $count, 'chain', 'count', $coverage['chain'][$count] ?? 0);
+        }
+        foreach ((array) ($coverage['reasons'] ?? []) as $reason => $count) {
+            self::add('subscales', 'coverage', 'reason', (string) $reason, 'reasons', 'count', $count);
+        }
+        foreach ((array) ($coverage['spread'] ?? []) as $strategy => $sets) {
+            foreach (['all', 'valid'] as $set) {
+                foreach (['n', 'sdtrue', 'sdest', 'ratio', 'correlation', 'rmse', 'bias'] as $stat) {
+                    self::add(
+                        'subscales',
+                        'spread',
+                        'strategy',
+                        (string) $strategy,
+                        'spread' . $set,
+                        $stat,
+                        $sets[$set][$stat] ?? null
+                    );
+                }
+            }
+        }
 
         // Robustness: every cell's global and local outcomes and their differences to the ideal pool, as the tab
         // computes them (with the runs' scale maps).
@@ -141,6 +172,39 @@ class research_reference {
             self::add('testflow', 'feasibility', '', '', 'verdict', $key, $counts[$key] ?? 0);
         }
         unset($observations);
+
+        // Test flow: every counted sitting's flow, step by step — what "Comparison of flows" puts side by side (twins
+        // across strategies): the estimate and its standard error after each step, and how many steps (#157).
+        $query->whole_traces();
+        foreach ($query->each_observation() as $observation) {
+            // As the steps table is written (results_export::step_rows()).
+            $detail = $observation + results_query::detail($observation, true);
+            $flow = test_flow::steps($detail);
+            if (results_export::$engineinfo) {
+                $flow = test_flow::with_engine_information(
+                    $flow,
+                    (array) ($detail['trace'] ?? []),
+                    (int) $observation['runid'],
+                    results_query::run_maxitems((int) $observation['runid'])
+                );
+            }
+            $group = (string) $observation['attemptid'];
+            self::add('testflow', 'flow', 'attempt', $group, 'steps', 'count', count($flow['steps']));
+            foreach ($flow['steps'] as $step) {
+                foreach (['ability' => 'ability', 'se' => 'se'] as $metric => $field) {
+                    $value = $step[$field] ?? null;
+                    self::add(
+                        'testflow',
+                        'flow',
+                        'attempt',
+                        $group,
+                        $metric,
+                        'step' . (int) $step['step'],
+                        $value === null ? null : round((float) $value, 6)
+                    );
+                }
+            }
+        }
 
         // Mode-specific detection: the summary table, every mode and comparison.
         $analysis = mode_detection::analyse(mode_detection::sittings($query));

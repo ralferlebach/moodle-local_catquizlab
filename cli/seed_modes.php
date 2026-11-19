@@ -22,6 +22,9 @@
  * 3; its sixth sitting answers everything right and is not valid. So against "all sub": five pairs, two common
  * subscales, ten signed points on two coordinates — (+0.6; +0.2) and (+0.2; −0.1), five each.
  *
+ * With --single the deficit mode plays subscale 1 only: one common subscale, five signed points on one coordinate,
+ * (+0.6; +0.2) — the case of exactly one shared valid subscale (#144, re-audit 18.11.2026).
+ *
  * Prints MODES_EXPERIMENTID=<id>. Development and CI only.
  *
  * @package    local_catquizlab
@@ -45,6 +48,7 @@ use local_catquizlab\local\scale_provisioner;
 global $DB;
 
 \core\session\manager::set_user(get_admin());
+[$options] = cli_get_params(['single' => false]);
 
 // The true local deviation of the four subscales, and what each strategy plays and estimates of them.
 $truth = [1 => -1.0, 2 => 0.9, 3 => 0.1, 4 => -0.2];
@@ -53,9 +57,12 @@ $plays = [
     'allsubs' => [1 => -0.4, 2 => 0.7, 3 => 0.3, 4 => -0.2],
     'classic' => [1 => -1.0, 2 => 0.9, 3 => 0.1, 4 => -0.2],
 ];
+if ($options['single']) {
+    $plays['lowestsub'] = [1 => -0.8];
+}
 
 $definition = experiment_definition::example_baseline();
-$definition['name'] = 'Modes ' . date('Ymd-His');
+$definition['name'] = ($options['single'] ? 'Modes single ' : 'Modes ') . date('Ymd-His');
 $definition['persons']['count'] = 6;
 $definition['pool']['scales'] = ['categories' => 1, 'subcategories' => 4, 'itemspersubscale' => 3];
 $definition['budgets'] = [

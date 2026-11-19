@@ -103,22 +103,154 @@ global_figures <- function(p, a) {
   )
 }
 
-# The subscale results the dashboard counts: valid ones of counted sittings (filter "valid"), or, with "all", every
-# one with an administered item or an unknown count.
+# The subscale results the dashboard counts: valid ones of counted sittings (filter "valid"); with "all", every one
+# with an administered item or an unknown count; with "invalid" or "unknown", the scale results in that state —
+# of every sitting, valid or not (an invalid scale result of a valid sitting is invalid), never one estimated
+# without an item of its own (#157, 0.7.71).
 subscale_rows <- function(p, a) {
   s <- p$tables$estimated_profiles
-  s <- s[s$attemptid %in% a$attemptid, , drop = FALSE]
   mode <- if ("validity" %in% names(p$filter)) p$filter[["validity"]] else "valid"
   if (mode == "valid") {
-    s <- s[!is.na(s$valid) & s$valid == 1, , drop = FALSE]
+    s <- s[s$attemptid %in% a$attemptid & !is.na(s$valid) & s$valid == 1, , drop = FALSE]
   } else if (mode == "all") {
-    s <- s[is.na(s$items) | s$items > 0, , drop = FALSE]
+    s <- s[s$attemptid %in% a$attemptid & (is.na(s$items) | s$items > 0), , drop = FALSE]
+  } else if (mode %in% c("invalid", "unknown")) {
+    mapped <- mapped_attempts(p)
+    s <- s[s$attemptid %in% mapped & txt(s$validitystate) == mode & (is.na(s$items) | s$items > 0), , drop = FALSE]
   } else {
     s <- s[0, , drop = FALSE]
     attr(s, "unsupported") <- mode
   }
   s$key <- paste(int_text(s$category), int_text(s$subscale), sep = ":")
   s
+}
+
+# Every sitting of the package whose run maps its subscales: what the subscale analysis reads, valid or not.
+mapped_attempts <- function(p) {
+  a <- p$tables$attempts
+  runs <- p$tables$runs
+  a$attemptid[runs$subscalemaps[match(a$runid, runs$runid)] > 0]
+}
+
+# Per sitting, the subscales of the design that were given at least one item: from the steps (the questions played),
+# the items (the scale each was assigned to) and the scale maps (which engine scale is which subscale) — raw tables
+# only, also for subscales the engine gave no estimate (#157: "scale results with an administered item").
+administered_scales <- function(p) {
+  steps <- p$tables$steps
+  items <- p$tables$items
+  maps <- p$tables$scale_maps
+  if (is.null(maps) || nrow(steps) == 0) return(list(count = integer(0), keys = list()))
+  maps <- maps[maps$level == "subscale" & !is.na(maps$category) & !is.na(maps$subscale), , drop = FALSE]
+  scale <- items$assignedcatscaleid[match(paste(steps$runid, steps$questionid), paste(items$runid, items$questionid))]
+  key <- ifelse(is.na(scale), NA_character_, paste(int_text(maps$category), int_text(maps$subscale), sep = ":")[
+    match(paste(steps$runid, scale), paste(maps$runid, maps$catscaleid))])
+  keep <- !is.na(key)
+  keys <- tapply(key[keep], steps$attemptid[keep], function(k) sort(unique(k)), simplify = FALSE)
+  list(count = vapply(keys, length, integer(1)), keys = keys)
+}
+
+# The item count class of a scale result (#113): 0, 1, 2, 3-4, 5+, or unknown.
+item_class <- function(items) {
+  ifelse(is.na(items), "unknown", ifelse(items <= 0, "0", ifelse(items == 1, "1", ifelse(items == 2, "2",
+         ifelse(items <= 4, "3-4", "5+")))))
+}
+
+# The spread of a set of scale results as the dashboard sums it (#112): SDs of the true and the estimated deviation,
+# their ratio and correlation, RMSE and bias of the error.
+spread_of <- function(x, y) {
+  n <- length(x)
+  if (n < 2) {
+    e <- y - x
+    return(list(n = n, sdtrue = NA, sdest = NA, ratio = NA, correlation = NA,
+                rmse = if (n > 0) r6(sqrt(sum(e^2) / n)) else NA, bias = if (n > 0) r6(sum(e) / n) else NA))
+  }
+  varx <- max(0, (sum(x * x) - sum(x)^2 / n) / (n - 1))
+  vary <- max(0, (sum(y * y) - sum(y)^2 / n) / (n - 1))
+  cov <- (sum(x * y) - sum(x) * sum(y) / n) / (n - 1)
+  e <- y - x
+  list(n = n, sdtrue = r6(sqrt(varx)), sdest = r6(sqrt(vary)), ratio = if (varx > 1e-12) r6(sqrt(vary / varx)) else NA,
+       correlation = if (varx > 1e-12 && vary > 1e-12) r6(cov / sqrt(varx * vary)) else NA,
+       rmse = r6(sqrt(sum(e^2) / n)), bias = r6(sum(e) / n))
+}
+
+# What went in of what there was (#112, #157): the counting chain of the scale results, the reasons a scale result of
+# a valid sitting was left out, and the spread per strategy — every sitting of the selection, valid or not.
+coverage_figures <- function(p) {
+  a <- p$tables$attempts
+  a <- a[a$attemptid %in% mapped_attempts(p), , drop = FALSE]
+  e <- p$tables$estimated_profiles
+  e <- e[e$attemptid %in% a$attemptid, , drop = FALSE]
+  sittingvalid <- !is.na(a$valid[match(e$attemptid, a$attemptid)]) & a$valid[match(e$attemptid, a$attemptid)] == 1
+  strategy <- a$strategy[match(e$attemptid, a$attemptid)]
+  unknown <- is.na(e$items)
+  zero <- !unknown & e$items <= 0
+  measured <- !unknown & e$items > 0
+  scalevalid <- !is.na(e$scalevalid) & e$scalevalid == 1
+  valid <- measured & sittingvalid & scalevalid
+  # With an item but no estimate: design subscales given an item, without a row here.
+  given <- administered_scales(p)
+  estimated <- tapply(paste(int_text(e$category), int_text(e$subscale), sep = ":"), e$attemptid,
+                      function(k) unique(k), simplify = FALSE)
+  unestimated <- 0
+  unestimatedvalid <- 0
+  for (id in names(given$keys)) {
+    if (!(as.numeric(id) %in% a$attemptid)) next
+    missing <- length(setdiff(given$keys[[id]], estimated[[id]] %||% character(0)))
+    unestimated <- unestimated + missing
+    if (isTRUE(a$valid[match(as.numeric(id), a$attemptid)] == 1)) unestimatedvalid <- unestimatedvalid + missing
+  }
+  mode <- if ("validity" %in% names(p$filter)) p$filter[["validity"]] else "valid"
+  state <- txt(e$validitystate)
+  included <- sum(valid & (mode == "all" | state == mode))
+  out <- list(figure_rows("subscales", "coverage", "", "", "sittings", list(count = nrow(a))),
+              figure_rows("subscales", "coverage", "", "", "measured", list(count = sum(measured) + unestimated)),
+              figure_rows("subscales", "coverage", "", "", "included", list(count = included)),
+              figure_rows("subscales", "coverage", "", "", "frominvalid", list(count = sum(measured & !sittingvalid))),
+              figure_rows("subscales", "coverage", "", "", "unestimated", list(count = unestimated)),
+              figure_rows("subscales", "coverage", "", "", "unknownitems", list(count = sum(unknown))),
+              figure_rows("subscales", "coverage", "", "", "withoutitems", list(count = sum(zero))))
+  chain <- list(fromvalid = sum(measured & sittingvalid) + unestimatedvalid, paired = sum(measured & sittingvalid),
+                valid = sum(valid), withse = sum(valid & !is.na(e$localse)))
+  for (k in names(chain)) {
+    out[[length(out) + 1]] <- figure_rows("subscales", "coverage", "chain", k, "chain", list(count = chain[[k]]))
+  }
+  left <- measured & sittingvalid & !scalevalid
+  reasons <- unlist(lapply(txt(e$scalereasons[left]), function(r) if (r == "") "engine" else strsplit(r, ",")[[1]]))
+  for (reason in sort(unique(reasons))) {
+    out[[length(out) + 1]] <- figure_rows("subscales", "coverage", "reason", reason, "reasons",
+                                          list(count = sum(reasons == reason)))
+  }
+  for (st in sort(unique(strategy))) {
+    mine <- strategy == st
+    out[[length(out) + 1]] <- figure_rows("subscales", "spread", "strategy", st, "spreadall",
+                                          spread_of(e$truedelta[mine], e$estdelta[mine]))
+    out[[length(out) + 1]] <- figure_rows("subscales", "spread", "strategy", st, "spreadvalid",
+                                          spread_of(e$truedelta[mine & valid], e$estdelta[mine & valid]))
+  }
+  do.call(rbind, out)
+}
+
+# The flows of "Comparison of flows": every counted sitting step by step — the estimate and its standard error after
+# each step, from the steps table (#157).
+flow_figures <- function(p, a) {
+  steps <- p$tables$steps
+  out <- list()
+  bya <- split(seq_len(nrow(steps)), steps$attemptid)
+  for (id in a$attemptid) {
+    i <- bya[[as.character(id)]] %||% integer(0)
+    i <- i[order(steps$step[i])]
+    group <- int_text(id)
+    out[[length(out) + 1]] <- figure_rows("testflow", "flow", "attempt", group, "steps", list(count = length(i)))
+    if (length(i)) {
+      out[[length(out) + 1]] <- data.frame(tab = "testflow", section = "flow", groupby = "attempt", group = group,
+                                           metric = "ability", stat = paste0("step", int_text(steps$step[i])),
+                                           value = r6(steps$esttheta[i]), stringsAsFactors = FALSE)
+      out[[length(out) + 1]] <- data.frame(tab = "testflow", section = "flow", groupby = "attempt", group = group,
+                                           metric = "se", stat = paste0("step", int_text(steps$step[i])),
+                                           value = r6(steps$se[i]), stringsAsFactors = FALSE)
+    }
+  }
+  do.call(rbind, out)
 }
 
 local_summary <- function(s) {
@@ -145,6 +277,15 @@ subscale_figures <- function(p, a) {
       out[[length(out) + 1]] <- figure_rows("subscales", groupby, groupby, group, "local", local_summary(rows))
     }
   }
+  # By item count class, from the administered count (#113): the item classes table.
+  classes <- item_class(s$items)
+  for (class in c("0", "1", "2", "3-4", "5+", "unknown")) {
+    rows <- s[classes == class, , drop = FALSE]
+    if (nrow(rows) > 0) {
+      out[[length(out) + 1]] <- figure_rows("subscales", "itemclass", "itemclass", class, "local", local_summary(rows))
+    }
+  }
+  out[[length(out) + 1]] <- coverage_figures(p)
   do.call(rbind, out)
 }
 
@@ -154,7 +295,9 @@ robustness_figures <- function(p, a) {
   a$rcell <- paste(txt(a$tier), txt(a$strategy), txt(a$model), txt(a$stratum), txt(a$severity), txt(a$variant),
                    php_number_text(a$strength), sep = "|")
   a$reference <- paste(txt(a$tier), txt(a$strategy), txt(a$model), txt(a$stratum), txt(a$severity), sep = "|")
-  s <- subscale_rows(p, a)
+  # Valid scale results of valid sittings only, whatever the validity filter (robustness_analysis, #112).
+  s <- p$tables$estimated_profiles
+  s <- s[s$attemptid %in% a$attemptid & !is.na(s$valid) & s$valid == 1, , drop = FALSE]
   s$rcell <- a$rcell[match(s$attemptid, a$attemptid)]
   outcomes <- list()
   for (cell in unique(a$rcell)) {
@@ -230,5 +373,5 @@ all_figures <- function(p) {
   a <- population(p)
   if (nrow(a) == 0) return(NULL)
   rbind(overview_figures(p, a), global_figures(p, a), subscale_figures(p, a), robustness_figures(p, a),
-        testflow_figures(p, a), detection_figures(p))
+        testflow_figures(p, a), flow_figures(p, a), detection_figures(p))
 }

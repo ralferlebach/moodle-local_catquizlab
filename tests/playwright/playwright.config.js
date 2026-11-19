@@ -23,11 +23,15 @@
 // recordings and the report of the main run stay as they are.
 const DEEP = Boolean(process.env.CATQUIZLAB_DEEP_DELETE);
 const REPORT = DEEP ? 'report-deep-delete' : 'report';
+// The engine's session and migration tests (#136, #137, acceptance.yml) need two activities and two learners seeded by
+// cli/engine_session_seed.php, and the migration test an engine upgrade between its two phases: they run only where
+// ENGINE_SESSION names that seed, never inside the interface run.
+const ENGINE = Boolean(process.env.ENGINE_SESSION);
 
 module.exports = {
     testDir: '.',
     testMatch: DEEP ? 'deep_delete.spec.js' : '**/*.spec.js',
-    testIgnore: DEEP ? [] : ['deep_delete.spec.js'],
+    testIgnore: DEEP ? [] : ['deep_delete.spec.js'].concat(ENGINE ? [] : ['engine_session.spec.js', 'engine_migration.spec.js']),
     // An experiment takes minutes: it provisions a course, questions and
     // people, then plays five sittings through a real browser.
     timeout: 30 * 60 * 1000,

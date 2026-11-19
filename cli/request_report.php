@@ -25,7 +25,9 @@
  * is a gate: the exit code is 1 when a limit is broken.
  *
  * Options: --from=UNIXTIME (required), --until=UNIXTIME (default now), --json,
- *          --max-5xx=N, --max-fatals=N, --max-peak-mb=N.
+ *          --max-5xx=N, --max-fatals=N, --max-peak-mb=N,
+ *          --raw=FILE (every request of the window as a CSV line: page, status, duration, peak, RSS, queries — for
+ *          statistics over the whole sample, #164).
  *
  * @package    local_catquizlab
  * @copyright  2026 Ralf Erlebach
@@ -40,7 +42,7 @@ require_once($CFG->libdir . '/clilib.php');
 use local_catquizlab\local\request_trace;
 
 [$options] = cli_get_params([
-    'from' => 0, 'until' => 0, 'json' => false,
+    'from' => 0, 'until' => 0, 'json' => false, 'raw' => '',
     'max-5xx' => -1, 'max-fatals' => -1, 'max-peak-mb' => -1,
 ]);
 $from = (int) $options['from'];
@@ -64,8 +66,26 @@ $pids = [];
 $sittings = [];
 $correlations = [];
 $starts = [];
+$durations = [];
+// Every request of the window as one CSV line, for statistics over the whole sample (#164 AK-08): no values of
+// parameters, only the page, the status and the figures.
+$raw = (string) $options['raw'] !== '' ? fopen((string) $options['raw'], 'w') : null;
+if ($raw) {
+    fputcsv($raw, ['unixms', 'page', 'method', 'status', 'durationms', 'peakmb', 'rssmb', 'queries', 'connection', 'pid',
+        'attemptid', 'correlationid']);
+}
 foreach (request_trace::each($from, $until) as $line) {
     $figures['requests']++;
+    if (isset($line['durationms'])) {
+        $durations[] = (int) $line['durationms'];
+    }
+    if ($raw) {
+        fputcsv($raw, [(int) ($line['unixms'] ?? 0), (string) strtok((string) ($line['path'] ?? ''), '?'),
+            (string) ($line['method'] ?? ''), (int) ($line['status'] ?? 0), (int) ($line['durationms'] ?? -1),
+            (float) ($line['peakmb'] ?? 0), $line['rssmb'] ?? '', $line['queries'] ?? '',
+            (string) ($line['connection'] ?? 'normal'), (int) ($line['pid'] ?? 0), (int) ($line['attemptid'] ?? 0),
+            (string) ($line['correlationid'] ?? '')]);
+    }
     $status = (int) ($line['status'] ?? 0);
     $figures['status'][$status] = ($figures['status'][$status] ?? 0) + 1;
     $figures['http5xx'] += $status >= 500 ? 1 : 0;
@@ -134,6 +154,22 @@ $quantiles = static function (array $values): array {
     return ['max' => end($values), 'p50' => $at(0.5), 'p95' => $at(0.95)];
 };
 $figures['rssmb'] = $quantiles($rss);
+// Request time over every request of the window, not a top-n: n, mean, standard deviation, 95 % interval of the
+// mean, p50/p95/p99 and the maximum (#164 AK-08).
+$figures['durationms'] = null;
+if ($durations !== []) {
+    sort($durations);
+    $n = count($durations);
+    $mean = array_sum($durations) / $n;
+    $sd = $n > 1 ? sqrt(array_sum(array_map(static fn($v) => ($v - $mean) ** 2, $durations)) / ($n - 1)) : 0.0;
+    $q = static fn(float $p): int => $durations[(int) min($n - 1, floor($p * ($n - 1) + 0.5))];
+    $figures['durationms'] = ['n' => $n, 'mean' => round($mean, 1), 'sd' => round($sd, 1),
+        'ci95' => [round($mean - 1.96 * $sd / sqrt($n), 1), round($mean + 1.96 * $sd / sqrt($n), 1)],
+        'p50' => $q(0.5), 'p95' => $q(0.95), 'p99' => $q(0.99), 'max' => end($durations)];
+}
+if ($raw) {
+    fclose($raw);
+}
 $figures['queries'] = $quantiles($queries);
 // Web server processes that served the window: under prefork or mod_php, the slots that were busy at some point.
 $figures['processes'] = count($pids);
@@ -208,6 +244,21 @@ if (!empty($options['json'])) {
         $figures['sittings'],
         $figures['correlations']
     ));
+    if ($figures['durationms'] !== null) {
+        $d = $figures['durationms'];
+        cli_writeln(sprintf(
+            'Request time (ms) over all %d: mean %s (95 %% CI %s–%s, sd %s), p50 %d, p95 %d, p99 %d, max %d',
+            $d['n'],
+            $d['mean'],
+            $d['ci95'][0],
+            $d['ci95'][1],
+            $d['sd'],
+            $d['p50'],
+            $d['p95'],
+            $d['p99'],
+            $d['max']
+        ));
+    }
     foreach ($figures['status'] as $status => $n) {
         cli_writeln(sprintf('  status %d: %d', $status, $n));
     }

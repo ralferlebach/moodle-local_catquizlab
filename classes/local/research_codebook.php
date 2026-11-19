@@ -97,6 +97,12 @@ class research_codebook {
                     . 'that scale result may go into the figures.',
                 'de' => 'Die geschätzte Fähigkeit je Subskala jeder Testbearbeitung, mit lokalem Standardfehler und ob '
                     . 'dieses Skalenergebnis in die Kennzahlen darf.'],
+            'scale_maps' => ['key' => ['runid', 'catscaleid'], 'joins' => ['runid' => 'runs.runid',
+                'runid, catscaleid' => 'items.runid, items.assignedcatscaleid'],
+                'en' => 'Which engine scale is which scale of the design, per run: joins an administered item to its '
+                    . 'subscale, also where the engine gave that subscale no estimate.',
+                'de' => 'Welche Engine-Skala welche Skala des Designs ist, je Lauf: verbindet ein gestelltes Item mit '
+                    . 'seiner Subskala, auch wo die Engine für die Subskala keine Schätzung gab.'],
         ];
     }
 
@@ -321,8 +327,9 @@ class research_codebook {
                 . 'leer, wenn sie keins gab.'),
             'contractviolations' => $c('list', 'Limits of its test the sitting broke, as rule keys.', 'Grenzen ihres Tests, die '
                 . 'die Testbearbeitung verletzte, als Regelschlüssel.'),
-            'validitystate' => $c('string', 'valid, invalid or unknown under the rule in force.', 'valid, invalid oder unknown '
-                . 'unter der geltenden Regel.'),
+            'validitystate' => $c('string', 'valid, invalid or unknown under the rule in force (estimated_profiles: of the '
+                . 'scale result).', 'valid, invalid oder unknown unter der geltenden Regel (estimated_profiles: des '
+                . 'Skalenergebnisses).'),
             'engineverdict' => $c('string', 'The engine\'s verdict in the same three words.', 'Das Urteil der Engine in denselben '
                 . 'drei Wörtern.'),
             'engineunknownreason' => $c('string', 'Why the engine gave no verdict.', 'Warum die Engine kein Urteil gab.'),
@@ -367,6 +374,12 @@ class research_codebook {
                 . 'sie zusammenfasst.'),
             // Estimated profiles.
             'category' => $c('integer', 'Category index.', 'Kategorieindex.'),
+            'catscaleid' => $c('integer', 'Engine scale (local_catquiz_catscales.id) of the run.', 'Engine-Skala '
+                . '(local_catquiz_catscales.id) des Laufs.'),
+            'parentcatscaleid' => $c('integer', 'The engine scale above it; empty at the top.', 'Die Engine-Skala '
+                . 'darüber; leer an der Spitze.'),
+            'nodekey' => $c('string', 'The scale\'s place in the design (c1s2: category 1, subscale 2).', 'Platz der '
+                . 'Skala im Design (c1s2: Kategorie 1, Subskala 2).'),
             'subscale' => $c('integer', 'Subscale index.', 'Subskalenindex.'),
             'truedelta' => $c('number', 'True subscale ability − true global ability.', 'Wahre Subskalenfähigkeit − wahre globale '
                 . 'Fähigkeit.', $theta),

@@ -1,0 +1,641 @@
+##############################################################################
+# Acceptance measurements – local_catquizlab (re-audit 18.11.2026)
+#
+# What the re-audit asked for as automated evidence instead of manual runs on
+# the live installation, each job on its own installation set up the same way
+# (.github/scripts/acceptance-setup.sh: Moodle, the pinned CAT engine, this
+# plugin, a database, Apache with PHP-FPM at 512M and mod_status):
+#
+#   scheduler   #163  11 and 25 real workers, several experiments and runs, a
+#                     backlog of >1000 due sittings, stop/resume, the circuit
+#                     breaker, 30 minutes of polling on a fake clock — on
+#                     PostgreSQL and MariaDB; the claim's query budget and plan;
+#                     the read-only inventory (section 3); the scan of existing
+#                     logs (#149) on synthetic logs.
+#   load        #110  CLASSIC, ALLSUBS, HIGHESTSUB and a short mode at 1, 5, 12,
+#                     25 and 50 workers; server, database and browser figures
+#                     every 2 s; lost and late responses under 12 workers.
+#   trace       #164  engine tracing × lab debug, 2 × 2, FASTEST and HIGHESTSUB,
+#                     cold and warm cache, ABCD then DCBA; every request
+#                     compared; a trace table of 200 000 rows and retention.
+#   engine-*    #136/#137  two attempts in one browser session, other users,
+#                     cache purge and TTL; attempts left open across the engine
+#                     upgrade release → candidate; the cost of a sitting by
+#                     length and pool size, release against candidate.
+#   manifest          every job's components and commits in one file.
+#
+# Every job uploads what it measured; nothing here is judged by eye. The
+# release gate is this workflow together with Release CI, Worker CI and
+# Interface end-to-end, green on the same commit (docs/dev/release-gate.md).
+##############################################################################
+
+name: Acceptance measurements
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      load_workers:
+        description: 'Worker steps of the load matrix (#110)'
+        required: false
+        default: '1 5 12 25 50'
+
+concurrency:
+  group: acceptance-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PHP_MEMORY_LIMIT: 512M
+
+jobs:
+  scheduler:
+    name: "Issue 163 — scheduler, ${{ matrix.workers }} real workers (${{ matrix.db }})"
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        db: [pgsql, mariadb]
+        workers: [11, 25]
+        include:
+          - { workers: 11, persons: 6 }
+          - { workers: 25, persons: 13 }
+    services:
+      postgres:
+        image: postgres:16
+        env: { POSTGRES_USER: postgres, POSTGRES_PASSWORD: moodle, POSTGRES_DB: moodle }
+        ports: ['5432:5432']
+        options: --health-cmd pg_isready --health-interval 10s --health-timeout 5s --health-retries 5
+      mariadb:
+        image: mariadb:10.11
+        env: { MYSQL_ROOT_PASSWORD: root }
+        ports: ['3306:3306']
+        options: --health-cmd="mariadb-admin ping --silent" --health-interval=10s --health-retries=10
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          path: plugin
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+      - name: Moodle 4.5, the release engine set, ${{ matrix.db }}, Apache + PHP-FPM
+        env: { MOODLE_BRANCH: MOODLE_405_STABLE, PINS: release, DB: '${{ matrix.db }}', WEB: apache }
+        run: bash plugin/.github/scripts/acceptance-setup.sh
+
+      - name: Issue 163 — experiments, runs, backlog, stop/resume, breaker, polling, ${{ matrix.workers }} real workers
+        working-directory: ${{ env.MOODLE_ROOT }}
+        timeout-minutes: 90
+        run: |
+          set -o pipefail
+          php local/catquizlab/cli/scheduler_check.php --workers=${{ matrix.workers }} --persons=${{ matrix.persons }} \
+              --backlog=1200 --minutes=35 --out="$GITHUB_WORKSPACE/evidence/scheduler" \
+              | tee "$GITHUB_WORKSPACE/evidence-scheduler.txt"
+
+      # The claim's cost and plan on this database (PostgreSQL: EXPLAIN ANALYZE; MariaDB: EXPLAIN), under a backlog of
+      # twenty experiments outside the line, with 11 and 25 claimers at once.
+      - name: Issue 163 — the claim's query budget and plan on ${{ matrix.db }}
+        if: matrix.workers == 11
+        working-directory: ${{ env.MOODLE_ROOT }}
+        timeout-minutes: 20
+        run: |
+          set -o pipefail
+          mkdir -p "$GITHUB_WORKSPACE/evidence"
+          php local/catquizlab/cli/claim_bench.php --old=20 --per=2000 --claims=120 --processes=11,25 \
+              | tee "$GITHUB_WORKSPACE/evidence/claim-bench.txt"
+
+      # Re-audit section 3: one read-only inventory; no contradiction allowed after everything above.
+      - name: The read-only inventory (no write, no contradiction)
+        if: always()
+        working-directory: ${{ env.MOODLE_ROOT }}
+        run: |
+          mkdir -p "$GITHUB_WORKSPACE/evidence"
+          php local/catquizlab/cli/acceptance_inventory.php --json > "$GITHUB_WORKSPACE/evidence/inventory.json" || true
+          php local/catquizlab/cli/acceptance_inventory.php --csv > "$GITHUB_WORKSPACE/evidence/inventory.csv" || true
+          php local/catquizlab/cli/acceptance_inventory.php
+
+      # Issue 149: the scan an operator runs over the logs a server still has, here over synthetic ones in every format
+      # it reads (tests/fixtures/logs149). Counts, categories and hours as expected.json says; no value in the report.
+      - name: Issue 149 — scan of existing logs (synthetic logs, counts only)
+        if: matrix.db == 'pgsql' && matrix.workers == 11
+        working-directory: ${{ env.MOODLE_ROOT }}
+        run: |
+          set +e
+          php local/catquizlab/cli/scan_logs_for_secrets.php --dir=local/catquizlab/tests/fixtures/logs149 --all --json \
+              > "$GITHUB_WORKSPACE/evidence/log-scan-149.json"
+          code=$?
+          set -e
+          test "$code" = 3 || { echo "::error::Expected exit code 3 (secrets found in the synthetic logs), got $code"; exit 1; }
+          if grep -q S3CR3T149 "$GITHUB_WORKSPACE/evidence/log-scan-149.json"; then
+            echo "::error::A value from the logs is in the report"; exit 1
+          fi
+          python3 - "$GITHUB_WORKSPACE/evidence/log-scan-149.json" local/catquizlab/tests/fixtures/logs149/expected.json <<'PY'
+          import json, sys
+          r, e = json.load(open(sys.argv[1])), json.load(open(sys.argv[2]))
+          got = {k: r['total'][k] for k in ('files', 'lines', 'lineswithsecrets', 'categories', 'first', 'last')}
+          assert got == e['total'], (got, e['total'])
+          files = {f['file'].split('logs149/')[1]: {k: f[k] for k in ('lineswithsecrets', 'categories', 'untimed',
+                   'fatallineswithquery')} for f in r['files']}
+          assert files == e['files'], (files, e['files'])
+          print('The scan counted as expected:', json.dumps(got))
+          PY
+          php local/catquizlab/cli/scan_logs_for_secrets.php --dir=local/catquizlab/tests/fixtures/logs149 --all || true
+
+      - name: Release manifest of this job
+        if: always()
+        env:
+          JOB_NAME: "scheduler ${{ matrix.db }} ${{ matrix.workers }}"
+        run: |
+          mkdir -p evidence manifest
+          bash plugin/.github/scripts/release-manifest.sh > "manifest/manifest-scheduler-${{ matrix.db }}-${{ matrix.workers }}.json"
+          cp engine-manifest.txt installed-versions.txt evidence-scheduler.txt evidence/ 2>/dev/null || true
+          cp /tmp/apache-error.log evidence/ 2>/dev/null || true
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: catquizlab-acceptance-scheduler-${{ matrix.db }}-${{ matrix.workers }}
+          path: evidence
+          retention-days: 30
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: manifest-scheduler-${{ matrix.db }}-${{ matrix.workers }}
+          path: manifest
+          retention-days: 30
+
+  load:
+    name: "Issue 110 — load, ${{ matrix.mode }}, 1/5/12/25/50 workers, Apache + PHP-FPM 512M"
+    runs-on: ubuntu-24.04
+    timeout-minutes: 330
+    strategy:
+      fail-fast: false
+      matrix:
+        mode: [classic, allsubs, highestsub, control]
+        include:
+          # CLASSIC and ALLSUBS as the long sittings of the incidents (100 questions); HIGHESTSUB as on CLARA;
+          # the short mode (ALLSUBS, 2–4 questions) as the comparison. Lost and late responses with the classic job.
+          - { mode: classic, minanswers: 100, faults: '12' }
+          - { mode: allsubs, minanswers: 100, faults: '' }
+          - { mode: highestsub, minanswers: 60, faults: '' }
+          - { mode: control, minanswers: 4, faults: '' }
+    services:
+      postgres:
+        image: postgres:16
+        env: { POSTGRES_USER: postgres, POSTGRES_PASSWORD: moodle, POSTGRES_DB: moodle }
+        ports: ['5432:5432']
+        options: --health-cmd pg_isready --health-interval 10s --health-timeout 5s --health-retries 5
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          path: plugin
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+      - name: Moodle 4.5, the release engine set, PostgreSQL, Apache + PHP-FPM (64 processes, 512M)
+        env: { MOODLE_BRANCH: MOODLE_405_STABLE, PINS: release, DB: pgsql, WEB: apache, FPM_CHILDREN: '64' }
+        run: bash plugin/.github/scripts/acceptance-setup.sh
+
+      # The engine's request tracing on: strategy:select_question per request for the report (its cost is #164's).
+      - name: Engine tracing on for the selector's times
+        working-directory: ${{ env.CORE_ROOT }}
+        run: php admin/cli/cfg.php --component=local_catquiz --name=attempttrace --set=1
+
+      - name: Issue 110 — ${{ matrix.mode }} at 1, 5, 12, 25 and 50 workers
+        working-directory: ${{ env.MOODLE_ROOT }}
+        timeout-minutes: 300
+        env:
+          WORKERS: ${{ github.event.inputs.load_workers || '1 5 12 25 50' }}
+          MODES: ${{ matrix.mode }}
+          PER: '1'
+          MINANSWERS: ${{ matrix.minanswers }}
+          MINUTES: '40'
+          FAULTS: ${{ matrix.faults }}
+          WEBLIMIT: ${{ env.PHP_MEMORY_LIMIT }}
+          OUT: ${{ github.workspace }}/evidence/load
+        run: |
+          set -o pipefail
+          bash local/catquizlab/cli/load_matrix.sh | tee "$GITHUB_WORKSPACE/evidence-load.txt"
+
+      - name: The selector's time and the capacity events of the whole job
+        if: always()
+        working-directory: ${{ env.MOODLE_ROOT }}
+        run: |
+          mkdir -p "$GITHUB_WORKSPACE/evidence"
+          php local/catquizlab/cli/trace_report.php --from=$(( $(date +%s) - 21600 )) > "$GITHUB_WORKSPACE/evidence/traces.txt" || true
+          php local/catquizlab/cli/capacity_report.php --hours=6 > "$GITHUB_WORKSPACE/evidence/capacity.txt" || true
+          php local/catquizlab/cli/acceptance_inventory.php --json > "$GITHUB_WORKSPACE/evidence/inventory.json" || true
+
+      - name: Release manifest of this job
+        if: always()
+        env:
+          JOB_NAME: "load ${{ matrix.mode }}"
+        run: |
+          mkdir -p evidence manifest
+          bash plugin/.github/scripts/release-manifest.sh > "manifest/manifest-load-${{ matrix.mode }}.json"
+          cp engine-manifest.txt installed-versions.txt evidence-load.txt evidence/ 2>/dev/null || true
+          cp /tmp/apache-error.log evidence/ 2>/dev/null || true
+          tail -c 2000000 /tmp/apache-access.log > evidence/apache-access-tail.log 2>/dev/null || true
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: catquizlab-acceptance-load-${{ matrix.mode }}
+          path: evidence
+          retention-days: 30
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: manifest-load-${{ matrix.mode }}
+          path: manifest
+          retention-days: 30
+
+  trace:
+    name: "Issue 164 — engine tracing × lab debug, 2 × 2 (${{ matrix.cache }} cache)"
+    runs-on: ubuntu-24.04
+    timeout-minutes: 300
+    strategy:
+      fail-fast: false
+      matrix:
+        cache: [cold, warm]
+    services:
+      postgres:
+        image: postgres:16
+        env: { POSTGRES_USER: postgres, POSTGRES_PASSWORD: moodle, POSTGRES_DB: moodle }
+        ports: ['5432:5432']
+        options: --health-cmd pg_isready --health-interval 10s --health-timeout 5s --health-retries 5
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          path: plugin
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+      - name: Moodle 4.5, the release engine set, PostgreSQL, Apache + PHP-FPM 512M
+        env: { MOODLE_BRANCH: MOODLE_405_STABLE, PINS: release, DB: pgsql, WEB: apache }
+        run: bash plugin/.github/scripts/acceptance-setup.sh
+
+      # Same code, engine, pool shape, seeds (the smoke experiment's fixed seed), worker limit and server in every
+      # cell; ABCD then DCBA; cold: caches purged before each cell.
+      - name: Issue 164 — the 2 × 2 matrix, FASTEST and HIGHESTSUB, ABCD then DCBA
+        working-directory: ${{ env.MOODLE_ROOT }}
+        timeout-minutes: 240
+        env:
+          WORKERS: '4'
+          PER: '3'
+          STRATEGIES: fastest highestsub
+          REPEAT: '2'
+          COLD: ${{ matrix.cache == 'cold' && '1' || '0' }}
+          MINUTES: '20'
+          MOODLE_ROOT: ${{ env.MOODLE_ROOT }}
+          OUT: ${{ github.workspace }}/evidence/trace-matrix
+        run: |
+          set -o pipefail
+          bash local/catquizlab/cli/trace_matrix.sh | tee "$GITHUB_WORKSPACE/evidence-trace.txt"
+          cat "$OUT/report.md" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Issue 164 — a trace table of 200 000 rows, retention, no secret in a trace
+        working-directory: ${{ env.MOODLE_ROOT }}
+        run: |
+          set -o pipefail
+          php local/catquizlab/cli/trace_volume_check.php --rows=200000 --days=30 --retention=14 --json \
+              | tee "$GITHUB_WORKSPACE/evidence/trace-volume.json"
+
+      - name: Release manifest of this job
+        if: always()
+        env:
+          JOB_NAME: "trace ${{ matrix.cache }}"
+        run: |
+          mkdir -p evidence manifest
+          bash plugin/.github/scripts/release-manifest.sh > "manifest/manifest-trace-${{ matrix.cache }}.json"
+          cp engine-manifest.txt installed-versions.txt evidence-trace.txt evidence/ 2>/dev/null || true
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: catquizlab-acceptance-trace-${{ matrix.cache }}
+          path: evidence
+          retention-days: 30
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: manifest-trace-${{ matrix.cache }}
+          path: manifest
+          retention-days: 30
+
+  engine-session:
+    name: "Issues 136/137 — two attempts in one session, other users, caches (${{ matrix.stack }}, ${{ matrix.pins }})"
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        stack: [legacy, moodle5, moodle53]
+        pins: [release, candidate]
+        include:
+          - { stack: legacy, moodle: MOODLE_405_STABLE }
+          - { stack: moodle5, moodle: MOODLE_502_STABLE }
+          - { stack: moodle53, moodle: MOODLE_503_STABLE }
+    services:
+      postgres:
+        image: ${{ matrix.moodle == 'MOODLE_503_STABLE' && 'postgres:17' || 'postgres:16' }}
+        env: { POSTGRES_USER: postgres, POSTGRES_PASSWORD: moodle, POSTGRES_DB: moodle }
+        ports: ['5432:5432']
+        options: --health-cmd pg_isready --health-interval 10s --health-timeout 5s --health-retries 5
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          path: plugin
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+      - name: Moodle (${{ matrix.moodle }}), the ${{ matrix.pins }} engine set, Apache + PHP-FPM 512M
+        env: { MOODLE_BRANCH: '${{ matrix.moodle }}', PINS: '${{ matrix.pins }}', DB: pgsql, WEB: apache }
+        run: bash plugin/.github/scripts/acceptance-setup.sh
+
+      - name: Two adaptive quizzes, two learners
+        id: seed
+        working-directory: ${{ env.MOODLE_ROOT }}
+        run: php local/catquizlab/cli/engine_session_seed.php | tee -a "$GITHUB_OUTPUT"
+
+      - name: Install Playwright
+        working-directory: ${{ env.MOODLE_ROOT }}/local/catquizlab/tests/playwright
+        run: |
+          npm ci --no-audit --no-fund
+          npx playwright install --with-deps chromium
+
+      # Issue 136 AK 2/AK 3, #137 AK 5: attempt A started, attempt B started in the same browser session, answered in
+      # turns; a second learner beside; the caches purged in the middle; and (TTL) a wait of 610 s with A open, then
+      # A continued. Every question asked once per attempt, every answer kept where it was given, progress and the
+      # engine's attempt record of each unchanged by the other.
+      - name: Issues 136/137 — interleaved attempts in one session, another learner, purge and TTL
+        working-directory: ${{ env.MOODLE_ROOT }}/local/catquizlab/tests/playwright
+        timeout-minutes: 30
+        env:
+          MOODLE_URL: ${{ env.WEB_URL }}
+          ENGINE_SESSION: ${{ steps.seed.outputs.session }}
+          TTL_WAIT_SECONDS: '610'
+          MOODLE_ROOT: ${{ env.MOODLE_ROOT }}
+          CORE_ROOT: ${{ env.CORE_ROOT }}
+        run: npx playwright test engine_session.spec.js --reporter=list
+
+      - name: Release manifest of this job
+        if: always()
+        env:
+          JOB_NAME: "engine-session ${{ matrix.stack }} ${{ matrix.pins }}"
+        run: |
+          mkdir -p evidence manifest
+          bash plugin/.github/scripts/release-manifest.sh > "manifest/manifest-engine-session-${{ matrix.stack }}-${{ matrix.pins }}.json"
+          cp engine-manifest.txt installed-versions.txt evidence/ 2>/dev/null || true
+          cp -r "$MOODLE_ROOT/local/catquizlab/tests/playwright/artifacts/engine-session" evidence/ 2>/dev/null || true
+          cp -r "$MOODLE_ROOT/local/catquizlab/tests/playwright/test-results" evidence/ 2>/dev/null || true
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: catquizlab-acceptance-engine-session-${{ matrix.stack }}-${{ matrix.pins }}
+          path: evidence
+          retention-days: 30
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: manifest-engine-session-${{ matrix.stack }}-${{ matrix.pins }}
+          path: manifest
+          retention-days: 30
+
+  engine-migration:
+    name: "Issue 136 AK 7 — attempts open across the engine upgrade release → candidate (${{ matrix.stack }})"
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { stack: legacy, moodle: MOODLE_405_STABLE }
+          - { stack: moodle5, moodle: MOODLE_502_STABLE }
+          - { stack: moodle53, moodle: MOODLE_503_STABLE }
+    services:
+      postgres:
+        image: ${{ matrix.moodle == 'MOODLE_503_STABLE' && 'postgres:17' || 'postgres:16' }}
+        env: { POSTGRES_USER: postgres, POSTGRES_PASSWORD: moodle, POSTGRES_DB: moodle }
+        ports: ['5432:5432']
+        options: --health-cmd pg_isready --health-interval 10s --health-timeout 5s --health-retries 5
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          path: plugin
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+      - name: Moodle (${{ matrix.moodle }}) with the RELEASE engine set, Apache + PHP-FPM 512M
+        env: { MOODLE_BRANCH: '${{ matrix.moodle }}', PINS: release, DB: pgsql, WEB: apache }
+        run: bash plugin/.github/scripts/acceptance-setup.sh
+      - name: Two adaptive quizzes, two learners
+        id: seed
+        working-directory: ${{ env.MOODLE_ROOT }}
+        run: php local/catquizlab/cli/engine_session_seed.php | tee -a "$GITHUB_OUTPUT"
+      - name: Install Playwright
+        working-directory: ${{ env.MOODLE_ROOT }}/local/catquizlab/tests/playwright
+        run: |
+          npm ci --no-audit --no-fund
+          npx playwright install --with-deps chromium
+
+      - name: Before — two attempts left open in one session (release engine)
+        working-directory: ${{ env.MOODLE_ROOT }}/local/catquizlab/tests/playwright
+        env:
+          MOODLE_URL: ${{ env.WEB_URL }}
+          ENGINE_SESSION: ${{ steps.seed.outputs.session }}
+          MIGRATION_PHASE: open
+          MOODLE_ROOT: ${{ env.MOODLE_ROOT }}
+          CORE_ROOT: ${{ env.CORE_ROOT }}
+        run: npx playwright test engine_migration.spec.js --reporter=list
+
+      # Only the engine's code changes: the candidate set (CatQuiz #146) replaces the release set in place, Moodle's
+      # upgrade runs, the web server is restarted; the database, moodledata and the browser session stay.
+      - name: The engine upgraded in place to the CANDIDATE set (CatQuiz #146)
+        run: |
+          before=$(cd "$CORE_ROOT" && php admin/cli/cfg.php --component=local_catquiz --name=version)
+          for d in local/catquiz mod/adaptivequiz local/wunderbyte_table; do rm -rf "${MOODLE_ROOT:?}/$d"; done
+          ENGINE_DIR="$MOODLE_ROOT" ENGINE_LAYOUT=moodle ENGINE_SUBMODULES=1 ENGINE_MANIFEST="$GITHUB_WORKSPACE/engine-manifest-after.txt" \
+              PINS_FILE="$GITHUB_WORKSPACE/plugin/.github/engine-pins-interface.env" MOODLE_BRANCH=${{ matrix.moodle }} \
+              bash plugin/.github/scripts/fetch-engine.sh
+          (cd "$CORE_ROOT" && php admin/cli/upgrade.php --non-interactive)
+          after=$(cd "$CORE_ROOT" && php admin/cli/cfg.php --component=local_catquiz --name=version)
+          echo "local_catquiz $before -> $after" | tee engine-upgrade.txt
+          test "$after" -gt "$before" || { echo "::error::The engine was not upgraded ($before -> $after)"; exit 1; }
+          sudo service php8.3-fpm restart
+
+      - name: After — both attempts continued from where they were (candidate engine)
+        working-directory: ${{ env.MOODLE_ROOT }}/local/catquizlab/tests/playwright
+        env:
+          MOODLE_URL: ${{ env.WEB_URL }}
+          ENGINE_SESSION: ${{ steps.seed.outputs.session }}
+          MIGRATION_PHASE: continue
+          MOODLE_ROOT: ${{ env.MOODLE_ROOT }}
+          CORE_ROOT: ${{ env.CORE_ROOT }}
+        run: npx playwright test engine_migration.spec.js --reporter=list
+
+      - name: Release manifest of this job
+        if: always()
+        env:
+          JOB_NAME: "engine-migration ${{ matrix.stack }}"
+        run: |
+          mkdir -p evidence manifest
+          bash plugin/.github/scripts/release-manifest.sh > "manifest/manifest-engine-migration-${{ matrix.stack }}.json"
+          cp engine-manifest.txt engine-manifest-after.txt engine-upgrade.txt installed-versions.txt evidence/ 2>/dev/null || true
+          # The readings before and after; not the browser session's cookies.
+          mkdir -p evidence/engine-migration
+          cp "$MOODLE_ROOT"/local/catquizlab/tests/playwright/engine-migration/{before,after}.json evidence/engine-migration/ 2>/dev/null || true
+          cp -r "$MOODLE_ROOT/local/catquizlab/tests/playwright/test-results" evidence/ 2>/dev/null || true
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: catquizlab-acceptance-engine-migration-${{ matrix.stack }}
+          path: evidence
+          retention-days: 30
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: manifest-engine-migration-${{ matrix.stack }}
+          path: manifest
+          retention-days: 30
+
+  engine-bench:
+    name: "Issue 136 DoD 3 — a sitting's cost by length and pool, 512 MiB (${{ matrix.stack }}, ${{ matrix.pins }})"
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    strategy:
+      fail-fast: false
+      matrix:
+        stack: [legacy, moodle53]
+        pins: [release, candidate]
+        include:
+          - { stack: legacy, moodle: MOODLE_405_STABLE }
+          - { stack: moodle53, moodle: MOODLE_503_STABLE }
+    services:
+      postgres:
+        image: ${{ matrix.moodle == 'MOODLE_503_STABLE' && 'postgres:17' || 'postgres:16' }}
+        env: { POSTGRES_USER: postgres, POSTGRES_PASSWORD: moodle, POSTGRES_DB: moodle }
+        ports: ['5432:5432']
+        options: --health-cmd pg_isready --health-interval 10s --health-timeout 5s --health-retries 5
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          path: plugin
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+      - name: Moodle (${{ matrix.moodle }}), the ${{ matrix.pins }} engine set, Apache + PHP-FPM 512M
+        env: { MOODLE_BRANCH: '${{ matrix.moodle }}', PINS: '${{ matrix.pins }}', DB: pgsql, WEB: apache }
+        run: bash plugin/.github/scripts/acceptance-setup.sh
+      - name: Issue 136 DoD 3 — 10/50/100/150 questions × pools of 100/500/1000 items
+        working-directory: ${{ env.MOODLE_ROOT }}
+        timeout-minutes: 220
+        env:
+          POOLS: 100 500 1000
+          STEPS: 10 50 100 150
+          STRATEGY: fastest
+          PERSONS: '2'
+          OUT: ${{ github.workspace }}/evidence/engine-bench
+        run: |
+          set -o pipefail
+          bash local/catquizlab/cli/engine_bench.sh | tee "$GITHUB_WORKSPACE/evidence-bench.txt"
+      - name: Release manifest of this job
+        if: always()
+        env:
+          JOB_NAME: "engine-bench ${{ matrix.stack }} ${{ matrix.pins }}"
+        run: |
+          mkdir -p evidence manifest
+          bash plugin/.github/scripts/release-manifest.sh > "manifest/manifest-engine-bench-${{ matrix.stack }}-${{ matrix.pins }}.json"
+          cp engine-manifest.txt installed-versions.txt evidence-bench.txt evidence/ 2>/dev/null || true
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: catquizlab-acceptance-engine-bench-${{ matrix.stack }}-${{ matrix.pins }}
+          path: evidence
+          retention-days: 30
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: manifest-engine-bench-${{ matrix.stack }}-${{ matrix.pins }}
+          path: manifest
+          retention-days: 30
+
+  manifest:
+    name: "Release manifest (every gate job of this commit, one file)"
+    runs-on: ubuntu-24.04
+    needs: [scheduler, load, trace, engine-session, engine-migration, engine-bench]
+    if: ${{ !cancelled() }}
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          path: plugin
+      - uses: actions/download-artifact@v7
+        with:
+          pattern: manifest-*
+          path: manifests
+          merge-multiple: true
+      # The other three gate workflows on the same commit (Release CI, Worker CI, Interface end-to-end): their job
+      # manifests, read when their runs have finished — waited for up to 90 minutes, then what is missing is named.
+      - name: The manifests of the other gate workflows on this commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -uo pipefail
+          : > manifests-missing.txt
+          for wf in moodle-release.yml worker-e2e.yml ui-e2e.yml; do
+            id=""
+            for i in $(seq 1 90); do
+              read -r id status <<<"$(gh run list -R "$GITHUB_REPOSITORY" --workflow "$wf" --commit "$GITHUB_SHA" \
+                  --event "$GITHUB_EVENT_NAME" --limit 1 --json databaseId,status \
+                  --jq '.[0] | "\(.databaseId) \(.status)"' 2>/dev/null)"
+              [ "${status:-}" = completed ] && break
+              [ -z "${id:-}" ] && [ "$i" -ge 10 ] && break
+              sleep 60
+            done
+            if [ -n "${id:-}" ] && [ "${status:-}" = completed ]; then
+              gh run download "$id" -R "$GITHUB_REPOSITORY" --pattern 'manifest-*' -D "other-$wf" \
+                  || echo "$wf run $id: no manifest artefact" >> manifests-missing.txt
+              find "other-$wf" -name '*.json' -exec cp {} manifests/ \; 2>/dev/null || true
+            else
+              echo "$wf: no finished run on $GITHUB_SHA (${status:-none})" >> manifests-missing.txt
+            fi
+          done
+          cat manifests-missing.txt
+      - name: One manifest, checked
+        run: |
+          python3 - <<'PY'
+          import glob, json, os
+          jobs = [json.load(open(p)) for p in sorted(glob.glob('manifests/manifest-*.json'))]
+          skips = {p: json.load(open(p)) for p in sorted(glob.glob('manifests/phpunit-skips*.json'))}
+          missing = [l.strip() for l in open('manifests-missing.txt') if l.strip()]
+          sha = os.environ['GITHUB_SHA']
+          problems = [j['job'] + ': plugin commit ' + str(j['catquizlab']['commit']) for j in jobs
+                      if j['catquizlab']['commit'] != sha]
+          sets = {}
+          for j in jobs:
+              sets.setdefault(j['engine']['set'] or '?', set()).add((j['moodle']['branch'], j['engine']['local_catquiz'],
+                                                                     j['engine']['mod_adaptivequiz'],
+                                                                     j['engine']['adaptivequizcatmodel_catquiz']))
+          out = {'commit': sha, 'run': os.environ['GITHUB_SERVER_URL'] + '/' + os.environ['GITHUB_REPOSITORY']
+                 + '/actions/runs/' + os.environ['GITHUB_RUN_ID'], 'jobs': jobs,
+                 'engine_sets': {k: sorted(map(list, v)) for k, v in sets.items()}, 'problems': problems,
+                 'workflows': sorted({j.get('workflow') or '?' for j in jobs}), 'missing': missing,
+                 'skips': {os.path.basename(k): v for k, v in skips.items()}}
+          json.dump(out, open('release-manifest.json', 'w'), indent=2)
+          print(f'{len(jobs)} jobs of {len(out["workflows"])} workflows, plugin commit {sha}')
+          for m in missing:
+              print('missing:', m)
+          for k, v in out['engine_sets'].items():
+              for line in v:
+                  print(k, *line)
+          if problems or not jobs:
+              raise SystemExit('Manifest problems: ' + '; '.join(problems or ['no job manifest']))
+          PY
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: release-manifest
+          path: release-manifest.json
+          retention-days: 90

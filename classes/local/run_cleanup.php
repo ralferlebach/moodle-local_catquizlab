@@ -76,8 +76,12 @@ class run_cleanup {
         // leads to them, so a failing or incomplete engine deletion throws purge_incomplete before any of them goes.
         $counts['items'] = self::teardown_engine_artifacts($runid);
 
+        $DB->delete_records('local_catquizlab_attemptlog', ['runid' => $runid]);
         $DB->delete_records('local_catquizlab_attempt', ['runid' => $runid]);
         $DB->delete_records('local_catquizlab_result', ['runid' => $runid]);
+        // The twins' claims go with their persons: left behind they were orphans once the run went (220 found by the
+        // acceptance inventory), and with the run kept they stopped the next provisioning from storing the persons.
+        $DB->delete_records('local_catquizlab_twinclaim', ['runid' => $runid]);
         $DB->delete_records('local_catquizlab_person', ['runid' => $runid]);
         // The scale map is a lab-store table and is always safe to remove.
         $DB->delete_records('local_catquizlab_scalemap', ['runid' => $runid]);

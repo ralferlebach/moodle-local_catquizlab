@@ -58,14 +58,23 @@ final class research_package_test extends \advanced_testcase {
      * @param int $sittings How many of the twins sit the test, per run.
      * @param string $model The model.
      * @param array $persons Overrides of the persons block (stratum, severity).
-     * @param string[] $strategies Three strategies.
+     * @param string[] $strategies The strategies.
+     * @param int[] $scales Categories, subscales per category, items per subscale.
+     * @param int|null $length Questions per sitting; null: 12 to 18, mixed.
+     * @param string[] $variants The pool variants.
+     * @param bool $unknown Whether the third twin's sitting comes without its record of questions and answers: its
+     *     validity, and that of its scale results, cannot be judged (unknown).
      * @return array{experimentid: int, runs: int[], truth: array} truth: per attempt [finaltheta, finalse].
      */
     protected function experiment(
         int $sittings = 10,
         string $model = '2pl',
         array $persons = [],
-        array $strategies = ['classic', 'fastest', 'allsubs']
+        array $strategies = ['classic', 'fastest', 'allsubs'],
+        array $scales = [2, 2, 10],
+        ?int $length = null,
+        array $variants = ['ideal', 'shifted'],
+        bool $unknown = false
     ): array {
         global $DB;
 
@@ -74,9 +83,10 @@ final class research_package_test extends \advanced_testcase {
         $definition['model'] = $model;
         $definition['replications'] = 2;
         $definition['persons'] = array_merge($definition['persons'], ['count' => self::TWINS], $persons);
-        $definition['pool']['scales'] = ['categories' => 2, 'subcategories' => 2, 'itemspersubscale' => 10];
+        $definition['pool']['scales'] = ['categories' => $scales[0], 'subcategories' => $scales[1],
+            'itemspersubscale' => $scales[2]];
         $definition['sweep']['factors']['strategy'] = $strategies;
-        $definition['sweep']['factors']['variant'] = ['ideal', 'shifted'];
+        $definition['sweep']['factors']['variant'] = $variants;
         $saved = experiment_service::save($definition);
         $experimentid = (int) $saved['id'];
         $sweep = experiment_service::create_sweep($experimentid);
@@ -90,8 +100,8 @@ final class research_package_test extends \advanced_testcase {
             $model = (string) $def['model'];
             $variant = (string) $def['pool']['variant'];
             $scalemap = [];
-            foreach ([1, 2] as $c) {
-                foreach ([1, 2] as $s) {
+            foreach (range(1, $scales[0]) as $c) {
+                foreach (range(1, $scales[1]) as $s) {
                     $catscaleid = $runid * 100 + $c * 10 + $s;
                     $DB->insert_record('local_catquizlab_scalemap', (object) ['runid' => $runid,
                         'level' => scale_provisioner::LEVEL_SUBSCALE, 'catscaleid' => $catscaleid,
@@ -151,12 +161,12 @@ final class research_package_test extends \advanced_testcase {
                     continue;
                 }
                 // Mixed lengths; the order differs per strategy cell.
-                $length = 12 + ($i + $n) % 7;
+                $played = $length ?? 12 + ($i + $n) % 7;
                 // Round robin over the subscales, so that a sitting has several subscale results to rank.
                 $order = $items;
                 usort($order, static fn(\stdClass $a, \stdClass $b): int => [substr($a->itemkey, -4), $a->itemkey]
                     <=> [substr($b->itemkey, -4), $b->itemkey]);
-                $played = array_slice($n % 2 ? array_reverse($order) : $order, $i % 3, $length);
+                $played = array_slice($n % 2 ? array_reverse($order) : $order, $length === null ? $i % 3 : 0, $played);
                 $responses = [];
                 foreach ($played as $item) {
                     $responses[(int) $item->questionid] = ['questionid' => (string) $item->questionid,
@@ -178,6 +188,11 @@ final class research_package_test extends \advanced_testcase {
                         array_map(static fn(array $m): int => $m['catscaleid'], $scalemap),
                         $se
                     ),
+                    // The estimate after each step, as the engine's ability path records it: what the flows read.
+                    'abilitypath' => array_map(static fn(int $k): array => ['abilities' => [$runid * 100 => round(
+                        $theta * ($k + 1) / count($responses) + 0.1 * sin($k + $person->id),
+                        6
+                    )]], range(0, count($responses) - 1)),
                     'progress' => ['playedquestions' => array_map(
                         static fn(int $id): array => ['id' => $id],
                         array_keys($responses)
@@ -190,6 +205,10 @@ final class research_package_test extends \advanced_testcase {
                     $trace += ['stopreason' => 'maxitems'];
                 } else {
                     $trace += ['finaltheta' => $theta, 'finalse' => $se, 'stopreason' => 'se'];
+                }
+                if ($unknown && $i === 2) {
+                    // Nothing recorded of what was asked and answered: neither valid nor invalid.
+                    unset($trace['items'], $trace['progress'], $trace['abilitypath']);
                 }
                 $attemptid = $DB->insert_record('local_catquizlab_attempt', (object) ['runid' => $runid,
                     'personid' => $person->id, 'status' => attempt_scheduler::STATUS_COLLECTED, 'tries' => 1 + $i % 2,
@@ -481,10 +500,117 @@ final class research_package_test extends \advanced_testcase {
         local_catquizlab_pluginfile(null, null, \context_system::instance(), 'export', [0, $stored[0]->get_filename()], true);
     }
     /**
-     * The R re-analysis (#157 DoD2, DoD3): run on the package of a 2PL and a GPCM experiment (three strategies, two
-     * replications, two pool variants, two strata, sittings of different lengths, valid and not), it recomputes every
-     * figure it covers from the raw tables and finds no difference to the dashboard's; a figure changed in the data
-     * makes it fail, and so does a table that is not the one the manifest names.
+     * Run the R re-analysis on an unpacked package.
+     *
+     * @param string $rscript Rscript.
+     * @param string $dir The unpacked package.
+     * @return array{0: int, 1: string, 2: array[]} Exit status, output, the rows of comparison.csv.
+     */
+    protected function reanalyse(string $rscript, string $dir): array {
+        $output = [];
+        exec(escapeshellarg($rscript) . ' ' . escapeshellarg($dir . '/reanalysis/run_all.R') . ' ' . escapeshellarg($dir)
+            . ' --out=' . escapeshellarg($dir . '/out') . ' 2>&1', $output, $status);
+        $comparison = [];
+        if (is_readable($dir . '/out/comparison.csv')) {
+            $handle = fopen($dir . '/out/comparison.csv', 'r');
+            $header = fgetcsv($handle, null, ',', '"', '');
+            while (($line = fgetcsv($handle, null, ',', '"', '')) !== false) {
+                $comparison[] = array_combine($header, $line);
+            }
+            fclose($handle);
+        }
+        @unlink($dir . '/out/comparison.csv');
+
+        return [$status, implode("\n", $output), $comparison];
+    }
+
+    /**
+     * Write a package of a filter and unpack it.
+     *
+     * @param array $filter The filter.
+     * @return string The directory.
+     */
+    protected function unpacked(array $filter): string {
+        $zip = make_request_directory() . '/package.zip';
+        research_package::write_file($filter, $zip);
+        $dir = make_request_directory();
+        $archive = new \ZipArchive();
+        $this->assertTrue($archive->open($zip) === true);
+        $archive->extractTo($dir);
+        $archive->close();
+
+        return $dir;
+    }
+
+    /**
+     * Change one table of an unpacked package and make its manifest match: an error in the data, not in the package.
+     *
+     * @param string $dir The unpacked package.
+     * @param string $table The table.
+     * @param callable $change Gets the header and one row's cells, returns the changed cells or null (unchanged).
+     * @param int $limit How many rows to change at most.
+     * @return int How many rows were changed.
+     */
+    protected function falsify(string $dir, string $table, callable $change, int $limit = 1): int {
+        $lines = file($dir . '/data/' . $table . '.csv');
+        $header = str_getcsv($lines[0], ',', '"', '');
+        $changed = 0;
+        foreach ($lines as $i => $line) {
+            if ($i === 0 || $changed >= $limit) {
+                continue;
+            }
+            $cells = $change($header, str_getcsv(rtrim($line, "\n"), ',', '"', ''));
+            if ($cells === null) {
+                continue;
+            }
+            $handle = fopen('php://memory', 'w+');
+            fputcsv($handle, $cells, ',', '"', '');
+            rewind($handle);
+            $lines[$i] = stream_get_contents($handle);
+            fclose($handle);
+            $changed++;
+        }
+        file_put_contents($dir . '/data/' . $table . '.csv', implode('', $lines));
+        $tables = file($dir . '/manifest-tables.csv');
+        foreach ($tables as $i => $line) {
+            if (str_starts_with($line, $table . ',')) {
+                $cells = str_getcsv($line, ',', '"', '');
+                $cells[5] = md5_file($dir . '/data/' . $table . '.csv');
+                $tables[$i] = implode(',', $cells) . "\n";
+            }
+        }
+        file_put_contents($dir . '/manifest-tables.csv', implode('', $tables));
+
+        return $changed;
+    }
+
+    /**
+     * The attempts the dashboard counts in an unpacked package.
+     *
+     * @param string $dir The unpacked package.
+     * @return array<string, bool>
+     */
+    protected function counted(string $dir): array {
+        $counted = [];
+        foreach (array_slice(file($dir . '/data/analysis_population.csv'), 1) as $line) {
+            $cells = str_getcsv($line, ',', '"', '');
+            if ($cells[2] === '1') {
+                $counted[$cells[0]] = true;
+            }
+        }
+        $this->assertNotEmpty($counted);
+
+        return $counted;
+    }
+
+    /**
+     * The R re-analysis (#157): run on the packages of 2PL and GPCM experiments — three strategies, two replications,
+     * two pool variants, sittings of different lengths, valid, invalid and without a final value, with modes and their
+     * baselines, without a baseline, with one subscale only, and with 625-question sittings — it recomputes every
+     * figure the dashboard shows from the raw tables (theta, item parameters, answers, steps) and finds no difference,
+     * under every validity filter (valid, all, invalid, unknown), and leaves nothing "not reproduced". A bias in an
+     * estimate, a changed step and a broken join (scale map) each make it fail; so does a table the manifest does not
+     * name.
      *
      * Needs Rscript (CATQUIZLAB_RSCRIPT or on the path). Skipped without it, unless CATQUIZLAB_REQUIRE_R is set, as in
      * CI, where a missing R fails the test.
@@ -501,121 +627,168 @@ final class research_package_test extends \advanced_testcase {
         }
         $this->resetAfterTest();
         $this->setAdminUser();
-        $run = static function (string $dir) use ($rscript): array {
-            $output = [];
-            exec(escapeshellarg($rscript) . ' ' . escapeshellarg($dir . '/reanalysis/run_all.R') . ' ' . escapeshellarg($dir)
-                . ' --out=' . escapeshellarg($dir . '/out') . ' 2>&1', $output, $status);
-            $comparison = [];
-            if (is_readable($dir . '/out/comparison.csv')) {
-                $handle = fopen($dir . '/out/comparison.csv', 'r');
-                $header = fgetcsv($handle, null, ',', '"', '');
-                while (($line = fgetcsv($handle, null, ',', '"', '')) !== false) {
-                    $comparison[] = array_combine($header, $line);
-                }
-                fclose($handle);
-            }
-            return [$status, implode("\n", $output), $comparison];
-        };
-        // With strategies that have a role in mode-specific detection: a deficit and a strength mode, the relevant
-        // mode, both baselines.
-        $designs = [['2pl', ['stratum' => 'subscalevariation', 'severity' => 'medium'], ['lowestsub', 'allsubs', 'classic']],
-            ['gpcm', ['stratum' => 'chaotic', 'severity' => 'strong'], ['highestsub', 'relsubs', 'allsubs']]];
-        foreach ($designs as [$model, $persons, $strategies]) {
-            $e = $this->experiment(10, $model, $persons, $strategies);
-            $zip = make_request_directory() . '/package.zip';
-            research_package::write_file(['experimentid' => $e['experimentid']], $zip);
-            $dir = make_request_directory();
-            $archive = new \ZipArchive();
-            $this->assertTrue($archive->open($zip) === true);
-            $archive->extractTo($dir);
-            $archive->close();
-
-            [$status, $output, $comparison] = $run($dir);
-            $this->assertSame(0, $status, $model . ":\n" . $output);
-            $bystatus = array_count_values(array_column($comparison, 'status'));
-            $this->assertArrayNotHasKey('FAIL', $bystatus, $model . ":\n" . $output);
-            $passed = [];
-            foreach ($comparison as $row) {
-                if ($row['status'] === 'PASS') {
-                    $passed[$row['tab']] = ($passed[$row['tab']] ?? 0) + 1;
-                }
-                if ($row['status'] === 'NOT_REPRODUCED') {
-                    // Only the figure the coverage matrix names as not reproduced.
-                    $this->assertSame(['detection', 'scaleswithitems'], [$row['tab'], $row['metric']], json_encode($row));
-                }
-            }
-            // Compared on values, not on two empty cells: every family has figures with a value on both sides.
-            $families = [['overview', 'error', 'mean'], ['overview', 'rmse', 'value'], ['global', 'exposure', 'gini'],
-                ['subscales', 'local', 'rmse'], ['robustness', 'rmse', 'delta'], ['robustness', 'localrmse', 'value'],
-                ['robustness', 'spearman', 'value'], ['robustness', 'top3', 'value'], ['robustness', 'ndcg3', 'value'],
-                ['testflow', 'verdict', 'n'], ['detection', 'rmse', 'value'], ['detection', 'recall', 'value'],
-                ['detection', 'spearman', 'value'], ['detection', 'meandifference', 'value'], ['detection', 'pairs', 'value']];
-            foreach ($families as [$tab, $metric, $stat]) {
-                $this->assertNotEmpty(
-                    array_filter($comparison, static fn(array $r): bool => $r['tab'] === $tab
-                    && $r['metric'] === $metric && $r['stat'] === $stat && $r['status'] === 'PASS' && $r['expected'] !== ''),
-                    $model . ': no compared value for ' . $tab . ' ' . $metric . ' ' . $stat
-                );
-            }
-            foreach (['package', 'overview', 'global', 'subscales', 'robustness', 'testflow', 'detection'] as $tab) {
-                $this->assertGreaterThan(0, $passed[$tab] ?? 0, $model . ': nothing compared on ' . $tab . "\n" . $output);
-            }
-            $this->assertFileExists($dir . '/out/plotdata/global_recovery.csv');
-            $this->assertFileExists($dir . '/out/coverage.csv');
-
-            // A deliberate error in the data, with the manifest made to match: the figures must disagree. The estimate
-            // of a sitting the dashboard counts moves by half a logit.
-            $counted = [];
-            foreach (array_slice(file($dir . '/data/analysis_population.csv'), 1) as $line) {
-                $cells = str_getcsv($line, ',', '"', '');
-                if ($cells[2] === '1') {
-                    $counted[$cells[0]] = true;
-                }
-            }
-            $this->assertNotEmpty($counted);
-            $attempts = file($dir . '/data/attempts.csv');
-            $header = str_getcsv($attempts[0], ',', '"', '');
-            $column = array_search('esttheta', $header, true);
-            foreach ($attempts as $i => $line) {
-                $cells = str_getcsv($line, ',', '"', '');
-                if ($i > 0 && isset($counted[$cells[0]]) && is_numeric($cells[$column])) {
-                    $cells[$column] = (string) ((float) $cells[$column] + 0.5);
-                    $handle = fopen('php://memory', 'w+');
-                    fputcsv($handle, $cells, ',', '"', '');
-                    rewind($handle);
-                    $attempts[$i] = stream_get_contents($handle);
-                    fclose($handle);
-                    break;
-                }
-            }
-            file_put_contents($dir . '/data/attempts.csv', implode('', $attempts));
-            $tables = file($dir . '/manifest-tables.csv');
-            foreach ($tables as $i => $line) {
-                if (str_starts_with($line, 'attempts,')) {
-                    $cells = str_getcsv($line, ',', '"', '');
-                    $cells[5] = md5_file($dir . '/data/attempts.csv');
-                    $tables[$i] = implode(',', $cells) . "\n";
-                }
-            }
-            file_put_contents($dir . '/manifest-tables.csv', implode('', $tables));
-            [$status, $output, $comparison] = $run($dir);
-            $this->assertSame(1, $status, $model . ': a changed estimate must fail' . "\n" . $output);
-            $failed = array_filter($comparison, static fn(array $r): bool => $r['status'] === 'FAIL');
-            $this->assertNotEmpty(array_filter($failed, static fn(array $r): bool => $r['tab'] === 'overview'
-                && $r['metric'] === 'error'), 'the bias moved');
-            $this->assertEmpty(
-                array_filter($failed, static fn(array $r): bool => $r['tab'] === 'package'),
-                'the package itself is consistent'
+        // Label => model, persons, strategies, scales, questions per sitting, variants, filters, falsify.
+        $designs = [
+            'modes 2pl' => ['2pl', ['stratum' => 'subscalevariation', 'severity' => 'medium'],
+                ['lowestsub', 'allsubs', 'classic'], [2, 2, 10], null, ['ideal', 'shifted'],
+                ['valid', 'all', 'invalid', 'unknown'], true],
+            'modes gpcm' => ['gpcm', ['stratum' => 'chaotic', 'severity' => 'strong'],
+                ['highestsub', 'relsubs', 'allsubs'], [2, 2, 10], null, ['ideal', 'shifted'], ['valid', 'all'], true],
+            'no baseline' => ['2pl', ['stratum' => 'subscalevariation', 'severity' => 'medium'],
+                ['lowestsub', 'highestsub', 'classic'], [2, 2, 10], null, ['ideal', 'shifted'], ['valid'], false],
+            'one subscale' => ['2pl', [], ['lowestsub', 'allsubs', 'classic'], [1, 1, 20], null, ['ideal'],
+                ['valid', 'all'], false],
+            '625 questions' => ['gpcm', [], ['allsubs'], [5, 5, 25], 625, ['ideal'], ['valid'], false],
+        ];
+        foreach ($designs as $label => [$model, $persons, $strategies, $scales, $length, $variants, $filters, $falsify]) {
+            $e = $this->experiment(
+                $length === null ? 10 : 3,
+                $model,
+                $persons,
+                $strategies,
+                $scales,
+                $length,
+                $variants,
+                in_array('unknown', $filters, true)
             );
+            foreach ($filters as $validity) {
+                $what = $label . ', ' . $validity;
+                $dir = $this->unpacked(['experimentid' => $e['experimentid'], 'validity' => $validity]);
+                [$status, $output, $comparison] = $this->reanalyse($rscript, $dir);
+                $this->assertSame(0, $status, $what . ":\n" . $output);
+                $this->assertNotEmpty($comparison, $what);
+                $passed = [];
+                foreach ($comparison as $row) {
+                    $this->assertSame('PASS', $row['status'], $what . ': ' . json_encode($row));
+                    if ($row['expected'] !== '') {
+                        $passed[$row['tab'] . '/' . $row['section'] . '/' . $row['metric']] = true;
+                    }
+                }
+                if ($length === 625) {
+                    // Every sitting played the whole pool: 625 steps each, in the flows.
+                    $this->assertNotEmpty(array_filter($comparison, static fn(array $r): bool => $r['section'] === 'flow'
+                        && $r['metric'] === 'steps' && $r['expected'] === '625'), $what);
+                }
+                if ($validity !== 'valid') {
+                    $this->assertArrayHasKey('subscales/coverage/included', $passed, $what);
+                    continue;
+                }
+                // Compared on values, not on two empty cells: every family has figures with a value on both sides.
+                $families = ['overview/*/error', 'overview/*/rmse', 'global/*/exposure', 'subscales/summary/local',
+                    'subscales/itemclass/local', 'subscales/coverage/measured', 'subscales/coverage/chain',
+                    'subscales/spread/spreadall', 'subscales/spread/spreadvalid', 'testflow/*/verdict', 'testflow/flow/steps',
+                    'testflow/flow/ability'];
+                if (count($variants) > 1) {
+                    array_push(
+                        $families,
+                        'robustness/*/rmse',
+                        'robustness/*/localrmse',
+                        'robustness/*/spearman',
+                        'robustness/*/top3',
+                        'robustness/*/ndcg3'
+                    );
+                }
+                if (
+                    array_intersect(['lowestsub', 'highestsub'], $strategies) && array_intersect(
+                        ['allsubs', 'relsubs'],
+                        $strategies
+                    )
+                ) {
+                    array_push($families, 'detection/*/rmse', 'detection/*/scaleswithitems');
+                    if ($scales[0] * $scales[1] > 1) {
+                        // A ranking needs two subscales: with one, recall and rank correlation are empty on both sides.
+                        array_push($families, 'detection/*/recall', 'detection/*/spearman');
+                    }
+                }
+                foreach ($families as $family) {
+                    [$tab, $section, $metric] = explode('/', $family);
+                    $this->assertNotEmpty(
+                        array_filter(array_keys($passed), static fn(string $k): bool =>
+                        (bool) preg_match('#^' . preg_quote($tab, '#') . '/' . ($section === '*' ? '[^/]*'
+                        : preg_quote($section, '#')) . '/' . preg_quote($metric, '#') . '$#', $k)),
+                        $what . ': no compared value for ' . $family . "\n" . implode("\n", array_keys($passed))
+                    );
+                }
+                foreach (['global_recovery', 'subscales_items', 'testflow_flows'] as $plot) {
+                    $this->assertFileExists($dir . '/out/plotdata/' . $plot . '.csv');
+                }
+                // The coverage matrix leaves nothing "not reproduced" (#157): every part compared, plot data or data.
+                $this->assertDoesNotMatchRegularExpression('/not reproduced/', file_get_contents($dir . '/out/coverage.csv'));
+                $this->assertFileExists($dir . '/out/coverage.csv');
+                if (!$falsify) {
+                    continue;
+                }
 
-            // A table that is not the one the manifest names: the package check fails.
-            $steps = file($dir . '/data/steps.csv');
-            array_pop($steps);
-            file_put_contents($dir . '/data/steps.csv', implode('', $steps));
-            [$status, , $comparison] = $run($dir);
-            $this->assertSame(1, $status);
-            $this->assertNotEmpty(array_filter($comparison, static fn(array $r): bool => $r['tab'] === 'package'
-                && $r['group'] === 'steps' && $r['status'] === 'FAIL'));
+                // A bias: the estimate of a sitting the dashboard counts moves by half a logit.
+                $counted = $this->counted($dir);
+                $clean = make_request_directory();
+                $this->assertTrue(check_dir_exists($clean));
+                exec('cp -a ' . escapeshellarg($dir . '/.') . ' ' . escapeshellarg($clean));
+                $this->assertSame(1, $this->falsify($dir, 'attempts', static function (array $h, array $c) use ($counted): ?array {
+                    $column = array_search('esttheta', $h, true);
+                    if (!isset($counted[$c[0]]) || !is_numeric($c[$column])) {
+                        return null;
+                    }
+                    $c[$column] = (string) ((float) $c[$column] + 0.5);
+                    return $c;
+                }));
+                [$status, $output, $comparison] = $this->reanalyse($rscript, $dir);
+                $this->assertSame(1, $status, $what . ': a changed estimate must fail' . "\n" . $output);
+                $failed = array_filter($comparison, static fn(array $r): bool => $r['status'] === 'FAIL');
+                $this->assertNotEmpty(array_filter($failed, static fn(array $r): bool => $r['tab'] === 'overview'
+                    && $r['metric'] === 'error'), $what . ': the bias moved');
+                $this->assertEmpty(
+                    array_filter($failed, static fn(array $r): bool => $r['tab'] === 'package'),
+                    $what . ': the package itself is consistent'
+                );
+
+                // A step: the estimate after one step of a counted sitting moves; the flows disagree.
+                $dir = make_request_directory();
+                exec('cp -a ' . escapeshellarg($clean . '/.') . ' ' . escapeshellarg($dir));
+                $this->assertSame(1, $this->falsify($dir, 'steps', static function (array $h, array $c) use ($counted): ?array {
+                    $row = array_combine($h, $c);
+                    if (!isset($counted[$row['attemptid']]) || !is_numeric($row['esttheta'])) {
+                        return null;
+                    }
+                    $c[array_search('esttheta', $h, true)] = (string) ((float) $row['esttheta'] + 0.5);
+                    return $c;
+                }));
+                [$status, $output, $comparison] = $this->reanalyse($rscript, $dir);
+                $this->assertSame(1, $status, $what . ': a changed step must fail' . "\n" . $output);
+                $this->assertNotEmpty(array_filter($comparison, static fn(array $r): bool => $r['status'] === 'FAIL'
+                    && $r['section'] === 'flow'), $what . ': the flow moved');
+
+                // A join: the scale map of the first run points at engine scales no item is assigned to.
+                $dir = make_request_directory();
+                exec('cp -a ' . escapeshellarg($clean . '/.') . ' ' . escapeshellarg($dir));
+                $first = null;
+                $broken = static function (array $h, array $c) use (&$first): ?array {
+                    $row = array_combine($h, $c);
+                    $first = $first ?? $row['runid'];
+                    if ($row['runid'] !== $first || $row['level'] !== 'subscale') {
+                        return null;
+                    }
+                    $c[array_search('catscaleid', $h, true)] = (string) ((int) $row['catscaleid'] + 7777);
+                    return $c;
+                };
+                $this->assertGreaterThan(0, $this->falsify($dir, 'scale_maps', $broken, PHP_INT_MAX));
+                [$status, $output, $comparison] = $this->reanalyse($rscript, $dir);
+                $this->assertSame(1, $status, $what . ': a broken join must fail' . "\n" . $output);
+                $this->assertNotEmpty(
+                    array_filter($comparison, static fn(array $r): bool => $r['status'] === 'FAIL'
+                    && in_array($r['metric'], ['scaleswithitems', 'measured', 'fromvalid', 'unestimated'], true)),
+                    $what . ': the subscales given an item moved'
+                );
+
+                // A table that is not the one the manifest names: the package check fails.
+                $steps = file($dir . '/data/steps.csv');
+                array_pop($steps);
+                file_put_contents($dir . '/data/steps.csv', implode('', $steps));
+                [$status, , $comparison] = $this->reanalyse($rscript, $dir);
+                $this->assertSame(1, $status);
+                $this->assertNotEmpty(array_filter($comparison, static fn(array $r): bool => $r['tab'] === 'package'
+                    && $r['group'] === 'steps' && $r['status'] === 'FAIL'));
+            }
         }
     }
 }

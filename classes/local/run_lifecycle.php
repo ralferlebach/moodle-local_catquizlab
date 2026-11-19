@@ -718,6 +718,8 @@ class run_lifecycle {
             'local_catquizlab_item'     => 'items',
             'local_catquizlab_scalemap' => 'scales',
             'local_catquizlab_result'   => 'results',
+            'local_catquizlab_twinclaim' => 'twinclaims',
+            'local_catquizlab_attemptlog' => 'history',
         ];
 
         foreach ($tables as $table => $label) {
@@ -894,6 +896,11 @@ class run_lifecycle {
             'local_catquizlab_item'      => 'items',
             'local_catquizlab_scalemap'  => 'scales',
             'local_catquizlab_result'    => 'results',
+            // The twins' claims point at the persons removed above: kept, a provisioning after the reset found each
+            // twin "provisioned before" and stored no person for it (found by the acceptance inventory, 18.11.2026).
+            'local_catquizlab_twinclaim' => 'twinclaims',
+            // The history of sittings that no longer exist (the inventory found 8 such rows).
+            'local_catquizlab_attemptlog' => 'history',
             ] as $table => $label
         ) {
             if (!$DB->get_manager()->table_exists($table)) {
