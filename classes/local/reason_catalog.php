@@ -81,6 +81,12 @@ class reason_catalog {
         // The main scale measured precisely enough, before the maximum (local_catquiz 2026100913,
         // mod_adaptivequiz #20): it used to be reported as "no remaining questions".
         11 => 'stoptargetprecision',
+        // A general error of the engine, stored as such since local_catquiz 2026111701 (its #64), no longer as
+        // "undefined"; numbers are never reused.
+        12 => 'error',
+        // Every scale the strategy measures done by its own stop rule, after the minimum (local_catquiz #172,
+        // 2026111701): a regular end, before that reported as a general error or as "no remaining questions".
+        13 => 'stopscalescomplete',
     ];
 
     /**
@@ -95,6 +101,9 @@ class reason_catalog {
         'maximumquestions' => 'reachedmaximumquestions',
         'timelimit' => 'attemptclosedbytimelimit',
         'noeligiblequestions' => 'noremainingquestions',
+        // The host from 2026111701 on, and its CAT model (#172, adapter #12): the two ends it now tells apart itself.
+        'scalescomplete' => 'stopscalescomplete',
+        'noeligiblebeforeminimum' => 'noremainingquestionsbeforeminimum',
     ];
 
     /** @var array<string, string>|null The engine's stop texts in every installed language => its code. */
@@ -351,6 +360,12 @@ class reason_catalog {
         $minapplies = $strategy === '' || strategy_catalog::uses($strategy, 'globalmin');
         if ($minapplies && $minitems > 0 && $played < $minitems) {
             return $code === 'noremainingquestions' ? 'no_eligible_item_before_minimum' : 'ended_before_minimum';
+        }
+
+        // Every measured scale done by its own stop rule (local_catquiz #172): the engine says so only after the
+        // minimum, checked above all the same.
+        if ($code === 'stopscalescomplete') {
+            return 'subscale_rule_satisfied';
         }
 
         $finalse = $facts['finalse'] ?? null;

@@ -25,6 +25,9 @@ which of the possible causes it was. Now each step is one of:
     CAPACITY  every sitting collected and at least one valid, no 5xx, no fatal, none failed, none stalled at the limit,
               none held back, none still in play after it — but some ended after the limit, each still answering when
               it was reached: the machine was full, nothing broke. At 1 or 5 workers this is no load at all: FAIL;
+              or (0.7.73, CI d23b39c0) overload answered as designed: the load guard tripped and asked workers to stop,
+              every failed execution failed for an overload cause (timeouts, connections) and none for another, no 5xx,
+              no fatal, a valid sitting — with the sittings still in play and the ones that failed counted and said;
     FAIL      everything else, with its reasons: no summary or request report, a 5xx, a fatal, no request, a failed,
               stalled, held back or unfinished sitting, no valid sitting, a check of smoke.php that failed.
 
@@ -112,9 +115,54 @@ def verdict(smoke, requests, smoke_exit, workers):
                             f'{max(idle) if idle else "?"} s before it), all {collected} collected '
                             f'{after.get("seconds", "?")} s later, {valid} valid'
                             + (f', {json.dumps(others)}' if others else '') + '; no 5xx, no fatal, none failed']
+    if said in ('overload', 'navigation'):
+        return overload(smoke, said, reasons, valid, others, workers)
     reasons.append(f'smoke.php ended with exit {smoke_exit} and verdict "{said}"'
                    + (': every sitting ended invalid' if said == 'noobservations' else ''))
     return 'FAIL', reasons
+
+
+def overload(smoke, said, reasons, valid, others, workers):
+    """A step whose executions failed on navigation or transport, or still moving after the limit (CI d23b39c0).
+
+    CAPACITY only as the controlled answer to overload (#110 AK 3: "Überlast statt 500er kontrolliert verhindern"):
+    the load guard tripped in the step and asked workers to stop; every failed execution failed for a cause that says
+    the server or the network was overloaded (timeouts, connections), none for any other (a state mismatch, an error
+    page, an engine exception, an unknown cause); no 5xx, no fatal (checked before); a valid sitting among those
+    collected; more than NO_LOAD workers. "navigation" means every check of the collected sittings passed before it was
+    said; "overload" that sittings were still in play after the limit and the wait, so none was compared — said.
+    """
+    executions = smoke.get('executions') or {}
+    guard = smoke.get('loadguard') or {}
+    causes = executions.get('reasons') if isinstance(executions.get('reasons'), dict) else {}
+    other = {code: c.get('n') for code, c in causes.items() if not (isinstance(c, dict) and c.get('capacity'))}
+    if not executions:
+        reasons.append('no record of the failed executions in the summary')
+    if other:
+        reasons.append(f'executions failed for causes other than overload: {json.dumps(other)}')
+    if int(guard.get('trips') or 0) < 1:
+        reasons.append('the load guard did not trip: failures without the overload the guard answers')
+    if valid < 1:
+        reasons.append('no valid sitting')
+    if workers <= NO_LOAD:
+        reasons.append(f'navigation or transport failures at {workers} worker(s): no load at all')
+    if reasons:
+        reasons.append(f'smoke.php verdict "{said}"')
+        return 'FAIL', reasons
+    after = smoke.get('afterlimit') or {}
+    queued = int(smoke.get('queued') or 0)
+    capacity = {code: c.get('n') for code, c in causes.items()}
+    line = (f'overload, controlled: the load guard tripped {guard.get("trips")} time(s) and asked '
+            f'{guard.get("drained", "?")} worker(s) to stop (limit {guard.get("limit", "?")}); '
+            f'{executions.get("failed", 0)} of {executions.get("total", "?")} executions failed, all for overload '
+            f'({json.dumps(capacity)}); {after.get("collected", "?")} of {queued} sittings collected, '
+            f'{after.get("failed", 0)} failed, {after.get("inplay", 0)} still in play; {valid} valid'
+            + (f', {json.dumps(others)}' if others else '') + '; no 5xx, no fatal')
+    if said == 'overload':
+        line += '; the sittings were not compared: the run was still moving'
+    else:
+        line += '; every check of the collected sittings passed'
+    return 'CAPACITY', [line]
 
 
 def safe_load(matrix):
@@ -146,6 +194,12 @@ def self_test():
     """Every rule against a made-up step: what must pass passes, what must fail fails, capacity is capacity."""
     req = {'requests': 100, 'http5xx': 0, 'fatals': 0}
     good = {'experimentid': 1, 'queued': 5, 'verdict': 'pass', 'validity': {'valid': 5}}
+    over = {'experimentid': 1, 'queued': 50, 'verdict': 'overload', 'validity': {'valid': 20},
+            'executions': {'total': 68, 'failed': 11, 'navigation': 10,
+                           'reasons': {'submit_cdp_timeout': {'n': 10, 'capacity': True},
+                                       'worker_timeout': {'n': 1, 'capacity': True}}},
+            'loadguard': {'trips': 1, 'first': 1, 'drained': 25, 'limit': 25},
+            'afterlimit': {'collected': 20, 'failed': 3, 'held': 0, 'inplay': 27, 'seconds': 241}}
     late = {'experimentid': 1, 'queued': 50, 'verdict': 'deadline', 'validity': {'valid': 50}, 'stallseconds': 300,
             'atlimit': {'collected': 42, 'failed': 0, 'notfinished': 8, 'stalled': 0,
                         'sittings': [{'sitting': 1, 'answered': 101, 'idleseconds': 9}]},
@@ -171,6 +225,18 @@ def self_test():
         ('still in play', dict(late, afterlimit=dict(late['afterlimit'], inplay=1, collected=49)), req, 1, 50, 'FAIL'),
         ('late and 5xx', late, dict(req, http5xx=3), 1, 50, 'FAIL'),
         ('late, none valid', dict(late, validity={'invalid': 50}), req, 1, 50, 'FAIL'),
+        ('overload, controlled', over, req, 1, 50, 'CAPACITY'),
+        ('navigation failures, checks passed', dict(over, verdict='navigation'), req, 1, 50, 'CAPACITY'),
+        ('overload, a state mismatch among the causes', dict(over, executions=dict(over['executions'], reasons=dict(
+            over['executions']['reasons'], submit_state_mismatch={'n': 9, 'capacity': False}))), req, 1, 50, 'FAIL'),
+        ('overload, an unknown cause', dict(over, executions=dict(over['executions'], reasons={
+            'unknown_failure': {'n': 1, 'capacity': False}})), req, 1, 50, 'FAIL'),
+        ('overload, the guard never tripped', dict(over, loadguard={'trips': 0}), req, 1, 50, 'FAIL'),
+        ('overload, no record of the executions', {k: v for k, v in over.items() if k != 'executions'}, req, 1, 50,
+         'FAIL'),
+        ('overload and 5xx', over, dict(req, http5xx=2), 1, 50, 'FAIL'),
+        ('overload, none valid', dict(over, validity={'invalid': 20}), req, 1, 50, 'FAIL'),
+        ('overload at 5 workers', over, req, 1, 5, 'FAIL'),
     ]
     bad = 0
     for label, smoke, requests, code, workers, expected in cases:

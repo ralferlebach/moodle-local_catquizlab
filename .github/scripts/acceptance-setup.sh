@@ -9,7 +9,8 @@
 #
 # Environment (with defaults):
 #   MOODLE_BRANCH=MOODLE_405_STABLE   The Moodle line.
-#   PINS=release                      release (.github/engine-pins.env) or candidate (engine-pins-interface.env).
+#   PINS=release                      release (.github/engine-pins.env), candidate (engine-pins-candidate.env: the
+#                                     branch heads, not pinned) or previous (engine-pins-previous.env).
 #   DB=pgsql                          pgsql or mariadb (a service container on 127.0.0.1).
 #   WEB=apache                        apache (Apache + PHP-FPM) or builtin (php -S on :8000).
 #   PHP_MEMORY_LIMIT=512M             The web server's memory_limit: the production reference.
@@ -60,13 +61,16 @@ ROOT="$WS/$DIRROOT"
 
 say "Moodle $MOODLE_BRANCH and the $PINS engine set"
 git clone --depth 1 -b "$MOODLE_BRANCH" https://github.com/moodle/moodle.git "$CORE"
-PINS_FILE="$WS/$PLUGIN_DIR/.github/$([ "$PINS" = candidate ] && echo engine-pins-interface.env || echo engine-pins.env)"
+case "$PINS" in
+    release) PINS_FILE="$WS/$PLUGIN_DIR/.github/engine-pins.env" ;;
+    candidate|previous) PINS_FILE="$WS/$PLUGIN_DIR/.github/engine-pins-$PINS.env" ;;
+    *) echo "PINS must be release, candidate or previous, not '$PINS'" >&2; exit 2 ;;
+esac
 echo "Engine set: $PINS ($(basename "$PINS_FILE"))"
 ENGINE_DIR="$ROOT" ENGINE_LAYOUT=moodle ENGINE_SUBMODULES=1 ENGINE_MANIFEST="$WS/engine-manifest.txt" \
     PINS_FILE="$PINS_FILE" MOODLE_BRANCH="$MOODLE_BRANCH" bash "$WS/$PLUGIN_DIR/.github/scripts/fetch-engine.sh"
 echo "local_catquizlab  ${GITHUB_SHA:-$(git -C "$WS/$PLUGIN_DIR" rev-parse HEAD 2>/dev/null || echo unknown)}" \
     >> "$WS/engine-manifest.txt"
-echo "engine_set  $PINS" >> "$WS/engine-manifest.txt"
 cp -r "$WS/$PLUGIN_DIR" "$ROOT/local/catquizlab"
 rm -rf "$ROOT/local/catquizlab/.git"
 done_

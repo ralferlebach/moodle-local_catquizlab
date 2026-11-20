@@ -21,7 +21,8 @@
  *
  * Per kind of request (first_item, next_item, reload, …), from every trace of the window — not a top-100 of the
  * slowest: n, mean, standard deviation, a 95 % interval of the mean, p50/p95/p99 and the maximum of the request time;
- * the same for the span strategy:select_question and the pool lookup, where the engine wrote spans; the bytes of the
+ * the same for the spans strategy (the selector's time), strategy:select_question and the pool lookup, where the engine
+ * wrote spans — from the traces of lab sittings, the dry run apart; the bytes of the
  * spans stored, per kind and in all. Then the link of every trace to its lab sitting, run, experiment and worker
  * (live_correlation: stored, in play, person, none) — also for sittings being played, whose engine attempt the lab
  * stores only at collection. And the lab's own debug log in the window: rows and bytes by channel.
@@ -56,7 +57,7 @@ $report = [
     'tracing' => (bool) get_config('local_catquiz', 'attempttrace'),
     'debuglevel' => \local_catquizlab\local\debug_trace::level(),
     'traces' => 0, 'kinds' => [], 'spans' => [], 'bytes' => 0, 'links' => [], 'debug' => [], 'bysitting' => [],
-    'selections' => 0, 'unlinked' => [],
+    'selections' => 0, 'unlinked' => [], 'selector' => null, 'selectorspan' => null,
 ];
 $manager = $DB->get_manager();
 
@@ -72,50 +73,74 @@ if ($manager->table_exists('local_catquiz_trace')) {
         'id ASC',
         'id, adaptiveattemptid, userid, kind, requestms, spans'
     );
+    $spansof = [];
     foreach ($rs as $trace) {
         $kind = (string) $trace->kind;
         $report['traces']++;
-        if ($trace->requestms !== null) {
-            $requestms[$kind][] = (float) $trace->requestms;
-        }
         $size = strlen((string) $trace->spans);
         $bytes[$kind] = ($bytes[$kind] ?? 0) + $size;
         $report['bytes'] += $size;
-        foreach ((array) (json_decode((string) $trace->spans, true) ?: []) as $span) {
-            if (isset($span['name'], $span['ms'])) {
-                $spanms[(string) $span['name']][] = (float) $span['ms'];
-            }
-        }
+        $named = [];
         $selections = 0;
         foreach ((array) (json_decode((string) $trace->spans, true) ?: []) as $span) {
+            if (isset($span['name'], $span['ms'])) {
+                $named[(string) $span['name']][] = (float) $span['ms'];
+            }
             if (($span['name'] ?? '') === 'strategy:select_question') {
                 $selections++;
             }
         }
+        $spansof[(int) $trace->id] = $named;
         $traces[(int) $trace->id] = ['userid' => (int) $trace->userid, 'adaptiveattemptid' => (int) $trace->adaptiveattemptid,
             'kind' => $kind, 'requestms' => $trace->requestms, 'selections' => $selections];
     }
     $rs->close();
+    $links = live_correlation::link($traces);
+    // The figures from the traces of lab sittings only (0.7.73): the preparation's dry run asks for its first item in
+    // the command-line process, and the engine counts that request's time from the start of the process — 33 to 64 s
+    // of "first_item" in a window of answers taking 0.1 s. It is listed apart (unlinked), not averaged in.
+    foreach ($links as $id => $link) {
+        if ($link['how'] === live_correlation::NONE) {
+            continue;
+        }
+        $kind = $traces[$id]['kind'];
+        if ($traces[$id]['requestms'] !== null) {
+            $requestms[$kind][] = (float) $traces[$id]['requestms'];
+        }
+        foreach ($spansof[$id] as $name => $values) {
+            $spanms[$name] = array_merge($spanms[$name] ?? [], $values);
+        }
+    }
     foreach ($requestms as $kind => $values) {
         $report['kinds'][$kind] = trace_report_stats($values) + ['bytes' => $bytes[$kind] ?? 0];
     }
-    foreach (['strategy:select_question', 'pool:cache_lookup'] as $name) {
-        if (isset($spanms[$name])) {
+    // The selector's time is the strategy as a whole (span "strategy", the engine's return_next_testitem): newer engines
+    // trace the filters and the Fisher information as spans of their own beside strategy:select_question, which is then
+    // only the final pick (0.015 ms against 54 ms for the strategy, local_catquiz 2026111707); the release engine until
+    // 0.7.72 ran them inside it. strategy:select_question still counts the selections.
+    foreach (['strategy', 'strategy:select_question', 'pool:cache_lookup'] as $name) {
+        if (!empty($spanms[$name])) {
             $report['spans'][$name] = trace_report_stats($spanms[$name]);
         }
     }
-    $links = live_correlation::link($traces);
+    $report['selector'] = $report['spans']['strategy'] ?? $report['spans']['strategy:select_question'] ?? null;
+    $report['selectorspan'] = isset($report['spans']['strategy']) ? 'strategy'
+        : (isset($report['spans']['strategy:select_question']) ? 'strategy:select_question' : null);
     foreach ($links as $id => $link) {
         $report['links'][$link['how']] = ($report['links'][$link['how']] ?? 0) + 1;
         // Per lab sitting: its traces by kind and the selections they hold — what a check maps onto the sitting's
         // answer requests (#164 re-audit 19.11.2026: request and selector spans mapped completely, not sampled).
         $sitting = (string) (int) $link['labattemptid'];
         $report['bysitting'][$sitting] = $report['bysitting'][$sitting] ?? ['engineattempt' => 0, 'kinds' => [],
-            'selections' => 0];
+            'selections' => 0, 'sequence' => []];
         $report['bysitting'][$sitting]['engineattempt'] = (int) $traces[$id]['adaptiveattemptid'];
         $kind = $traces[$id]['kind'];
         $report['bysitting'][$sitting]['kinds'][$kind] = ($report['bysitting'][$sitting]['kinds'][$kind] ?? 0) + 1;
         $report['bysitting'][$sitting]['selections'] += $traces[$id]['selections'];
+        // Its traces in order, each with the selections it holds: which request chose an item and which did not is
+        // what tells the end of a sitting apart from a lost selection (the release engine names its last answer
+        // request next_item, a newer one complete).
+        $report['bysitting'][$sitting]['sequence'][$id] = $kind . ':' . $traces[$id]['selections'];
         if ($link['how'] === live_correlation::NONE) {
             // A trace of no lab sitting: which kind, and whether its engine attempt still exists — the preparation's
             // dry run (engine_dryrun) asks for one first item on an attempt it deletes again.
@@ -166,7 +191,10 @@ if (!empty($options['json'])) {
         $json[$key] = (object) ($json[$key] ?? []);
     }
     $json['bysitting'] = (object) array_map(
-        static fn(array $row): array => ['kinds' => (object) $row['kinds']] + $row,
+        static function (array $row): array {
+            ksort($row['sequence']);
+            return ['kinds' => (object) $row['kinds'], 'sequence' => array_values($row['sequence'])] + $row;
+        },
         $report['bysitting']
     );
     echo json_encode($json, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES), "\n";

@@ -173,6 +173,19 @@ test('reconciling with the server: stored, not stored, finished, missing, mismat
     assert.strictEqual(nav.reconcile(4, null), 'missing');
 });
 
+test('back in after "not stored": the answer that reached the server late is counted once (CI d23b39c0)', () => {
+    const s = (attempted) => ({found: true, state: 'inprogress', questionsattempted: attempted, slots: attempted + 1});
+    // Judged not stored with 4 counted; back in, the server has 5: the submission given up on was stored after the check.
+    assert.strictEqual(nav.reconcileLate(4, s(5)), 'storedlate');
+    assert.strictEqual(nav.reconcileLate(4, s(4)), 'notstored');
+    // Two more, or fewer than the worker counts: a real mismatch.
+    assert.strictEqual(nav.reconcileLate(4, s(6)), 'mismatch');
+    assert.strictEqual(nav.reconcileLate(4, s(3)), 'mismatch');
+    // The server could not be asked: nothing is assumed, the next submission decides.
+    assert.strictEqual(nav.reconcileLate(4, {found: false, reason: 'unavailable'}), 'unknown');
+    assert.strictEqual(nav.reconcileLate(4, null), 'unknown');
+});
+
 test('in a browser: every answer the server gives is told apart (#134)', async(t) => {
     const browser = await browserOrNull();
     if (!browser) {

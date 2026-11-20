@@ -11,8 +11,8 @@
 #     POOLS="100 500 1000" STEPS="10 50 100 150" STRATEGY=fastest MOODLE_ROOT=/var/www/moodle \
 #         local/catquizlab/cli/engine_bench.sh
 #
-# Run once per engine set (release, candidate = CatQuiz #146) on the same kind of machine: the two bench.jsonl files
-# are the before and after. Writes everything to $OUT; exit 1 when a sitting was not played to the end, a request ended
+# Run once per engine set (previous, release: .github/engine-pins-previous.env and engine-pins.env) on the same kind of
+# machine: the two bench.jsonl files are the before and after. Writes everything to $OUT; exit 1 when a sitting was not played to the end, a request ended
 # in 5xx or PHP died (GATE=0 reports without failing).
 set -u
 MOODLE="${MOODLE_ROOT:-/home/claude/moodle}"

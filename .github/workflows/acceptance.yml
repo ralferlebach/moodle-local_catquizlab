@@ -19,9 +19,10 @@
 #                     cold and warm cache, ABCD then DCBA; every request
 #                     compared; a trace table of 200 000 rows and retention.
 #   engine-*    #136/#137  two attempts in one browser session, other users,
-#                     cache purge and TTL; attempts left open across the engine
-#                     upgrade release → candidate; the cost of a sitting by
-#                     length and pool size, release against candidate.
+#                     cache purge and TTL (release pins and the branch heads);
+#                     attempts left open across the engine upgrade previous →
+#                     release; the cost of a sitting by length and pool size,
+#                     previous against release (.github/engine-pins*.env).
 #   manifest          every job's components and commits in one file.
 #
 # Every job uploads what it measured; nothing here is judged by eye. The
@@ -418,7 +419,7 @@ jobs:
           retention-days: 30
 
   engine-migration:
-    name: "Issue 136 AK 7 — attempts open across the engine upgrade release → candidate (${{ matrix.stack }})"
+    name: "Issue 136 AK 7 — attempts open across the engine upgrade previous → release (${{ matrix.stack }})"
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     strategy:
@@ -441,8 +442,8 @@ jobs:
       - uses: actions/setup-node@v5
         with:
           node-version: '22'
-      - name: Moodle (${{ matrix.moodle }}) with the RELEASE engine set, Apache + PHP-FPM 512M
-        env: { MOODLE_BRANCH: '${{ matrix.moodle }}', PINS: release, DB: pgsql, WEB: apache }
+      - name: Moodle (${{ matrix.moodle }}) with the PREVIOUS engine set, Apache + PHP-FPM 512M
+        env: { MOODLE_BRANCH: '${{ matrix.moodle }}', PINS: previous, DB: pgsql, WEB: apache }
         run: bash plugin/.github/scripts/acceptance-setup.sh
       - name: Two adaptive quizzes, two learners
         id: seed
@@ -454,7 +455,7 @@ jobs:
           npm ci --no-audit --no-fund
           npx playwright install --with-deps chromium
 
-      - name: Before — two attempts left open in one session (release engine)
+      - name: Before — two attempts left open in one session (previous engine)
         working-directory: ${{ env.MOODLE_ROOT }}/local/catquizlab/tests/playwright
         env:
           MOODLE_URL: ${{ env.WEB_URL }}
@@ -464,14 +465,15 @@ jobs:
           CORE_ROOT: ${{ env.CORE_ROOT }}
         run: npx playwright test engine_migration.spec.js --reporter=list
 
-      # Only the engine's code changes: the candidate set (CatQuiz #146) replaces the release set in place, Moodle's
-      # upgrade runs, the web server is restarted; the database, moodledata and the browser session stay.
-      - name: The engine upgraded in place to the CANDIDATE set (CatQuiz #146)
+      # Only the engine's code changes: the release set (.github/engine-pins.env) replaces the previous one in place
+      # (engine-pins-previous.env, the release set until 0.7.72), Moodle's upgrade runs, the web server is restarted;
+      # the database, moodledata and the browser session stay.
+      - name: The engine upgraded in place to the RELEASE set
         run: |
           before=$(cd "$CORE_ROOT" && php admin/cli/cfg.php --component=local_catquiz --name=version)
           for d in local/catquiz mod/adaptivequiz local/wunderbyte_table; do rm -rf "${MOODLE_ROOT:?}/$d"; done
           ENGINE_DIR="$MOODLE_ROOT" ENGINE_LAYOUT=moodle ENGINE_SUBMODULES=1 ENGINE_MANIFEST="$GITHUB_WORKSPACE/engine-manifest-after.txt" \
-              PINS_FILE="$GITHUB_WORKSPACE/plugin/.github/engine-pins-interface.env" MOODLE_BRANCH=${{ matrix.moodle }} \
+              PINS_FILE="$GITHUB_WORKSPACE/plugin/.github/engine-pins.env" MOODLE_BRANCH=${{ matrix.moodle }} \
               bash plugin/.github/scripts/fetch-engine.sh
           (cd "$CORE_ROOT" && php admin/cli/upgrade.php --non-interactive)
           after=$(cd "$CORE_ROOT" && php admin/cli/cfg.php --component=local_catquiz --name=version)
@@ -479,7 +481,7 @@ jobs:
           test "$after" -gt "$before" || { echo "::error::The engine was not upgraded ($before -> $after)"; exit 1; }
           sudo service php8.3-fpm restart
 
-      - name: After — both attempts continued from where they were (candidate engine)
+      - name: After — both attempts continued from where they were (release engine)
         working-directory: ${{ env.MOODLE_ROOT }}/local/catquizlab/tests/playwright
         env:
           MOODLE_URL: ${{ env.WEB_URL }}
@@ -522,7 +524,8 @@ jobs:
       fail-fast: false
       matrix:
         stack: [legacy, moodle53]
-        pins: [release, candidate]
+        # The cost of the release set against the one before it (#136 DoD 3).
+        pins: [previous, release]
         include:
           - { stack: legacy, moodle: MOODLE_405_STABLE }
           - { stack: moodle53, moodle: MOODLE_503_STABLE }
@@ -629,6 +632,24 @@ jobs:
           sha = os.environ['GITHUB_SHA']
           problems = [j['job'] + ': plugin commit ' + str(j['catquizlab']['commit']) for j in jobs
                       if j['catquizlab']['commit'] != sha]
+          # Release jobs test exactly the release pins of their Moodle line (re-audit 16.10.2026, AK 5): the
+          # commits each job's engine manifest names against .github/engine-pins.env.
+          pins = {}
+          for line in open('plugin/.github/engine-pins.env'):
+              if '=' in line and not line.lstrip().startswith('#'):
+                  key, value = line.strip().split('=', 1)
+                  pins[key] = value
+          for j in jobs:
+              e = j.get('engine') or {}
+              if e.get('set') != 'release' or not e.get('local_catquiz'):
+                  continue
+              line = 'LEGACY' if j['moodle']['branch'] == 'MOODLE_405_STABLE' else 'M5'
+              for part, key in (('local_catquiz', 'CATQUIZ'), ('mod_adaptivequiz', 'ADAPTIVEQUIZ'),
+                                ('adaptivequizcatmodel_catquiz', 'CATMODEL')):
+                  got = (e.get(part) or '').split()
+                  want = pins.get(f'{line}_{key}_SHA')
+                  if len(got) < 2 or got[1] != want:
+                      problems.append(f"{j['job']}: {part} {got[1] if len(got) > 1 else None}, release pin {want}")
           sets = {}
           for j in jobs:
               sets.setdefault(j['engine']['set'] or '?', set()).add((j['moodle']['branch'], j['engine']['local_catquiz'],

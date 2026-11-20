@@ -89,8 +89,24 @@ function purgeCaches() {
  * @returns {{changed: number, deactivated: number}} Parameter rows changed, the question made inactive.
  */
 function changeItems() {
-    const out = execFileSync('php', [SEED, '--change-items', '--session=' + process.env.ENGINE_SESSION], {encoding: 'utf8'});
-    return JSON.parse(out.trim().split('\n').pop());
+    return seedJson(['--change-items', '--session=' + process.env.ENGINE_SESSION]);
+}
+
+/**
+ * Run the seed script and read the JSON line it ends with — on a failure too: what it found is the finding, and the
+ * job log showed nothing but "Command failed" (CI d23b39c0, release engine: exit 1, no reason).
+ *
+ * @param {string[]} args The script's arguments.
+ * @returns {object} Its last line, parsed.
+ */
+function seedJson(args) {
+    try {
+        const out = execFileSync('php', [SEED, ...args], {encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe']});
+        return JSON.parse(out.trim().split('\n').pop());
+    } catch (error) {
+        const said = [error.stdout, error.stderr].filter(Boolean).join('\n').trim();
+        throw new Error(`engine_session_seed.php ${args[0]} ended with exit ${error.status}: ${said || error.message}`);
+    }
 }
 
 /**
@@ -246,8 +262,7 @@ function keep(dir, name, data) {
  * @returns {{items: number, behind: number, answersbehind: number, maxbehind: number, ahead: number}}
  */
 function usageProbe() {
-    const out = execFileSync('php', [SEED, '--usage-probe', '--session=' + process.env.ENGINE_SESSION], {encoding: 'utf8'});
-    return JSON.parse(out.trim().split('\n').pop());
+    return seedJson(['--usage-probe', '--session=' + process.env.ENGINE_SESSION]);
 }
 
 module.exports = {session, report, attempt, purgeCaches, changeItems, usageProbe, login, openQuestion, answer, unharmed, keep};

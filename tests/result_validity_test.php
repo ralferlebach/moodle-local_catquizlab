@@ -220,6 +220,23 @@ final class result_validity_test extends \advanced_testcase {
         // A host code this version does not know decides nothing.
         $v = $this->evaluate('fastest', 14, ['facts' => ['hoststopcode' => 'manual', 'finalse' => 0.3]]);
         $this->assertSame('target_se_reached', $v['endcode']);
+
+        // Status 13 and the host's "scalescomplete" (local_catquiz #172): every measured scale done by its own stop
+        // rule after the minimum — a planned end, with an SE above the global target.
+        foreach ([['enginestatus' => 13], ['hoststopcode' => 'scalescomplete']] as $facts) {
+            $v = $this->evaluate('allsubs', 20, ['facts' => $facts + ['finalse' => 0.5, 'dropped' => 0]]);
+            $this->assertSame([true, 'subscale_rule_satisfied'], [$v['valid'], $v['endcode']]);
+        }
+        // Said before the minimum all the same, it is not a regular end.
+        $v = $this->evaluate('allsubs', 6, ['facts' => ['enginestatus' => 13]]);
+        $this->assertSame([false, 'ended_before_minimum'], [$v['valid'], $v['endcode']]);
+        // The host's own code for running dry before the minimum (adapter #12) is that end.
+        $v = $this->evaluate('fastest', 6, ['facts' => ['hoststopcode' => 'noeligiblebeforeminimum']]);
+        $this->assertSame([false, 'no_eligible_item_before_minimum'], [$v['valid'], $v['endcode']]);
+        // Status 12, the engine's general error: never a valid result, whatever the SE.
+        $v = $this->evaluate('fastest', 14, ['facts' => ['enginestatus' => 12, 'finalse' => 0.3]]);
+        $this->assertFalse($v['valid']);
+        $this->assertContains(result_validity::ENGINE_ERROR, $v['reasons']);
     }
 
     /**

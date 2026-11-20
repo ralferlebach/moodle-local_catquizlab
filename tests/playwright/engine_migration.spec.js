@@ -18,9 +18,9 @@
  * purges the session once on the first upgrade — the second open attempt must come through it whole).
  *
  * Two phases, with the engine upgraded between them by the workflow (acceptance.yml, job engine-migration):
- * - MIGRATION_PHASE=open (release engine): learner 1 starts adaptive quiz A and B in one browser session and answers two
+ * - MIGRATION_PHASE=open (previous engine set, .github/engine-pins-previous.env): learner 1 starts adaptive quiz A and B in one browser session and answers two
  *   questions in each; the session (its cookies) and what the server stored are kept.
- * - MIGRATION_PHASE=continue (candidate engine, same database, same moodledata, same session): both attempts are
+ * - MIGRATION_PHASE=continue (release engine set, same database, same moodledata, same session): both attempts are
  *   continued — "Continue", never "Start a new attempt" — and played to the end.
  * Checked after the upgrade: the same attempts and question usages, nothing asked before lost or replaced, every answer
  * from before still stored, no question asked twice, every question from its activity's pool, both finished with the

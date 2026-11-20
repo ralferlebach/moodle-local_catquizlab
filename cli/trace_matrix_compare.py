@@ -18,8 +18,8 @@
 
 Reads what cli/trace_matrix.sh left in OUT: per cell and strategy the server's trace of every request
 (*-requests.csv, request_trace: the time each request took, measured by the lab whether the engine traces or not),
-the engine's traces (*-traces.json: strategy:select_question, bytes), the machine samples (*-samples.jsonl) and the
-smoke test's log (sittings collected and failed).
+the engine's traces (*-traces.json: the selector — the strategy span, else strategy:select_question —, bytes), the
+machine samples (*-samples.jsonl) and the smoke test's log (sittings collected and failed).
 
 Per cell: every request counted (n), the answer requests (attempt.php POST) with mean, p50, p95, p99 and bootstrap
 95 % intervals of mean and median; HTTP 5xx and CDP timeouts; the engine's selector time; traces and bytes written; the
@@ -139,7 +139,10 @@ def cell(out, prefix):
     m = re.findall(r'(\d+) collected, (\d+) failed', log)
     if not answers:
         PROBLEMS.append(f'{prefix}: no answer request')
-    sel = as_map(traces.get('spans'), f'{prefix} spans').get('strategy:select_question') or {}
+    # The selector's time: the strategy span as a whole where the engine wrote one (trace_report.php "selector").
+    spans = as_map(traces.get('spans'), f'{prefix} spans')
+    sel = (traces.get('selector') if isinstance(traces.get('selector'), dict) else None) \
+        or spans.get('strategy') or spans.get('strategy:select_question') or {}
     dbg = as_map(traces.get('debug'), f'{prefix} debug')
     status = {}
     for r in rows:

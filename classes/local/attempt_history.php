@@ -185,7 +185,7 @@ class attempt_history {
         foreach ($reconciliations as $entry) {
             $verdict = (string) ($entry['verdict'] ?? '');
             // Those that ended the execution are its failure, recorded with it.
-            if (!in_array($verdict, ['stored', 'notstored', 'finished'], true)) {
+            if (!in_array($verdict, ['stored', 'notstored', 'storedlate', 'finished'], true)) {
                 continue;
             }
             $class = preg_replace('/[^a-z0-9_]/', '', (string) ($entry['class'] ?? ''));

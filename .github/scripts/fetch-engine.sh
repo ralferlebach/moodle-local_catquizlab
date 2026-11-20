@@ -72,7 +72,8 @@ max_required() {
 # Branch AND commit come from .github/engine-pins.env (re-audit 16.10.2026,
 # AK 5): every job tests the same, recorded state of the engine, and the
 # manifest written at the end says which. ENGINE_FOLLOW_HEADS=1 takes the branch
-# heads instead — to check a new engine state before the pins are moved.
+# heads instead — the candidate set (engine-pins-candidate.env sets it), or to
+# check a new engine state before the pins are moved.
 # ENGINE_BRANCH, when set, overrides all three refs at once, for an experiment
 # (and implies the heads).
 PINS_FILE="${PINS_FILE:-$(dirname "${BASH_SOURCE[0]}")/../engine-pins.env}"
@@ -141,7 +142,20 @@ target_of() {
 
 mkdir -p "${ENGINE_DIR}"
 : > "${ENGINE_MANIFEST}"
-printf '# engine set %s for %s, %s\n' "${SET}" "${MOODLE_BRANCH:-unknown}" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "${ENGINE_MANIFEST}"
+printf '# engine set %s for %s, %s%s\n' "${SET}" "${MOODLE_BRANCH:-unknown}" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    "$([ "${ENGINE_FOLLOW_HEADS:-0}" = "1" ] && echo ', branch heads (not pinned)' || echo ", pinned ($(basename "${PINS_FILE}"))")" \
+    >> "${ENGINE_MANIFEST}"
+# Which set this is, by its pins file — release, candidate, previous — or "heads" for the release file taken at the
+# branch heads (ENGINE_FOLLOW_HEADS=1, ENGINE_BRANCH): the release manifest checks the release jobs against the pins.
+case "$(basename "${PINS_FILE}")" in
+    engine-pins.env) SETNAME=release ;;
+    engine-pins-*.env) SETNAME=$(basename "${PINS_FILE}" .env); SETNAME=${SETNAME#engine-pins-} ;;
+    *) SETNAME=other ;;
+esac
+if [ "${ENGINE_FOLLOW_HEADS:-0}" = "1" ] && [ "${SETNAME}" = release ]; then
+    SETNAME=heads
+fi
+printf 'engine_set  %s\n' "${SETNAME}" >> "${ENGINE_MANIFEST}"
 printf '%-30s %-26s %-40s %s\n' component ref commit version >> "${ENGINE_MANIFEST}"
 
 # The host first: in the Moodle layout the cat model goes inside it.
@@ -174,7 +188,23 @@ for name in local_wunderbyte_table local_catquiz mod_adaptivequiz adaptivequizca
 
     if [ -f "${target}/.gitmodules" ]; then
         if [ "${ENGINE_SUBMODULES}" = "1" ]; then
-            git -C "${target}" submodule update --init --depth 1 --quiet
+            # One by one: a submodule whose recorded commit its remote does not serve is left out, said aloud and
+            # in the manifest — not the whole engine. local_catquiz 2026111706 and later record the hub host at
+            # ec77e605, which moodle-catquizcentralhub_host does not have (20.11.2026: "not our ref"); the hub
+            # subplugins do not drive the engine, the PHPUnit and Behat jobs install without them all along.
+            while read -r path; do
+                [ -n "${path}" ] || continue
+                recorded=$(git -C "${target}" ls-tree HEAD "${path}" | awk '{print $3}')
+                if git -C "${target}" submodule update --init --depth 1 --quiet -- "${path}" 2>/dev/null; then
+                    printf '%-30s %-26s %-40s %s\n' "  ${name}/${path}" "(submodule)" "${recorded}" "-" >> "${ENGINE_MANIFEST}"
+                else
+                    echo "::warning::${name}: submodule ${path} at ${recorded} is not on its remote; left out"
+                    printf '# %s/%s: recorded commit %s not on its remote, left out\n' "${name}" "${path}" "${recorded}" \
+                        >> "${ENGINE_MANIFEST}"
+                    rm -rf "${target:?}/${path:?}"
+                fi
+            done < <(grep -oE '^[[:space:]]*path[[:space:]]*=[[:space:]]*.*$' "${target}/.gitmodules" \
+                | sed -E 's/^[[:space:]]*path[[:space:]]*=[[:space:]]*//')
         else
             # Submodules are left as empty directories by a plain clone. Where a
             # plugin declares subplugin types, Moodle scans those directories and
@@ -200,10 +230,37 @@ for name in local_wunderbyte_table local_catquiz mod_adaptivequiz adaptivequizca
     echo "   ${commit} version ${version}"
     printf '%-30s %-26s %-40s %s\n' "${name}" "${ref}" "${commit}" "${version}" >> "${ENGINE_MANIFEST}"
 done
+# The parts of a set must fit each other: each declares the versions of the others it needs. A pinned set was checked
+# when it was pinned; the heads (candidate) are taken as found, and a part pushed before the one it needs is a set that
+# cannot install — said here with both versions, rather than as Moodle's pluginrequirementsnotmet later.
+declare -A FOUND=()
+while read -r component _ _ version; do
+    case "${component}" in \#*|component|"") continue ;; esac
+    FOUND["${component}"]="${version}"
+done < "${ENGINE_MANIFEST}"
+mismatch=0
+for name in local_catquiz mod_adaptivequiz adaptivequizcatmodel_catquiz; do
+    file="$(target_of "${name}")/version.php"
+    [ -f "${file}" ] || continue
+    while read -r dependency needed; do
+        have="${FOUND[${dependency}]:-}"
+        if [ -n "${have}" ] && [ "${have}" -lt "${needed}" ]; then
+            echo "== ${name} needs ${dependency} ${needed}, the set has ${have}" >&2
+            echo "# INCOHERENT: ${name} needs ${dependency} ${needed}, the set has ${have}" >> "${ENGINE_MANIFEST}"
+            mismatch=1
+        fi
+    done < <(sed -n '/dependencies/,/\]/p' "${file}" | grep -oE "'[a-z_]+'[[:space:]]*=>[[:space:]]*[0-9]{10}" \
+        | sed -E "s/'([a-z_]+)'[[:space:]]*=>[[:space:]]*([0-9]+)/\1 \2/")
+done
+
 echo "== manifest ${ENGINE_MANIFEST}:"
 cat "${ENGINE_MANIFEST}"
 if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
     { echo '### Engine set tested'; echo '```'; cat "${ENGINE_MANIFEST}"; echo '```'; } >> "${GITHUB_STEP_SUMMARY}"
+fi
+if [ "${mismatch}" = "1" ]; then
+    echo "== The engine set does not fit together (see above): not installable." >&2
+    exit 3
 fi
 
 if [ "${ENGINE_LAYOUT}" = "moodle" ]; then

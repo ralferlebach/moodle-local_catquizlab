@@ -378,6 +378,29 @@ async function playAttempt(browser, job) {
             // again when it was not. Never the same answer twice.
             await gotoSettle(page, `${BASE_URL}/mod/adaptivequiz/view.php?id=${job.quizcmid}`);
             state = await startAttempt(page, recorder);
+            // Asked again once back in (CI d23b39c0, 50 workers on four cores: 9 and 1 executions failed on
+            // [reconcile:mismatch]). A submission the browser gave up on can still be running on the server — queued
+            // or holding the session — when the first question is asked: "not stored" then, stored a moment later.
+            // Back in through the activity page means behind it (the session's lock), so the server's count now is
+            // the one to go on: one more than the worker's is that late answer, counted once; anything else is a real
+            // mismatch, and ends the execution as before.
+            if (state === nav.STATE.QUESTION && verdict === 'notstored') {
+                const again = await callWs('local_catquizlab_sitting_state', {attemptid: job.attemptid})
+                    .catch((stateError) => ({found: false, reason: 'unavailable: ' + stateError.message}));
+                const late = nav.reconcileLate(answeredCount, again);
+                if (late === 'storedlate') {
+                    answeredCount++;
+                    reconciliations.push({class: kind, verdict: late, answered: answeredCount - 1, usage: qubaid, slot,
+                        session: sessionlost ? 'lost' : 'kept',
+                        server: {state: again.state || '', questionsattempted: again.questionsattempted || 0,
+                            slots: again.slots || 0, reason: again.reason || ''}});
+                    recorder.event('reconcile', `back in: server ${again.questionsattempted}/${again.slots} → ${late}`);
+                } else if (late === 'mismatch') {
+                    throw new Error(`${nav.describeSubmit(result.submit)} [reconcile:mismatch] back in, server: `
+                        + `${again.state || again.reason}, ${again.questionsattempted || 0} answered, `
+                        + `${again.slots || 0} presented; the worker had ${answeredCount}.`);
+                }
+            }
         }
 
         if (state === nav.STATE.ERROR) {

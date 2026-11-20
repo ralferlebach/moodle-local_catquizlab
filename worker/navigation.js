@@ -386,6 +386,28 @@ function reconcile(answered, server) {
 }
 
 /**
+ * The server's count once the worker is back in after a "not stored" (CI d23b39c0): whether that answer arrived late.
+ *
+ * @param {number} answered Answers the worker counts (the one judged not stored not among them).
+ * @param {object} server sitting_state, read after the re-entry.
+ * @returns {string} 'storedlate' (the server has one more: the answer the worker gave up on, stored after the check),
+ *      'notstored' (as judged), 'unknown' (the server could not be asked: the next submission decides), 'mismatch'.
+ */
+function reconcileLate(answered, server) {
+    if (!server || !server.found) {
+        return 'unknown';
+    }
+    const stored = Number(server.questionsattempted) || 0;
+    if (stored === answered) {
+        return 'notstored';
+    }
+    if (stored === answered + 1) {
+        return 'storedlate';
+    }
+    return 'mismatch';
+}
+
+/**
  * Click and wait for the navigation it causes — atomically.
  *
  * The wait for the navigation is registered before the click, so a navigation
@@ -786,4 +808,5 @@ class Recorder {
 
 module.exports = {STATE, SUBMIT, UNCERTAIN, isContextLost, isUnresponsive, isSecretName, sanitiseUrl, sanitiseRequestUrl,
     sanitiseHtml, stateInPage,
-    waitForState, clickAndSettle, safeClick, acceptDialogs, withContextRetry, classifySubmit, reconcile, describeSubmit, Recorder};
+    waitForState, clickAndSettle, safeClick, acceptDialogs, withContextRetry, classifySubmit, reconcile, reconcileLate,
+    describeSubmit, Recorder};

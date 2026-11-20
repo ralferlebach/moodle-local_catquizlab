@@ -74,7 +74,9 @@ class result_validity {
     public const MAPPING_AMBIGUOUS = 'mapping_ambiguous';
 
     /** @var string[] The engine's own end codes that are errors, not ends. */
-    public const ENGINE_ERRORS = ['errorfetchnextquestion', 'emptyfirstquestionlist', 'errornoitems', 'statusundefined'];
+    public const ENGINE_ERRORS = ['errorfetchnextquestion', 'emptyfirstquestionlist', 'errornoitems', 'statusundefined',
+        // The engine's general error, a status of its own since local_catquiz 2026111701.
+        'error'];
 
     /**
      * Whether a sitting's result may go into the figures — the one place that decides (#112).

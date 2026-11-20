@@ -101,10 +101,10 @@ jobs:
           # scripts stay at the top: moodle/admin/cli/install_database.php, not
           # moodle/public/admin/cli/… — running the installer from dirroot found
           # nothing to run.
-          # Two engine sets per stack (#136): `release`, the baseline of .github/engine-pins.env, and `candidate`,
-          # CatQuiz #146 with its host lines from .github/engine-pins-interface.env — the set the interface E2E
-          # already plays. Every step runs against both; the candidate becomes the release set once its legs are
-          # green (#136 DoD), not before.
+          # Two engine sets per stack (#136): `release`, the pinned set of .github/engine-pins.env, and `candidate`,
+          # the branch heads at the moment of the run (.github/engine-pins-candidate.env, not pinned; the manifest
+          # names what was found). Every step runs against both: the release legs are the gate, the candidate legs
+          # say the same day when a new engine state breaks the lab.
           # Moodle 4.5: local_catquiz 1.2.1, the live line.
           - { stack: legacy, pins: release, moodle: MOODLE_405_STABLE, coreroot: moodle, dirroot: moodle, webroot: moodle }
           - { stack: legacy, pins: candidate, moodle: MOODLE_405_STABLE, coreroot: moodle, dirroot: moodle, webroot: moodle }
@@ -149,15 +149,16 @@ jobs:
       - name: Check out Moodle
         run: git clone --depth 1 -b ${{ matrix.moodle }} https://github.com/moodle/moodle.git moodle
 
-      # The pinned engine set of this Moodle line, with the hub subplugins; the
-      # manifest records the commits tested.
-      - name: Check out the CAT engine and its host activity (pinned set)
+      # The engine set of this Moodle line (release: pinned; candidate: the
+      # branch heads), with the hub subplugins; the manifest records the
+      # commits tested.
+      - name: Check out the CAT engine and its host activity
         env:
           ENGINE_DIR: ${{ github.workspace }}/${{ matrix.dirroot }}
           ENGINE_LAYOUT: moodle
           ENGINE_SUBMODULES: '1'
           ENGINE_MANIFEST: ${{ github.workspace }}/engine-manifest.txt
-          PINS_FILE: ${{ github.workspace }}/plugin/.github/${{ matrix.pins == 'candidate' && 'engine-pins-interface.env' || 'engine-pins.env' }}
+          PINS_FILE: ${{ github.workspace }}/plugin/.github/${{ matrix.pins == 'candidate' && 'engine-pins-candidate.env' || 'engine-pins.env' }}
           ENGINE_FOLLOW_HEADS: ${{ github.event.inputs.engine_heads == 'true' && '1' || '0' }}
           MOODLE_BRANCH: ${{ matrix.moodle }}
         run: |

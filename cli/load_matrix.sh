@@ -147,7 +147,8 @@ row = {'step': name, 'mode': mode, 'workers': int(workers), 'persons': int(perso
        'smoke': smoke, 'verdict_reasons': reasons,
        # The engine's own times in the step, read before the step's experiment was deleted (#110: the selector).
        'engine_traces': traces.get('traces'), 'engine_kinds': traces.get('kinds'),
-       'engine_selector_ms': (traces.get('spans') or {}).get('strategy:select_question')}
+       'engine_selector_ms': traces.get('selector') or (traces.get('spans') or {}).get('strategy:select_question'),
+       'engine_selector_span': traces.get('selectorspan')}
 with open(matrix, 'a') as f:
     f.write(json.dumps(row) + "\n")
 p = r.get('peakmb') or {}

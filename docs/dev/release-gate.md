@@ -18,18 +18,34 @@ SQL-Inventur (Abschnitt 7). Welche Abnahme welches Issue belegt: `abnahme-messun
 | Worker CI (`worker-e2e.yml`) | End-to-end je Stack (4.5 Legacy, 5.2, 5.3): Reihenfolge der Ausführungsreihe (#163), Sittings je Strategie, Trace unter Gleichzeitigkeit (#138), Löschen (#161), Ein-Klick-Start (#151), Stopp/Fortsetzen (#165/#166), langer CLASSIC- und ALLSUBS-Lauf, 300 Sittings Last, Log-Redaktion (#149); danach **keine** 5xx und **kein** PHP-Fatal | ja | – | ja |
 
 Für den Branch-Schutz von `main` gehören als Pflicht-Checks dazu:
-„CI complete (release)“, „Interface end-to-end (Playwright)“,
-„Worker end-to-end (legacy, release engine set)“ und
+„CI complete (release)“, „Interface end-to-end (legacy, release engine set)“ (bis 0.7.72: „… pinned CatQuiz #146“;
+ebenso moodle5 und moodle53), „Worker end-to-end (legacy, release engine set)“ und
 „Worker end-to-end (moodle5, release engine set)“ (bis 0.7.68: „… needs the CAT engine“; nach dem Push umbenennen).
 Diese Einstellung liegt im Repository auf GitHub, nicht im Code.
 
 ## 2. Engine-Set: Zweig und Commit
 
-Zwei Pinsätze: `.github/engine-pins.env` (`release`) für Release-CI und Worker-E2E, `.github/engine-pins-interface.env`
-(`candidate`, gepinnt auf CatQuiz #146) für das Interface-E2E und seit 0.7.69 zusätzlich für je einen Worker-E2E-Job
-je Stack („Worker end-to-end (legacy, candidate engine set)“ usw.). Der Kandidat wird zum Release-Satz, wenn seine
-Worker-E2E-Jobs grün sind (#136), nicht vorher. Jeder Job mit Engine schreibt „engine set …“ mit den drei Commits ins Log;
-der CI-Nachweis listet sie je Job.
+Drei Sätze, drei Dateien (seit 0.7.73, 20.11.2026):
+
+| Satz | Datei | Was | Wo gespielt |
+|---|---|---|---|
+| `release` | `.github/engine-pins.env` | gepinnt, Zweig **und** Commit — der Satz, auf dem ein Release abgenommen wird | Release-CI, Worker-E2E (release), Interface-E2E, Abnahme (Last, Tracing, Scheduler, Session, Ziel der Migration, Kosten) |
+| `candidate` | `.github/engine-pins-candidate.env` | **nicht gepinnt**: die Zweig-Heads im Moment des Laufs | Worker-E2E (candidate), Abnahme `engine-session` (candidate) |
+| `previous` | `.github/engine-pins-previous.env` | der Release-Satz davor (bis 0.7.72) | Abnahme `engine-migration` (Start), `engine-bench` (Vergleich) |
+
+Warum gepinnt (Re-Audit 16.10.2026, AK 5): Die Engine-Zweige bewegen sich mehrmals am Tag (19.11.: 07:18 und 23:22;
+20.11.: 09:37–09:45). Ein Job, der den jeweiligen Head nimmt, testet ein anderes Engine-Programm als der Job davor, ohne
+dass sich am Plugin etwas geändert hat; zwei Läufe desselben Commits wären nicht mehr vergleichbar, ein Rot nicht mehr
+dem Plugin oder der Engine zuzuordnen. Der Kandidatensatz nimmt die Heads trotzdem mit — als Frühwarnung, nicht als Gate:
+er sagt am selben Tag, dass ein neuer Engine-Stand das Labor bricht, und sein Manifest nennt die Commits, die er fand.
+Passen die Heads nicht zueinander (ein Teil verlangt eine Version des anderen, die noch nicht gepusht ist), bricht
+`fetch-engine.sh` mit Exit 3 und beiden Versionen ab, statt Moodle mit `pluginrequirementsnotmet` scheitern zu lassen.
+Ein Submodul, dessen eingetragener Commit auf seinem Remote fehlt (local_catquiz ab 2026111706: Hub-Host `ec77e605`),
+wird ausgelassen — Warnung im Log, Zeile im Manifest.
+
+Jeder Job mit Engine schreibt „engine set …“ mit den drei Commits und `engine_set release|candidate|previous|heads`
+ins Manifest; der Job „Release manifest“ der Abnahme prüft jeden Job des Satzes `release` gegen die Pins seiner Linie
+und scheitert bei einer Abweichung.
 
 `.github/engine-pins.env` legt für beide Linien Zweig **und** Commit fest:
 local_catquiz, mod_adaptivequiz und adaptivequizcatmodel_catquiz, dazu
@@ -44,10 +60,15 @@ installierte gar keine Engine, ihre engine-berührenden Tests liefen dort leer.
 
 Das Set nachziehen:
 1. Die neuen Heads gegen catquizlab prüfen. Dazu gehören CHANGELOG der Engine,
-   Statuscodes, Progress-Format und Gültigkeitsgründe.
-2. Mit `ENGINE_FOLLOW_HEADS=1` (in den E2E-Workflows: Eingabe „engine_heads“)
-   gegen die Heads testen.
-3. Die SHAs in einem Commit ersetzen.
+   Statuscodes, Progress-Format und Gültigkeitsgründe; lokal installieren, PHPUnit,
+   Smoke und den Session-Test (`engine_session.spec.js`) laufen lassen. Die
+   Kandidaten-Jobs zeigen dasselbe in der CI.
+2. `engine-pins.env` nach `engine-pins-previous.env` kopieren (nur die Variablen,
+   neuer Kopf), dann die SHAs in `engine-pins.env` ersetzen — ein Commit.
+
+Zuletzt nachgezogen am 20.11.2026 (0.7.73): legacy local_catquiz `2b39e3c` (2026111707), mod_adaptivequiz `4869fc5`
+(2026111704), Catmodel `fee42fd` (2026111707); Moodle 5 local_catquiz `6be6852` (2026111708), mod_adaptivequiz `8488f74`
+(2026111706), Catmodel `9a07cca` (2026111708); local_wunderbyte_table `d45e1ea` (2026111600).
 
 ## 2a. Moodle 5: drei Wurzeln, und was nach der Installation laufen muss (#135)
 

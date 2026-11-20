@@ -86,8 +86,9 @@ derselben Nummer ging. Ab 2026101701 (beide Linien) löscht das CAT-Modell über
 (`classes/local/attempt_cleanup.php`, local_catquiz #95).
 
 CatQuizLab repariert den Callback nicht und räumt fremde oder alte Zeilen nicht global auf. Stattdessen:
-- **CI:** `engine-pins.env` und `engine-pins-interface.env` pinnen das CAT-Modell seit 0.7.63 auf die korrigierten
-  Stände `a7ba075` (ALiSe-v-1.2.0-legacy, 2026101801) und `15d4c55` (v-3.0, 2026102800). Ihre Abhängigkeiten sind
+- **CI:** `engine-pins.env` pinnte das CAT-Modell seit 0.7.63 auf die korrigierten
+  Stände `a7ba075` (ALiSe-v-1.2.0-legacy, 2026101801) und `15d4c55` (v-3.0, 2026102800); seit 0.7.73 auf neuere Heads
+  derselben Zweige (`fee42fd`, `9a07cca`), die alten Stände stehen in `engine-pins-previous.env`. Ihre Abhängigkeiten sind
   unverändert, und jede local_catquiz-Klasse, die sie benutzen, ist in den gepinnten Engines vorhanden.
 - **Auf einer Installation** mit älterem CAT-Modell warnt die Vorschau des tiefen Löschens. Die Prüfung in Schritt 7
   hält das Löschen an, bevor es „gelöscht“ meldet.

@@ -32,9 +32,10 @@ A cell is clean when: its files are there and parse (cell, smoke summary, reques
 samples); the smoke test passed; the server traced requests, answers among them, no 5xx, no fatal; the engine report
 has its maps as maps (kinds, spans, links, bysitting); with engine tracing off, it wrote no trace; with it on, every
 sitting's requests are mapped one to one onto its traces — its attempt.php GET onto its first_item trace, each answer
-(attempt.php POST) onto a next_item or complete trace — each item selection has its strategy:select_question span,
-and every trace belongs to a lab sitting, except the preparation's dry run (first_item on an engine attempt that no
-longer exists).
+(attempt.php POST) onto a next_item or complete trace — each request that presents an item holds one
+strategy:select_question span, in order (first_item and every next_item but the one that ended the sitting; complete
+none), and every trace belongs to a lab sitting, except the preparation's dry run (first_item on an engine attempt
+that no longer exists).
 """
 
 import csv
@@ -169,15 +170,46 @@ def problems_of(out, name):
             if int(kinds.get('first_item', 0)) != min(1, gets.get(sitting, 0)):
                 problems.append(f'sitting {sitting}: {gets.get(sitting, 0)} first request(s), '
                                 f'{kinds.get("first_item", 0)} first_item trace(s)')
-            want = int(kinds.get('first_item', 0)) + int(kinds.get('next_item', 0))
-            if int(got.get('selections') or 0) != want:
-                problems.append(f'sitting {sitting}: {want} item(s) chosen, {got.get("selections")} selector span(s)')
+            problems += [f'sitting {sitting}: {p}' for p in sequence_problems(got.get('sequence'))]
             selections += int(got.get('selections') or 0)
         facts['selections'] = selections
         sel = traces['spans'].get('strategy:select_question') or {}
         if int(sel.get('n') or 0) < selections:
             problems.append(f'selector statistics over {sel.get("n")} span(s), {selections} mapped')
     return problems, facts
+
+
+def sequence_problems(sequence):
+    """What is wrong with one sitting's traces in order, each "kind:selections" (trace_report.php bysitting).
+
+    Each request that presents an item chose it: its first_item trace holds one strategy:select_question span, and so
+    does every next_item trace — except the sitting's last one, the answer that ended it: the release engine names
+    that request next_item, a newer one complete (CI d23b39c0: "21 item(s) chosen, 20 selector span(s)" was the last
+    answer of each sitting, named next_item, choosing nothing). A complete trace chooses nothing; no trace chooses two.
+    """
+    if not isinstance(sequence, list) or not sequence:
+        return ['no trace sequence in the report']
+    problems = []
+    parsed = []
+    for i, item in enumerate(sequence):
+        kind, _, n = str(item).rpartition(':')
+        if not kind or not n.isdigit():
+            return [f'trace {i + 1} unreadable in the sequence: {item!r}']
+        parsed.append((kind, int(n)))
+    last = len(parsed) - 1
+    ended = any(kind == 'complete' for kind, _ in parsed)
+    for i, (kind, n) in enumerate(parsed):
+        if n > 1:
+            problems.append(f'trace {i + 1} ({kind}) holds {n} selector spans')
+        elif kind == 'first_item' and n != 1:
+            problems.append(f'trace {i + 1} (first_item) chose no item')
+        elif kind == 'complete' and n != 0:
+            problems.append(f'trace {i + 1} (complete) chose an item')
+        elif kind == 'next_item' and n != 1 and (i != last or ended):
+            problems.append(f'trace {i + 1} of {last + 1} (next_item) chose no item, and it did not end the sitting')
+    if parsed[0][0] != 'first_item':
+        problems.append(f'the sitting\'s first trace is {parsed[0][0]}, not first_item')
+    return problems
 
 
 def summary_line(facts, traces_path):
@@ -189,7 +221,8 @@ def summary_line(facts, traces_path):
     spans = t.get('spans') if isinstance(t.get('spans'), dict) else {}
     kinds = t.get('kinds') if isinstance(t.get('kinds'), dict) else {}
     nxt = kinds.get('next_item') or {}
-    sel = spans.get('strategy:select_question') or {}
+    sel = (t.get('selector') if isinstance(t.get('selector'), dict) else None) \
+        or spans.get('strategy') or spans.get('strategy:select_question') or {}
     f = lambda d, k: ('%.0f' % d[k]) if isinstance(d, dict) and k in d else '–'
     g = lambda d, k: ('%.3f' % d[k]) if isinstance(d, dict) and k in d else '–'
     return (f"answers {facts.get('answers', '–')}  next p50/p95 {f(nxt, 'p50')}/{f(nxt, 'p95')}  "
@@ -243,7 +276,9 @@ def self_test():
                        'spans': {'strategy:select_question': {'n': posts}} if trace else {},
                        'links': {'stored': 1 + posts, 'none': 1} if trace else {},
                        'bysitting': {'5': {'kinds': {'first_item': 1, 'next_item': posts - 1, 'complete': 1},
-                                           'selections': posts}} if trace else {},
+                                           'selections': posts,
+                                           'sequence': ['first_item:1'] + ['next_item:1'] * (posts - 1)
+                                           + ['complete:0']}} if trace else {},
                        'unlinked': [{'kind': 'first_item', 'exists': False}] if trace else []},
         }
         for key, value in change.items():
@@ -263,10 +298,14 @@ def self_test():
                 f.write(f'{i},/mod/adaptivequiz/attempt.php,POST,200,10,5\n')
 
     good = {'trace': 1}
+    SEQ = ['first_item:1', 'next_item:1', 'next_item:1', 'complete:0']
+    # The release engine: the last answer is a next_item trace that chose nothing (CI d23b39c0).
+    release = {'5': {'kinds': {'first_item': 1, 'next_item': 3}, 'selections': 3,
+                     'sequence': ['first_item:1', 'next_item:1', 'next_item:1', 'next_item:0']}}
     t = lambda **c: dict({'tracing': True, 'traces': 5, 'kinds': {'first_item': {}}, 'spans':
                           {'strategy:select_question': {'n': 3}}, 'links': {'stored': 4, 'none': 1},
                           'bysitting': {'5': {'kinds': {'first_item': 1, 'next_item': 2, 'complete': 1},
-                                              'selections': 3}},
+                                              'selections': 3, 'sequence': SEQ}},
                           'unlinked': [{'kind': 'first_item', 'exists': False}]}, **c)
     cases = [
         ('clean, tracing on', good, 0),
@@ -289,7 +328,25 @@ def self_test():
         ('an answer without trace', {'traces': t(bysitting={'5': {'kinds': {'first_item': 1, 'next_item': 1,
                                                                               'complete': 1}, 'selections': 2}})}, 1),
         ('a selection without span', {'traces': t(bysitting={'5': {'kinds': {'first_item': 1, 'next_item': 2,
-                                                                               'complete': 1}, 'selections': 2}})}, 1),
+                                                                               'complete': 1}, 'selections': 2,
+                                                                     'sequence': ['first_item:1', 'next_item:0',
+                                                                                  'next_item:1', 'complete:0']}})}, 1),
+        ('clean, the release engine\'s last answer as next_item', {'traces': t(bysitting=release)}, 0),
+        ('a next_item without span before the end', {'traces': t(bysitting={'5': dict(
+            release['5'], sequence=['first_item:1', 'next_item:0', 'next_item:1', 'next_item:1'])})}, 1),
+        ('the last next_item without span, a complete trace too', {'traces': t(bysitting={'5': dict(
+            release['5'], sequence=['first_item:1', 'next_item:1', 'next_item:0', 'complete:0'])})}, 1),
+        ('a first_item without span', {'traces': t(bysitting={'5': dict(
+            release['5'], sequence=['first_item:0', 'next_item:1', 'next_item:1', 'next_item:0'])})}, 1),
+        ('two spans in one request', {'traces': t(bysitting={'5': dict(
+            release['5'], sequence=['first_item:1', 'next_item:2', 'next_item:1', 'next_item:0'])})}, 1),
+        ('a complete trace that chose', {'traces': t(bysitting={'5': dict(
+            {'kinds': {'first_item': 1, 'next_item': 2, 'complete': 1}, 'selections': 4},
+            sequence=['first_item:1', 'next_item:1', 'next_item:1', 'complete:1'])})}, 1),
+        ('no sequence in the report', {'traces': t(bysitting={'5': {'kinds': {'first_item': 1, 'next_item': 2,
+                                                                                'complete': 1}, 'selections': 3}})}, 1),
+        ('an unreadable sequence', {'traces': t(bysitting={'5': dict(
+            release['5'], sequence=['first_item', 'next_item:1', 'next_item:1', 'next_item:0'])})}, 1),
         ('a sitting without traces', {'traces': t(bysitting={})}, 1),
         ('an unlinked trace not the dry run', {'traces': t(unlinked=[{'kind': 'next_item', 'exists': True}])}, 1),
         ('selector statistics short', {'traces': t(spans={'strategy:select_question': {'n': 1}})}, 1),

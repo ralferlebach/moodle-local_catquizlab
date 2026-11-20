@@ -327,6 +327,8 @@ if ($options['case'] === '102') {
 }
 
 $experimentid = (int) experiment_service::save($definition)['id'];
+// From here on, the load guard's decisions belong to this test (#110: a step's verdict names the trips in it).
+$experimentsince = time();
 step('Defined experiment ' . $experimentid . '.', $started);
 smoke_summary(['experimentid' => $experimentid, 'strategy' => $strategy]);
 
@@ -678,6 +680,67 @@ if (!empty($options['no-navigation-failures'])) {
     foreach ($reasons as $reason) {
         cli_writeln(sprintf('    %-28s %d', $reason->reason, $reason->n));
     }
+    // For the step's verdict (#110, CI d23b39c0): every failed execution by cause, each marked as a capacity cause
+    // (the server or the network overloaded, \local_catquizlab\local\circuit_breaker::CAPACITY_CAUSES) or not, and
+    // what the load guard did meanwhile — the one place that knows both lists.
+    $byreason = [];
+    foreach ($reasons as $reason) {
+        $byreason[(string) $reason->reason] = ['n' => (int) $reason->n,
+            'capacity' => in_array((string) $reason->reason, \local_catquizlab\local\circuit_breaker::CAPACITY_CAUSES, true)];
+    }
+    $trips = $DB->get_records_select(
+        'local_catquizlab_runlog',
+        'event = :event AND timecreated >= :since',
+        ['event' => \local_catquizlab\local\run_log::LOAD_THROTTLED, 'since' => $experimentsince],
+        'id ASC',
+        'id, timecreated, detail'
+    );
+    $drained = $DB->get_records_select(
+        'local_catquizlab_runlog',
+        'event = :event AND timecreated >= :since',
+        ['event' => \local_catquizlab\local\run_log::WORKERS_DRAINING, 'since' => $experimentsince],
+        'id ASC',
+        'id, detail'
+    );
+    $askedtostop = 0;
+    $drainlimit = null;
+    foreach ($drained as $row) {
+        $said = json_decode((string) $row->detail, true) ?: [];
+        $askedtostop += (int) ($said['workers'] ?? 0);
+        $drainlimit = (int) ($said['limit'] ?? 0);
+    }
+    $guard = ['trips' => count($trips), 'first' => $trips ? (int) reset($trips)->timecreated : null,
+        'drained' => $askedtostop, 'limit' => $drainlimit];
+    // And each of them, as it was recorded (up to 200): a cause counted is not a cause read (CI d23b39c0 had nine
+    // state mismatches and one unknown failure, and no text of any of them in the artefacts).
+    $failures = [];
+    $failedrows = $DB->get_records_select(
+        'local_catquizlab_attemptlog',
+        'runid ' . $insql . ' AND outcome = :failed',
+        $inparams + ['failed' => \local_catquizlab\local\attempt_history::FAILED],
+        'id ASC',
+        'id, attemptid, tryno, reasoncode, timecreated, detail',
+        0,
+        200
+    );
+    foreach ($failedrows as $row) {
+        $failures[] = ['sitting' => (int) $row->attemptid, 'try' => (int) $row->tryno, 'reason' => $row->reasoncode,
+            'time' => (int) $row->timecreated, 'detail' => \core_text::substr((string) $row->detail, 0, 600)];
+    }
+    smoke_summary(['executions' => ['total' => $total, 'failed' => count($executions), 'navigation' => $navigation,
+        'reasons' => (object) $byreason, 'failures' => $failures], 'loadguard' => $guard]);
+    if ($guard['trips'] > 0) {
+        cli_writeln(sprintf('  Load guard: tripped %d time(s), first at %s; %d worker(s) asked to finish their sitting and '
+            . 'stop, limit %s.', $guard['trips'], gmdate('H:i:s', $guard['first']), $guard['drained'], $guard['limit'] ?? '?'));
+    }
+    // Still in play after the limit and the wait: the run moves, and a comparison of sittings while it moves compares
+    // two states (gate 12.11.2026). Said and stopped here, with what is known: nothing compared.
+    if (!empty($inplay)) {
+        smoke_summary(['verdict' => 'overload']);
+        cli_error($inplay . ' sitting(s) still in play after the limit and the wait: the run is still moving, no '
+            . 'sitting compared' . ($navigation > 0 ? '; ' . $navigation . ' execution(s) failed on navigation or transport' : '')
+            . '.');
+    }
     $samples = $DB->get_records_select(
         'local_catquizlab_attemptlog',
         'runid ' . $insql . ' AND outcome = :failed',
@@ -690,9 +753,9 @@ if (!empty($options['no-navigation-failures'])) {
     foreach ($samples as $sample) {
         cli_writeln('    e.g. ' . ($sample->reasoncode ?? 'none') . ': ' . substr((string) $sample->detail, 0, 220));
     }
-    if ($navigation > 0) {
-        cli_error($navigation . ' execution(s) failed on navigation or transport.');
-    }
+    // Said at the end, after every check of the sittings that were collected (#110, CI d23b39c0: the check stopped
+    // the test before any of them, so the step's verdict had nothing to go on but "error").
+    $navigationfailed = $navigation;
 }
 
 // Issue #134: submissions that ended uncertainly were reconciled with the
@@ -1047,6 +1110,11 @@ if ($probe !== null) {
     }
 }
 
+if (!empty($navigationfailed)) {
+    smoke_summary(['verdict' => 'navigation']);
+    cli_error($navigationfailed . ' execution(s) failed on navigation or transport.'
+        . ($notfinished > 0 ? ' ' . $notfinished . ' of ' . $queued . ' sittings did not finish in the time limit.' : ''));
+}
 if (!empty($options['require-all']) && $notfinished > 0) {
     smoke_summary(['verdict' => 'deadline']);
     cli_error($notfinished . ' of ' . $queued . ' sittings did not finish in ' . (int) $options['minutes']

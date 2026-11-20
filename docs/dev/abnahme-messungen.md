@@ -12,9 +12,9 @@ offen, was davon vor der Auslieferung **lokal** gelaufen ist und was erst die CI
 | Issue | Nachweis | Wo | Artefakt |
 |---|---|---|---|
 | #110 | Lastmatrix CLASSIC, ALLSUBS, HIGHESTSUB, Kontrollmodus × 1/5/12/25/50 echte Worker, Apache + PHP-FPM mit `memory_limit=512M`; Fehlerstufe mit 12 Workern (verlorene Antwort, verlorene Anfrage, verspätete Antwort) | `acceptance.yml`, Job `load` | `catquizlab-acceptance-load-<modus>` (`matrix.jsonl`, Stichproben, Request-Bericht, Traces, Kapazität, Inventur) |
-| #136 | zwei offene Versuche in einer Sitzung, zweiter Lerner, Cache-Purge, TTL 610 s, Itemparameter geändert; je Stack (4.5, 5.2, 5.3) und Engine-Satz (release, candidate) | `acceptance.yml`, Job `engine-session` | `catquizlab-acceptance-engine-session-<stack>-<satz>` |
-| #136 AK 7 | offene Versuche über das Engine-Upgrade release → candidate auf derselben Installation | Job `engine-migration` | `catquizlab-acceptance-engine-migration-<stack>` (`before.json`, `after.json`, `engine-upgrade.txt`) |
-| #136 DoD 3 | Kosten einer Bearbeitung: 10/50/100/150 Fragen × Pools 100/500/1000, 512 MiB, release gegen candidate | Job `engine-bench` | `catquizlab-acceptance-engine-bench-<stack>-<satz>` (`bench.jsonl`) |
+| #136 | zwei offene Versuche in einer Sitzung, zweiter Lerner, Cache-Purge, TTL 610 s, Itemparameter geändert; je Stack (4.5, 5.2, 5.3) und Engine-Satz (release gepinnt, candidate = Zweig-Heads ungepinnt) | `acceptance.yml`, Job `engine-session` | `catquizlab-acceptance-engine-session-<stack>-<satz>` |
+| #136 AK 7 | offene Versuche über das Engine-Upgrade previous → release auf derselben Installation | Job `engine-migration` | `catquizlab-acceptance-engine-migration-<stack>` (`before.json`, `after.json`, `engine-upgrade.txt`) |
+| #136 DoD 3 | Kosten einer Bearbeitung: 10/50/100/150 Fragen × Pools 100/500/1000, 512 MiB, previous gegen release | Job `engine-bench` | `catquizlab-acceptance-engine-bench-<stack>-<satz>` (`bench.jsonl`) |
 | #137 | derselbe Browsertest wie #136 (Moodle 5.2/5.3, aktualisierte Pins, gleiche und verschiedene Sitzungen, Fortschritt, Stoppkriterium, Fragenverwendung, Trennung der Lerner) | Job `engine-session` | wie #136 |
 | #144 | Moduswechsel-Plot mit zwei und mit genau einer gemeinsamen gültigen Subskala: Punktzahl = gültige (Twin, Subskala)-Paare, Vorzeichen, Nullachsen, 45°-Linie, Tooltip, Tastatur, SVG/PNG/PDF/CSV/JSON aus denselben Punkten; deutsche Texte | Interface-E2E (`mode_single_subscale.spec.js`), PHPUnit (`mode_plot_language_test`) | `catquizlab-ui-e2e-<stack>` |
 | #149 | Bestands-Scan synthetischer Logs aller Formate, nur Zahlen, Kategorien, Stunden; Betreiberprozess oder Risikoverzicht | Job `scheduler` (pgsql, 11), PHPUnit `log_scan_test` | `catquizlab-acceptance-scheduler-pgsql-11` (`log-scan-149.json`); `log-datenschutz.md` |
@@ -52,7 +52,9 @@ in `matrix.jsonl` mit echten Stichprobenumfängen, p50/p95/p99 der Anfragezeiten
 Stoppcode der Bearbeitungen. Die Fehlerstufe (12 Worker) lässt in jeder Bearbeitung eine Antwort und eine Anfrage
 verloren gehen und eine Antwort zu spät kommen; jede muss abgeglichen werden, nichts doppelt beantwortet. Der Job
 scheitert bei einer nicht zu Ende gespielten Bearbeitung, einer 5xx-Antwort oder einem PHP-Fatal. Die Selektorzeit
-(`strategy:select_question`) liest `cli/trace_report.php` aus den Engine-Traces des Jobs.
+(Span `strategy`, die ganze Strategie der Engine; seit 0.7.73 — vorher `strategy:select_question`, das in den neuen
+Engines nur noch die letzte Wahl misst) liest `cli/trace_report.php` aus den Engine-Traces des Jobs, ohne den
+Trockenlauf der Vorbereitung (dessen first_item zählt die Laufzeit des ganzen CLI-Prozesses, 33–64 s).
 
 **Seit 0.7.72 (Re-Audit 19.11.2026): das Urteil je Stufe aus dem, was die Stufe hinterlässt**, nicht aus dem Exitcode
 von `smoke.php` allein (`cli/load_step_verdict.py`, Selbsttest vor jeder Messreihe). `smoke.php --summary` schreibt je
@@ -65,6 +67,13 @@ Gültigkeit jeder gesammelten Bearbeitung und das Urteil der Prüfungen. Daraus:
   `STALL`, 300 s), keine zurückgehalten, keine danach noch im Spiel — nur einige erst nach der Grenze: die Maschine war
   voll, das Plugin hat nicht versagt. Wird mit Zahlen berichtet, die sichere Last je Modus steht in `safe-load.txt`. Bei 1
   oder 5 Workern ist das keine Last: dann FAIL;
+- **CAPACITY als kontrollierte Überlast** (seit 0.7.73, CI d23b39c0) — der Lastschutz hat in der Stufe ausgelöst und
+  Worker gebeten aufzuhören, jede gescheiterte Ausführung scheiterte an einer Überlastursache (Zeitüberschreitung,
+  Verbindung; `circuit_breaker::CAPACITY_CAUSES`) und keine an einer anderen (Zustandsabweichung, Fehlerseite,
+  Engine-Ausnahme, unbekannt), kein 5xx/Fatal, eine gültige, mehr als 5 Worker. Noch laufende und gescheiterte
+  Bearbeitungen werden gezählt und genannt; waren nach Grenze und Wartezeit noch welche im Spiel, wird nichts verglichen
+  (der Lauf bewegt sich) und das steht im Urteil. `smoke.php` schreibt dazu jede gescheiterte Ausführung (Ursache,
+  Überlastursache ja/nein, Text, bis 200) und die Auslösungen des Lastschutzes in die Zusammenfassung;
 - **FAIL** — alles andere, mit Gründen.
 
 Ungültige Bearbeitungen werden gezählt und genannt (`validity` je Stufe); ein Fehler sind sie nur, wenn keine einzige
@@ -79,6 +88,17 @@ Befund auf ca851469 (0.7.71, Lauf 44453835263), aus den Artefakten korreliert:
   (5 Worker) auf 23,5 s (50 Worker). Kapazität des 4-vCPU-Runners, kein Defekt — heute CAPACITY.
 - *classic*, *highestsub*: alle Stufen PASS; je eine ungültige Bearbeitung bei classic@25/@50 (extremer Twin, SE 0,41
   nach 102 Items, `noremainingquestions`) — gezählt, kein Fehler.
+
+Befund auf d23b39c0 (0.7.72, Lauf 44616989449): *allsubs@50* und *highestsub@50* FAIL mit Urteil „error“ —
+derselbe Code und dieselbe Engine wie auf ca851469, aber ein langsamerer Runner ab der ersten Stufe (highestsub bei 1
+Worker 60 s statt 47 s, mittlere Anfrage 181 statt 114 ms). Bei 50 Workern 99,5 % CPU, p95 31 s bzw. 41 s; die Browser
+liefen beim Absenden in ihre 60 s (`submit_cdp_timeout`, 3 bzw. 10), der Lastschutz löste aus und bat die Worker über 25
+aufzuhören; `smoke.php` brach an seiner Navigationsprüfung ab, bevor irgendetwas verglichen war. highestsub@50 hatte
+dazu 9 `submit_state_mismatch` und 1 `unknown_failure` — nach der neuen Regel weiter FAIL. Die wahrscheinliche Ursache
+der Abweichungen: eine aufgegebene Antwort lief auf dem Server noch (in der Warteschlange oder mit der Sitzung), als der
+Worker fragte, „nicht gespeichert“ — und wurde kurz danach gespeichert; der Worker zählte eine Antwort zu wenig. Seit
+0.7.73 fragt er nach dem Wiedereinstieg über die Aktivität (hinter der Sitzungssperre) noch einmal: eine mehr ist diese
+späte Antwort, einmal gezählt (`storedlate`); alles andere beendet die Ausführung wie bisher.
 
 Die Engine-Traces jeder Stufe liest `trace_report.php` jetzt, solange die Stufe noch existiert (`--keep`, danach
 `cli/delete_experiment.php`); vorher löschte `smoke.php` sie mit dem Experiment, und die Selektorzeit kam aus fast keinem
@@ -104,12 +124,12 @@ geführt; hier wird nur gemessen.
   dieselbe Fragenverwendung, jede Antwort gespeichert, keine zu viel, nichts verloren oder verändert, keine Frage
   doppelt, jede aus dem eigenen Pool; am Ende jeder Versuch mit der vorgegebenen Fragenzahl beendet, mit
   Stoppkriterium, und der Engine-Datensatz des Versuchs zählt dieselben Items.
-- **Migration** (`engine_migration.spec.js`): mit dem Release-Satz zwei Versuche in einer Sitzung öffnen; den Satz an
-  Ort und Stelle auf den Kandidaten (CatQuiz #146) heben (`upgrade.php`, Version muss steigen); mit derselben Sitzung
+- **Migration** (`engine_migration.spec.js`): mit dem vorigen Release-Satz (`engine-pins-previous.env`) zwei Versuche
+  in einer Sitzung öffnen; den Satz an Ort und Stelle auf den Release-Satz heben (`upgrade.php`, Version muss steigen); mit derselben Sitzung
   weiter, „Fortsetzen“, nie „Neu beginnen“; dieselben Versuche, nichts verloren, beide beendet.
 - **Kosten** (`cli/engine_bench.sh`): je Poolgröße und Länge eine Bearbeitung mit genau dieser Fragenzahl; je Zelle
   Anfragezeit (n, Mittel, 95-%-Intervall, p50/p95/p99), Queries je Anfrage, PHP-Spitze, RSS, HTTP-Fehler und der Verlauf
-  vom ersten zum letzten Zehntel der Bearbeitung; release gegen candidate auf derselben Art Maschine.
+  vom ersten zum letzten Zehntel der Bearbeitung; previous gegen release auf derselben Art Maschine.
 
 Lokal: Sitzungstest mit Purge und Itemänderung **PASS** (Moodle 4.5, ohne TTL-Wartezeit); die Migrationsphasen lokal
 geprüft. Alle sechs Stack-/Satz-Kombinationen, die TTL-Wartezeit und die Kostenmatrix laufen nur auf GitHub.
@@ -135,7 +155,8 @@ geprüft. Alle sechs Stack-/Satz-Kombinationen, die TTL-Wartezeit und die Kosten
 gleichem Seed, gleichem Worker-Limit, Reihenfolge ABCD dann DCBA, je einmal mit kaltem und warmem Cache (zwei Jobs).
 Je Zelle: jede Anfrage gezählt (Serverzeit aus dem Request-Trace des Labors, unabhängig vom Engine-Tracing), die
 Antwortanfragen mit Mittel, p50/p95/p99 und Bootstrap-95-%-Intervallen, 5xx, CDP-Timeouts, die Selektorzeit der Engine
-(`strategy:select_question`), geschriebene Traces und Bytes, das Debug-Log, CPU, Speicher, Schreibvolumen.
+(Span `strategy`; seit 0.7.73, siehe oben), geschriebene Traces und Bytes, das Debug-Log, CPU, Speicher,
+Schreibvolumen.
 `cli/trace_matrix_compare.py` rechnet die Effekte als Differenz von Median und Mittel zweier Zellen derselben Strategie
 mit Bootstrap-Intervall (2 000 Ziehungen, fester Seed): Engine-Tracing an/aus, Labor-Debug an/aus, und den Anteil des
 Selektors an der Anfrage. Ein Intervall, das 0 enthält, heißt „mit dieser Stichprobe kein Unterschied messbar“, nicht
@@ -156,12 +177,14 @@ Engine-Traces löschte, bevor der Bericht sie las (1–2 Selektor-Spans gegen 24
 - jede Zelle wird mit `--keep` gespielt, gelesen, dann gelöscht;
 - `cli/trace_matrix_check.py` prüft jede Zelle: Dateien da und lesbar, Smoke bestanden, kein 5xx/Fatal, Maps als Maps;
   Tracing aus → kein Trace; Tracing an → jede Antwortanfrage (attempt.php POST) einer Bearbeitung auf genau einen
-  next_item-/complete-Trace, ihr erster Aufruf auf genau einen first_item-Trace, jede Itemwahl auf ihren
-  `strategy:select_question`-Span, jeder Trace einer Bearbeitung zugeordnet außer dem Trockenlauf der Vorbereitung
+  next_item-/complete-Trace, ihr erster Aufruf auf genau einen first_item-Trace; die Traces einer Bearbeitung der Reihe
+  nach (`sequence`, seit 0.7.73): first_item und jeder next_item genau ein `strategy:select_question`-Span, außer dem
+  letzten Trace, der die Bearbeitung beendet hat (die Release-Engine bis 0.7.72 nennt ihn next_item, er wählt nichts —
+  CI d23b39c0: „21 item(s) chosen, 20 selector span(s)“), complete keiner, nie zwei; jeder Trace einer Bearbeitung zugeordnet außer dem Trockenlauf der Vorbereitung
   (`engine_dryrun`: first_item auf einem zurückgerollten Engine-Versuch); dann die ganze Matrix (jede Zelle jeder
   Strategie REPEAT-mal);
 - `trace_matrix_compare.py` scheitert an fehlendem Paar, leerer Stichprobe, nicht lesbarer Datei, Liste statt Map;
-- jeder Fehlerfall als Selbsttest (`--self-test` beider Skripte, 24 bzw. 4 Fälle), im Job vor der Matrix;
+- jeder Fehlerfall als Selbsttest (`--self-test` beider Skripte, 32 bzw. 4 Fälle), im Job vor der Matrix;
 - der Job scheitert bei jedem Befund.
 
 Lokal (4.5, FASTEST, 2 Worker, eine Wiederholung): alle vier Zellen sauber, je 40 Antworten auf 40 next_item-/

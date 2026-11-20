@@ -2,8 +2,8 @@ name: Interface end-to-end
 
 # The release gate for the interface (re-audit 16.10.2026, AK 3): on every
 # push and pull request to main, and by hand. It installs Moodle with the
-# pinned *candidate* engine set from .github/engine-pins-interface.env,
-# independent of the release/worker baselines in .github/engine-pins.env,
+# release engine set of .github/engine-pins.env (the candidate set CatQuiz #146
+# it played until 0.7.72 has been part of the release set since 20.11.2026),
 # provisions an experiment and plays it through a real
 # browser, then runs every Playwright spec — minutes of runner time, which is
 # what a release costs. Development branches run it by hand.
@@ -55,7 +55,7 @@ permissions:
 
 jobs:
   ui-e2e:
-    name: "Interface end-to-end (${{ matrix.stack }}, pinned CatQuiz #146)"
+    name: "Interface end-to-end (${{ matrix.stack }}, release engine set)"
     runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
@@ -99,17 +99,15 @@ jobs:
       - name: Check out Moodle
         run: git clone --depth 1 -b ${{ matrix.moodle }} https://github.com/moodle/moodle.git moodle
 
-      # New CatQuiz #146 engine/host candidates, pinned separately in
-      # .github/engine-pins-interface.env. This E2E must not silently test the
-      # older release baseline: its manifest records the actual installed SHAs.
-      # Promote to shared release/worker pins only after CatQuizLab #136 DoDs.
+      # The release engine set (.github/engine-pins.env), the one every gate job
+      # tests; its manifest records the actual installed SHAs.
       - name: Check out the CAT engine and its host activity (pinned set)
         env:
           ENGINE_DIR: ${{ github.workspace }}/${{ matrix.dirroot }}
           ENGINE_LAYOUT: moodle
           ENGINE_SUBMODULES: '1'
           ENGINE_MANIFEST: ${{ github.workspace }}/engine-manifest.txt
-          PINS_FILE: ${{ github.workspace }}/plugin/.github/engine-pins-interface.env
+          PINS_FILE: ${{ github.workspace }}/plugin/.github/engine-pins.env
           ENGINE_FOLLOW_HEADS: ${{ github.event.inputs.engine_heads == 'true' && '1' || '0' }}
           MOODLE_BRANCH: ${{ matrix.moodle }}
         run: |
@@ -118,26 +116,25 @@ jobs:
           cp -r plugin ${{ matrix.dirroot }}/local/catquizlab
 
       # A green browser suite against the wrong engine SHA is false evidence.
-      # Fail before installation if the manifest does not contain the expected
-      # candidate versions. engine_heads deliberately bypasses this candidate
-      # gate for exploratory runs but never for push/PR release evidence.
-      - name: Verify exact Interface E2E candidate commits
+      # Fail before installation if the manifest does not name the pinned
+      # commits — read from the pins file, not copied into this workflow (until
+      # 0.7.72 they were, and fell behind it). engine_heads deliberately bypasses
+      # this check for exploratory runs but never for push/PR release evidence.
+      - name: Verify exact Interface E2E engine commits
         if: ${{ github.event.inputs.engine_heads != 'true' }}
         run: |
           set -euo pipefail
+          # shellcheck disable=SC1091
+          . plugin/.github/engine-pins.env
           if [[ "${{ matrix.stack }}" == "legacy" ]]; then
-            CATQUIZ_SHA=8a62ce30db1fa66fb1712e7079dc4caaf5003f20
-            HOST_SHA=50b7aad7a783003bff30a57e21854120fee0f32d
-            MODEL_SHA=a7ba07555a30d5cd1f812859ed949dd127721dbd
+            CATQUIZ_SHA=$LEGACY_CATQUIZ_SHA; HOST_SHA=$LEGACY_ADAPTIVEQUIZ_SHA; MODEL_SHA=$LEGACY_CATMODEL_SHA
           else
-            CATQUIZ_SHA=02c856f092d91f2387b8499c7c02f8948fb909cc
-            HOST_SHA=d3b0dd12f82c759a5a8d256791570fadb4c0111b
-            MODEL_SHA=15d4c551b06766a84ad75eea988fe110db58f009
+            CATQUIZ_SHA=$M5_CATQUIZ_SHA; HOST_SHA=$M5_ADAPTIVEQUIZ_SHA; MODEL_SHA=$M5_CATMODEL_SHA
           fi
           grep -E '^local_catquiz[[:space:]]' engine-manifest.txt | grep -Fq "$CATQUIZ_SHA"
           grep -E '^mod_adaptivequiz[[:space:]]' engine-manifest.txt | grep -Fq "$HOST_SHA"
           grep -E '^adaptivequizcatmodel_catquiz[[:space:]]' engine-manifest.txt | grep -Fq "$MODEL_SHA"
-          echo "${{ matrix.stack }} candidate engine set verified against actual checkouts"
+          echo "${{ matrix.stack }} release engine set verified against actual checkouts
 
       - name: Configure Moodle
         run: |

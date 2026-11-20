@@ -6,6 +6,74 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.7.73] — 2026-11-20 — Version 2026112000. CI on d23b39c0 (0.7.72) read and fixed; the engine pins moved to the heads of 20.11.2026, a candidate set that follows the heads unpinned, the old set as "previous"
+
+No database change. No new string.
+
+### Engine sets (#136, re-audit 16.10.2026 AK 5)
+- `.github/engine-pins.env` (release) moved to the heads of 20.11.2026: legacy local_catquiz `2b39e3c` (2026111707),
+  mod_adaptivequiz `4869fc5` (2026111704), catmodel `fee42fd` (2026111707); Moodle 5 local_catquiz `6be6852`
+  (2026111708), mod_adaptivequiz `8488f74` (2026111706), catmodel `9a07cca` (2026111708); local_wunderbyte_table
+  `d45e1ea` (2026111600). Checked locally on Moodle 4.5 before pinning: the plugin's PHPUnit suite (1199 tests), the
+  engine-session browser test (two attempts in one session, purge, item change, usage probe) and `--change-items`.
+- Why pinned at all: the engine's branches moved three times in 26 hours (19.11. 07:18 and 23:22, 20.11. 09:37–09:45);
+  a job taking the head it finds tests another engine than the job before it, with nothing in the plugin changed — two
+  runs of one commit would no longer be comparable. The commit is what makes them so; the manifest names it.
+- `.github/engine-pins-candidate.env` (new, replaces `engine-pins-interface.env`, a second pinned set a month behind):
+  the branch heads at the moment of the run, not pinned — the candidate legs of the worker E2E and of `engine-session`
+  say the same day that a new engine state breaks the lab, and their manifests name the commits they found.
+- `.github/engine-pins-previous.env` (new): the release set until 0.7.72. The upgrade test now runs previous → release
+  (`engine-migration`), the cost comparison previous against release (`engine-bench`).
+- `fetch-engine.sh`: writes `engine_set release|candidate|previous|heads` into the manifest; checks that the parts of a
+  set fit each other (each part's `$plugin->dependencies` against the versions fetched) and stops with exit 3 and both
+  versions when not — a head pushed before the one it needs; fetches submodules one by one and leaves out one whose
+  recorded commit its remote does not have, with a warning and a manifest line (local_catquiz from 2026111706 records
+  the hub host at `ec77e605`, which moodle-catquizcentralhub_host does not serve: "not our ref").
+- The release manifest of the acceptance workflow checks every job of the release set against the pins of its line
+  and fails on a difference. The interface E2E reads the commits it verifies from `engine-pins.env` instead of a copy
+  in the workflow, which had fallen behind.
+
+### The engine's new end codes (local_catquiz #172, #64; mod_adaptivequiz 2026111701)
+- Engine status 12 (`error`, a general error stored as such) and 13 (`stopscalescomplete`: every measured scale done by
+  its own stop rule after the minimum); the host's codes `scalescomplete` and `noeligiblebeforeminimum`. Status 13 and
+  `scalescomplete` are `subscale_rule_satisfied` — a planned end — and before the minimum `ended_before_minimum`;
+  `noeligiblebeforeminimum` is `no_eligible_item_before_minimum`; status 12 is an engine error, never a valid result.
+  `tests/result_validity_test.php` covers each.
+
+### CI d23b39c0: what was red and why
+- **engine-session, release × 3**: `--change-items` exit 1 against local_catquiz `ee1f096` — the release engine kept its
+  runtime pool in a session cache (`adaptivequizattempt`, invalidated only by `changesinadaptivequizattempt`): an item
+  deactivated in its scale and the new difficulties stayed in the warm pool. The test found what it was written for
+  (#136 AK 3); the engines since #146 rebuild the pool on these events. With the new release set it passes locally.
+  The browser test now shows what the seed script printed when it fails, not only "Command failed".
+- **trace cold/warm**: "21 item(s) chosen, 20 selector span(s)" in every sitting. The rule counted every next_item
+  trace as a selection; the release engine names the request of the last answer next_item, though it chooses nothing.
+  `trace_report.php` now lists each sitting's traces in order with their selector spans (`sequence`), and
+  `trace_matrix_check.py` checks them in order: first_item and every next_item one span, except the last trace that
+  ended the sitting; complete none; never two. 32 self-test cases (24 before).
+- **load allsubs@50, highestsub@50**: at 99.5 % CPU, request p95 31 s and 41 s, the browsers' submissions ran into
+  their 60 s limit (`submit_cdp_timeout`), the load guard tripped and asked the workers above 25 to stop, and the step
+  could not end in its 40 minutes. smoke.php stopped at its navigation check before comparing anything, so the step
+  only knew "error". The same code and engine as the green run on ca851469; this runner was slower from the first step
+  (highestsub at 1 worker 60 s against 47 s, mean request 181 ms against 114 ms).
+  - smoke.php writes every failed execution (cause, whether it is an overload cause, its text, up to 200) and the load
+    guard's trips and drains into the summary; with sittings still in play after the limit it says "overload" and
+    compares nothing (the run is moving); with navigation failures it checks every collected sitting first and says
+    "navigation" at the end.
+  - `load_step_verdict.py`: such a step is CAPACITY only as overload answered as designed (#110 AK 3) — the guard
+    tripped, every failed execution failed for an overload cause and none for another, no 5xx, no fatal, a valid
+    sitting, more than 5 workers; otherwise FAIL with its reasons. 29 self-test cases.
+  - highestsub@50 also had nine `submit_state_mismatch` and one `unknown_failure` — FAIL under this rule as well. The
+    likely cause of the mismatches: a submission the browser gave up on still ran on the server (queued, or holding the
+    session) when the worker asked the server, which said "not stored"; stored a moment later, the worker counted one
+    answer too few and the next reconciliation found two more. The worker now asks again once back in through the
+    activity page (behind the session's lock): one more than it counts is that late answer, counted once
+    (`storedlate`, recorded as a reconciliation); anything else ends the execution as before. Proven by unit tests,
+    not reproduced end to end here: the delay is on the server, which a browser-side fault cannot make.
+  - The load guard decided and drained concurrently: two heartbeats in the same second each logged "load_throttled",
+    three drains asked 15, 6 and 21 workers to stop at a limit of 25 (the same ones counted twice). Both now under a
+    lock; the drain reads the workers under it.
+
 ## [0.7.72] — 2026-11-19 — Version 2026111901. The critical-friend re-audit of 19.11.2026 on ca851469: load steps judged from what they left (#110), the trace matrix fail-closed (#164), the engine's item freshness tested and judged (#136 AK 3), every output compared (#136 AK 5)
 
 No database change. One new string (EN/DE).

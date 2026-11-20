@@ -146,8 +146,26 @@ class worker_capacity {
         $kept = json_decode((string) get_config('local_catquizlab', 'loadguard'), true) ?: [];
 
         if (($kept['checked'] ?? 0) <= $now - self::GUARD_EVERY || ($kept['checked'] ?? 0) > $now) {
-            $kept = self::evaluate($now, $kept);
-            set_config('loadguard', json_encode($kept), 'local_catquizlab');
+            // One evaluation at a time (CI d23b39c0: two heartbeats in the same second each found the guard untripped,
+            // each logged "load_throttled"). Whoever does not get the lock at once uses the verdict as it stands; the
+            // one holding it re-reads it first, in case it was renewed meanwhile.
+            $lock = \core\lock\lock_config::get_lock_factory('local_catquizlab_loadguard')->get_lock('evaluate', 0);
+            if ($lock) {
+                try {
+                    global $DB;
+                    $kept = json_decode((string) $DB->get_field(
+                        'config_plugins',
+                        'value',
+                        ['plugin' => 'local_catquizlab', 'name' => 'loadguard']
+                    ), true) ?: [];
+                    if (($kept['checked'] ?? 0) <= $now - self::GUARD_EVERY || ($kept['checked'] ?? 0) > $now) {
+                        $kept = self::evaluate($now, $kept);
+                        set_config('loadguard', json_encode($kept), 'local_catquizlab');
+                    }
+                } finally {
+                    $lock->release();
+                }
+            }
         }
         $throttled = ($kept['until'] ?? 0) > $now;
 
@@ -329,12 +347,24 @@ class worker_capacity {
         global $DB;
 
         $effective = self::effective($now);
+        // One drain at a time (CI d23b39c0: three heartbeats in the same second asked 15, 6 and 21 workers to stop
+        // at a limit of 25 — 42 "asked" for 25 workers, the same ones counted twice). Busy: another drain is asking
+        // them now.
+        $lock = \core\lock\lock_config::get_lock_factory('local_catquizlab_loadguard')->get_lock('drain', 5);
+        if (!$lock) {
+            return 0;
+        }
         $asked = [];
-        foreach (worker_registry::live() as $worker) {
-            if ((int) $worker->slot > $effective['limit'] && (int) $worker->stoprequested === 0) {
-                $DB->set_field('local_catquizlab_worker', 'stoprequested', $now ?? time(), ['id' => $worker->id]);
-                $asked[] = (string) $worker->workerid;
+        try {
+            // Read under the lock: a worker another drain asked a moment ago shows it here.
+            foreach (worker_registry::live() as $worker) {
+                if ((int) $worker->slot > $effective['limit'] && (int) $worker->stoprequested === 0) {
+                    $DB->set_field('local_catquizlab_worker', 'stoprequested', $now ?? time(), ['id' => $worker->id]);
+                    $asked[] = (string) $worker->workerid;
+                }
             }
+        } finally {
+            $lock->release();
         }
         if ($asked !== []) {
             run_log::record(0, run_log::WORKERS_DRAINING, [
