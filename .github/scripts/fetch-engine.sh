@@ -14,6 +14,9 @@
 # every job tests the same recorded engine state; the manifest says which.
 
 set -euo pipefail
+# No automatic gc or maintenance in the background of the clones and fetches below (see the removal of .git).
+export GIT_CONFIG_COUNT=2 GIT_CONFIG_KEY_0=gc.auto GIT_CONFIG_VALUE_0=0 \
+    GIT_CONFIG_KEY_1=maintenance.auto GIT_CONFIG_VALUE_1=false
 
 ENGINE_DIR="${ENGINE_DIR:-engine}"
 
@@ -224,7 +227,14 @@ for name in local_wunderbyte_table local_catquiz mod_adaptivequiz adaptivequizca
         fi
     fi
 
-    rm -rf "${target}/.git"
+    # No git history is kept. A fetch of a commit that is not the branch head may start an automatic gc in the
+    # background, still writing into .git while it is removed ("Directory not empty", CI 20.11.2026, previous set);
+    # automatic gc is off for this script (above), and the removal is tried again for a few seconds all the same.
+    for _ in 1 2 3 4 5; do
+        rm -rf "${target:?}/.git" 2>/dev/null && break
+        sleep 2
+    done
+    [ ! -e "${target}/.git" ] || { echo "== ${name}: ${target}/.git cannot be removed" >&2; exit 1; }
 
     version=$(grep -oE '\$plugin->version\s*=\s*[0-9]+' "${target}/version.php" | grep -oE '[0-9]+' | head -1)
     echo "   ${commit} version ${version}"

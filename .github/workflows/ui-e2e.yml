@@ -134,7 +134,7 @@ jobs:
           grep -E '^local_catquiz[[:space:]]' engine-manifest.txt | grep -Fq "$CATQUIZ_SHA"
           grep -E '^mod_adaptivequiz[[:space:]]' engine-manifest.txt | grep -Fq "$HOST_SHA"
           grep -E '^adaptivequizcatmodel_catquiz[[:space:]]' engine-manifest.txt | grep -Fq "$MODEL_SHA"
-          echo "${{ matrix.stack }} release engine set verified against actual checkouts
+          echo "${{ matrix.stack }} release engine set verified against actual checkouts"
 
       - name: Configure Moodle
         run: |

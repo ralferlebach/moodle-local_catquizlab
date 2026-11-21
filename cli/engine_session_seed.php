@@ -48,10 +48,10 @@ require_once($CFG->libdir . '/clilib.php');
 require_once($CFG->dirroot . '/user/lib.php');
 
 [$options] = cli_get_params(['items' => 6, 'file' => '', 'report' => false, 'session' => '', 'user' => 0,
-    'change-items' => false, 'usage-probe' => false, 'help' => false]);
+    'change-items' => false, 'usage-probe' => false, 'verify-learners' => false, 'help' => false]);
 if ($options['help']) {
     echo "php cli/engine_session_seed.php [--items=6] [--file=PATH] | --report --session=FILE --user=ID"
-        . " | --change-items --session=FILE | --usage-probe --session=FILE\n";
+        . " | --change-items --session=FILE | --usage-probe --session=FILE | --verify-learners --session=FILE\n";
     exit(0);
 }
 
@@ -67,6 +67,26 @@ function local_catquizlab_engine_session_pool(array $session): array {
     $test = $DB->get_record('local_catquiz_tests', ['componentid' => (int) $session['activities']['A']['instance'],
         'component' => 'mod_adaptivequiz'], 'id, catscaleid, contextid', MUST_EXIST);
     return (new \local_catquiz\catscale((int) $test->catscaleid))->get_testitems((int) $test->contextid, true);
+}
+
+if ($options['verify-learners']) {
+    // Why a learner could not sign in (CI 20.11.2026, Moodle 5.2, candidate engine: "Your login info may be incorrect"
+    // three times, the seed had reported nothing wrong): each learner of the session as the database has them.
+    $session = json_decode((string) file_get_contents((string) $options['session']), true);
+    $out = [];
+    foreach ((array) ($session['learners'] ?? []) as $learner) {
+        $user = $DB->get_record('user', ['username' => $learner['username'], 'mnethostid' => $CFG->mnet_localhost_id]);
+        $out[] = ['username' => $learner['username'], 'exists' => (bool) $user,
+            'id' => $user ? (int) $user->id : null, 'sessionid' => (int) $learner['id'],
+            'auth' => $user->auth ?? null, 'enabled' => $user ? is_enabled_auth($user->auth) : null,
+            'suspended' => $user ? (int) $user->suspended : null, 'deleted' => $user ? (int) $user->deleted : null,
+            'confirmed' => $user ? (int) $user->confirmed : null,
+            'passwordvalid' => $user ? validate_internal_user_password($user, (string) $learner['password']) : null,
+            'lockedout' => $user ? login_is_lockedout($user) : null,
+            'failedlogins' => $user ? (int) get_user_preferences('login_failed_count', 0, $user) : null];
+    }
+    echo json_encode(['learners' => $out]) . "\n";
+    exit(0);
 }
 
 if ($options['usage-probe']) {

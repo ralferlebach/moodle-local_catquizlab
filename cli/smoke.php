@@ -736,6 +736,13 @@ if (!empty($options['no-navigation-failures'])) {
     // Still in play after the limit and the wait: the run moves, and a comparison of sittings while it moves compares
     // two states (gate 12.11.2026). Said and stopped here, with what is known: nothing compared.
     if (!empty($inplay)) {
+        // How the engine judged the sittings collected so far — read, not compared (CI 20.11.2026: without it the
+        // step's verdict said "no valid sitting", having counted none).
+        $observations = new \local_catquizlab\local\results_query(['experimentid' => $experimentid, 'validity' => 'all']);
+        foreach ($observations->each_observation() as $observation) {
+            $state = (string) $observation['validitystate'];
+            $GLOBALS['smokesummary']['validity'][$state] = ($GLOBALS['smokesummary']['validity'][$state] ?? 0) + 1;
+        }
         smoke_summary(['verdict' => 'overload']);
         cli_error($inplay . ' sitting(s) still in play after the limit and the wait: the run is still moving, no '
             . 'sitting compared' . ($navigation > 0 ? '; ' . $navigation . ' execution(s) failed on navigation or transport' : '')
@@ -1273,6 +1280,7 @@ function smoke_outputs_agree(int $experimentid): array {
             $byjson[$key($r)] = $r;
         }
         $given = [];
+        $givenby = [];
         foreach ($subscsv as $r) {
             foreach (['items', 'localse', 'estdelta', 'scalevalid', 'validitystate'] as $field) {
                 if (array_key_exists($field, $r) && !$same($r[$field], $byjson[$key($r)][$field] ?? null)) {
@@ -1282,6 +1290,7 @@ function smoke_outputs_agree(int $experimentid): array {
             }
             if ((int) $r['items'] > 0) {
                 $given[(int) $r['attemptid']][] = (int) $r['items'];
+                $givenby[(int) $r['attemptid']][(string) ($r['subscale'] ?? '?')] = (int) $r['items'];
             }
         }
         $steps = [];
@@ -1308,8 +1317,22 @@ function smoke_outputs_agree(int $experimentid): array {
             }
             $differs = $validity === 'all' ? $fromsteps !== $exported : $part !== [];
             if (isset($given[$id]) && $differs) {
+                // By scale, and the sitting's executions beside it (CI 20.11.2026, highestsub@50: one sitting of 50,
+                // [17,19,29] against [20,20,25], nothing more to read): which scale, and whether it was resumed.
+                $history = [];
+                $rows = $DB->get_records(
+                    'local_catquizlab_attemptlog',
+                    ['attemptid' => $id],
+                    'id ASC',
+                    'id, tryno, outcome, reasoncode'
+                );
+                foreach ($rows as $row) {
+                    $history[] = $row->tryno . ':' . $row->outcome . ($row->reasoncode ? ':' . $row->reasoncode : '');
+                }
                 $problems[] = "{$validity}: sitting {$id}: items per scale from the steps " . json_encode($fromsteps)
-                    . ', in the scale results ' . json_encode($exported);
+                    . ', in the scale results ' . json_encode($exported) . '; by scale, steps '
+                    . json_encode((object) $byscale) . ', results ' . json_encode((object) ($givenby[$id] ?? []))
+                    . '; its executions ' . json_encode($history);
             }
         }
         $facts[] = "{$validity}: " . count($ids) . ' sitting(s), ' . count($subscsv) . ' scale result(s)';

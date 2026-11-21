@@ -309,7 +309,7 @@ jobs:
           rc=0
           bash local/catquizlab/cli/trace_matrix.sh | tee "$GITHUB_WORKSPACE/evidence-trace.txt" || rc=$?
           cat "$OUT/report.md" >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
-          exit $rc"
+          exit $rc
 
       - name: Issue 164 — a trace table of 200 000 rows, retention, no secret in a trace
         working-directory: ${{ env.MOODLE_ROOT }}
@@ -657,7 +657,10 @@ jobs:
                                                                      j['engine']['adaptivequizcatmodel_catquiz']))
           out = {'commit': sha, 'run': os.environ['GITHUB_SERVER_URL'] + '/' + os.environ['GITHUB_REPOSITORY']
                  + '/actions/runs/' + os.environ['GITHUB_RUN_ID'], 'jobs': jobs,
-                 'engine_sets': {k: sorted(map(list, v)) for k, v in sets.items()}, 'problems': problems,
+                 # Rows may hold None (a job without the engine) beside commits: sorted as text (CI 20.11.2026).
+                 'engine_sets': {k: sorted(map(list, v), key=lambda row: [str(x) for x in row])
+                                 for k, v in sets.items()},
+                 'problems': problems,
                  'workflows': sorted({j.get('workflow') or '?' for j in jobs}), 'missing': missing,
                  'skips': {os.path.basename(k): v for k, v in skips.items()}}
           json.dump(out, open('release-manifest.json', 'w'), indent=2)

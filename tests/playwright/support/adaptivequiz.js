@@ -137,7 +137,14 @@ async function login(page, learner) {
         message = await page.locator('#loginerrormessage, .loginerrors, .alert-danger').first().textContent()
             .catch(() => '');
     }
-    throw new Error(`${learner.username} could not sign in after three tries: ${String(message).trim()}`);
+    // What the database says about the learner (CI 20.11.2026: refused three times, nothing else known).
+    let found = '';
+    try {
+        found = JSON.stringify(seedJson(['--verify-learners', '--session=' + process.env.ENGINE_SESSION]));
+    } catch (error) {
+        found = 'not checked: ' + error.message;
+    }
+    throw new Error(`${learner.username} could not sign in after three tries: ${String(message).trim()}; ${found}`);
 }
 
 /**

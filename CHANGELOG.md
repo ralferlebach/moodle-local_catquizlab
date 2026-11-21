@@ -6,6 +6,44 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.7.74] — 2026-11-20 — Version 2026112001. CI on 0.7.73 read: two broken run blocks, the manifest's sort, a git race; the open findings made readable
+
+No database change. No new string.
+
+### Broken by 0.7.72/0.7.73 itself, found on GitHub (no local gate read the workflows)
+- `ui-e2e.yml`, step "Verify exact Interface E2E engine commits": the closing quote of its last `echo` was lost in
+  0.7.73 — "unexpected EOF while looking for matching `"'", all three interface jobs red, the screen-reader jobs
+  after them without their snapshots.
+- `acceptance.yml`, the trace matrix step: a stray quote after `exit $rc` since 0.7.72 — both trace jobs red with the
+  same message, after the matrix itself had run: on 0.7.73 every cell PASS, the checks by sequence clean, selector p50
+  32–52 ms (the span `strategy`, n 252 per traced cell). On 0.7.72 bash reached the quote after the rule's findings.
+- The local lint gate now runs `actionlint` (with shellcheck on every run block) over `.github`, `bash -n` over every
+  shell script, and the self-tests of the three Python checks.
+
+### Release manifest
+- "TypeError: '<' not supported between 'NoneType' and 'str'": a job without the engine (None) and jobs with commits in
+  the same set could not be sorted. Sorted as text now; checked against made-up manifests, the pin check included.
+
+### engine-migration (legacy): `rm: cannot remove …/mod/adaptivequiz/.git: Directory not empty`
+- Fetching a commit that is not the branch head (the previous set) can start git's automatic gc in the background,
+  still writing into `.git` while the script removes it. `fetch-engine.sh` turns automatic gc and maintenance off for
+  its clones and tries the removal again for a few seconds; it fails with a message if `.git` stays.
+
+### Load: the 50-worker steps of classic and highestsub
+- classic@50: "no valid sitting" — with sittings still in play `smoke.php` stopped before it counted the
+  engine's verdicts. It counts them now (read, not compared). The step stays FAIL all the same: one
+  `submit_state_mismatch` remains, despite the late-answer reconciliation of 0.7.73; its text is in the step's
+  `*-smoke.json` (`executions.failures`).
+- highestsub@50: all 50 sittings ended (886 s), and the comparison of the outputs found one sitting whose items per
+  scale differ between the steps and the scale results ([17,19,29] against [20,20,25], 65 items either way). A real
+  disagreement, not yet explained; the message now names both counts by scale and the sitting's executions (resumed or
+  not), so the next run says which scale and whether a resumption is involved.
+
+### engine-session (Moodle 5.2, candidate): "Your login info may be incorrect" three times
+- The seed reported nothing wrong. `engine_session_seed.php --verify-learners` reads each learner of the session as the
+  database has them (exists, auth, suspended, confirmed, password valid, locked out, failed logins); the browser test
+  adds it to the error when a learner cannot sign in.
+
 ## [0.7.73] — 2026-11-20 — Version 2026112000. CI on d23b39c0 (0.7.72) read and fixed; the engine pins moved to the heads of 20.11.2026, a candidate set that follows the heads unpinned, the old set as "previous"
 
 No database change. No new string.
