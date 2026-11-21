@@ -223,7 +223,20 @@ jobs:
           OUT: ${{ github.workspace }}/evidence/load
         run: |
           set -o pipefail
-          bash local/catquizlab/cli/load_matrix.sh | tee "$GITHUB_WORKSPACE/evidence-load.txt"
+          # The runner's own agent first (CI 21.11.2026, 0.7.75: classic and highestsub lost at the 50-worker step,
+          # "The hosted runner lost communication with the server", no log, no artefact): it may not be the one the
+          # kernel kills or starves. The agent: never chosen by the OOM killer, ahead in the CPU queue; the load (smoke,
+          # the workers, their browsers — children of this step) behind it and first in line for the OOM killer. A
+          # browser killed that way fails its execution, and the step's verdict says so.
+          for pid in $(pgrep -f 'Runner\.(Listener|Worker)'); do
+            sudo choom -n -1000 -p "$pid" || true
+            sudo renice -n -5 -p "$pid" > /dev/null || true
+          done
+          echo 500 > /proc/self/oom_score_adj
+          # Memory and CPU of the whole machine every 30 s, to read when a step goes wrong.
+          mkdir -p "$GITHUB_WORKSPACE/evidence"
+          vmstat -t -w 30 > "$GITHUB_WORKSPACE/evidence/vmstat.txt" 2>&1 &
+          nice -n 10 bash local/catquizlab/cli/load_matrix.sh | tee "$GITHUB_WORKSPACE/evidence-load.txt"
 
       - name: The selector's time and the capacity events of the whole job
         if: always()
@@ -404,7 +417,9 @@ jobs:
           bash plugin/.github/scripts/release-manifest.sh > "manifest/manifest-engine-session-${{ matrix.stack }}-${{ matrix.pins }}.json"
           cp engine-manifest.txt installed-versions.txt evidence/ 2>/dev/null || true
           cp -r "$MOODLE_ROOT/local/catquizlab/tests/playwright/artifacts/engine-session" evidence/ 2>/dev/null || true
-          cp -r "$MOODLE_ROOT/local/catquizlab/tests/playwright/test-results" evidence/ 2>/dev/null || true
+          # Playwright writes screenshots, the trace and the error context of a failed test under artifacts/
+          # (playwright.config.js outputDir), not test-results/: until 0.7.76 none of it reached the artefact.
+          cp -r "$MOODLE_ROOT/local/catquizlab/tests/playwright/artifacts" evidence/playwright 2>/dev/null || true
       - uses: actions/upload-artifact@v6
         if: always()
         with:
@@ -502,7 +517,9 @@ jobs:
           # The readings before and after; not the browser session's cookies.
           mkdir -p evidence/engine-migration
           cp "$MOODLE_ROOT"/local/catquizlab/tests/playwright/engine-migration/{before,after}.json evidence/engine-migration/ 2>/dev/null || true
-          cp -r "$MOODLE_ROOT/local/catquizlab/tests/playwright/test-results" evidence/ 2>/dev/null || true
+          # Playwright writes screenshots, the trace and the error context of a failed test under artifacts/
+          # (playwright.config.js outputDir), not test-results/: until 0.7.76 none of it reached the artefact.
+          cp -r "$MOODLE_ROOT/local/catquizlab/tests/playwright/artifacts" evidence/playwright 2>/dev/null || true
       - uses: actions/upload-artifact@v6
         if: always()
         with:

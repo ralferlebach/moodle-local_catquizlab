@@ -6,6 +6,38 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.7.76] — 2026-11-21 — Version 2026112101. CI on d0916f86 (0.7.75): 21 of 24 acceptance jobs green; a sign-in that typed into a form still starting up; the runner lost at 50 workers
+
+No database change. No new string. Nothing in the plugin's PHP changed.
+
+### On d0916f86
+- Release CI, Worker CI, Interface E2E: success. Acceptance 21 of 24: **allsubs and control PASS up to 50 workers**
+  (allsubs: 50 of 50 collected, 50 valid; the output comparison that found the wrong progress in 0.7.74 now agrees),
+  traces, scheduler, migrations, costs, five of six engine-session jobs, the release manifest.
+- **classic and highestsub**: GitHub's annotation "The hosted runner lost communication with the server", after 79 and
+  74 minutes in the matrix step — by its length presumably the 50-worker step, the last and longest; no log, no
+  artefact to say so. Not a verdict of the matrix: the runner's own agent starved or was killed.
+- **engine-session legacy release**: the second learner refused three times ("Invalid login"); the database had the
+  right password, nothing locked (`--verify-learners`, 0.7.74).
+
+### Sign-in (`tests/playwright/support/adaptivequiz.js`)
+- Each try now checks that the form holds what was typed before it submits. Locally, on the login page of a fresh
+  session, a field was empty again right after filling it in 2 of 5 tries (the page's own scripts still starting) —
+  a right password then reads "Invalid login". The form is filled again until it holds both, after the page's network
+  is idle; each refill is counted.
+- After three refused tries, two more with the context's cookies cleared (a fresh session: Moodle also says "Invalid
+  login" for a form token its session does not know). Every try that did not get in is recorded — message, token
+  sent, session cookie before and after, typed or not, refills — in `artifacts/signin.jsonl` and the test's output,
+  and in the error after five.
+- The acceptance workflow now uploads the Playwright output of engine-session and engine-migration (screenshots, trace,
+  error context, `signin.jsonl`): it lies under `artifacts/`, the workflow copied `test-results/`, which is empty.
+
+### Load job (`acceptance.yml`)
+- Before the matrix: the runner's agent (`Runner.Listener`, `Runner.Worker`) out of reach of the OOM killer and ahead
+  in the CPU queue; the matrix and everything it starts (smoke, workers, browsers) at `nice 10` and first in line
+  for the OOM killer. A browser killed that way fails its execution, and the step's verdict says so.
+- `vmstat` every 30 s into the job's evidence, for the next step that goes wrong.
+
 ## [0.7.75] — 2026-11-21 — Version 2026112100. A sitting could carry another person's engine progress; found by the output check of #136 AK 5 on cd4a6dfc
 
 No database change. No new string.

@@ -119,12 +119,37 @@ async function login(page, learner) {
     // Up to three tries: a login page whose form token went stale while it loaded (a cold server, a page recorded on
     // video) says "Invalid login" for the right password. Signing in is not what these tests test; what they test
     // starts after it, and a learner who never got in fails here, with the page's message.
+    //
+    // CI 20.11. (Moodle 5.2) and 21.11.2026 (4.5): three refusals within two seconds, the database saying the password
+    // is right and nothing locked (--verify-learners). Moodle says "Invalid login" for a form token its session does
+    // not know as well; so each refused try notes what the browser held — the session cookie, the token sent — and
+    // after three, two more with the context's cookies cleared: a fresh session. A learner who gets in that way is
+    // said in the test's output (artifacts/signin.jsonl and the log), not passed over.
     let message = '';
-    for (let attempt = 1; attempt <= 3; attempt++) {
+    const tries = [];
+    for (let attempt = 1; attempt <= 5; attempt++) {
+        if (attempt === 4) {
+            await page.context().clearCookies();
+        }
         // Loaded, not only parsed: a field filled before the page's scripts ran can be emptied by them.
         await page.goto('/login/index.php', {waitUntil: 'load'});
-        await page.fill('#username', learner.username);
-        await page.fill('#password', learner.password);
+        const token = await page.locator('input[name="logintoken"]').first().inputValue().catch(() => '');
+        const before = (await page.context().cookies()).filter((c) => /^MoodleSession/.test(c.name))
+            .map((c) => c.name + ':' + c.value.slice(0, 6));
+        // Filled until the form holds what was typed: locally, on a fresh session's first login page, a field was
+        // empty again right after filling it (the page's own scripts, still starting up) — and the right password
+        // then reads "Invalid login". Each refill is noted.
+        let typed = false;
+        let refills = 0;
+        for (; refills < 5 && !typed; refills++) {
+            if (refills > 0) {
+                await page.waitForLoadState('networkidle').catch(() => null);
+            }
+            await page.fill('#username', learner.username);
+            await page.fill('#password', learner.password);
+            typed = (await page.inputValue('#username')) === learner.username
+                && (await page.inputValue('#password')) === learner.password;
+        }
         await page.click('#loginbtn');
         // Signed in: Moodle leaves the login page (through ?loginredirect=1 to the dashboard).
         const left = page.waitForURL((url) => !url.pathname.endsWith('/login/index.php'), {timeout: 60 * 1000})
@@ -132,10 +157,17 @@ async function login(page, learner) {
         const refused = page.locator('#loginerrormessage, .loginerrors .alert, .alert-danger').first()
             .waitFor({state: 'visible', timeout: 60 * 1000}).then(() => false);
         if (await Promise.race([left, refused]).catch(() => false)) {
+            if (attempt > 1) {
+                noteSignin({username: learner.username, signedinat: attempt, tries});
+            }
             return;
         }
         message = await page.locator('#loginerrormessage, .loginerrors, .alert-danger').first().textContent()
             .catch(() => '');
+        const after = (await page.context().cookies()).filter((c) => /^MoodleSession/.test(c.name))
+            .map((c) => c.name + ':' + c.value.slice(0, 6));
+        tries.push({attempt, message: String(message).trim(), token: token ? token.length : 0, typed, refills,
+            cookiebefore: before, cookieafter: after, freshsession: attempt >= 4});
     }
     // What the database says about the learner (CI 20.11.2026: refused three times, nothing else known).
     let found = '';
@@ -144,7 +176,26 @@ async function login(page, learner) {
     } catch (error) {
         found = 'not checked: ' + error.message;
     }
-    throw new Error(`${learner.username} could not sign in after three tries: ${String(message).trim()}; ${found}`);
+    noteSignin({username: learner.username, signedinat: null, tries});
+    throw new Error(`${learner.username} could not sign in after five tries: ${String(message).trim()}; `
+        + `tries ${JSON.stringify(tries)}; ${found}`);
+}
+
+/**
+ * A sign-in that took more than one try, written beside the test's output (artifacts/signin.jsonl).
+ *
+ * @param {object} entry What happened.
+ */
+function noteSignin(entry) {
+    const dir = pathlib.join(__dirname, '..', 'artifacts');
+    try {
+        fs.mkdirSync(dir, {recursive: true});
+        fs.appendFileSync(pathlib.join(dir, 'signin.jsonl'), JSON.stringify(entry) + '\n');
+    } catch (error) {
+        // Only a note: the test goes on, its error says the same.
+    }
+    // eslint-disable-next-line no-console
+    console.log('sign-in: ' + JSON.stringify(entry));
 }
 
 /**
