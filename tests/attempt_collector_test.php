@@ -242,4 +242,54 @@ final class attempt_collector_test extends \advanced_testcase {
         $this->assertSame([7 => 1.5], $result);
         $this->assertSame([], $method->invoke(null, '', ['Known' => 7]));
     }
+
+    /**
+     * The progress read for a sitting is its own CAT attempt's, never the row that another CAT attempt numbered like
+     * the sitting's activity attempt holds (CI cd4a6dfc: another person's, newer, read as this sitting's).
+     *
+     * @return void
+     */
+    public function test_read_progress_is_the_sittings_own(): void {
+        global $DB;
+        $this->resetAfterTest();
+        $manager = $DB->get_manager();
+        if (!$manager->table_exists('local_catquiz_progress') || !$manager->table_exists('adaptivequiz_attempt')) {
+            $this->markTestSkipped('The engine is not installed.');
+        }
+        $me = $this->getDataGenerator()->create_user();
+        $other = $this->getDataGenerator()->create_user();
+        // Only the columns this host version has (4.5 and 5.x differ).
+        $columns = $DB->get_columns('adaptivequiz_attempt');
+        $attempt = static fn(int $userid): int => (int) $DB->insert_record('adaptivequiz_attempt', (object) array_intersect_key([
+            'instance' => 1, 'userid' => $userid, 'uniqueid' => 0, 'attemptstate' => 'inprogress',
+            'attemptstopcriteria' => '', 'questionsattempted' => 0, 'difficultysum' => 0, 'standarderror' => 0,
+            'measure' => 0, 'timecreated' => time(), 'timemodified' => time()], $columns));
+        // Both CAT attempts with ids of their own choosing: mine far off, the other person's with the number of my
+        // activity attempt — as two counters that run side by side produce it.
+        $cat = static function (int $id, int $attemptid, int $userid) use ($DB): int {
+            $DB->insert_record_raw('local_catquiz_attempts', ['id' => $id, 'attemptid' => $attemptid,
+                'userid' => $userid, 'component' => 'mod_adaptivequiz', 'timecreated' => time()], false, false, true);
+            return $id;
+        };
+        $progress = static fn(int $catid, int $userid, array $played): int => (int) $DB->insert_record(
+            'local_catquiz_progress',
+            (object) ['attemptid' => $catid, 'userid' => $userid, 'component' => 'adaptivequiz', 'timemodified' => time(),
+                'json' => json_encode(['playedquestions' => $played])]
+        );
+
+        $mine = $attempt((int) $me->id);
+        $theirs = $attempt((int) $other->id);
+        $mycat = $cat($mine + 100000, $mine, (int) $me->id);
+        $progress($mycat, (int) $me->id, [['id' => 11], ['id' => 12], ['id' => 13]]);
+        // The other person's CAT attempt is numbered like my activity attempt, and its progress is the newer row.
+        $cat($mine, $theirs, (int) $other->id);
+        $progress($mine, (int) $other->id, [['id' => 91], ['id' => 92]]);
+
+        $method = new \ReflectionMethod(attempt_collector::class, 'read_progress');
+        $read = $method->invoke(null, $mine);
+        $this->assertSame([11, 12, 13], array_column($read['playedquestions'], 'id'));
+        // Without a CAT attempt (an engine before 1.2.1): the row under the activity attempt, if it is the person's.
+        $DB->delete_records('local_catquiz_attempts', ['id' => $mycat]);
+        $this->assertSame([], $method->invoke(null, $mine));
+    }
 }

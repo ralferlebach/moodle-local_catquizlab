@@ -525,18 +525,26 @@ class attempt_collector {
         // 1.2.1 local_catquiz_progress.attemptid is local_catquiz_attempts.id.
         // Looked up without a component filter, because the engine writes
         // "adaptivequiz" there while its own progress lookup asks for
-        // "mod_adaptivequiz" — which is also why, as of 1.2.1, the engine
-        // never persists the progress row at all (reported upstream).
+        // "mod_adaptivequiz".
+        //
+        // Only by the CAT attempt where there is one (0.7.75, CI cd4a6dfc). Until 0.7.74 both numbers were asked for
+        // and the newest row taken: the activity attempt's number is also the id of some other CAT attempt, and that
+        // attempt's progress — another person's, often still running — was read as this sitting's whenever it was the
+        // newer row. Its steps, scale states and ability path stood in the sitting (highestsub@50: 46 steps of
+        // another sitting for 65 items; allsubs@50: 105 of another for 105, by scale one apart). The activity attempt's
+        // number is asked for only where no CAT attempt exists (an engine before 1.2.1), and in both cases only rows
+        // of the sitting's own person count.
+        $owner = (int) $DB->get_field('adaptivequiz_attempt', 'userid', ['id' => $engineattemptid]);
+        if ($owner <= 0) {
+            return [];
+        }
         $catattemptid = (int) $DB->get_field_sql(
-            'SELECT MAX(id) FROM {local_catquiz_attempts} WHERE attemptid = :attemptid',
-            ['attemptid' => $engineattemptid]
+            'SELECT MAX(id) FROM {local_catquiz_attempts} WHERE attemptid = :attemptid AND userid = :userid',
+            ['attemptid' => $engineattemptid, 'userid' => $owner]
         );
-        $keys = array_values(array_filter([$catattemptid, $engineattemptid]));
-        [$insql, $params] = $DB->get_in_or_equal($keys, SQL_PARAMS_NAMED, 'att');
-        $record = $DB->get_records_select(
+        $record = $DB->get_records(
             'local_catquiz_progress',
-            'attemptid ' . $insql,
-            $params,
+            ['attemptid' => $catattemptid > 0 ? $catattemptid : $engineattemptid, 'userid' => $owner],
             'id DESC',
             '*',
             0,

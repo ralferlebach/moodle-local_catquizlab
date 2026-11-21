@@ -6,6 +6,39 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.7.75] — 2026-11-21 — Version 2026112100. A sitting could carry another person's engine progress; found by the output check of #136 AK 5 on cd4a6dfc
+
+No database change. No new string.
+
+### The defect
+- `attempt_collector::read_progress()` looked up the engine's progress row under two numbers — the sitting's CAT
+  attempt (`local_catquiz_attempts.id`, the key since local_catquiz 1.2.1) and, for older engines, its activity
+  attempt (`adaptivequiz_attempt.id`) — and took the newest row. The activity attempt's number is also the id of some
+  other CAT attempt; where that one's progress row was newer, the sitting was collected with **another person's
+  progress**: its played questions, scale states, responses and ability path, the step-level export and the test flow
+  built from them. The engine's own results (items, SE, ability, end) were the sitting's.
+- CI cd4a6dfc (0.7.74), the 50-worker steps: highestsub sitting 89 with 46 steps of another, still running sitting for
+  its 65 items ("TOO SHORT … answered 46"; by scale steps {24: 20, 25: 26}, results {17, 26, 22}); allsubs sitting 56
+  with 105 steps of another for its 105 (by scale one apart). The output comparison (0.7.72, #136 AK 5) caught both;
+  the steps of 0.7.74 named the scales and showed that neither sitting was resumed.
+- Locally, of 317 stored sittings on the development site 3 carry a progress other than their own CAT attempt's;
+  re-collected with the 0.7.74 lookup, 131 would. It takes parallel sittings and two counters that meet; with one or
+  a few workers it rarely happens, which is why only the 50-worker steps showed it.
+
+### The fix
+- Only the sitting's own CAT attempt (the activity attempt's number only where there is none, an engine before 1.2.1),
+  and in both cases only rows of the sitting's own person.
+- `tests/attempt_collector_test.php::test_read_progress_is_the_sittings_own`: another person's CAT attempt numbered
+  like the sitting's activity attempt, with the newer progress row — red with the 0.7.74 code (it read [91, 92]),
+  green now ([11, 12, 13]).
+- Sittings collected before 0.7.75 keep what they were collected with; a re-collection reads the right row.
+
+### Everything else on cd4a6dfc: green
+- Release CI, Worker CI, Interface E2E (with the screen-reader jobs): success. Acceptance: 22 of 24 jobs green —
+  classic and control PASS up to 50 workers (no failed execution, no load guard trip on this runner), allsubs and
+  highestsub PASS up to 25, the trace matrices, the scheduler, every engine-session job (moodle5 candidate included),
+  the three migrations previous → release, the four cost jobs, the release manifest.
+
 ## [0.7.74] — 2026-11-20 — Version 2026112001. CI on 0.7.73 read: two broken run blocks, the manifest's sort, a git race; the open findings made readable
 
 No database change. No new string.
