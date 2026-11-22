@@ -24,6 +24,10 @@
 # readable, the smoke test passed, no 5xx, every answer request mapped onto its engine trace and every item selection
 # onto its selector span where the engine traces, no trace where it does not; then the whole matrix (every cell of
 # every strategy REPEAT times) and the comparison (no missing pair, no empty sample). Any finding: exit 1.
+#
+# The request time taken apart (#164 AK02, 0.7.77): every cell has the server's edge counters per request (database
+# time, session lock) and the client's time per sitting; after the 2 x 2 a query-log cell per strategy (PERSIST=1, the
+# default) times the engine trace's own INSERT through Moodle's query log. A part not measured whole fails the cell.
 set -u
 MOODLE="${MOODLE_ROOT:-/home/claude/moodle}"
 WORKERS="${WORKERS:-4}"
@@ -42,6 +46,7 @@ mkdir -p "$OUT"
 trace_before=$("$PHP" "$CFG" --component=local_catquiz --name=attempttrace 2>/dev/null)
 debug_before=$("$PHP" "$CFG" --component=local_catquizlab --name=debuglevel 2>/dev/null)
 restore() {
+    "$PHP" "$CLI/trace_report.php" --querylog=off > /dev/null
     "$PHP" "$CFG" --component=local_catquiz --name=attempttrace --set="${trace_before:-0}" > /dev/null
     "$PHP" "$CFG" --component=local_catquizlab --name=debuglevel --set="${debug_before:-off}" > /dev/null
     echo "Settings put back: attempttrace=${trace_before:-0}, debuglevel=${debug_before:-off}."
@@ -57,12 +62,24 @@ fi
 printf '%-24s %-6s %s\n' cell result 'what the cell measured'
 n=0
 bad=0
+# The query-log cells (#164 AK02): engine tracing on, lab debug off, Moodle's query log on — the engine trace's own
+# INSERT timed by the database layer. After the 2 x 2 and apart from it (the log costs every query an INSERT of its own;
+# the comparison's cells run without it). PERSIST=0 leaves them out, and with them the measurement AK02 asks for.
+if [ "${PERSIST:-1}" = 1 ]; then
+    order="$order 1:querylog"
+fi
 for cell in $order; do
     trace=${cell%%:*}
     debug=${cell##*:}
     n=$((n + 1))
     "$PHP" "$CFG" --component=local_catquiz --name=attempttrace --set="$trace" > /dev/null
-    "$PHP" "$CFG" --component=local_catquizlab --name=debuglevel --set="$debug" > /dev/null
+    if [ "$debug" = querylog ]; then
+        "$PHP" "$CFG" --component=local_catquizlab --name=debuglevel --set=off > /dev/null
+        "$PHP" "$CLI/trace_report.php" --querylog=on > /dev/null
+    else
+        "$PHP" "$CFG" --component=local_catquizlab --name=debuglevel --set="$debug" > /dev/null
+        "$PHP" "$CLI/trace_report.php" --querylog=off > /dev/null
+    fi
     if [ "$COLD" = 1 ]; then
         "$PHP" "$MOODLE/admin/cli/purge_caches.php" > /dev/null
     fi
@@ -84,8 +101,15 @@ for cell in $order; do
             > "$OUT/$name-requests.json" 2>/dev/null
         echo "{\"cell\": \"$name\", \"trace\": $trace, \"debug\": \"$debug\", \"strategy\": \"$strategy\", \"cold\": $COLD, \"from\": $from, \"until\": $until, \"result\": \"$result\"}" \
             > "$OUT/$name-cell.json"
+        if [ "$debug" = querylog ]; then
+            # The log off before the reports read it: their own queries are not the cell's.
+            "$PHP" "$CLI/trace_report.php" --querylog=off > /dev/null
+        fi
         "$PHP" "$CLI/trace_report.php" --from="$from" --until="$until" --json > "$OUT/$name-traces.json" 2>/dev/null
         "$PHP" "$CLI/trace_report.php" --from="$from" --until="$until" > "$OUT/$name-traces.txt" 2>/dev/null
+        if [ "$debug" = querylog ]; then
+            "$PHP" "$CLI/trace_report.php" --querylog=on > /dev/null
+        fi
         experiment=$(python3 -c 'import json,sys
 try: print(int(json.load(open(sys.argv[1])).get("experimentid") or 0))
 except Exception: print(0)' "$OUT/$name-smoke.json")
@@ -100,10 +124,17 @@ except Exception: print(0)' "$OUT/$name-smoke.json")
 done
 echo "Everything in $OUT. The tables in $OUT/*-traces.txt have n, mean, sd and the 95 % interval per kind."
 # The whole 2 x 2: every cell there REPEAT times for every strategy, each clean (trace_matrix_check.py).
-python3 "$CLI/trace_matrix_check.py" matrix "$OUT" "$STRATEGIES" "$REPEAT" || bad=$((bad + 1))
+python3 "$CLI/trace_matrix_check.py" matrix "$OUT" "$STRATEGIES" "$REPEAT" "${PERSIST:-1}" || bad=$((bad + 1))
 # The comparison of the cells over every request (bootstrap intervals of the differences), report.md and report.json;
 # it fails on a missing pair or an empty sample.
 python3 "$CLI/trace_matrix_compare.py" "$OUT" || bad=$((bad + 1))
+# The request time taken apart, per cell (#164 AK02): appended to the report.
+{
+    echo
+    echo "## The request time taken apart (#164 AK02; measured counters only)"
+    echo
+    python3 "$CLI/trace_matrix_check.py" decomposition "$OUT"
+} | tee -a "$OUT/report.md"
 if [ "$bad" -gt 0 ]; then
     echo "FAIL: the trace matrix is not complete and clean ($bad finding(s) above; $OUT/*-check.txt, matrix-check.txt)."
     exit 1

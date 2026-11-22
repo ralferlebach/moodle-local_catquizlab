@@ -531,7 +531,8 @@ class results_query {
         $row = $DB->get_record_sql(
             'SELECT COUNT(1) AS sittings, SUM(' . trace_reader::digest_bytes_sql('a') . ') AS bytes
                FROM {local_catquizlab_attempt} a
-              WHERE a.runid ' . $insql . ' AND a.status IN (:collected, :validated) AND a.tracejson IS NOT NULL',
+              WHERE a.runid ' . $insql . ' AND a.status IN (:collected, :validated) AND a.tracejson IS NOT NULL
+                AND ' . progress_provenance::included_sql('a'),
             $params
         );
         $count = (int) ($row->sittings ?? 0);
@@ -720,7 +721,9 @@ class results_query {
             $persons = [];
             // Restricted to given sittings where asked (#99): a twin family
             // of a few tests is fetched as itself, not found by reading all.
-            $where = 'a.runid = :runid AND a.status IN (:collected, :validated) AND a.tracejson IS NOT NULL';
+            // Without the sittings left out for their provenance (#168 AK3: another sitting's progress, not re-derived).
+            $where = 'a.runid = :runid AND a.status IN (:collected, :validated) AND a.tracejson IS NOT NULL AND '
+                . progress_provenance::included_sql('a');
             $batchparams = [
                 'runid'     => $runid,
                 'collected' => attempt_scheduler::STATUS_COLLECTED,

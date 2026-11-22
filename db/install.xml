@@ -420,5 +420,28 @@
         <INDEX NAME="timecreated-outcome" UNIQUE="false" FIELDS="timecreated, outcome" COMMENT="The load guard's window over the whole installation (#124)."/>
       </INDEXES>
     </TABLE>
+    <TABLE NAME="local_catquizlab_provenance" COMMENT="Decisions on whose engine progress a sitting carries (#168): one row per decision, never one changed. A re-derivation keeps the trace it replaced, so it can be undone.">
+      <FIELDS>
+        <FIELD NAME="id" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="true"/>
+        <FIELD NAME="attemptid" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="false" COMMENT="The sitting (local_catquizlab_attempt)."/>
+        <FIELD NAME="verdict" TYPE="char" LENGTH="20" NOTNULL="true" SEQUENCE="false" COMMENT="verified, mismatch, suspect, notreconstructable, notassessed (progress_provenance)."/>
+        <FIELD NAME="progresscount" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false" COMMENT="Questions in the stored engine progress."/>
+        <FIELD NAME="itemcount" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false" COMMENT="Items of the sitting's own question usage."/>
+        <FIELD NAME="overlap" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false" COMMENT="Questions in both."/>
+        <FIELD NAME="decision" TYPE="char" LENGTH="20" NOTNULL="true" SEQUENCE="false" COMMENT="recorded, excluded, rederived, reverted."/>
+        <FIELD NAME="previoustrace" TYPE="text" NOTNULL="false" SEQUENCE="false" COMMENT="The trace a re-derivation or revert replaced."/>
+        <FIELD NAME="previoushash" TYPE="char" LENGTH="64" NOTNULL="false" SEQUENCE="false" COMMENT="SHA-256 of previoustrace."/>
+        <FIELD NAME="rules" TYPE="int" LENGTH="4" NOTNULL="true" DEFAULT="1" SEQUENCE="false" COMMENT="Version of the verdict rules."/>
+        <FIELD NAME="note" TYPE="char" LENGTH="255" NOTNULL="false" SEQUENCE="false" COMMENT="Why, in a few words."/>
+        <FIELD NAME="userid" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false" COMMENT="Who decided."/>
+        <FIELD NAME="timecreated" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="false"/>
+      </FIELDS>
+      <KEYS>
+        <KEY NAME="primary" TYPE="primary" FIELDS="id"/>
+      </KEYS>
+      <INDEXES>
+        <INDEX NAME="attemptid-decision" UNIQUE="false" FIELDS="attemptid, decision"/>
+      </INDEXES>
+    </TABLE>
   </TABLES>
 </XMLDB>

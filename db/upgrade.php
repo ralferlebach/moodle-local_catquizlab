@@ -719,6 +719,17 @@ function xmldb_local_catquizlab_upgrade($oldversion): bool {
         upgrade_plugin_savepoint(true, 2026111501, 'local', 'catquizlab');
     }
 
+    if ($oldversion < 2026112102) {
+        // Decisions on whose engine progress a sitting carries (#168).
+        if (!$dbman->table_exists('local_catquizlab_provenance')) {
+            $dbman->install_one_table_from_xmldb_file(
+                $CFG->dirroot . '/local/catquizlab/db/install.xml',
+                'local_catquizlab_provenance'
+            );
+        }
+        upgrade_plugin_savepoint(true, 2026112102, 'local', 'catquizlab');
+    }
+
     return true;
 }
 

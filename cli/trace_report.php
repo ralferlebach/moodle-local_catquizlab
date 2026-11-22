@@ -30,7 +30,13 @@
  * With the engine's tracing off (local_catquiz/attempttrace = 0) there are no traces, and the report says so instead of
  * printing zeros as if they were measured (#164 AK7).
  *
- * Read only. The trace table is the engine's (local_catquiz_trace); nothing is written to it.
+ * And the request time taken apart from measured counters (#164 AK02; trace_decomposition): the engine trace's own
+ * INSERT where Moodle's query log timed it (--querylog=on sets the flag config.php reads; off removes it), the server's
+ * database time and session lock per request, the client's time per sitting. Fail closed: a part not measured whole is
+ * said to be so.
+ *
+ * Read only, but for the query-log flag. The trace table is the engine's (local_catquiz_trace); nothing is written to
+ * it.
  *
  * @package    local_catquizlab
  * @copyright  2026 Ralf Erlebach
@@ -44,9 +50,22 @@ require_once($CFG->libdir . '/clilib.php');
 
 use local_catquizlab\local\live_correlation;
 
-[$options] = cli_get_params(['from' => 0, 'until' => 0, 'json' => false, 'rows' => 20, 'help' => false]);
+[$options] = cli_get_params(['from' => 0, 'until' => 0, 'json' => false, 'rows' => 20, 'querylog' => '',
+    'help' => false]);
+// Moodle's query log on or off for the requests that follow (#164 AK02): config.php turns dboptions logall on while
+// the flag file exists. Nothing else is changed.
+if ((string) $options['querylog'] !== '') {
+    $flag = \local_catquizlab\local\trace_decomposition::flag_path();
+    if ($options['querylog'] === 'on') {
+        file_put_contents($flag, gmdate('c') . "\n");
+    } else if (is_file($flag)) {
+        unlink($flag);
+    }
+    cli_writeln('Query log flag ' . (is_file($flag) ? 'set' : 'not set') . ": {$flag}");
+    exit(0);
+}
 if (!empty($options['help']) || (int) $options['from'] <= 0) {
-    cli_writeln('php cli/trace_report.php --from=UNIXTIME [--until=UNIXTIME] [--json] [--rows=20]');
+    cli_writeln('php cli/trace_report.php --from=UNIXTIME [--until=UNIXTIME] [--json] [--rows=20] | --querylog=on|off');
     exit((int) $options['from'] > 0 ? 0 : 1);
 }
 $from = (int) $options['from'];
@@ -183,6 +202,9 @@ foreach (
 }
 
 $report['selections'] = $report['spans']['strategy:select_question']['n'] ?? 0;
+// The request time taken apart, from measured counters only (#164 AK02): the trace INSERT, the server's database time
+// and session lock, the client's time; each said measured, incomplete or not measured — never estimated.
+$report['decomposition'] = \local_catquizlab\local\trace_decomposition::build($from, $until, $report['tracing']);
 if (!empty($options['json'])) {
     // Every map an object, also when empty: an empty PHP array is a JSON list, and a reader that expects a map broke on
     // it (#164, re-audit 19.11.2026: "'list' object has no attribute 'get'").
@@ -261,6 +283,22 @@ if ($report['traces'] === 0) {
 cli_writeln('Executions in the window: ' . json_encode($report['executions']) . '; capacity causes: '
     . json_encode($report['capacitycauses']) . '.');
 cli_writeln('Lab debug log in the window: ' . ($report['debug'] === [] ? 'nothing' : json_encode($report['debug'])) . '.');
+$d = $report['decomposition'];
+$q = static fn(?array $s): string => $s === null || ($s['n'] ?? 0) === 0 ? '–'
+    : sprintf('p50 %.1f, p95 %.1f, p99 %.1f, max %.1f ms (n %d)', $s['p50'], $s['p95'], $s['p99'], $s['max'], $s['n']);
+cli_writeln('The request time taken apart (#164 AK02): ' . ($d['verdict'] === 'measured' ? 'measured whole'
+    : 'NOT measured whole — ' . implode('; ', $d['missing'])) . '.');
+cli_writeln('  trace INSERT (query log): ' . ($d['persistence']['status'] === 'measured'
+    ? $q($d['persistence']['stats']) . ", {$d['persistence']['matched']} of {$d['persistence']['traces']} trace(s)"
+    : $d['persistence']['status'] . (isset($d['persistence']['why']) ? ' — ' . $d['persistence']['why'] : '')));
+foreach (
+    ['durationms' => 'server, whole request', 'dbms' => 'server, database', 'lockwaitms' => 'server, session lock wait',
+    'lockheldms' => 'server, session lock held', 'otherms' => 'server, neither'] as $key => $label
+) {
+    cli_writeln("  {$label}: " . $q($d['server'][$key] ?? null));
+}
+cli_writeln('  client (runtime less server busy, per sitting): ' . $q($d['client']['stats'] ?? null) . ' — '
+    . $d['client']['status'] . (isset($d['client']['why']) ? ': ' . $d['client']['why'] : ''));
 
 /**
  * Count, mean, standard deviation, a 95 % interval of the mean, quantiles and maximum of all values.

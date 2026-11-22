@@ -23,8 +23,8 @@ deleted, with them — 1 or 2 selector spans against 240 answer requests. Now:
 
     trace_matrix_check.py cell OUT NAME     one cell: its summary line on stdout; its problems in OUT/NAME-check.txt,
                                             exit 1 when there is one
-    trace_matrix_check.py matrix OUT STRATEGIES REPEAT
-                                            the whole matrix: every (strategy, tracing, debug) cell there REPEAT times,
+    trace_matrix_check.py matrix OUT STRATEGIES REPEAT [QUERYLOG]
+                                            the whole matrix (and with QUERYLOG 1 the query-log cell per strategy): every (strategy, tracing, debug) cell there REPEAT times,
                                             each checked clean; exit 1 otherwise
     trace_matrix_check.py --self-test       every failure case below against a made-up cell, and one clean cell
 
@@ -36,9 +36,18 @@ sitting's requests are mapped one to one onto its traces — its attempt.php GET
 strategy:select_question span, in order (first_item and every next_item but the one that ended the sitting; complete
 none), and every trace belongs to a lab sitting, except the preparation's dry run (first_item on an engine attempt
 that no longer exists).
+
+The decomposition of the request time (#164 AK02, 0.7.77; trace_decomposition.php): in every cell the server's edge
+counters (database time, session lock waited and held) on every request line, and the client's time per sitting (its
+runtime less the server's busy time); in the query-log cell (debug "querylog": engine tracing on, Moodle's query log on)
+also the engine trace's own INSERT, timed by the database layer, for every trace. A part not measured whole is a
+problem — never a pass on missing data.
+
+    trace_matrix_check.py decomposition OUT  the parts of every cell as a Markdown table, on stdout
 """
 
 import csv
+import glob
 import json
 import os
 import shutil
@@ -129,6 +138,28 @@ def problems_of(out, name):
     facts['answers'] = answers
     if rows and answers == 0:
         problems.append('no answer request (attempt.php POST) among the requests')
+
+    # The request time taken apart (#164 AK02): measured whole, or a problem.
+    if traces:
+        dec = traces.get('decomposition')
+        if not isinstance(dec, dict):
+            problems.append('engine trace report without the decomposition of the request time')
+        else:
+            for part in ('server', 'client'):
+                got = dec.get(part) if isinstance(dec.get(part), dict) else {}
+                if got.get('status') != 'measured':
+                    problems.append(f'decomposition, {part}: {got.get("status")!r} — {got.get("why", "no reason given")}')
+            persistence = dec.get('persistence') if isinstance(dec.get('persistence'), dict) else {}
+            facts['persistence'] = persistence.get('status')
+            if meta.get('debug') == 'querylog':
+                if persistence.get('status') != 'measured':
+                    problems.append(f'decomposition, persistence (the trace INSERT) in the query-log cell: '
+                                    f'{persistence.get("status")!r} — {persistence.get("why", "no reason given")}')
+                if dec.get('verdict') != 'measured':
+                    problems.append(f'decomposition not measured whole: {dec.get("missing")}')
+            elif persistence.get('status') == 'measured':
+                problems.append('the trace INSERT measured outside the query-log cell: the query log was on in a '
+                                'cell of the comparison')
 
     # The engine's report: maps are maps, and what tracing says it should hold.
     for key in MAPS:
@@ -230,6 +261,40 @@ def summary_line(facts, traces_path):
             f"traces {facts.get('traces', '–')}  KiB {round((t.get('bytes') or 0) / 1024)}")
 
 
+def decomposition_table(out):
+    """The parts of the request time of every cell, as Markdown (#164 AK02)."""
+    rows = ['| cell | trace INSERT ms p50/p95/p99 (n of traces) | server ms, every request, p50/p95/p99 | DB ms p50/p95/p99 | '
+            'lock wait ms p50/p95/p99 | lock held ms p50/p95 | rest ms p50/p95/p99 | client wait ms p50/p95/p99 '
+            '(sittings) | verdict |', '|' + '---|' * 9]
+    q = lambda s: '/'.join('–' if not isinstance(s, dict) or s.get(k) is None else '%.1f' % s[k]
+                           for k in ('p50', 'p95', 'p99'))
+    for path in sorted(glob.glob(f'{out}/*-traces.json')):
+        name = os.path.basename(path)[:-len('-traces.json')]
+        try:
+            dec = load_json(path).get('decomposition') or {}
+        except (OSError, ValueError, AttributeError):
+            dec = {}
+        try:
+            querylog = load_json(f'{out}/{name}-cell.json').get('debug') == 'querylog'
+        except (OSError, ValueError, AttributeError):
+            querylog = False
+        p, sv, c = (dec.get(k) or {} for k in ('persistence', 'server', 'client'))
+        # In a comparison cell the INSERT is not measured by design (the query log is off there): say what was.
+        verdict = dec.get('verdict', 'missing')
+        if not querylog and dec and all((dec.get(k) or {}).get('status') == 'measured' for k in ('server', 'client')):
+            verdict = 'server and client measured; INSERT: query-log cell'
+        elif dec.get('missing'):
+            verdict += ': ' + '; '.join(dec['missing'])
+        pers = (q(p.get('stats')) + f" ({p.get('matched', 0)} of {p.get('traces', 0)})") \
+            if p.get('status') == 'measured' else str(p.get('status'))
+        held = '/'.join('–' if (sv.get('lockheldms') or {}).get(k) is None else '%.1f' % sv['lockheldms'][k]
+                        for k in ('p50', 'p95'))
+        rows.append(f"| {name} | {pers} | {q(sv.get('durationms'))} | {q(sv.get('dbms'))} | {q(sv.get('lockwaitms'))} | "
+                    f"{held} | {q(sv.get('otherms'))} | {q(c.get('stats'))} ({c.get('measured', 0)}) | "
+                    f"{verdict} |")
+    return '\n'.join(rows) + '\n'
+
+
 def check_cell(out, name):
     problems, facts = problems_of(out, name)
     with open(f'{out}/{name}-check.txt', 'w') as f:
@@ -238,7 +303,7 @@ def check_cell(out, name):
     return 1 if problems else 0
 
 
-def check_matrix(out, strategies, repeat):
+def check_matrix(out, strategies, repeat, querylog=False):
     problems = []
     seen = {}
     for path in sorted(os.listdir(out)):
@@ -255,6 +320,9 @@ def check_matrix(out, strategies, repeat):
                 n = seen.get((strategy, trace, debug), 0)
                 if n < repeat:
                     problems.append(f'cell {strategy} tracing {trace} debug {debug}: {n} of {repeat} run(s)')
+        # The trace INSERT, measured in a cell of its own (#164 AK02).
+        if querylog and seen.get((strategy, 1, 'querylog'), 0) < 1:
+            problems.append(f'cell {strategy} tracing 1 with the query log (the trace INSERT): missing')
     with open(f'{out}/matrix-check.txt', 'w') as f:
         f.write(''.join(p + '\n' for p in problems) or 'clean\n')
     for p in problems:
@@ -281,8 +349,18 @@ def self_test():
                                            + ['complete:0']}} if trace else {},
                        'unlinked': [{'kind': 'first_item', 'exists': False}] if trace else []},
         }
+        querylog = change.pop('querylog', False)
+        dec = change.pop('dec', None)
+        if querylog:
+            files['cell']['debug'] = 'querylog'
         for key, value in change.items():
             files[key] = value
+        if isinstance(files['traces'], dict) and 'decomposition' not in files['traces'] and dec != 'none':
+            measured = {'status': 'measured'}
+            files['traces'] = dict(files['traces'], decomposition=dec or {
+                'server': measured, 'client': measured, 'verdict': 'measured' if querylog else 'not_measured',
+                'persistence': measured if querylog else ({'status': 'not_measured', 'why': 'log off'} if trace
+                                                          else {'status': 'not_applicable'})})
         for key in ('cell', 'smoke', 'requests', 'traces'):
             if files[key] is None:
                 continue
@@ -351,6 +429,23 @@ def self_test():
         ('an unlinked trace not the dry run', {'traces': t(unlinked=[{'kind': 'next_item', 'exists': True}])}, 1),
         ('selector statistics short', {'traces': t(spans={'strategy:select_question': {'n': 1}})}, 1),
         ('an unlinked trace not listed', {'traces': t(links={'stored': 4, 'none': 2})}, 1),
+        # The decomposition of the request time (#164 AK02).
+        ('clean, the query-log cell with every trace INSERT timed', {'querylog': True}, 0),
+        ('no decomposition in the report', {'dec': 'none'}, 1),
+        ('server counters on only some lines', {'dec': {'server': {'status': 'incomplete', 'why': '3 of 9'},
+                                                        'client': {'status': 'measured'},
+                                                        'persistence': {'status': 'not_measured'}}}, 1),
+        ('client time not measured', {'dec': {'server': {'status': 'measured'}, 'client': {'status': 'not_measured'},
+                                              'persistence': {'status': 'not_measured'}}}, 1),
+        ('query-log cell, the INSERTs not logged', {'querylog': True, 'dec': {
+            'server': {'status': 'measured'}, 'client': {'status': 'measured'},
+            'persistence': {'status': 'not_measured', 'why': 'query log off'}, 'verdict': 'not_measured'}}, 1),
+        ('query-log cell, some INSERTs not logged', {'querylog': True, 'dec': {
+            'server': {'status': 'measured'}, 'client': {'status': 'measured'},
+            'persistence': {'status': 'incomplete', 'why': '2 of 30'}, 'verdict': 'not_measured'}}, 1),
+        ('the query log on in a cell of the comparison', {'dec': {
+            'server': {'status': 'measured'}, 'client': {'status': 'measured'},
+            'persistence': {'status': 'measured'}, 'verdict': 'measured'}}, 1),
     ]
     bad = 0
     for label, change, expect in cases:
@@ -390,7 +485,27 @@ def self_test():
     ok = got == 1
     bad += not ok
     print(('ok   ' if ok else 'FAIL ') + 'a cell of the 2 x 2 missing: the matrix fails')
-    print(f'{len(cases) + 1 - bad} of {len(cases) + 1} cases as expected.')
+    # The query-log cell: required when asked for, there or missing.
+    out = tempfile.mkdtemp()
+    try:
+        for i, (trace, debug) in enumerate([(0, 'off'), (1, 'off'), (0, 'trace'), (1, 'trace')]):
+            cell = {'cell': f'{i}', 'trace': trace, 'debug': debug, 'strategy': 'fastest', 'result': 'PASS'}
+            write_cell(out, f'{i}', trace=trace, cell=cell,
+                       **({} if trace else {'traces': {'tracing': False, 'traces': 0, 'kinds': {}, 'spans': {},
+                                                        'links': {}, 'bysitting': {}, 'unlinked': []}}))
+        with contextlib.redirect_stdout(io.StringIO()):
+            without = check_matrix(out, ['fastest'], 1, True)
+            write_cell(out, 'q', trace=1, querylog=True)
+            withcell = check_matrix(out, ['fastest'], 1, True)
+            table = decomposition_table(out)
+    finally:
+        shutil.rmtree(out)
+    for label, ok in (('the query-log cell missing: the matrix fails', without == 1),
+                      ('the query-log cell there: the matrix is clean', withcell == 0),
+                      ('the decomposition table has a row per cell', table.count('\n') == 2 + 5)):
+        bad += not ok
+        print(('ok   ' if ok else 'FAIL ') + label)
+    print(f'{len(cases) + 4 - bad} of {len(cases) + 4} cases as expected.')
     return 0 if bad == 0 else 1
 
 
@@ -399,8 +514,11 @@ def main(argv):
         return self_test()
     if argv[1:2] == ['cell']:
         return check_cell(argv[2], argv[3])
+    if argv[1:2] == ['decomposition']:
+        sys.stdout.write(decomposition_table(argv[2]))
+        return 0
     if argv[1:2] == ['matrix']:
-        return check_matrix(argv[2], argv[3].split(), int(argv[4]))
+        return check_matrix(argv[2], argv[3].split(), int(argv[4]), argv[5:6] == ['1'])
     print(__doc__)
     return 2
 

@@ -90,14 +90,18 @@ class build_research_package extends \core\task\adhoc_task {
      * The packages of an experiment that are queued or being built.
      *
      * @param int $experimentid The experiment.
-     * @return array[] running (bool) and since (Unix time: started, or due).
+     * @return array[] running (bool), failed (bool: an earlier try failed, the next is due at since) and since (Unix
+     *      time: started, or due).
      */
     public static function pending(int $experimentid): array {
         $out = [];
         foreach (\core\task\manager::get_adhoc_tasks(self::class) as $task) {
             if ((int) ($task->get_custom_data()->experimentid ?? 0) === $experimentid) {
                 $started = (int) $task->get_timestarted();
-                $out[] = ['running' => $started > 0, 'since' => $started > 0 ? $started : (int) $task->get_next_run_time()];
+                // A build that failed stays queued with a delay before the next try (#169 AK3): said as failed, not
+                // as an ordinary wait.
+                $out[] = ['running' => $started > 0, 'failed' => $started === 0 && (int) $task->get_fail_delay() > 0,
+                    'since' => $started > 0 ? $started : (int) $task->get_next_run_time()];
             }
         }
 

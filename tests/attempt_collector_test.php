@@ -292,4 +292,34 @@ final class attempt_collector_test extends \advanced_testcase {
         $DB->delete_records('local_catquiz_attempts', ['id' => $mycat]);
         $this->assertSame([], $method->invoke(null, $mine));
     }
+
+    /**
+     * Without a CAT attempt (an engine before 1.2.1) the progress row under the activity attempt's number is read only
+     * if it is the sitting's own person's: another person's row of that number is never taken (#168 DoD1).
+     *
+     * @return void
+     */
+    public function test_read_progress_never_falls_back_to_another_person(): void {
+        global $DB;
+        $this->resetAfterTest();
+        $manager = $DB->get_manager();
+        if (!$manager->table_exists('local_catquiz_progress') || !$manager->table_exists('adaptivequiz_attempt')) {
+            $this->markTestSkipped('The engine is not installed.');
+        }
+        $me = $this->getDataGenerator()->create_user();
+        $other = $this->getDataGenerator()->create_user();
+        $columns = $DB->get_columns('adaptivequiz_attempt');
+        $mine = (int) $DB->insert_record('adaptivequiz_attempt', (object) array_intersect_key([
+            'instance' => 1, 'userid' => $me->id, 'uniqueid' => 0, 'attemptstate' => 'inprogress',
+            'attemptstopcriteria' => '', 'questionsattempted' => 0, 'difficultysum' => 0, 'standarderror' => 0,
+            'measure' => 0, 'timecreated' => time(), 'timemodified' => time()], $columns));
+        // Another person's progress under the number of my activity attempt, and no CAT attempt of mine.
+        $DB->insert_record('local_catquiz_progress', (object) ['attemptid' => $mine, 'userid' => (int) $other->id,
+            'component' => 'adaptivequiz', 'timemodified' => time(), 'json' => json_encode(['playedquestions' => [
+            ['id' => 91], ['id' => 92]]])]);
+
+        $method = new \ReflectionMethod(attempt_collector::class, 'read_progress');
+        $this->assertSame([], $method->invoke(null, $mine));
+        $this->assertSame([], attempt_collector::progress_of($mine));
+    }
 }

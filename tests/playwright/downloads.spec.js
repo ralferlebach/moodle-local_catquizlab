@@ -39,6 +39,41 @@ const EXPERIMENT = process.env.PLOTS_EXPERIMENTID || '';
 const RUN = process.env.RECOVERY_RUNID || '';
 
 /**
+ * A research data package, checked as its reader would: a ZIP that unpacks, a manifest of its schema whose every
+ * table is there with its checksum and header, the codebook naming the same tables, the reproducibility file, the R
+ * re-analysis and the dashboard reference (#156). Throws when any of it is missing or wrong — an empty or cut ZIP too.
+ *
+ * @param {Buffer} body The file.
+ * @param {string} name Its name.
+ * @returns {object} The manifest.
+ */
+function verifyPackage(body, name) {
+    if (!body || body.length === 0) {
+        throw new Error(name + ': empty');
+    }
+    const zip = pathlib.join(fs.mkdtempSync(pathlib.join(os.tmpdir(), 'package-')), name);
+    fs.writeFileSync(zip, body);
+    const read = (entry) => execFileSync('unzip', ['-p', zip, entry], {maxBuffer: 512 * 1024 * 1024,
+        stdio: ['ignore', 'pipe', 'pipe']});
+    const manifest = JSON.parse(read('manifest.json').toString('utf8'));
+    expect(manifest.schema).toBe('catquizlab-research-package');
+    const codebook = JSON.parse(read('codebook.json').toString('utf8'));
+    expect(Object.keys(manifest.tables)).toEqual(Object.keys(codebook.tables));
+    for (const [table, entry] of Object.entries(manifest.tables)) {
+        const content = read(entry.file);
+        expect(crypto.createHash('sha256').update(content).digest('hex'), table + ' checksum').toBe(entry.sha256);
+        expect(content.toString('utf8').split('\n')[0], table + ' header').toBe(entry.columns.join(','));
+    }
+    expect(JSON.parse(read('reproducibility.json').toString('utf8'))).toHaveProperty('runs');
+    // The R re-analysis travels with the data (#157): its entry script, its README, the dashboard's figures to compare.
+    expect(read('reanalysis/run_all.R').toString('utf8')).toContain('Rscript reanalysis/run_all.R');
+    expect(read('reanalysis/README.md').toString('utf8')).toContain('Reanalyse in R');
+    expect(read('reference/dashboard.csv').toString('utf8').split('\n')[0])
+        .toBe('tab,section,groupby,group,metric,stat,value');
+    return manifest;
+}
+
+/**
  * Sign in.
  *
  * @param {object} page The page.
@@ -202,32 +237,91 @@ test('the research data package downloads and holds what its manifest says (#156
         + 'button[type="submit"]'));
     check(file);
     expect(file.name).toMatch(/^catquizlab-research-\d+-\d{8}-\d{6}\.zip$/);
-    const zip = pathlib.join(fs.mkdtempSync(pathlib.join(os.tmpdir(), 'package-')), file.name);
-    fs.writeFileSync(zip, file.body);
-    const read = (name) => execFileSync('unzip', ['-p', zip, name], {maxBuffer: 512 * 1024 * 1024});
-    const manifest = JSON.parse(read('manifest.json').toString('utf8'));
-    expect(manifest.schema).toBe('catquizlab-research-package');
+    const manifest = verifyPackage(file.body, file.name);
     expect(String(manifest.experimentid)).toBe(String(EXPERIMENT));
-    const codebook = JSON.parse(read('codebook.json').toString('utf8'));
-    expect(Object.keys(manifest.tables)).toEqual(Object.keys(codebook.tables));
-    for (const [table, entry] of Object.entries(manifest.tables)) {
-        const body = read(entry.file);
-        expect(crypto.createHash('sha256').update(body).digest('hex'), table + ' checksum').toBe(entry.sha256);
-        expect(body.toString('utf8').split('\n')[0], table + ' header').toBe(entry.columns.join(','));
-    }
     expect(manifest.tables.attempts.rows, 'the seeded sittings are in it').toBeGreaterThan(0);
     expect(manifest.tables.steps.rows).toBeGreaterThan(0);
-    expect(JSON.parse(read('reproducibility.json').toString('utf8'))).toHaveProperty('runs');
-    // The R re-analysis travels with the data (#157): its entry script, its README, the dashboard's figures to compare.
-    expect(read('reanalysis/run_all.R').toString('utf8')).toContain('Rscript reanalysis/run_all.R');
-    expect(read('reanalysis/README.md').toString('utf8')).toContain('Reanalyse in R');
-    expect(read('reference/dashboard.csv').toString('utf8').split('\n')[0]).toBe('tab,section,groupby,group,metric,stat,value');
 
-    // In the background: queued, said, and listed until it is built.
+    // In the background (#169): queued, being built or — cron runs every 20 s — already ready when the page comes
+    // back. The page says which in data-state; the test takes whichever it finds, drives it to ready and checks the
+    // file like the direct one. Then the other order, forced: built before the page is drawn, ready at once.
+    const entries = () => page.locator('[data-region="catquizlab-package-files"] li')
+        .evaluateAll((els) => els.map((e) => ({state: e.dataset.state, file: e.dataset.file || ''})));
+    const adhoc = [pathlib.resolve(__dirname, '../../../../admin/cli/adhoc_task.php'),
+        pathlib.resolve(__dirname, '../../../../../admin/cli/adhoc_task.php')].find((f) => fs.existsSync(f));
+    expect(adhoc, 'admin/cli/adhoc_task.php found').toBeTruthy();
+    const build = () => execFileSync('php', [adhoc, '--execute',
+        '--classname=\\local_catquizlab\\task\\build_research_package'], {encoding: 'utf8'});
+    /**
+     * The one package new since `before`, as the page shows it after it was queued: its state, and its file once ready.
+     *
+     * @param {Set<string>} before Files ready before.
+     * @returns {Promise<object>} {state, file}.
+     */
+    const fresh = async(before) => {
+        const all = await entries();
+        expect(all.filter((e) => e.state === 'failed'), 'no failed build').toEqual([]);
+        const added = all.filter((e) => e.state !== 'ready' || !before.has(e.file));
+        expect(added.length, 'exactly one new package: ' + JSON.stringify(all)).toBe(1);
+        expect(['queued', 'building', 'ready']).toContain(added[0].state);
+        return added[0];
+    };
+    /**
+     * Downloads a ready package by its link on the page and checks it like the direct one.
+     *
+     * @param {string} name Its file name.
+     */
+    const fetchPackage = async(name) => {
+        const href = await page.locator(`[data-region="catquizlab-package-files"] li[data-file="${name}"] a`)
+            .getAttribute('href');
+        const response = await page.request.get(href);
+        expect(response.status()).toBe(200);
+        expect(response.headers()['content-disposition'] || '').toContain('attachment');
+        const body = await response.body();
+        const m = verifyPackage(body, name);
+        expect(String(m.experimentid)).toBe(String(EXPERIMENT));
+        return body;
+    };
+
+    // First: as a person does it — the button, then whatever the page says.
+    let before = new Set((await entries()).filter((e) => e.state === 'ready').map((e) => e.file));
     await page.locator('form:has(input[name="action"][value="researchpackagelater"]) button[type="submit"]').click();
     await page.waitForLoadState('networkidle');
     await expect(page.locator('.alert-success')).toContainText(/background|Hintergrund/);
-    await expect(page.locator('[data-region="catquizlab-package-files"]')).toContainText(/Queued|Being built|Warteschlange|Wird erstellt/);
+    let seen = await fresh(before);
+    const firstseen = seen.state;
+    // Driven to ready: the task run now (cron may be running it already; then it is waited for), the page read again.
+    for (let i = 0; i < 10 && seen.state !== 'ready'; i++) {
+        build();
+        await page.reload({waitUntil: 'networkidle'});
+        seen = await fresh(before);
+    }
+    expect(seen.state, 'ready after ' + firstseen).toBe('ready');
+    const body = await fetchPackage(seen.file);
+    // eslint-disable-next-line no-console
+    console.log(`research package in the background: first seen ${firstseen}, then ready (${seen.file})`);
+
+    // Second, forced: queued by the same POST, built, and only then the page — ready at once, nothing pending.
+    before = new Set((await entries()).filter((e) => e.state === 'ready').map((e) => e.file));
+    const sesskey = await page.evaluate(() => window.M.cfg.sesskey);
+    const queued = await page.request.post('/local/catquizlab/results.php', {
+        form: {experimentid: EXPERIMENT, tab: 'export', action: 'researchpackagelater', sesskey: sesskey}});
+    expect(queued.status()).toBe(200);
+    build();
+    await page.goto(results + '&tab=export', {waitUntil: 'networkidle'});
+    const immediate = await fresh(before);
+    expect(immediate.state, 'built before the page: ready at once').toBe('ready');
+    await fetchPackage(immediate.file);
+
+    // Not counted as a package (#169 AK3): an empty file, a cut one, a file that is not there.
+    expect(() => verifyPackage(Buffer.alloc(0), 'empty.zip')).toThrow();
+    expect(() => verifyPackage(body.subarray(0, Math.floor(body.length / 2)), 'cut.zip')).toThrow();
+    const href = await page.locator(`[data-region="catquizlab-package-files"] li[data-file="${immediate.file}"] a`)
+        .getAttribute('href');
+    const missing = await page.request.get(href.replace(immediate.file, 'catquizlab-research-' + EXPERIMENT
+        + '-19700101-000000.zip'));
+    expect(missing.headers()['content-disposition'] || '', 'no file for a package that is not there')
+        .not.toContain('attachment');
 });
 
 test('the logs and a run\'s debug artefacts download', async({page}) => {

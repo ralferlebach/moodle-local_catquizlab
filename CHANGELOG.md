@@ -6,6 +6,76 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.7.77] — 2026-11-21 — Version 2026112102. Re-audit of a1a0b685 (0.7.76): #169, #110 accounting, #136 AK 5 equality matrix, #164 AK02, #168 provenance
+
+Database: new table `local_catquizlab_provenance` (upgrade step 2026112102). New strings: `package:failed`,
+`population:excluded` (EN/DE).
+
+### On a1a0b685 (0.7.76)
+- Release CI, Worker CI: success. Acceptance measurements: **24 of 24 jobs success**, among them classic, allsubs,
+  highestsub and control at 1/5/12/25/50 workers (classic 48 minutes; GitHub API, run 44943637490). Their step
+  verdicts are in the jobs' artefacts, not read here.
+- Interface end-to-end: legacy and moodle53 83/83, all four screen-reader jobs green; **moodle5 82/83** — the one red
+  test is #169.
+
+### #169 — the research package test raced the package (`tests/playwright/downloads.spec.js`)
+- The package was built before the page was read again; the test expected "Queued/Being built" and found the ZIP.
+  Now every state is allowed — exactly one new entry, queued, building or ready, never failed — the test drives it to
+  ready (the build task, then a reload, at most ten times) and downloads and checks the ZIP: manifest schema,
+  codebook against the tables, every table's SHA-256 and header, reproducibility runs, the reanalysis files, the
+  reference CSV. A second path: ready at once. Negative: an empty and a cut ZIP throw; without the package link no
+  attachment. No waiting time made longer.
+- The list says each entry's state (`data-state`, `data-file`), and a failed build: "Failed; tried again at …".
+
+### #110 — every execution and sitting of a load step accounted for (`cli/smoke.php`, `cli/load_step_verdict.py`)
+- smoke.php's summary counts executions (total, failed, navigation, by cause with capacity flag, each failure listed)
+  and sittings (queued, running, collected, failed, cancelled, other; each failed sitting with its cause).
+- The verdict checks the accounts first: states add up to the total, the total is what was queued, failures add up to
+  their causes, every failure listed, no unexplained cause (`''`, `none`, `unknown_failure`). PASS only with all
+  sittings collected and none open or failed. CAPACITY reads "NOT SUSTAINABLE at N workers" and is never a release
+  PASS; `--safe-load FILE --required N` exits 1 when the matrix carries fewer workers than required (load_matrix.sh:
+  `REQUIRED_SAFE`, default 25). 47 self-test cases, among them a missing cause, sums that do not add up, open and
+  failed sittings.
+
+### #136 AK 5 — the equality matrix valid | invalid | unknown | all (`classes/local/output_agreement.php`)
+- `smoke_outputs_agree()` moved into a class and extended: all four filters; per filter the same sitting ids in the
+  analysis, the CSV and the JSON (no id twice), strategy, validity state and verdicts, SE, TI@n, items, the engine's
+  end, stop text, end and terminal codes and verdict, the limits broken, the engine's own count; per scale result the
+  steps' count, SE, verdicts and **the engine's own reasons** (new column `enginescalereasons`, codebook entry; e.g.
+  `max_questions_exceeded`); the step table against the analysis; the plots of overview and global tab per filter.
+  Across the filters: valid, invalid and unknown disjoint, together all, each sitting under its own state. Per
+  sitting: its engine progress is its own (#168), and no progress is stored with two sittings of different items.
+- `tests/output_agreement_test.php`: a deterministic experiment of two real strategies (fastest, allsubs), lengths 12
+  to 18 against a maximum of 15, invalid, unknown and engine-rejected (`max_questions_exceeded`,
+  `maxquestionsreached`) sittings with exact reference sets per filter; negative: a foreign progress, a duplicated
+  progress (two sittings), a reordered progress (suspect), a broken partition — each found.
+- The fixture of the research package test is now a trait (`tests/fixtures/sittings_experiment.php`).
+
+### #168 — whose engine progress a stored sitting carries (`classes/local/progress_provenance.php`)
+- Rules v1: verified, mismatch, suspect, notreconstructable, notassessed (items from the sitting's own question usage
+  against the progress' played questions).
+- `cli/progress_provenance.php`: read-only inventory (counts, ids, the part last changed before 0.7.75, fingerprint
+  before and after — exit 3 if the database changed); decisions as rows added, never changed: record, exclude
+  (left out of every analysis, export and count; the population says how many), include, rederive (only from the
+  engine's own progress, provably the sitting's; the stored trace kept with its SHA-256), revert (byte for byte).
+- Development site: 18 603 sittings, 3 mismatch (8158, 8160, 8161 — the three known), re-derived; the output check of
+  their experiment from 13 disagreements to none. DoD 1: the two read-progress tests fail on the 0.7.74 collector and
+  pass on this one (new: no fallback to another person's row under the activity attempt's number).
+
+### #164 AK02 / DoD02 — the request time taken apart, from measured counters (`classes/local/trace_decomposition.php`)
+- Per request at its edge (`request_trace`): database time of all queries (`perf_get_queries_time()`), reads, writes,
+  session lock waited and held (`$PERF->sessionlock`).
+- The engine trace's own INSERT: timed by Moodle's query log (`dboptions['logall']` while
+  `$CFG->dataroot/catquizlab-querylog` exists; `trace_report.php --querylog=on|off`; `acceptance-setup.sh` writes the
+  line into config.php), matched to its trace by the request id. The engine computes `requestms` before it writes;
+  the write is in no trace — now measured apart, without touching the engine.
+- Per sitting: the worker's runtime less the server's busy time for it (union of its requests' intervals) — browser,
+  CDP, navigation, network.
+- `trace_matrix.sh`: after the 2 × 2 a query-log cell per strategy (`PERSIST=1`, default). `trace_matrix_check.py`:
+  fail closed — in every cell server and client measured whole, in the query-log cell every trace INSERT; the
+  query-log cell missing or the log on in a comparison cell is a finding; `report.md` gets the table (p50/p95/p99, n).
+  42 self-test cases.
+
 ## [0.7.76] — 2026-11-21 — Version 2026112101. CI on d0916f86 (0.7.75): 21 of 24 acceptance jobs green; a sign-in that typed into a form still starting up; the runner lost at 50 workers
 
 No database change. No new string. Nothing in the plugin's PHP changed.

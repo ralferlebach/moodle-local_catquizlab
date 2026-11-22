@@ -401,6 +401,9 @@ class research_codebook {
                 . 'nicht gültig ist (kommagetrennt).'),
             'enginescalevalid' => $c('boolean', 'The engine\'s verdict on the scale; empty where none.', 'Urteil der Engine über '
                 . 'die Skala; leer, wenn keins.'),
+            'enginescalereasons' => $c('list', 'The engine\'s own reasons against the scale result, word for word '
+                . '(comma-separated; e.g. max_questions_exceeded); empty where none.', 'Die eigenen Gründe der Engine gegen '
+                . 'das Skalenergebnis, wörtlich (kommagetrennt; z. B. max_questions_exceeded); leer, wenn keine.'),
             'itemssource' => $c('string', 'Where the item count comes from.', 'Woher die Itemzahl stammt.'),
             'itemsreason' => $c('string', 'Why the item count is not known.', 'Warum die Itemzahl unbekannt ist.'),
             'itemclass' => $c('string', 'Diagnostic class of the item count.', 'Diagnostische Klasse der Itemzahl.'),

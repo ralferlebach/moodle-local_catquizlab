@@ -564,7 +564,7 @@ final class mode_detection_test extends \advanced_testcase {
         $this->assertEquals(
             ['planned' => 30, 'scheduled' => 30, 'started' => 30, 'failed' => 6, 'collected' => 24,
             'valid' => 23, 'evaluated' => 24, 'invalid' => 1, 'unknown' => 0, 'tracepending' => 0, 'withouttrace' => 0,
-            'cancelled' => 0],
+            'cancelled' => 0, 'excluded' => 0],
             $population['attempts']
         );
         // The engine's own three counts, beside the rule's, add up to what was evaluated (#112).

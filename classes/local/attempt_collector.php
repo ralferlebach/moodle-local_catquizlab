@@ -503,6 +503,26 @@ class attempt_collector {
     }
 
     /**
+     * The sitting's own engine progress, as the collector reads it (progress_provenance, #168).
+     *
+     * @param int $engineattemptid The activity's attempt.
+     * @return array The progress; empty when the engine has none.
+     */
+    public static function progress_of(int $engineattemptid): array {
+        return self::read_progress($engineattemptid);
+    }
+
+    /**
+     * The ability path from an engine progress' ability trace, as the collector derives it (progress_provenance).
+     *
+     * @param array $abilitytrace Scale id => list of {step, ability}.
+     * @return array[]
+     */
+    public static function path_of(array $abilitytrace): array {
+        return self::path_from_progress_trace($abilitytrace);
+    }
+
+    /**
      * Archive the engine's progress snapshot of an attempt, if it still exists.
      *
      * The row currently outlives the attempt and is removed only when the

@@ -402,7 +402,7 @@ class results_export {
         'localse', 'items', 'within1se', 'within2se',
         // Validity per scale (#112): by the engine's definitions, why not,
         // and the engine's own verdict.
-        'fraction', 'scalevalid', 'scalereasons', 'enginescalevalid',
+        'fraction', 'scalevalid', 'scalereasons', 'enginescalevalid', 'enginescalereasons',
         // The column 'items' is what was administered on the scale, from the
         // sitting's own steps (#113): empty where that is not known, 0 only where it
         // is certain. Where it is from, why it is not known, its diagnostic
@@ -785,6 +785,7 @@ class results_export {
         $rows = (static function () use ($query, $columns): \Generator {
             foreach ($query->each_subscale_observation(true) as $observation) {
                 $observation['scalereasons'] = implode(',', (array) $observation['scalereasons']);
+                $observation['enginescalereasons'] = implode(',', (array) ($observation['enginescalereasons'] ?? []));
                 $row = [];
                 foreach ($columns as $column) {
                     $value = $observation[$column] ?? null;

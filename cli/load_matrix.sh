@@ -65,13 +65,15 @@ for step in $steps; do
             classic) args=(--strategy=classic --minanswers=$(( MINANSWERS / 2 ))) ;;
             *) args=(--strategy="$mode" --minanswers="$MINANSWERS") ;;
         esac
+        # Always: smoke.php then counts every sitting's end state and every execution's outcome into its summary, the
+        # accounting each step's verdict checks — the faults step included (0.7.77).
         extra=(--no-navigation-failures)
         envs=()
         if [ "$kind" = faults ]; then
             # Each sitting: the fifth answer's response lost, the ninth request lost, the twelfth response held back past
             # both waits of the worker — three reconciliations per sitting, one of them a timeout (worker-e2e.yml).
             envs=(CATQUIZLAB_FAULTS=lostresponse@5,lostrequest@9,slowresponse@12)
-            extra=(--expect-recovered=$(( persons * 3 )) \
+            extra=(--no-navigation-failures --expect-recovered=$(( persons * 3 )) \
                 --expect-recovered-reasons=submit_cdp_timeout:$persons,submit_connect_failed:$(( persons * 2 )))
         fi
         from=$(date +%s)
@@ -165,12 +167,20 @@ PY
         if [ "$result" != PASS ] && [ "$result" != CAPACITY ]; then failed=$(( failed + 1 )); fi
         sed 's/^/    /' "$OUT/$name-verdict.txt"
 done
-python3 "$CLI/load_step_verdict.py" --safe-load "$OUT/matrix.jsonl" | tee "$OUT/safe-load.txt"
+# The load a release is accepted on (REQUIRED_SAFE, default 25 workers): every step up to it PASS in every mode played.
+# A CAPACITY step is reported, never counted as passed (#110 re-audit 21.11.2026); a mode short of the required load
+# fails the matrix like a failed step.
+python3 "$CLI/load_step_verdict.py" --safe-load "$OUT/matrix.jsonl" --required "${REQUIRED_SAFE:-25}" \
+    | tee "$OUT/safe-load.txt"
+if grep -q 'SHORT of the required' "$OUT/safe-load.txt"; then
+    failed=$(( failed + 1 ))
+fi
 echo "Every step's figures: $OUT/matrix.jsonl; the requests of each step: $OUT/*-requests.csv."
 if [ "$GATE" = 1 ] && [ "$failed" -gt 0 ]; then
     echo "FAIL: $failed step(s) failed (see each step's verdict above and $OUT/*-verdict.txt)."
     exit 1
 fi
 if [ "$capacity" -gt 0 ]; then
-    echo "$capacity step(s) beyond this machine's capacity, every sitting collected and valid (see $OUT/safe-load.txt)."
+    echo "$capacity step(s) CAPACITY: not sustainable at their load, no PASS — each verdict says what was lost or late"
+    echo "(see $OUT/*-verdict.txt and $OUT/safe-load.txt)."
 fi

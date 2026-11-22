@@ -103,6 +103,8 @@ class analysis_population {
                 // Finished without a trace (#138): waiting for it, or — from versions before 0.7.47 — stored as
                 // collected without one. Neither is a result; both are said.
                 'tracepending' => 0, 'withouttrace' => 0,
+                // Collected, and left out of the analyses for their provenance (#168 AK3): another sitting's progress.
+                'excluded' => 0,
                 'valid' => (int) ($counts['byrun'][$runid]['valid'] ?? 0),
                 'evaluated' => (int) ($counts['byrun'][$runid]['total'] ?? 0),
             ];
@@ -148,10 +150,15 @@ class analysis_population {
                 }
             }
             $rows->close();
+            foreach (array_keys($perrun) as $runid) {
+                $excluded = progress_provenance::excluded_count([$runid]);
+                $perrun[$runid]['excluded'] = $excluded;
+                $perrun[$runid]['collected'] -= $excluded;
+            }
         }
 
         $total = ['planned' => 0, 'scheduled' => 0, 'started' => 0, 'failed' => 0, 'cancelled' => 0, 'collected' => 0,
-            'valid' => 0, 'tracepending' => 0, 'withouttrace' => 0];
+            'valid' => 0, 'tracepending' => 0, 'withouttrace' => 0, 'excluded' => 0];
         $strategies = [];
         foreach ($perrun as $runid => $run) {
             $planned = $run['planned'] ?? $run['scheduled'];
@@ -261,7 +268,8 @@ class analysis_population {
         $funnel = self::funnel($query);
         $out = [
             'attempts' => array_intersect_key($funnel, array_flip(['planned', 'scheduled', 'started', 'failed',
-                'cancelled', 'collected', 'evaluated', 'valid', 'invalid', 'unknown', 'tracepending', 'withouttrace'])),
+                'cancelled', 'collected', 'evaluated', 'valid', 'invalid', 'unknown', 'tracepending', 'withouttrace',
+                'excluded'])),
             'invalidreasons' => $funnel['invalidreasons'],
             // Not judgeable is not invalid (#112 AK 7); an export of 250 unknown sittings says so (#115).
             'engineverdicts' => $funnel['engine'] + ['unknownreasons' => $funnel['unknownreasons']],

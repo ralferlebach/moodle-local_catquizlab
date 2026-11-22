@@ -720,6 +720,12 @@ class results_page {
             // Finished without a trace: not a result, and not hidden (#138).
             [get_string('population:withouttrace', $component), (int) ($funnel['tracepending'] ?? 0)
                 + (int) ($funnel['withouttrace'] ?? 0)],
+        ];
+        // Left out for their provenance (#168): said where there are any.
+        if ((int) ($funnel['excluded'] ?? 0) > 0) {
+            $rows[] = [get_string('population:excluded', $component), (int) $funnel['excluded']];
+        }
+        $rows = [...$rows,
             [get_string('population:valid', $component), $funnel['valid'] . ' — '
                 . $share('population:validofstarted', $funnel['valid'], $funnel['started']) . '; '
                 . $share('population:validoffinished', $funnel['valid'], $funnel['collected'])],
@@ -1426,16 +1432,20 @@ class results_page {
         $buttons .= $OUTPUT->single_button($post('researchpackagelater'), get_string('package:background', $component), 'post');
         $out .= \html_writer::div($buttons, 'd-flex flex-wrap gap-2 mb-2', ['data-region' => 'catquizlab-package-actions']);
 
+        // Each entry says its state in data-state — queued, building, failed or ready — so a reader (and a test) does
+        // not have to guess it from the wording: the package may be ready before the page is shown (#169).
         $items = [];
         foreach (\local_catquizlab\task\build_research_package::pending($experimentid) as $pending) {
-            $items[] = get_string(
-                $pending['running'] ? 'package:running' : 'package:waiting',
-                $component,
-                userdate($pending['since'], get_string('strftimedatetimeshort', 'langconfig'))
+            $state = $pending['running'] ? 'building' : (!empty($pending['failed']) ? 'failed' : 'queued');
+            $string = ['building' => 'package:running', 'failed' => 'package:failed', 'queued' => 'package:waiting'][$state];
+            $items[] = \html_writer::tag(
+                'li',
+                get_string($string, $component, userdate($pending['since'], get_string('strftimedatetimeshort', 'langconfig'))),
+                ['data-state' => $state]
             );
         }
         foreach (\local_catquizlab\task\build_research_package::stored($experimentid) as $file) {
-            $items[] = \html_writer::link(\moodle_url::make_pluginfile_url(
+            $url = \moodle_url::make_pluginfile_url(
                 \context_system::instance()->id,
                 'local_catquizlab',
                 'export',
@@ -1443,13 +1453,17 @@ class results_page {
                 '/',
                 $file->get_filename(),
                 true
-            ), s($file->get_filename())) . ' · '
-                . display_size($file->get_filesize()) . ' · '
-                . userdate($file->get_timemodified(), get_string('strftimedatetimeshort', 'langconfig'));
+            );
+            $items[] = \html_writer::tag(
+                'li',
+                \html_writer::link($url, s($file->get_filename())) . ' · ' . display_size($file->get_filesize()) . ' · '
+                    . userdate($file->get_timemodified(), get_string('strftimedatetimeshort', 'langconfig')),
+                ['data-state' => 'ready', 'data-file' => $file->get_filename()]
+            );
         }
         if ($items !== []) {
             $out .= \html_writer::tag('h4', get_string('package:built', $component), ['class' => 'h6']);
-            $out .= \html_writer::alist($items, ['class' => 'small', 'data-region' => 'catquizlab-package-files']);
+            $out .= \html_writer::tag('ul', implode('', $items), ['class' => 'small', 'data-region' => 'catquizlab-package-files']);
         }
 
         return $out;

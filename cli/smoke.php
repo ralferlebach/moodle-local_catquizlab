@@ -727,8 +727,48 @@ if (!empty($options['no-navigation-failures'])) {
         $failures[] = ['sitting' => (int) $row->attemptid, 'try' => (int) $row->tryno, 'reason' => $row->reasoncode,
             'time' => (int) $row->timecreated, 'detail' => \core_text::substr((string) $row->detail, 0, 600)];
     }
+    // Every sitting of the step by the state it ended in, and every execution by its outcome (#110 re-audit
+    // 21.11.2026: a step's verdict counts them all, and the counts must add up — nothing may drop out between them).
+    $bystatus = $DB->get_records_sql(
+        "SELECT status, COUNT(1) AS n FROM {local_catquizlab_attempt} WHERE runid $insql GROUP BY status",
+        $inparams
+    );
+    $sched = \local_catquizlab\local\attempt_scheduler::class;
+    $names = [$sched::STATUS_QUEUED => 'queued', $sched::STATUS_RUNNING => 'running', $sched::STATUS_COLLECTED => 'collected',
+        $sched::STATUS_TRACEPENDING => 'collected', $sched::STATUS_VALIDATED => 'collected', $sched::STATUS_FAILED => 'failed',
+        $sched::STATUS_CANCELLED => 'cancelled'];
+    $sittings = ['total' => 0, 'queued' => 0, 'running' => 0, 'collected' => 0, 'failed' => 0, 'cancelled' => 0,
+        'other' => 0];
+    foreach ($bystatus as $row) {
+        $sittings[$names[(int) $row->status] ?? 'other'] += (int) $row->n;
+        $sittings['total'] += (int) $row->n;
+    }
+    // The sittings that failed for good, each with the cause of its last execution.
+    $lastcause = [];
+    foreach ($failures as $failure) {
+        $lastcause[$failure['sitting']] = $failure['reason'];
+    }
+    $sittings['failedsittings'] = [];
+    $failedids = $DB->get_fieldset_select(
+        'local_catquizlab_attempt',
+        'id',
+        'runid ' . $insql . ' AND status = :failedstatus',
+        $inparams + ['failedstatus' => $sched::STATUS_FAILED]
+    );
+    foreach ($failedids as $id) {
+        $sittings['failedsittings'][] = ['sitting' => (int) $id, 'cause' => $lastcause[(int) $id] ?? null];
+    }
+    $outcomes = [];
+    $byoutcome = $DB->get_records_sql(
+        "SELECT outcome, COUNT(1) AS n FROM {local_catquizlab_attemptlog} WHERE runid $insql GROUP BY outcome",
+        $inparams
+    );
+    foreach ($byoutcome as $row) {
+        $outcomes[(string) $row->outcome] = (int) $row->n;
+    }
     smoke_summary(['executions' => ['total' => $total, 'failed' => count($executions), 'navigation' => $navigation,
-        'reasons' => (object) $byreason, 'failures' => $failures], 'loadguard' => $guard]);
+        'reasons' => (object) $byreason, 'failures' => $failures, 'outcomes' => (object) $outcomes],
+        'sittings' => $sittings, 'loadguard' => $guard]);
     if ($guard['trips'] > 0) {
         cli_writeln(sprintf('  Load guard: tripped %d time(s), first at %s; %d worker(s) asked to finish their sitting and '
             . 'stop, limit %s.', $guard['trips'], gmdate('H:i:s', $guard['first']), $guard['drained'], $guard['limit'] ?? '?'));
@@ -1024,8 +1064,8 @@ if ($disagreements !== []) {
 // results, and the plots as drawn — validity, SE, TI@n, the engine's end, the limits broken, the engine's count, the
 // items given per scale (the actual scale exposure, from the steps) — against this engine, whichever set is installed.
 $started = microtime(true);
-$outputs = smoke_outputs_agree($experimentid);
-step('Outputs compared (analysis and tables, CSV, JSON, plots; filters valid and all): '
+$outputs = \local_catquizlab\local\output_agreement::check($experimentid);
+step('Outputs compared (analysis and tables, CSV, JSON, plots; filters valid, invalid, unknown, all; provenance): '
     . ($outputs['problems'] === [] ? 'all agree, ' . $outputs['facts'] . '.' : count($outputs['problems'])
     . ' disagreement(s).'), $started);
 smoke_summary(['outputs' => $outputs]);
@@ -1180,203 +1220,6 @@ function smoke_work_taken(int $experimentid): int {
             'collected'    => attempt_scheduler::STATUS_COLLECTED,
         ]
     );
-}
-
-/**
- * Every collected sitting as each output shows it, compared (#136 AK 5): the analysis (what the tables show), the CSV
- * and the JSON export of the sittings and of the scale results, and the plots of the overview, the global tab and the
- * subscale tab as rendered — under the filters "valid" (the dashboard's) and "all".
- *
- * Compared: the filtered sample (the same sittings in analysis, CSV and JSON); per sitting validity state and verdicts,
- * SE, TI@n, the engine's end (finished, end code, terminal code), the limits it broke (max_questions_exceeded among
- * them), the engine's productive count against its own record; per scale result the items administered against the
- * steps (the actual scale exposure); the plots' points against the analysis.
- *
- * @param int $experimentid The smoke experiment.
- * @return array{problems: string[], facts: string}
- */
-function smoke_outputs_agree(int $experimentid): array {
-    global $DB, $PAGE;
-
-    $problems = [];
-    $facts = [];
-    $same = static fn($a, $b): bool => ($a === null || $a === '') ? ($b === null || $b === '')
-        : (is_numeric($a) && is_numeric($b) ? abs((float) $a - (float) $b) < 1e-9 : (string) $a === (string) $b);
-    $parsecsv = static function (string $csv): array {
-        $lines = array_values(array_filter(explode("\n", $csv), static fn(string $l): bool => $l !== ''));
-        $head = str_getcsv(array_shift($lines), ',', '"', '');
-        return array_map(static fn(string $l): array => array_combine($head, str_getcsv($l, ',', '"', '')), $lines);
-    };
-    $engineitems = [];
-    if ($DB->get_manager()->table_exists('local_catquiz_attempts')) {
-        $engineitems = $DB->get_records_sql_menu(
-            "SELECT a.id, e.number_of_testitems_used
-               FROM {local_catquizlab_attempt} a
-               JOIN {local_catquizlab_run} r ON r.id = a.runid
-               JOIN {local_catquiz_attempts} e ON e.attemptid = a.engineattemptid
-                    AND e.component IN ('adaptivequiz', 'mod_adaptivequiz')
-              WHERE r.experimentid = ?",
-            [$experimentid]
-        );
-    }
-    $fields = ['validitystate', 'valid', 'uniformvalid', 'enginevalid', 'statisticalvalid', 'se', 'nitems',
-        'enginefinished', 'designstopreached', 'endreasoncode', 'contractviolations', 'productiveitems', 'esttheta',
-        'truetheta'];
-    foreach (['valid', 'all'] as $validity) {
-        $filter = ['experimentid' => $experimentid, 'validity' => $validity];
-        $query = new \local_catquizlab\local\results_query($filter);
-        $analysis = [];
-        foreach ($query->each_observation() as $o) {
-            $analysis[(int) $o['attemptid']] = $o;
-        }
-        $export = \local_catquizlab\local\results_export::class;
-        $csvrows = $parsecsv($export::to_csv($export::dataset($query, $export::LEVEL_ATTEMPT)));
-        $csv = array_combine(array_map(static fn(array $r): int => (int) $r['attemptid'], $csvrows), $csvrows) ?: [];
-        $jsonrows = json_decode($export::to_json($query, $export::LEVEL_ATTEMPT), true)['data'] ?? [];
-        $json = array_combine(array_map(static fn(array $r): int => (int) $r['attemptid'], $jsonrows), $jsonrows) ?: [];
-        $ids = array_keys($analysis);
-        sort($ids);
-        foreach (['CSV' => $csv, 'JSON' => $json] as $name => $rows) {
-            $theirs = array_keys($rows);
-            sort($theirs);
-            if ($theirs !== $ids) {
-                $problems[] = "{$validity}: the analysis holds " . count($ids) . " sitting(s), the {$name} export "
-                    . count($theirs) . ' — not the same sample';
-            }
-        }
-        foreach ($analysis as $id => $o) {
-            foreach ($fields as $field) {
-                $values = ['analysis' => is_bool($o[$field] ?? null) ? (int) $o[$field] : ($o[$field] ?? null),
-                    'csv' => $csv[$id][$field] ?? null, 'json' => is_bool($json[$id][$field] ?? null)
-                    ? (int) $json[$id][$field] : ($json[$id][$field] ?? null)];
-                if (is_array($values['analysis'])) {
-                    $values['analysis'] = implode(';', $values['analysis']);
-                }
-                if (!$same($values['analysis'], $values['csv']) || !$same($values['analysis'], $values['json'])) {
-                    $problems[] = "{$validity}: sitting {$id} {$field}: " . json_encode($values);
-                }
-            }
-            foreach (['finaltiatn', 'finalti', 'engineverdict', 'terminalreasoncode'] as $field) {
-                if (!$same($csv[$id][$field] ?? null, $json[$id][$field] ?? null)) {
-                    $problems[] = "{$validity}: sitting {$id} {$field}: CSV " . json_encode($csv[$id][$field] ?? null)
-                        . ', JSON ' . json_encode($json[$id][$field] ?? null);
-                }
-            }
-            $enginecount = isset($engineitems[$id]) && $o['productiveitems'] !== null;
-            if ($enginecount && (int) $engineitems[$id] !== (int) $o['productiveitems']) {
-                $problems[] = "{$validity}: sitting {$id}: the engine's record counts {$engineitems[$id]} item(s), "
-                    . "the analysis {$o['productiveitems']}";
-            }
-        }
-        // Scale results: CSV and JSON alike, and the items given per scale as the steps count them.
-        $subscsv = $parsecsv($export::to_csv($export::dataset($query, $export::LEVEL_SUBSCALE)));
-        $subsjson = json_decode($export::to_json($query, $export::LEVEL_SUBSCALE), true)['data'] ?? [];
-        if (count($subscsv) !== count($subsjson)) {
-            $problems[] = "{$validity}: " . count($subscsv) . ' scale result(s) in the CSV, ' . count($subsjson) . ' in the JSON';
-        }
-        $key = static fn(array $r): string => $r['attemptid'] . ':' . $r['category'] . ':' . $r['subscale'];
-        $byjson = [];
-        foreach ($subsjson as $r) {
-            $byjson[$key($r)] = $r;
-        }
-        $given = [];
-        $givenby = [];
-        foreach ($subscsv as $r) {
-            foreach (['items', 'localse', 'estdelta', 'scalevalid', 'validitystate'] as $field) {
-                if (array_key_exists($field, $r) && !$same($r[$field], $byjson[$key($r)][$field] ?? null)) {
-                    $problems[] = "{$validity}: scale result {$key($r)} {$field}: CSV " . json_encode($r[$field])
-                        . ', JSON ' . json_encode($byjson[$key($r)][$field] ?? null);
-                }
-            }
-            if ((int) $r['items'] > 0) {
-                $given[(int) $r['attemptid']][] = (int) $r['items'];
-                $givenby[(int) $r['attemptid']][(string) ($r['subscale'] ?? '?')] = (int) $r['items'];
-            }
-        }
-        $steps = [];
-        $steprows = $export::dataset($query, $export::LEVEL_STEP)['rows'];
-        foreach ($steprows as $step) {
-            if (!empty($step['subscaleid'])) {
-                $steps[(int) $step['attemptid']][(int) $step['subscaleid']] =
-                    ($steps[(int) $step['attemptid']][(int) $step['subscaleid']] ?? 0) + 1;
-            }
-        }
-        foreach ($steps as $id => $byscale) {
-            $fromsteps = array_values($byscale);
-            sort($fromsteps);
-            $exported = $given[$id] ?? [];
-            sort($exported);
-            // With every scale result ("all") the two are the same; under "valid" an invalid scale result is not
-            // exported, so what is exported is a part of what the steps count.
-            $part = $exported;
-            foreach ($fromsteps as $n) {
-                $at = array_search($n, $part, true);
-                if ($at !== false) {
-                    unset($part[$at]);
-                }
-            }
-            $differs = $validity === 'all' ? $fromsteps !== $exported : $part !== [];
-            if (isset($given[$id]) && $differs) {
-                // By scale, and the sitting's executions beside it (CI 20.11.2026, highestsub@50: one sitting of 50,
-                // [17,19,29] against [20,20,25], nothing more to read): which scale, and whether it was resumed.
-                $history = [];
-                $rows = $DB->get_records(
-                    'local_catquizlab_attemptlog',
-                    ['attemptid' => $id],
-                    'id ASC',
-                    'id, tryno, outcome, reasoncode'
-                );
-                foreach ($rows as $row) {
-                    $history[] = $row->tryno . ':' . $row->outcome . ($row->reasoncode ? ':' . $row->reasoncode : '');
-                }
-                $problems[] = "{$validity}: sitting {$id}: items per scale from the steps " . json_encode($fromsteps)
-                    . ', in the scale results ' . json_encode($exported) . '; by scale, steps '
-                    . json_encode((object) $byscale) . ', results ' . json_encode((object) ($givenby[$id] ?? []))
-                    . '; its executions ' . json_encode($history);
-            }
-        }
-        $facts[] = "{$validity}: " . count($ids) . ' sitting(s), ' . count($subscsv) . ' scale result(s)';
-
-        // The plots as drawn, for the dashboard's filter: the points against the analysis.
-        if ($validity !== 'valid') {
-            continue;
-        }
-        if (!$PAGE->has_set_url()) {
-            $PAGE->set_context(\context_system::instance());
-            $PAGE->set_url('/local/catquizlab/results.php');
-        }
-        $withse = array_filter($analysis, static fn(array $o): bool => $o['se'] !== null);
-        $withestimate = array_filter($analysis, static fn(array $o): bool => $o['esttheta'] !== null);
-        $expected = [
-            'overview' => array_map(static fn(array $o): array => [(float) $o['nitems'], (float) $o['se']], $withse),
-            'global' => array_map(static fn(array $o): array => [(float) $o['truetheta'], (float) $o['esttheta']], $withestimate),
-        ];
-        foreach ($expected as $tab => $points) {
-            $html = (new \local_catquizlab\output\results_page($query, $tab, $filter))->render_tab();
-            $svg = explode('</svg>', substr($html, (int) strpos($html, '<svg ')))[0];
-            preg_match_all('/data-x="([^"]*)" data-y="([^"]*)" data-count="(\d+)"/', $svg, $m, PREG_SET_ORDER);
-            $drawn = [];
-            foreach ($m as [, $x, $y, $n]) {
-                for ($i = 0; $i < (int) $n; $i++) {
-                    $drawn[] = [(float) $x, (float) $y];
-                }
-            }
-            $points = array_values($points);
-            usort($points, static fn($a, $b) => $a <=> $b);
-            usort($drawn, static fn($a, $b) => $a <=> $b);
-            $ok = count($points) === count($drawn);
-            foreach ($points as $i => $p) {
-                $ok = $ok && abs($p[0] - $drawn[$i][0]) < 5e-3 && abs($p[1] - $drawn[$i][1]) < 5e-3;
-            }
-            if (!$ok) {
-                $problems[] = "valid: the first plot of the {$tab} tab draws " . count($drawn) . ' point(s), the analysis has '
-                    . count($points) . ' — or they lie elsewhere';
-            }
-        }
-        $facts[] = 'plots of overview and global tab, ' . implode(' and ', array_map('count', $expected)) . ' point(s)';
-    }
-
-    return ['problems' => $problems, 'facts' => implode('; ', $facts)];
 }
 
 /**

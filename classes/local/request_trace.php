@@ -155,7 +155,7 @@ class request_trace {
                 self::$exception,
                 error_get_last(),
                 self::process_figures(isset($DB) && is_object($DB) && method_exists($DB, 'perf_get_queries')
-                    ? (int) $DB->perf_get_queries() : null)
+                    ? (int) $DB->perf_get_queries() : null) + self::edge_figures()
             );
             self::write($line);
         } catch (\Throwable $e) {
@@ -174,7 +174,8 @@ class request_trace {
      * @param int $peakbytes Peak memory.
      * @param array|null $exception The exception behind an error page.
      * @param array|null $lasterror error_get_last().
-     * @param array $process What else was measured of the request (#132, #110): queries, rssmb, hwmmb — each optional.
+     * @param array $process What else was measured of the request (#132, #110, #164): queries, rssmb, hwmmb, dbms, dbreads,
+     *     dbwrites, lockwaitms, lockheldms — each optional.
      * @return array
      */
     public static function record(
@@ -220,7 +221,8 @@ class request_trace {
             // web server's limit is not the command line's.
             'memorylimit' => (string) ini_get('memory_limit'),
             'pid' => (int) getmypid(),
-        ] + array_intersect_key($process, array_flip(['queries', 'rssmb', 'hwmmb'])) + [
+        ] + array_intersect_key($process, array_flip(['queries', 'rssmb', 'hwmmb', 'dbms', 'dbreads', 'dbwrites',
+            'lockwaitms', 'lockheldms'])) + [
             'exception' => $exception,
             'fatal' => $fatal,
         ];
@@ -248,6 +250,32 @@ class request_trace {
             }
         }
 
+        return $out;
+    }
+
+    /**
+     * What the request spent in the database and on the session lock, read at its edge (#164 AK02): Moodle's own
+     * counters, measured whatever the engine traces — the time of every query of the request summed by the database
+     * layer (moodle_database::perf_get_queries_time()), its reads and writes, and how long it waited for the session
+     * lock and held it ($PERF->sessionlock). At shutdown, after Moodle has closed the session.
+     *
+     * @return array dbms, dbreads, dbwrites, lockwaitms, lockheldms — those that could be read.
+     */
+    public static function edge_figures(): array {
+        global $DB, $PERF;
+        $out = [];
+        if (isset($DB) && is_object($DB) && method_exists($DB, 'perf_get_queries_time')) {
+            $out['dbms'] = round(1000 * (float) $DB->perf_get_queries_time(), 3);
+            $out['dbreads'] = (int) $DB->perf_get_reads();
+            $out['dbwrites'] = (int) $DB->perf_get_writes();
+        }
+        $lock = isset($PERF) && is_object($PERF) ? (array) ($PERF->sessionlock ?? []) : [];
+        if (isset($lock['wait']) && is_numeric($lock['wait'])) {
+            $out['lockwaitms'] = round(1000 * (float) $lock['wait'], 3);
+        }
+        if (isset($lock['held']) && is_numeric($lock['held'])) {
+            $out['lockheldms'] = round(1000 * (float) $lock['held'], 3);
+        }
         return $out;
     }
 

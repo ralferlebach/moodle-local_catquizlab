@@ -88,6 +88,39 @@ KiB, Webserver-RSS, verbundene Traces. Die vollständigen Statistiken liegen je 
 **Offen (Betrieb):** Laufen muss die Matrix auf CLARA oder einer gleichwertigen Umgebung (DoD-01). Dort ist die Last
 echt; dieser Rechner hat 2 Kerne und keinen 2500-Kandidaten-Pool.
 
+## Die Anfragezeit zerlegt (AK02, DoD02; 0.7.77)
+
+Gemessen, nicht abgeleitet — jeder Teil aus einem eigenen Zähler (`classes/local/trace_decomposition.php`):
+
+| Teil | Zähler | wo |
+|---|---|---|
+| Trace-INSERT der Engine | Ausführungszeit jedes `INSERT INTO …local_catquiz_trace`, gemessen von Moodles Datenbankschicht, protokolliert im Query-Log (`dboptions['logall']`); über die Request-ID in der Zeile seinem Trace zugeordnet | Query-Log-Zelle |
+| Server, ganze Anfrage | `durationms` der Anfragezeile des Labors (`request_trace`), am Rand der Anfrage | jede Zelle |
+| Server, Datenbank | `moodle_database::perf_get_queries_time()` — Summe aller Abfragen der Anfrage, dazu Lese-/Schreibzahl | jede Zelle |
+| Server, Sitzungssperre | `$PERF->sessionlock` — gewartet und gehalten | jede Zelle |
+| Selektor | Span `strategy` der Engine-Traces (ganze CAT-Strategie) | Zellen mit Tracing |
+| Client | Laufzeit der Bearbeitung beim Worker (`runtimems`) minus der Zeit, in der der Server für sie arbeitete (Vereinigung der Intervalle ihrer Anfragen, ohne Webservice-Aufrufe): Browser, CDP, Navigation, Netz | jede Zelle |
+
+**Warum ein eigener Zähler für den INSERT:** Die Engine berechnet `requestms` vor dem Schreiben
+(`timeline::flush()`); die Schreibzeit steht in keinem Trace. Das Labor patcht die Engine nicht. Moodles Query-Log
+misst jede Abfrage mit demselben Zeitgeber wie `perf_get_queries_time()` und hält ihre Parameter — darin die
+Request-ID des Traces. `config.php` schaltet es ein, solange `$CFG->dataroot/catquizlab-querylog` existiert
+(`trace_report.php --querylog=on|off`; die CI schreibt die Zeile in `acceptance-setup.sh`).
+
+**Eigene Zelle:** Das Query-Log kostet jede Abfrage einen INSERT. Die Zellen des 2 × 2-Vergleichs laufen ohne; danach je
+Strategie eine Zelle `trace1-debugquerylog` (Tracing an, Debug aus, Log an; `PERSIST=0` lässt sie weg). Ihre
+Anfragezeiten sind instrumentiert und nicht mit den Vergleichszellen zu vergleichen; ihre INSERT-Zeiten sind die
+Messung von AK02.
+
+**Fail closed:** Jeder Teil heißt `measured` nur, wenn er für alle seine Anfragen bzw. Traces vorliegt; sonst
+`incomplete` oder `not_measured`, mit Grund. `trace_matrix_check.py` macht daraus einen Befund: in jeder Zelle Server
+und Client gemessen, in der Query-Log-Zelle zusätzlich jeder Trace-INSERT; fehlt die Query-Log-Zelle (`PERSIST=1`), ist
+die Matrix rot; misst eine Vergleichszelle INSERTs, war das Log dort an — rot. `report.md` bekommt die Tabelle je Zelle
+(p50/p95/p99, n).
+
+**Grenzen:** Die Client-Zeit gilt nur für Bearbeitungen mit einer Ausführung (`tries = 1`; die Laufzeit gehört zur
+gesammelten Ausführung). Die Sperrzeiten stammen aus Moodles Sitzungsverwaltung; mit `READ_ONLY_SESSION` gibt es keine.
+
 ## Datenschutz und Umfang (AK5, AK6)
 
 - `trace_report.php` gibt keine Antworten, Tokens oder Fähigkeitswerte aus: Ids, Zeiten, Größen, Ursachen.
@@ -103,5 +136,8 @@ echt; dieser Rechner hat 2 Kerne und keinen 2500-Kandidaten-Pool.
 - **`cli/trace_report.php`:** counts every trace of a window. Per kind and for `strategy:select_question` it gives
   n, mean, sd, 95 % CI, p50/p95/p99 and max, plus bytes and the links. It also gives execution outcomes, capacity
   causes and the lab's debug log volume. With tracing off it says so and prints no zeros.
+- **Request time taken apart (AK02, 0.7.77):** the engine trace's own INSERT timed by Moodle's query log in a cell of
+  its own; per request the server's database time and session lock (Moodle's counters, at the request's edge); per
+  sitting the client's time (runtime less the server's busy time). Fail closed: a part not measured whole fails.
 - **`cli/trace_matrix.sh`:** plays the 2 × 2 matrix (`attempttrace` × `debuglevel`) with real workers. Order ABCD/DCBA,
   cold or warm cache, settings restored at the end. The measurement itself belongs on a production-like server.

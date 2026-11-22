@@ -143,6 +143,8 @@ class local_analysis {
                 'scalevalid'  => $reasons === [],
                 'scalereasons' => $reasons,
                 'enginescalevalid' => $enginescale === null ? null : (bool) $enginescale['valid'],
+                // The engine's own reasons, word for word (max_questions_exceeded among them; #136 AK 5).
+                'enginescalereasons' => array_values(array_map('strval', (array) ($enginescale['reasons'] ?? []))),
                 'within1se'   => $se === null ? null : abs($estdelta - $truedelta) <= $se,
                 'within2se'   => $se === null ? null : abs($estdelta - $truedelta) <= 2 * $se,
             ];

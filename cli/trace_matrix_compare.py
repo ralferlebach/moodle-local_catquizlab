@@ -252,8 +252,10 @@ def main(out):
     for s in shares:
         md.append(f"| {s['cell']} | {s['selector_p50_ms']} | {s['answer_request_p50_ms']} | {s['selector_share_of_median']} |")
     md += ['', 'What these numbers do not contain: time a request spends outside the server (the worker\'s browser, '
-           'CDP, navigation, retries). The worker\'s CDP timeouts are counted per cell; a request the server never saw '
-           'has no line here. No effect is claimed where its interval contains 0.']
+           'CDP, navigation, retries) — that is measured per sitting in the decomposition below, with the database time, '
+           'the session lock and the engine trace\'s own INSERT (#164 AK02). The worker\'s CDP timeouts are counted per '
+           'cell; a request the server never saw has no line here. A query-log cell ("debugquerylog") runs with Moodle\'s '
+           'query log on and is in no comparison. No effect is claimed where its interval contains 0.']
     if PROBLEMS:
         md += ['', '## Problems: this report is not complete', ''] + [f'- {p}' for p in PROBLEMS]
     with open(f'{out}/report.md', 'w') as f:

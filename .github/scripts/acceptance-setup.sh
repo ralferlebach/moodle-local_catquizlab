@@ -104,6 +104,10 @@ global \$CFG;
 \$CFG->dataroot  = '$HOME/moodledata';
 \$CFG->admin     = 'admin';
 \$CFG->directorypermissions = 0777;
+// Moodle's query log, only while this flag file exists (#164 AK02: trace_matrix.sh's query-log cell).
+if (is_file(\$CFG->dataroot . '/catquizlab-querylog')) {
+    \$CFG->dboptions['logall'] = true;
+}
 require_once(__DIR__ . '/lib/setup.php');
 PHP
 
