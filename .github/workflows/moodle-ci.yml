@@ -82,8 +82,9 @@ jobs:
           coverage: none
 
       - name: Install moodle-plugin-ci
+        # Up to four tries: github.com refused one composer clone with 403 on 2026-11-22.
         run: |
-          composer create-project -n --no-dev moodlehq/moodle-plugin-ci ci ${{ env.MOODLE_CI }}
+          bash plugin/.github/scripts/install-plugin-ci.sh "${{ env.MOODLE_CI }}"
           echo "$GITHUB_WORKSPACE/ci/bin"        >> "$GITHUB_PATH"
           echo "$GITHUB_WORKSPACE/ci/vendor/bin" >> "$GITHUB_PATH"
 
@@ -131,8 +132,9 @@ jobs:
           echo "TRAVIS_BRANCH=${BRANCH:-main}" >> "$GITHUB_ENV"
 
       - name: Install moodle-plugin-ci
+        # Up to four tries: github.com refused one composer clone with 403 on 2026-11-22.
         run: |
-          composer create-project -n --no-dev moodlehq/moodle-plugin-ci ci ${{ env.MOODLE_CI }}
+          bash plugin/.github/scripts/install-plugin-ci.sh "${{ env.MOODLE_CI }}"
           echo "$GITHUB_WORKSPACE/ci/bin"        >> "$GITHUB_PATH"
           echo "$GITHUB_WORKSPACE/ci/vendor/bin" >> "$GITHUB_PATH"
 
@@ -243,8 +245,9 @@ jobs:
           echo "TRAVIS_BRANCH=${BRANCH:-main}" >> "$GITHUB_ENV"
 
       - name: Install moodle-plugin-ci
+        # Up to four tries: github.com refused one composer clone with 403 on 2026-11-22.
         run: |
-          composer create-project -n --no-dev moodlehq/moodle-plugin-ci ci ${{ env.MOODLE_CI }}
+          bash plugin/.github/scripts/install-plugin-ci.sh "${{ env.MOODLE_CI }}"
           echo "$GITHUB_WORKSPACE/ci/bin"        >> "$GITHUB_PATH"
           echo "$GITHUB_WORKSPACE/ci/vendor/bin" >> "$GITHUB_PATH"
 
@@ -340,8 +343,9 @@ jobs:
           echo "TRAVIS_BRANCH=${BRANCH:-main}" >> "$GITHUB_ENV"
 
       - name: Install moodle-plugin-ci
+        # Up to four tries: github.com refused one composer clone with 403 on 2026-11-22.
         run: |
-          composer create-project -n --no-dev moodlehq/moodle-plugin-ci ci ${{ env.MOODLE_CI }}
+          bash plugin/.github/scripts/install-plugin-ci.sh "${{ env.MOODLE_CI }}"
           echo "$GITHUB_WORKSPACE/ci/bin"        >> "$GITHUB_PATH"
           echo "$GITHUB_WORKSPACE/ci/vendor/bin" >> "$GITHUB_PATH"
 
@@ -463,8 +467,9 @@ jobs:
           echo "TRAVIS_BRANCH=${BRANCH:-main}" >> "$GITHUB_ENV"
 
       - name: Install moodle-plugin-ci
+        # Up to four tries: github.com refused one composer clone with 403 on 2026-11-22.
         run: |
-          composer create-project -n --no-dev moodlehq/moodle-plugin-ci ci ${{ env.MOODLE_CI }}
+          bash plugin/.github/scripts/install-plugin-ci.sh "${{ env.MOODLE_CI }}"
           echo "$GITHUB_WORKSPACE/ci/bin"        >> "$GITHUB_PATH"
           echo "$GITHUB_WORKSPACE/ci/vendor/bin" >> "$GITHUB_PATH"
 
@@ -518,7 +523,11 @@ jobs:
       - name: Issue 167 — the code of this commit in place, upgraded, checked
         run: |
           set -o pipefail
-          rsync -a --delete --exclude .git plugin/ "$PLUGIN/"
+          # --checksum: the two checkouts of this job can land in the same second, and a file of the same size
+          # (version.php: 2026111400 → 2026112102, '0.7.60' → '0.7.77') was then skipped by rsync's size-and-time test
+          # — release CI 2026-11-22, 5.2/PostgreSQL: "No upgrade needed", 0.7.60 left in place. Then: nothing may differ.
+          rsync -a --checksum --delete --exclude .git plugin/ "$PLUGIN/"
+          diff -rq --exclude .git plugin/ "$PLUGIN/"
           # Moodle's upgrade script writes its "no upgrade needed" (and its errors) to STDERR: both into the record.
           php moodle/admin/cli/upgrade.php --non-interactive 2>&1 | tee /tmp/upgrade-1.txt
           php "$PLUGIN/cli/upgrade_check.php" --phase=after --before=/tmp/upgrade-before.json | tee /tmp/upgrade-after-1.txt
