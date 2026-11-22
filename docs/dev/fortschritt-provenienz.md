@@ -1,4 +1,4 @@
-# Wessen Engine-Fortschritt eine Bearbeitung trägt (#168, 0.7.77)
+# Wessen Engine-Fortschritt eine Bearbeitung trägt (#168, 0.7.77; Betreiber-Inventur 0.7.78)
 
 Bis 0.7.74 konnte der Sammler einer Bearbeitung den Engine-Fortschritt einer anderen Person speichern
 (`attempt_collector::read_progress()`, behoben in 0.7.75). Betroffen sind daraus abgeleitete Teile des Traces:
@@ -54,3 +54,31 @@ Urteil und meldet `mismatch`/`suspect` sowie denselben Fortschritt in mehreren B
 18 603 gespeicherte Bearbeitungen: 3 `mismatch` (8158, 8160, 8161; Experiment 149, alle vor 0.7.75), 17 394 `verified`,
 1 206 `notassessed`. Die Engine hatte für alle drei noch den eigenen Fortschritt; neu abgeleitet, danach 0 Befunde, die
 Ausgabeprüfung von Experiment 149 ohne Abweichung (vorher 13).
+
+## Betreiber-Inventur auf CLARA und anderen Installationen (AK4; 0.7.78)
+
+Ein einziger Befehl je Installation, nur lesend, ab Plugin-Version 0.7.77 (mit `site` und `exposure` ab 0.7.78):
+
+    sudo -u www-data php local/catquizlab/cli/progress_provenance.php --json > provenienz-$(hostname)-$(date -u +%Y%m%dT%H%M%SZ).json
+
+- **Was er liefert:** die Installation (wwwroot, Datenbanktyp, Plugin- und Engine-Version, Lesezeitpunkt UTC);
+  Gesamtzahl; je Urteil (`verified`, `mismatch`, `suspect`, `notreconstructable`, `notassessed`) die Zahl und die
+  Ids der Befunde; den Anteil, der vor 0.7.75 zuletzt geändert wurde; den Fingerabdruck vor und nach dem Lesen.
+- **Ob Befunde hinausgingen** (`exposure`): Er zählt je Experiment die vom Plugin festgehaltenen Exporte
+  (`local_catquizlab_exportlog`) und Forschungspakete und davon die, die nach dem Sammeln einer befundeten Bearbeitung
+  entstanden — die tragen sie. Downloads direkt von der Ergebnisseite (CSV, JSON, Schritte) hält das Plugin nicht
+  fest; der Bericht sagt das, statt „keine“ zu melden.
+- **Exit-Status:** 0 bedeutet: nichts gefunden, oder alles Gefundene ist ausgeschlossen. 1 bedeutet: `mismatch` oder
+  `suspect` gefunden und nicht ausgeschlossen. 3 bedeutet: Die Datenbank änderte sich während des Lesens (z. B. liefen
+  Worker) — dann erneut lesen, wenn nichts läuft.
+- **Ablage:** Die Datei enthält Ids und Zahlen, keine Antworten und keine Schätzungen. Sie gehört trotzdem an einen
+  vertraulichen Ablageort. Ins Issue kommen nur die Zahlen je Installation.
+- **Was nicht dazu gehört:** `--exclude` und `--rederive` sind Korrekturen, keine Inventur. Sie werden nur nach
+  gesonderter Entscheidung je Installation ausgeführt.
+- **Lesart:** `notassessed` heißt: ohne gespeicherten Fortschritt nicht prüfbar. Das zählt weder als `verified` noch
+  als Beweis einer falschen Zuordnung.
+
+**Wird die Betreiberprüfung erlassen**, ist das ein **Risikoverzicht**, keine technische Abnahme. Formulierungsvorlage
+fürs Issue: „Auf die Provenienz-Inventur der Installation(en) … wird verzichtet. Damit ist weder die Unversehrtheit
+noch eine Beschädigung der dort vor 0.7.75 gesammelten Bearbeitungen festgestellt. Ergebnisse aus diesem Bestand
+gelten bis zu einer Inventur als ungeprüft.“

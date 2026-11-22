@@ -6,6 +6,47 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.7.78] — 2026-11-22 — Version 2026112200. Re-audit of 935bcceb (0.7.77): #110 CLARA-like benchmark, #168 operator inventory
+
+No database change, no new string.
+
+### On 935bcceb (0.7.77; re-audit 22.11.2026)
+- 63 of 63 jobs green (Release 25, Worker 7, Interface 7, Acceptance 24). #136, #164, #169 closed by the auditor.
+- On 07bb3e97 the release CI had two red upgrade cells: `rsync` skipped version.php of the same size and second;
+  github.com refused composer a clone. Both fixed in `.github` before (`--checksum` + `diff -rq`, `install-plugin-ci.sh`).
+
+### #110 — the CLARA incident as a benchmark (acceptance jobs `clara-bench`, `clara-report`)
+- HIGHESTSUB with a pool of about 2 500 items, as CLARA's run #87. Release engine set: 1/5/12/25 workers plus a
+  query-log step and a faults step, gated. Previous engine set: 1 and 25 workers on the same seeds, not gated — what
+  the incident looked like. `clara_bench.py` writes `clara-bench.json` with every figure and `clara-bench.md` with the
+  root cause from the figures, and judges the eight open points: database errors, web/PHP limits, database limits,
+  AK-CLARA-01/-03/-04/-05, DoD-CLARA-01. A point passes only on data; the historical runs #87/#88 are waived as operator
+  evidence, never reported as tested.
+- `load_matrix.sh`: `POOL`, `QUERYLOG_AT` (a step with Moodle's query log on, before the faults step); per step the
+  database (`db_health.php`) and every uncertain submission (`cdp_timeline.php`). A step fails on a deadlock, an
+  exception of the database layer, counters it could not read, a submission without a side (in the faults step: causes
+  other than those injected), a trace INSERT not measured in the query-log step (`load_step_verdict.py --extras`; 56
+  self-test cases).
+- `classes/local/cdp_timeline.php` (AK-CLARA-01): every uncertain submission to the millisecond — the worker's click,
+  its wait, its question to the server (worker: new fields `postedat`, `waitedms`, `reconciledat`), the server's
+  request line of that POST, the engine's trace — and its side: not received, not delivered (client), server slow,
+  server error, or unattributed.
+- `classes/local/db_health.php`: limits (max_connections, timeouts), counters before and after (PostgreSQL
+  pg_stat_database; MySQL/MariaDB SHOW GLOBAL STATUS), DML exceptions of the step's requests by class.
+- `load_sampler.php`: workers live and playing, the limit in force, the safety cap, throttled — every sample.
+- Every step starts with the load guard released (`GUARDWAIT`, default 900 s, waited for and said): a throttle the step
+  before set off held the next one (local run: 5 workers played as 1–2 after a faults step). The query-log step runs
+  before the faults step for the same reason.
+- `.github/scripts/server-limits.sh`: PHP asked through the web server, PHP-FPM, Apache, gateway, database.
+- Request lines carry `maxexecution` and `sapi`. `request_report.php`: `memorylimit` is now the web requests' own;
+  until 0.7.77 it was the command line's (1024M where the web server had 512M), `clilimit` beside it.
+
+### #168 — the operator's inventory (AK4)
+- `cli/progress_provenance.php`: the installation (wwwroot, database, plugin and engine version, read at) and
+  `exposure`: per experiment the recorded exports and research packages, and how many found sittings a later one
+  carries; browser downloads are said to be unrecorded. `docs/dev/fortschritt-provenienz.md`: one command per
+  installation, what goes into the issue, the risk-waiver wording if the inventory is waived.
+
 ## [0.7.77] — 2026-11-21 — Version 2026112102. Re-audit of a1a0b685 (0.7.76): #169, #110 accounting, #136 AK 5 equality matrix, #164 AK02, #168 provenance
 
 Database: new table `local_catquizlab_provenance` (upgrade step 2026112102). New strings: `package:failed`,

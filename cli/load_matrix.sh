@@ -40,6 +40,10 @@ OUT="${OUT:-/tmp/catquizlab-load}"
 PHP="${PHP:-php}"
 STATUS_URL="${STATUS_URL:-}"
 FAULTS="${FAULTS:-}"
+# 0.7.78 (#110, CLARA-like benchmark): POOL items in the pool (default: smoke.php's, twice the answer floor);
+# QUERYLOG_AT=W adds a step with W workers and Moodle's query log on, timing the engine trace's own INSERT (#164).
+POOL="${POOL:-}"
+QUERYLOG_AT="${QUERYLOG_AT:-}"
 GATE="${GATE:-1}"
 STALL="${STALL:-300}"
 failed=0
@@ -50,7 +54,12 @@ printf '%-16s %-7s %-6s %-9s %-6s %-6s %-8s %-8s %-8s %-8s %-10s %-6s %s\n' step
     webRSS dbconn startgap secs detail
 steps=""
 for w in $WORKERS; do for mode in $MODES; do steps="$steps $mode:$w:"; done; done
+# The query-log step before the faults step: the faults' timeouts are capacity causes, and the load guard they set
+# off would hold the step after them (local run 22.11.2026: 44 throttled samples in a query-log step after faults).
+if [ -n "$QUERYLOG_AT" ]; then steps="$steps $(echo "$MODES" | awk '{print $1}'):$QUERYLOG_AT:querylog"; fi
 if [ -n "$FAULTS" ]; then steps="$steps $(echo "$MODES" | awk '{print $1}'):$FAULTS:faults"; fi
+# The query log off whatever happens, and the database's state before the first step.
+trap '"$PHP" "$CLI/trace_report.php" --querylog=off > /dev/null 2>&1' EXIT
 for step in $steps; do
         mode=${step%%:*}; rest=${step#*:}; w=${rest%%:*}; kind=${rest#*:}
         name="$mode-w$w${kind:+-$kind}"
@@ -65,6 +74,9 @@ for step in $steps; do
             classic) args=(--strategy=classic --minanswers=$(( MINANSWERS / 2 ))) ;;
             *) args=(--strategy="$mode" --minanswers="$MINANSWERS") ;;
         esac
+        if [ -n "$POOL" ]; then
+            args+=(--pool="$POOL")
+        fi
         # Always: smoke.php then counts every sitting's end state and every execution's outcome into its summary, the
         # accounting each step's verdict checks — the faults step included (0.7.77).
         extra=(--no-navigation-failures)
@@ -76,6 +88,24 @@ for step in $steps; do
             extra=(--no-navigation-failures --expect-recovered=$(( persons * 3 )) \
                 --expect-recovered-reasons=submit_cdp_timeout:$persons,submit_connect_failed:$(( persons * 2 )))
         fi
+        # Every step starts with the load guard released (0.7.78): a throttle set off by the step before — the faults
+        # step's timeouts are capacity causes — held the next step at a lower limit (local run 22.11.2026: 5 workers
+        # played as 1–2). Waited for, at most GUARDWAIT seconds, and said; still throttled then, the step is played and
+        # its samples say so.
+        waited=0
+        while [ "$waited" -lt "${GUARDWAIT:-900}" ] && "$PHP" "$CLI/capacity_report.php" --json 2>/dev/null \
+                | python3 -c 'import json,sys; sys.exit(0 if json.load(sys.stdin)["capacity"]["guard"].get("throttled") else 1)' \
+                2>/dev/null; do
+            sleep 15
+            waited=$(( waited + 15 ))
+        done
+        if [ "$waited" -gt 0 ]; then
+            echo "    (waited ${waited} s for the load guard of an earlier step to release)"
+        fi
+        if [ "$kind" = querylog ]; then
+            "$PHP" "$CLI/trace_report.php" --querylog=on > /dev/null
+        fi
+        "$PHP" "$CLI/db_health.php" --snapshot > "$OUT/$name-db-before.json" 2>/dev/null
         from=$(date +%s)
         "$PHP" "$CLI/load_sampler.php" --seconds=$(( MINUTES * 60 + 600 )) ${STATUS_URL:+--status-url="$STATUS_URL"} \
             > "$OUT/$name-samples.jsonl" 2>/dev/null &
@@ -86,6 +116,19 @@ for step in $steps; do
             --summary="$OUT/$name-smoke.json" --stall="$STALL" > "$OUT/$name.log" 2>&1; then smoke=0; else smoke=$?; fi
         until=$(date +%s)
         kill "$sampler" 2>/dev/null; wait "$sampler" 2>/dev/null
+        if [ "$kind" = querylog ]; then
+            "$PHP" "$CLI/trace_report.php" --querylog=off > /dev/null
+        fi
+        # The database under the step, and every uncertain submission's life with its side (#110 AK-CLARA-01; the
+        # faults step knows what it injected: lost request → not received, lost and held responses → not delivered).
+        "$PHP" "$CLI/db_health.php" --before="$OUT/$name-db-before.json" --from="$from" --until="$until" \
+            > "$OUT/$name-db.json" 2>/dev/null
+        expect=()
+        if [ "$kind" = faults ]; then
+            expect=(--expect=request_not_received:$persons,response_not_delivered:$(( persons * 2 )))
+        fi
+        "$PHP" "$CLI/cdp_timeline.php" --from="$from" --until="$until" --json "${expect[@]}" > "$OUT/$name-cdp.json" \
+            2>/dev/null
         "$PHP" "$CLI/request_report.php" --from="$from" --until="$until" --json --raw="$OUT/$name-requests.csv" \
             > "$OUT/$name-requests.json" 2>/dev/null
         "$PHP" "$CLI/capacity_report.php" --hours=1 --json > "$OUT/$name-capacity.json" 2>/dev/null
@@ -99,12 +142,18 @@ except Exception: print(0)' "$OUT/$name-smoke.json")
         fi
         result=$(python3 "$CLI/load_step_verdict.py" "$OUT/$name-smoke.json" "$OUT/$name-requests.json" "$smoke" "$mode" \
             "$w" 2> "$OUT/$name-verdict.txt")
+        # The database, the uncertain submissions, the query log (0.7.78): any problem fails the step.
+        if ! python3 "$CLI/load_step_verdict.py" --extras "$OUT/$name-db.json" "$OUT/$name-cdp.json" \
+                "$OUT/$name-traces.json" "${kind:-load}" > "$OUT/$name-extras.txt"; then
+            sed 's/^/FAIL: /' "$OUT/$name-extras.txt" >> "$OUT/$name-verdict.txt"
+            result=FAIL
+        fi
         summary=$(python3 - "$OUT/$name-requests.json" "$OUT/$name-samples.jsonl" "$OUT/matrix.jsonl" "$name" "$mode" "$w" \
             "$persons" "${kind:-load}" "$result" "$(( until - from ))" "${WEBLIMIT:-}" "$OUT/$name-smoke.json" \
-            "$OUT/$name-traces.json" "$OUT/$name-verdict.txt" <<'PY'
+            "$OUT/$name-traces.json" "$OUT/$name-verdict.txt" "$from" "$until" <<'PY'
 import json, sys
 (req, samples, matrix, name, mode, workers, persons, kind, result, secs, weblimit, smokef, tracesf,
- verdictf) = sys.argv[1:15]
+ verdictf, stepfrom, stepuntil) = sys.argv[1:17]
 def load(p):
     try:
         v = json.load(open(p))
@@ -133,7 +182,14 @@ for x in s:
         waits[k] = max(waits.get(k, 0), v)
 gap = r.get('startgap') or {}
 row = {'step': name, 'mode': mode, 'workers': int(workers), 'persons': int(persons), 'kind': kind, 'result': result,
-       'seconds': int(secs), 'web_memory_limit': weblimit, 'requests': r.get('requests'), 'sittings': r.get('sittings'),
+       'seconds': int(secs), 'from': int(stepfrom), 'until': int(stepuntil),
+       # The workers as the samples saw them (0.7.78, #110 AK-CLARA-04): most live and playing, the limit in force,
+       # the cap, whether the load guard throttled.
+       'workers_live_max': peak('workerslive'), 'workers_playing_max': peak('workersplaying'),
+       'worker_limit_min': min((x['workerlimit'] for x in s if x.get('workerlimit') and x.get('workerslive')),
+                               default=None),
+       'worker_cap': max((x.get('workercap') or 0 for x in s), default=None),
+       'throttled_samples': sum(1 for x in s if x.get('throttled')), 'web_memory_limit': weblimit, 'requests': r.get('requests'), 'sittings': r.get('sittings'),
        'status': r.get('status'), 'http5xx': r.get('http5xx'), 'fatals': r.get('fatals'),
        'exceptions': r.get('exceptions'), 'aborted': r.get('aborted'), 'php_peak_mb': r.get('peakmb'),
        'process_rss_mb': r.get('rssmb'), 'queries_per_request': r.get('queries'), 'request_ms': r.get('durationms'),

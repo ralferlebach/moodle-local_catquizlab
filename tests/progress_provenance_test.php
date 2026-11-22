@@ -266,6 +266,44 @@ final class progress_provenance_test extends \advanced_testcase {
     }
 
     /**
+     * Whether found sittings went out (#168 AK4): exports and research packages made after they were collected carry
+     * them; those made before do not; browser downloads are said to be unrecorded.
+     */
+    public function test_exposure_of_the_found_sittings(): void {
+        global $DB;
+        $this->resetAfterTest();
+        $this->setAdminUser();
+        $built = $this->experiment(5, '2pl', [], ['fastest'], [2, 2, 10], null, ['ideal']);
+        $ids = array_keys($built['truth']);
+        [$early, $late] = [$ids[2], $ids[3]];
+        foreach ([$early => 1000, $late => 5000] as $id => $time) {
+            $DB->insert_record('local_catquizlab_attemptlog', (object) ['attemptid' => $id, 'runid' => $built['runs'][0],
+                'tryno' => 1, 'outcome' => 'collected', 'timecreated' => $time]);
+        }
+        $none = progress_provenance::exposure([$early, $late]);
+        $this->assertSame(0, $none['carried']);
+        $this->assertSame(0, $none['experiments'][$built['experimentid']]['exports']);
+        $this->assertStringContainsString('not recorded', $none['unrecorded']);
+
+        // An export of the run between the two collections: it carries the early sitting, not the late one.
+        $DB->insert_record('local_catquizlab_exportlog', (object) ['runid' => $built['runs'][0], 'experimentid' => null,
+            'format' => 'csv', 'dataset' => 'rawmatrix', 'usermodified' => 2, 'timecreated' => 3000]);
+        $one = progress_provenance::exposure([$early, $late]);
+        $this->assertSame(1, $one['carried']);
+        $this->assertSame(1, $one['experiments'][$built['experimentid']]['carriedbyalaterexport']);
+
+        // A research package of the experiment after both: it carries both.
+        get_file_storage()->create_file_from_string(['contextid' => \context_system::instance()->id,
+            'component' => 'local_catquizlab', 'filearea' => 'export', 'itemid' => 0, 'filepath' => '/',
+            'filename' => \local_catquizlab\local\research_package::filename($built['experimentid'], 9000),
+            'timecreated' => 9000, 'timemodified' => 9000], 'zip');
+        $both = progress_provenance::exposure([$early, $late]);
+        $this->assertSame(2, $both['carried']);
+        $this->assertSame(1, $both['experiments'][$built['experimentid']]['packages']);
+        $this->assertSame(gmdate('Y-m-d\TH:i:s\Z', 9000), $both['experiments'][$built['experimentid']]['lastexport']);
+    }
+
+    /**
      * A sitting's stored trace, decoded.
      *
      * @param int $attemptid The sitting.

@@ -214,7 +214,18 @@ while (time() < $until) {
     }
     $cpu = $now;
     $browser = local_catquizlab_load_processes($browsers);
-    echo json_encode(['time' => time()] + local_catquizlab_load_processes($names) + [
+    // The workers live and playing, the limit in force, the safety cap and the load guard (#110 AK-CLARA-04: the
+    // throttling and whether the cap was ever passed, sample by sample).
+    $workers = [];
+    try {
+        $capacity = \local_catquizlab\local\worker_capacity::snapshot();
+        $workers = ['workerslive' => (int) $capacity['live'], 'workersplaying' => (int) $capacity['playing'],
+            'workerlimit' => (int) $capacity['limit'], 'workercap' => (int) $capacity['cap'],
+            'throttled' => !empty($capacity['guard']['throttled'])];
+    } catch (\Throwable $e) {
+        $workers = ['workersunreadable' => $e->getMessage()];
+    }
+    echo json_encode(['time' => time()] + local_catquizlab_load_processes($names) + $workers + [
         'dbconnections' => local_catquizlab_load_connections(), 'load1' => $load[0], 'memavailablemb' => $available,
         'cpupercent' => $cpushare, 'iowaitpercent' => $iowaitshare,
         'browserprocs' => $browser['webprocs'], 'browserrssmb' => $browser['webrssmb'],

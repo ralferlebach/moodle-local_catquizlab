@@ -74,8 +74,13 @@ if ($raw) {
     fputcsv($raw, ['unixms', 'page', 'method', 'status', 'durationms', 'peakmb', 'rssmb', 'queries', 'connection', 'pid',
         'attemptid', 'correlationid']);
 }
+$weblimits = [];
 foreach (request_trace::each($from, $until) as $line) {
     $figures['requests']++;
+    // The memory_limit each request ran under, as it reported it (since 0.7.47; the web server's, not this script's).
+    if (isset($line['memorylimit']) && $line['memorylimit'] !== '') {
+        $weblimits[(string) $line['memorylimit']] = ($weblimits[(string) $line['memorylimit']] ?? 0) + 1;
+    }
     if (isset($line['durationms'])) {
         $durations[] = (int) $line['durationms'];
     }
@@ -189,7 +194,13 @@ foreach ($starts as $ms) {
 }
 $figures['startgap'] = $gaps === [] ? null : ['min' => round(min($gaps), 2), 'max' => round(max($gaps), 2),
     'mean' => round(array_sum($gaps) / count($gaps), 2)];
-$figures['memorylimit'] = (string) ini_get('memory_limit');
+// Until 0.7.77 'memorylimit' was this script's own (the command line's) — read as the web server's, it was wrong
+// (local run 22.11.2026: 1024M beside the web server's 512M). Now the web requests' own, the most frequent first,
+// and the command line's apart.
+arsort($weblimits);
+$figures['memorylimit'] = $weblimits === [] ? null : (string) array_key_first($weblimits);
+$figures['memorylimits'] = $weblimits;
+$figures['clilimit'] = (string) ini_get('memory_limit');
 
 $broken = [];
 foreach (['max-5xx' => 'http5xx', 'max-fatals' => 'fatals'] as $option => $key) {
@@ -225,11 +236,12 @@ if (!empty($options['json'])) {
         $figures['aborted']
     ));
     cli_writeln(sprintf(
-        'PHP peak memory (MB): max %s, p95 %s, p50 %s (CLI memory_limit %s; the web server\'s is its own)',
+        'PHP peak memory (MB): max %s, p95 %s, p50 %s (the requests\' memory_limit %s; the command line\'s %s)',
         $figures['peakmb']['max'] ?? '-',
         $figures['peakmb']['p95'] ?? '-',
         $figures['peakmb']['p50'] ?? '-',
-        $figures['memorylimit']
+        $figures['memorylimit'] ?? 'not reported',
+        $figures['clilimit']
     ));
     cli_writeln(sprintf(
         'Process RSS (MB): max %s, p95 %s, p50 %s; queries per request: max %s, p95 %s, p50 %s; '

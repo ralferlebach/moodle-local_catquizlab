@@ -60,7 +60,7 @@ if ($options['help']) {
         . "Decisions: --record=IDS | --exclude=IDS | --include=IDS | --rederive=IDS | --revert=IDS [--note=TEXT]\n";
     exit(0);
 }
-global $DB;
+global $CFG, $DB;
 \core\session\manager::set_user(get_admin());
 $ids = static fn(string $list): array => array_values(array_unique(array_filter(array_map(
     'intval',
@@ -137,7 +137,10 @@ $unresolved = array_values(array_filter(
 ));
 $report = [
     'rules' => progress_provenance::RULES,
-    'site' => ['dbtype' => $DB->get_dbfamily(), 'plugin' => get_config('local_catquizlab', 'version')],
+    // Which installation this is (#168 AK4: the development site and CLARA judged apart), and when it was read.
+    'site' => ['wwwroot' => $CFG->wwwroot, 'dbtype' => $DB->get_dbfamily(),
+        'plugin' => get_config('local_catquizlab', 'version'), 'engine' => get_config('local_catquiz', 'version'),
+        'readat' => gmdate('Y-m-d\TH:i:s\Z')],
     'scope' => $runids === null ? 'all runs' : 'runs ' . implode(',', $runids),
     'fixedsince' => $since > 0 ? gmdate('Y-m-d\TH:i:s\Z', $since) : null,
     'total' => $inventory['total'],
@@ -150,13 +153,18 @@ $report = [
         $runids ?? array_keys($DB->get_records('local_catquizlab_run', null, '', 'id'))
     )),
     'unresolved' => $unresolved,
+    // Whether the found sittings went out (#168 AK4): exports and research packages made after they were collected.
+    'exposure' => progress_provenance::exposure([...$inventory['ids'][progress_provenance::MISMATCH],
+        ...$inventory['ids'][progress_provenance::SUSPECT], ...$inventory['ids'][progress_provenance::UNRECONSTRUCTABLE]]),
     'fingerprint' => $inventory['fingerprint'],
     'seconds' => round(microtime(true) - $started, 2),
 ];
 if ($options['json']) {
     echo json_encode($report, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES), "\n";
 } else {
-    cli_writeln("Engine progress provenance, rules v{$report['rules']}, {$report['site']['dbtype']}, {$report['scope']}: "
+    cli_writeln("Engine progress provenance, rules v{$report['rules']}, {$report['site']['wwwroot']} "
+        . "({$report['site']['dbtype']}, plugin {$report['site']['plugin']}, read {$report['site']['readat']}), "
+        . "{$report['scope']}: "
         . "{$report['total']} stored sitting(s) in {$report['seconds']} s");
     foreach ($report['counts'] as $verdict => $n) {
         cli_writeln(sprintf('  %-20s %8d', $verdict, $n) . ($report['beforefix'] !== null
@@ -173,6 +181,9 @@ if ($options['json']) {
     }
     cli_writeln('  decisions recorded: ' . json_encode((object) $report['decided']) . '; left out of the analyses now: '
         . $report['excluded'] . '; found and not left out: ' . (count($unresolved) ?: 'none'));
+    cli_writeln('  found sittings carried by a later export or research package: ' . $report['exposure']['carried']
+        . ' of ' . $report['exposure']['sittings'] . ' ' . json_encode((object) $report['exposure']['experiments'])
+        . ' (' . $report['exposure']['unrecorded'] . ')');
     cli_writeln('  database ' . ($report['fingerprint']['unchanged'] ? 'unchanged' : 'CHANGED') . ' (fingerprint '
         . substr($report['fingerprint']['before'], 0, 16) . ' before, ' . substr($report['fingerprint']['after'], 0, 16)
         . ' after)');

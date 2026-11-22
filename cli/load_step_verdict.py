@@ -37,6 +37,14 @@ long as one is valid: an extreme person's sitting may end invalid by design.
     load_step_verdict.py SMOKE.json REQUESTS.json SMOKE_EXIT MODE WORKERS   prints the verdict; reasons to stderr
     load_step_verdict.py --safe-load matrix.jsonl                           the safe load per mode
     load_step_verdict.py --self-test                                        every rule against a made-up step
+    load_step_verdict.py --extras DB.json CDP.json TRACES.json KIND         the step's database, its uncertain
+                                                                            submissions, the query log; problems to
+                                                                            stdout, exit 1 if any (0.7.78)
+
+Since 0.7.78 (#110, CLARA-like benchmark) a step also fails on what extras() finds: a deadlock, a failed write or any
+other exception of Moodle's database layer, counters it could not read; an uncertain submission it cannot attribute to
+the client or the server side (or, in the faults step, causes other than those injected); in the query-log step an
+engine trace INSERT not measured.
 """
 
 import json
@@ -240,6 +248,31 @@ def overload(smoke, said, reasons, valid, others, workers):
     return 'CAPACITY', [line]
 
 
+def extras(db, cdp, traces, kind):
+    """What else fails a step: the database, the uncertain submissions, the query log (0.7.78)."""
+    problems = []
+    if not db:
+        problems.append('database: no report (db_health.php)')
+    else:
+        if not db.get('readable'):
+            problems.append('database: its counters could not be read')
+        if db.get('deadlocks'):
+            problems.append(f"database: {db['deadlocks']} deadlock(s)")
+        for cls, n in sorted((db.get('dmlerrors') or {}).items()):
+            problems.append(f'database: {n} × {cls} in the step\'s requests')
+    if not cdp:
+        problems.append('uncertain submissions: no report (cdp_timeline.php)')
+    else:
+        for problem in cdp.get('problems') or []:
+            problems.append(f'uncertain submissions: {problem}')
+    if kind == 'querylog':
+        persistence = ((traces or {}).get('decomposition') or {}).get('persistence') or {}
+        if persistence.get('status') != 'measured':
+            problems.append(f"query log step: the trace INSERT {persistence.get('status')!r} — "
+                            f"{persistence.get('why', 'no reason given')}")
+    return problems
+
+
 def safe_load(matrix, required=0):
     """Per mode: the highest worker count up to which every step passed, and the steps beyond it.
 
@@ -399,7 +432,28 @@ def self_test():
         bad += not ok
         print(('ok   ' if ok else 'FAIL ') + f'required {required}: short {got} (expected {expected})')
     os.unlink(f.name)
-    total = len(cases) + 1 + len(checks)
+    # The step's extras (0.7.78).
+    db_ok = {'readable': True, 'deadlocks': 0, 'dmlerrors': {}, 'failedwrites': 0}
+    cdp_ok = {'problems': [], 'counts': {}}
+    measured = {'decomposition': {'persistence': {'status': 'measured'}}}
+    extra_cases = [
+        ('extras clean', (db_ok, cdp_ok, {}, 'load'), 0),
+        ('no database report', ({}, cdp_ok, {}, 'load'), 1),
+        ('database counters unreadable', (dict(db_ok, readable=False), cdp_ok, {}, 'load'), 1),
+        ('a deadlock', (dict(db_ok, deadlocks=1), cdp_ok, {}, 'load'), 1),
+        ('a failed write', (dict(db_ok, dmlerrors={'dml_write_exception': 2}, failedwrites=2), cdp_ok, {}, 'load'), 1),
+        ('an unattributed submission', (db_ok, {'problems': ['1 event(s) unattributed']}, {}, 'load'), 1),
+        ('no timeline report', (db_ok, {}, {}, 'load'), 1),
+        ('query log step, INSERT measured', (db_ok, cdp_ok, measured, 'querylog'), 0),
+        ('query log step, INSERT not measured', (db_ok, cdp_ok, {'decomposition': {'persistence': {
+            'status': 'not_measured', 'why': 'log off'}}}, 'querylog'), 1),
+    ]
+    for label, args, expected in extra_cases:
+        got = len(extras(*args))
+        ok = (got > 0) == (expected > 0)
+        bad += not ok
+        print(('ok   ' if ok else 'FAIL ') + f'{label}: {got} problem(s)')
+    total = len(cases) + 1 + len(checks) + len(extra_cases)
     print(f'{total - bad} of {total} cases as expected.')
     return 0 if bad == 0 else 1
 
@@ -413,6 +467,11 @@ def main(argv):
         for line in lines:
             print(line)
         return 1 if short(lines) else 0
+    if argv[1:2] == ['--extras']:
+        problems = extras(load(argv[2]), load(argv[3]), load(argv[4]), argv[5])
+        for problem in problems:
+            print(problem)
+        return 1 if problems else 0
     smoke, requests = load(argv[1]), load(argv[2])
     result, reasons = verdict(smoke, requests, int(argv[3]), int(argv[5]))
     print(result)

@@ -198,6 +198,73 @@ final class progress_provenance {
     }
 
     /**
+     * Whether sittings found went out before they were found (#168 AK4, re-audit 22.11.2026): per experiment, the
+     * exports the plugin recorded (local_catquizlab_exportlog, for one of its runs or the whole experiment) and the
+     * research packages it stored (files of the component, area "export"), and of those how many were made after a
+     * found sitting was collected — they carry it. Downloads straight from the results page (CSV, JSON) are not
+     * recorded by the plugin: said so, not counted as none. Ids and counts only. Reads only.
+     *
+     * @param int[] $attemptids The sittings found.
+     * @return array{sittings: int, experiments: array, carried: int, unrecorded: string}
+     */
+    public static function exposure(array $attemptids): array {
+        global $DB;
+        $byexperiment = [];
+        foreach (array_chunk(array_values(array_unique(array_map('intval', $attemptids))), 500) as $chunk) {
+            [$insql, $params] = $DB->get_in_or_equal($chunk);
+            $rows = $DB->get_records_sql(
+                "SELECT a.id, a.runid, r.experimentid,
+                        (SELECT MAX(l.timecreated) FROM {local_catquizlab_attemptlog} l
+                          WHERE l.attemptid = a.id AND l.outcome = 'collected') AS timecollected
+                   FROM {local_catquizlab_attempt} a
+                   JOIN {local_catquizlab_run} r ON r.id = a.runid
+                  WHERE a.id {$insql}",
+                $params
+            );
+            foreach ($rows as $row) {
+                $byexperiment[(int) $row->experimentid][] = $row;
+            }
+        }
+        $fs = get_file_storage();
+        $context = \context_system::instance();
+        $files = $fs->get_area_files($context->id, 'local_catquizlab', 'export', 0, 'timecreated', false);
+        $experiments = [];
+        $carried = 0;
+        foreach ($byexperiment as $experimentid => $sittings) {
+            $runs = array_values(array_unique(array_map(static fn($r): int => (int) $r->runid, $sittings)));
+            [$insql, $params] = $DB->get_in_or_equal($runs, SQL_PARAMS_NAMED, 'run');
+            $exports = array_map('intval', $DB->get_fieldset_select(
+                'local_catquizlab_exportlog',
+                'timecreated',
+                "experimentid = :experimentid OR runid {$insql}",
+                $params + ['experimentid' => $experimentid]
+            ));
+            $packages = [];
+            foreach ($files as $file) {
+                if (str_starts_with($file->get_filename(), research_package::FILEPREFIX . $experimentid . '-')) {
+                    $packages[] = (int) $file->get_timecreated();
+                }
+            }
+            $out = array_merge($exports, $packages);
+            $after = 0;
+            foreach ($sittings as $sitting) {
+                $collected = (int) $sitting->timecollected;
+                if ($collected > 0 && array_filter($out, static fn(int $t): bool => $t >= $collected) !== []) {
+                    $after++;
+                }
+            }
+            $carried += $after;
+            $experiments[$experimentid] = ['sittings' => count($sittings), 'exports' => count($exports),
+                'packages' => count($packages), 'carriedbyalaterexport' => $after,
+                'lastexport' => $out === [] ? null : gmdate('Y-m-d\TH:i:s\Z', max($out))];
+        }
+        ksort($experiments);
+        return ['sittings' => count($attemptids), 'experiments' => $experiments, 'carried' => $carried,
+            'unrecorded' => 'downloads straight from the results page (CSV, JSON, step table) are not recorded by '
+                . 'the plugin: whether those went out cannot be read here'];
+    }
+
+    /**
      * A fingerprint of the sittings' table and of the decisions: rows, their latest change, the stored traces' bytes.
      * Taken before and after a read, equal when nothing was written.
      *

@@ -595,10 +595,136 @@ jobs:
           path: manifest
           retention-days: 30
 
+  clara-bench:
+    # The CLARA incident of 15.11.2026 as a benchmark (#110 re-audit 22.11.2026, section 3 A): HIGHESTSUB with a pool of
+    # about 2 500 items, as on CLARA, where the selector took about a minute per question and the browsers ran into
+    # their 60 s. The release engine set at 1/5/12/25 workers with a faults step and a query-log step (the gate), the
+    # previous engine set at 1 and 25 workers on the same seeds (the comparison: what the incident looked like; not
+    # gated). clara-report judges both.
+    name: "Issue 110 — CLARA-like: HIGHESTSUB, 2 500 items, ${{ matrix.leg }} (${{ matrix.pins }} engine set)"
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    strategy:
+      fail-fast: false
+      matrix:
+        leg: [after, before]
+        include:
+          - { leg: after, pins: release, workers: '1 5 12 25', per: '2', gate: '1', faults: '5', querylog: '5',
+              minutes: '40' }
+          - { leg: before, pins: previous, workers: '1 25', per: '1', gate: '0', faults: '', querylog: '',
+              minutes: '30' }
+    services:
+      postgres:
+        image: postgres:16
+        env: { POSTGRES_USER: postgres, POSTGRES_PASSWORD: moodle, POSTGRES_DB: moodle }
+        ports: ['5432:5432']
+        options: --health-cmd pg_isready --health-interval 10s --health-timeout 5s --health-retries 5
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          path: plugin
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+      - name: Moodle 4.5, the ${{ matrix.pins }} engine set, PostgreSQL, Apache + PHP-FPM (64 processes, 512M)
+        env: { MOODLE_BRANCH: MOODLE_405_STABLE, PINS: '${{ matrix.pins }}', DB: pgsql, WEB: apache, FPM_CHILDREN: '64' }
+        run: bash plugin/.github/scripts/acceptance-setup.sh
+      - name: Engine tracing on (the selector's time per question)
+        working-directory: ${{ env.CORE_ROOT }}
+        run: php admin/cli/cfg.php --component=local_catquiz --name=attempttrace --set=1
+      - name: Issue 110 — the self-tests of the step verdict and of the benchmark's judgement
+        working-directory: ${{ env.MOODLE_ROOT }}
+        run: |
+          python3 local/catquizlab/cli/load_step_verdict.py --self-test
+          python3 local/catquizlab/cli/clara_bench.py --self-test
+      - name: The limits in force (PHP through the web server, PHP-FPM, Apache, the database)
+        env:
+          PHPV: '8.3'
+        run: |
+          mkdir -p evidence
+          bash plugin/.github/scripts/server-limits.sh | tee evidence/limits.json
+          python3 -c 'import json, os; json.dump({"plugin": os.environ["GITHUB_SHA"], "run": os.environ["GITHUB_RUN_ID"],
+              "runner": os.environ.get("RUNNER_NAME"), "image": os.environ.get("ImageVersion"), "cpus": os.cpu_count()},
+              open("evidence/host.json", "w"), indent=2)'
+      - name: Issue 110 — HIGHESTSUB, 2 500 items, ${{ matrix.workers }} workers (${{ matrix.leg }})
+        working-directory: ${{ env.MOODLE_ROOT }}
+        timeout-minutes: 200
+        env:
+          WORKERS: ${{ matrix.workers }}
+          MODES: highestsub
+          PER: ${{ matrix.per }}
+          POOL: '2500'
+          MINANSWERS: '20'
+          MINUTES: ${{ matrix.minutes }}
+          FAULTS: ${{ matrix.faults }}
+          QUERYLOG_AT: ${{ matrix.querylog }}
+          GATE: ${{ matrix.gate }}
+          REQUIRED_SAFE: ${{ matrix.leg == 'after' && '25' || '0' }}
+          WEBLIMIT: ${{ env.PHP_MEMORY_LIMIT }}
+          OUT: ${{ github.workspace }}/evidence/load
+        run: |
+          set -o pipefail
+          # The runner's agent first, the load behind it (as the load job, CI 21.11.2026).
+          for pid in $(pgrep -f 'Runner\.(Listener|Worker)'); do
+            sudo choom -n -1000 -p "$pid" || true
+            sudo renice -n -5 -p "$pid" > /dev/null || true
+          done
+          echo 500 > /proc/self/oom_score_adj
+          vmstat -t -w 30 > "$GITHUB_WORKSPACE/evidence/vmstat.txt" 2>&1 &
+          nice -n 10 bash local/catquizlab/cli/load_matrix.sh | tee "$GITHUB_WORKSPACE/evidence-load.txt"
+      - name: Release manifest of this job
+        if: always()
+        env:
+          JOB_NAME: "clara-bench ${{ matrix.leg }}"
+        run: |
+          mkdir -p evidence manifest
+          bash plugin/.github/scripts/release-manifest.sh > "manifest/manifest-clara-bench-${{ matrix.leg }}.json"
+          cp engine-manifest.txt installed-versions.txt evidence-load.txt evidence/ 2>/dev/null || true
+          cp /tmp/apache-error.log evidence/ 2>/dev/null || true
+          rm -f evidence/load/*-requests.csv
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: catquizlab-acceptance-clara-bench-${{ matrix.leg }}
+          path: evidence
+          retention-days: 30
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: manifest-clara-bench-${{ matrix.leg }}
+          path: manifest
+          retention-days: 30
+
+  clara-report:
+    name: "Issue 110 — CLARA-like benchmark: before and after, the eight open points"
+    runs-on: ubuntu-24.04
+    needs: [clara-bench]
+    if: ${{ !cancelled() }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          path: plugin
+      - uses: actions/download-artifact@v7
+        with:
+          pattern: catquizlab-acceptance-clara-bench-*
+          path: legs
+      - name: Judge both legs (clara_bench.py)
+        run: |
+          set -o pipefail
+          python3 plugin/cli/clara_bench.py --after legs/catquizlab-acceptance-clara-bench-after \
+              --before legs/catquizlab-acceptance-clara-bench-before --out report | tee report.txt
+          cat report/clara-bench.md >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: catquizlab-acceptance-clara-report
+          path: report
+          retention-days: 90
+
   manifest:
     name: "Release manifest (every gate job of this commit, one file)"
     runs-on: ubuntu-24.04
-    needs: [scheduler, load, trace, engine-session, engine-migration, engine-bench]
+    needs: [scheduler, load, trace, engine-session, engine-migration, engine-bench, clara-bench, clara-report]
     if: ${{ !cancelled() }}
     permissions:
       contents: read

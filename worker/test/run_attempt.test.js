@@ -311,3 +311,13 @@ test('a sitting not due yet is waited for, within the idle limit (audit 11.11.20
     // Idle waiting switched off.
     assert.strictEqual(worker.nextIdleWait(10, 0, 0), 0);
 });
+
+test('submitTiming: an uncertain submission to the millisecond (#110 AK-CLARA-01)', () => {
+    const {submitTiming} = require('../run_attempt');
+    const now = Date.parse('2026-11-22T08:07:19.250Z');
+    assert.deepStrictEqual(submitTiming({startedat: '2026-11-22T08:06:19.125Z', ms: 60004.6}, now), {
+        postedat: '2026-11-22T08:06:19.125Z', waitedms: 60005, reconciledat: '2026-11-22T08:07:19.250Z'});
+    // Nothing known of the submission: said so, not invented.
+    assert.deepStrictEqual(submitTiming({}, now), {postedat: '', waitedms: -1, reconciledat: '2026-11-22T08:07:19.250Z'});
+    assert.deepStrictEqual(submitTiming(null, now).postedat, '');
+});

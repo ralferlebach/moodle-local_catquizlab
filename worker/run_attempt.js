@@ -349,7 +349,11 @@ async function playAttempt(browser, job) {
             const verdict = nav.reconcile(answeredCount, server);
             // The session as well: a 404 or a redirect may be the login page.
             const sessionlost = /\/login\//.test(page.url());
+            // Its life to the millisecond (#110 AK-CLARA-01): when the POST began, how long the browser waited for it,
+            // when the server was asked — to be laid beside the server's request line and the engine's trace.
+            const timing = submitTiming(result.submit);
             reconciliations.push({class: kind, verdict, answered: answeredCount, usage: qubaid, slot,
+                ...timing,
                 session: sessionlost ? 'lost' : 'kept',
                 server: {state: server.state || '', questionsattempted: server.questionsattempted || 0,
                     slots: server.slots || 0, reason: server.reason || ''}});
@@ -391,6 +395,7 @@ async function playAttempt(browser, job) {
                 if (late === 'storedlate') {
                     answeredCount++;
                     reconciliations.push({class: kind, verdict: late, answered: answeredCount - 1, usage: qubaid, slot,
+                        ...timing, askedagainat: new Date().toISOString(),
                         session: sessionlost ? 'lost' : 'kept',
                         server: {state: again.state || '', questionsattempted: again.questionsattempted || 0,
                             slots: again.slots || 0, reason: again.reason || ''}});
@@ -1161,6 +1166,25 @@ function fitDiagnostics(diagnosis, limit = DIAGNOSTICS_LIMIT, fullpath = null) {
 }
 
 /**
+ * When an uncertain submission began, how long the browser waited for it, and when the server was asked about it
+ * (#110 AK-CLARA-01). Times as ISO 8601 with milliseconds, UTC.
+ *
+ * @param {object} submit The submission record of clickAndSettle (startedat, ms).
+ * @param {number} [now] Epoch ms of the question to the server (default: now).
+ * @returns {{postedat: string, waitedms: number, reconciledat: string}}
+ */
+function submitTiming(submit, now = Date.now()) {
+    const record = submit || {};
+    const started = Date.parse(record.startedat || '');
+    const waited = record.ms === undefined || record.ms === null ? NaN : Number(record.ms);
+    return {
+        postedat: Number.isFinite(started) ? new Date(started).toISOString() : '',
+        waitedms: Number.isFinite(waited) ? Math.round(waited) : -1,
+        reconciledat: new Date(now).toISOString(),
+    };
+}
+
+/**
  * Parse a numeric question id from a `.que` element id (e.g. "question-12-34").
  *
  * @param {string} elementId The element id.
@@ -1760,4 +1784,5 @@ module.exports = {
     loginUrlFor,
     chooseOptionIndex,
     nextIdleWait,
+    submitTiming,
 };

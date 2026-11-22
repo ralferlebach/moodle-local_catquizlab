@@ -220,6 +220,9 @@ class request_trace {
             // The limit this request ran under, as PHP had it (#132): a peak means little without its ceiling, and the
             // web server's limit is not the command line's.
             'memorylimit' => (string) ini_get('memory_limit'),
+            // Its time limit and the server API it ran under (#110: the web server's limits, as the request had them).
+            'maxexecution' => (int) ini_get('max_execution_time'),
+            'sapi' => PHP_SAPI,
             'pid' => (int) getmypid(),
         ] + array_intersect_key($process, array_flip(['queries', 'rssmb', 'hwmmb', 'dbms', 'dbreads', 'dbwrites',
             'lockwaitms', 'lockheldms'])) + [
