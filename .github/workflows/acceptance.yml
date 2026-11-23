@@ -646,9 +646,19 @@ jobs:
         run: |
           mkdir -p evidence
           bash plugin/.github/scripts/server-limits.sh | tee evidence/limits.json
-          python3 -c 'import json, os; json.dump({"plugin": os.environ["GITHUB_SHA"], "run": os.environ["GITHUB_RUN_ID"],
-              "runner": os.environ.get("RUNNER_NAME"), "image": os.environ.get("ImageVersion"), "cpus": os.cpu_count()},
-              open("evidence/host.json", "w"), indent=2)'
+          # The runner as it was (#170 AK 3): the two legs run on two hosted runners, and the report says how far
+          # they compare — CPUs, CPU model, memory — instead of taking them for one machine.
+          LEG='${{ matrix.leg }}' PINSET='${{ matrix.pins }}' python3 -c 'import json, os, re
+          info = open("/proc/cpuinfo").read()
+          model = re.search(r"^model name\s*:\s*(.+)$", info, re.M)
+          mem = re.search(r"^MemTotal:\s+(\d+) kB", open("/proc/meminfo").read(), re.M)
+          json.dump({"plugin": os.environ["GITHUB_SHA"], "run": os.environ["GITHUB_RUN_ID"],
+                     "attempt": os.environ.get("GITHUB_RUN_ATTEMPT"), "runner": os.environ.get("RUNNER_NAME"),
+                     "image": os.environ.get("ImageVersion"), "cpus": os.cpu_count(),
+                     "cpu_model": model.group(1).strip() if model else None,
+                     "mem_total_mb": int(mem.group(1)) // 1024 if mem else None, "kernel": os.uname().release,
+                     "leg": os.environ["LEG"], "pins": os.environ["PINSET"]},
+                    open("evidence/host.json", "w"), indent=2)'
       - name: Issue 110 — HIGHESTSUB, 2 500 items, ${{ matrix.workers }} workers (${{ matrix.leg }})
         working-directory: ${{ env.MOODLE_ROOT }}
         timeout-minutes: 200
@@ -712,12 +722,23 @@ jobs:
         with:
           pattern: catquizlab-acceptance-clara-bench-*
           path: legs
+      # Fail closed (#170): the data set is checked before it is judged — every cell once, every file readable, the
+      # samples, counts and latencies consistent, both legs on their pinned engine sets and on this commit. The
+      # report is then read back: every point there, the waiver WAIVED, nothing FAIL.
+      - name: The gate's own negative matrix first (#170 DoD 1)
+        run: python3 plugin/cli/clara_bench.py --self-test --protocol report/negative-matrix.md
       - name: Judge both legs (clara_bench.py)
         run: |
           set -o pipefail
           python3 plugin/cli/clara_bench.py --after legs/catquizlab-acceptance-clara-bench-after \
-              --before legs/catquizlab-acceptance-clara-bench-before --out report | tee report.txt
-          cat report/clara-bench.md >> "$GITHUB_STEP_SUMMARY"
+              --before legs/catquizlab-acceptance-clara-bench-before --out report --commit "$GITHUB_SHA" \
+              --pins-release plugin/.github/engine-pins.env --pins-previous plugin/.github/engine-pins-previous.env \
+              | tee report.txt
+      - name: The report read back (clara_bench.py --verify-report)
+        if: always()
+        run: |
+          cat report/clara-bench.md >> "$GITHUB_STEP_SUMMARY" || echo "no clara-bench.md" >> "$GITHUB_STEP_SUMMARY"
+          python3 plugin/cli/clara_bench.py --verify-report report
       - uses: actions/upload-artifact@v6
         if: always()
         with:

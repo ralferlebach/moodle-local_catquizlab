@@ -61,6 +61,37 @@ jobs:
           node --check run_attempt.js
           node -e "JSON.parse(require('fs').readFileSync('package.json','utf8')); console.log('package.json OK')"
 
+  # ── The benchmark gate, fail closed (#170) ───────────────────────────────
+  # The CLARA-like benchmark's judgement (cli/clara_bench.py) checks its data set before it judges it. Its negative
+  # matrix — every way a data set can be incomplete or wrong, each injected into a complete one and run through the
+  # command line — must end nonzero case by case, the complete one zero; the protocol is kept as an artifact (#170
+  # DoD 1, DoD 3). Cheap: no Moodle, no database, seconds.
+  gate-selftest:
+    name: "Issue 170 — benchmark gate: negative matrix"
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: The CLARA benchmark gate's negative matrix (each injected defect must end nonzero)
+        run: |
+          set -o pipefail
+          mkdir -p gate-selftest
+          python3 cli/clara_bench.py --self-test --protocol gate-selftest/negative-matrix.md \
+              | tee gate-selftest/clara-bench-self-test.txt
+          cat gate-selftest/negative-matrix.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: The load step verdict's self-test
+        run: |
+          set -o pipefail
+          python3 cli/load_step_verdict.py --self-test | tee gate-selftest/load-step-verdict-self-test.txt
+
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: catquizlab-gate-selftest
+          path: gate-selftest
+          retention-days: 90
+
   # ── 1a. PHP Lint ────────────────────────────────────────────────────────
   lint-php:
     name: "PHP Lint – ${{ matrix.php }}"
@@ -555,14 +586,14 @@ jobs:
 
   ci-complete:
     name: CI complete
-    needs: [worker-check, phpunit, behat, upgrade]
+    needs: [worker-check, gate-selftest, phpunit, behat, upgrade]
     runs-on: ubuntu-24.04
     if: always()
     steps:
       - name: All matrix jobs must have succeeded
         run: |
-          result="${{ needs.worker-check.result }}-${{ needs.phpunit.result }}-${{ needs.behat.result }}-${{ needs.upgrade.result }}"
-          if [[ "$result" == "success-success-success-success" ]]; then
+          result="${{ needs.worker-check.result }}-${{ needs.gate-selftest.result }}-${{ needs.phpunit.result }}-${{ needs.behat.result }}-${{ needs.upgrade.result }}"
+          if [[ "$result" == "success-success-success-success-success" ]]; then
             echo "All CI jobs passed."
           else
             echo "CI result: $result – one or more jobs failed or were cancelled."

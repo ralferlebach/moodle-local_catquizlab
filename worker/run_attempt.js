@@ -626,12 +626,20 @@ async function login(page, userid, username, recorder = null, base = BASE_URL) {
     const password = passwordFor(userid, LOGIN_SUFFIX);
 
     // Twice at most. Moodle answers "Invalid login" for a wrong password and
-    // for a login token its session no longer holds — and the latter is
-    // transient: the same credentials succeeded minutes later on a retried
-    // execution, which cost a whole execution and its retry delay. A fresh
-    // login page brings a fresh token. A second refusal is real and reported.
+    // for a login token its session no longer holds. A second refusal is real
+    // and reported.
+    //
+    // The transient refusals seen so far had another cause (CI 521b961,
+    // 23.11.2026: the trace kept the POST, the password in it was empty):
+    // Moodle's password toggle replaces the password field by a copy of its
+    // HTML once its template has loaded, after the page's load event. A value
+    // set before that is gone. So the form is waited for before it is filled.
     for (let round = 1; round <= 2; round++) {
         await gotoSettle(page, `${base}/login/index.php`);
+        const form = await loginFormReady(page);
+        if (form === 'toggle missing' && recorder) {
+            recorder.event('login-form', 'the password toggle did not appear within 20 s; filling anyway');
+        }
 
         // No username field means a session is already open. With an isolated
         // context that should not happen, so it is reported rather than worked
@@ -683,6 +691,27 @@ async function login(page, userid, username, recorder = null, base = BASE_URL) {
         throw new Error(`Login as ${name} failed${notice ? ': ' + notice : '.'}`
             + (stalled ? ` (navigation after submit: ${stalled})` : ''));
     }
+}
+
+/**
+ * Wait until Moodle's login form is in its final shape. Where the page sets up
+ * the password toggle (core/togglesensitive, on by default since Moodle 4.3),
+ * the toggle replaces the password field by a copy of its HTML once its
+ * template has arrived — after the load event, and after "networkidle2" too
+ * when the server is slow. A value set before that is lost and the login
+ * refused with the right password.
+ *
+ * @param {object} page The Puppeteer page, on the login page.
+ * @param {number} timeout Milliseconds to wait for the toggle.
+ * @returns {Promise<string>} "toggle", "no toggle" or "toggle missing".
+ */
+async function loginFormReady(page, timeout = 20000) {
+    const html = await page.content();
+    if (!html.includes('core/togglesensitive')) {
+        return 'no toggle';
+    }
+    return page.waitForSelector('.toggle-sensitive-wrapper #password', {timeout})
+        .then(() => 'toggle', () => 'toggle missing');
 }
 
 /**
@@ -1805,6 +1834,7 @@ async function beginWork(ws, workerid, delayms, sleep) {
 module.exports = {
     beginWork,
     login,
+    loginFormReady,
     startAttempt,
     describeTransportError,
     artefactPath,

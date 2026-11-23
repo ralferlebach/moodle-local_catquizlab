@@ -116,15 +116,15 @@ function seedJson(args) {
  * @param {{username: string, password: string}} learner The learner.
  */
 async function login(page, learner) {
-    // Up to three tries: a login page whose form token went stale while it loaded (a cold server, a page recorded on
-    // video) says "Invalid login" for the right password. Signing in is not what these tests test; what they test
-    // starts after it, and a learner who never got in fails here, with the page's message.
+    // Up to five tries. Signing in is not what these tests test; what they test starts after it, and a learner who
+    // never got in fails here, with the page's message.
     //
-    // CI 20.11. (Moodle 5.2) and 21.11.2026 (4.5): three refusals within two seconds, the database saying the password
-    // is right and nothing locked (--verify-learners). Moodle says "Invalid login" for a form token its session does
-    // not know as well; so each refused try notes what the browser held — the session cookie, the token sent — and
-    // after three, two more with the context's cookies cleared: a fresh session. A learner who gets in that way is
-    // said in the test's output (artifacts/signin.jsonl and the log), not passed over.
+    // CI 20.11. (Moodle 5.2), 21.11. (4.5) and 23.11.2026 (4.5, legacy candidate): refusals within two seconds, the
+    // database saying the password is right and nothing locked (--verify-learners). A stale form token was suspected
+    // (hence the fresh session from the fourth try on); the trace of 23.11. showed the real cause: an empty
+    // password in the POST (see formReady). Each refused try notes what the browser held, what was waited for and
+    // the lengths of the fields that went out. A learner who gets in late is said in the test's output
+    // (artifacts/signin.jsonl and the log), not passed over.
     let message = '';
     const tries = [];
     for (let attempt = 1; attempt <= 5; attempt++) {
@@ -133,12 +133,17 @@ async function login(page, learner) {
         }
         // Loaded, not only parsed: a field filled before the page's scripts ran can be emptied by them.
         await page.goto('/login/index.php', {waitUntil: 'load'});
+        // The cause of every "Invalid login" so far (CI 521b961, legacy candidate, 23.11.2026; the trace kept the
+        // POST): the form went out with the username and an EMPTY password. Moodle's password toggle
+        // (core/togglesensitive, on by default since 4.3) loads a template after the page's load event and then
+        // replaces the password field by its own outerHTML — a copy without what was typed. A field filled
+        // before that is emptied, after the check below said it held the password. So: wait for the toggle
+        // when the page sets one up, then fill.
+        const ready = await formReady(page);
         const token = await page.locator('input[name="logintoken"]').first().inputValue().catch(() => '');
         const before = (await page.context().cookies()).filter((c) => /^MoodleSession/.test(c.name))
             .map((c) => c.name + ':' + c.value.slice(0, 6));
-        // Filled until the form holds what was typed: locally, on a fresh session's first login page, a field was
-        // empty again right after filling it (the page's own scripts, still starting up) — and the right password
-        // then reads "Invalid login". Each refill is noted.
+        // Filled until the form holds what was typed. Each refill is noted.
         let typed = false;
         let refills = 0;
         for (; refills < 5 && !typed; refills++) {
@@ -150,6 +155,12 @@ async function login(page, learner) {
             typed = (await page.inputValue('#username')) === learner.username
                 && (await page.inputValue('#password')) === learner.password;
         }
+        // What actually went out: the lengths of the two fields in the POST (not their content).
+        const posted = page.waitForRequest((r) => r.method() === 'POST' && new URL(r.url()).pathname.endsWith(
+            '/login/index.php'), {timeout: 30 * 1000}).then((r) => {
+            const form = new URLSearchParams(r.postData() || '');
+            return {username: (form.get('username') || '').length, password: (form.get('password') || '').length};
+        }).catch(() => null);
         await page.click('#loginbtn');
         // Signed in: Moodle leaves the login page (through ?loginredirect=1 to the dashboard).
         const left = page.waitForURL((url) => !url.pathname.endsWith('/login/index.php'), {timeout: 60 * 1000})
@@ -167,6 +178,7 @@ async function login(page, learner) {
         const after = (await page.context().cookies()).filter((c) => /^MoodleSession/.test(c.name))
             .map((c) => c.name + ':' + c.value.slice(0, 6));
         tries.push({attempt, message: String(message).trim(), token: token ? token.length : 0, typed, refills,
+            ready, sent: await posted, expected: {username: learner.username.length, password: learner.password.length},
             cookiebefore: before, cookieafter: after, freshsession: attempt >= 4});
     }
     // What the database says about the learner (CI 20.11.2026: refused three times, nothing else known).
@@ -179,6 +191,26 @@ async function login(page, learner) {
     noteSignin({username: learner.username, signedinat: null, tries});
     throw new Error(`${learner.username} could not sign in after five tries: ${String(message).trim()}; `
         + `tries ${JSON.stringify(tries)}; ${found}`);
+}
+
+/**
+ * Wait until the login form is in its final shape: if the page sets up Moodle's password toggle, until the toggle
+ * has replaced the password field (its button is there), and until Moodle's own pending JavaScript is done.
+ *
+ * @param {object} page The page, on /login/index.php.
+ * @returns {Promise<string>} What was waited for: "toggle", "no toggle", or "toggle missing" (after 20 s; the try
+ *     goes on and the POST's lengths will show whether the password went out).
+ */
+async function formReady(page) {
+    const toggle = (await page.content()).includes('core/togglesensitive');
+    let state = toggle ? 'toggle' : 'no toggle';
+    if (toggle) {
+        state = await page.locator('.toggle-sensitive-wrapper #password').first()
+            .waitFor({state: 'attached', timeout: 20 * 1000}).then(() => 'toggle').catch(() => 'toggle missing');
+    }
+    await page.waitForFunction(() => !window.M || !M.util || !Array.isArray(M.util.pending_js)
+        || M.util.pending_js.length === 0, null, {timeout: 20 * 1000}).catch(() => null);
+    return state;
 }
 
 /**

@@ -6,6 +6,61 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.7.80] — 2026-11-23 — Version 2026112300. #170: the benchmark gate fails closed; the "Invalid login" of the engine-session test explained
+
+No database change, no new string.
+
+### On 521b961 (0.7.79)
+- **Acceptance:** CLARA-like benchmark all PASS, the resume step included; classic at 50 workers PASS, the classic
+  resume step PASS. One job red: engine-session, legacy candidate — "Invalid login" five times (below).
+- **Release CI:** one job red — the upgrade job on 5.3/MariaDB could not reach github.com for its checkout (three
+  tries, 136 s each): the runner's network, not the plugin. Rerun.
+
+### "Invalid login" with the right password (tests/playwright/support/adaptivequiz.js, worker)
+- The trace of the failed test kept the login POST: username sent, password **empty**. Moodle's password toggle
+  (`core/togglesensitive`, on by default since 4.3) loads a template after the page's load event and then replaces the
+  password field by its own outerHTML — a copy without what was typed. A field filled before that is emptied after the
+  test had checked it. The stale-token theory of 20./21.11. was wrong; this was the cause there too.
+- `login()` now waits until the toggle has replaced the field (`formReady()`; and Moodle's pending JavaScript), then
+  fills, and notes for each refused try what was waited for and the lengths of the fields that went out.
+- The worker's login waits for the same (`loginFormReady()`), and notes when the toggle never appears.
+- Local, with the toggle's template held back 1 s: the old order 6 of 6 refused (empty password), the new 6 of 6 in.
+  Worker test: the form is filled only after the toggle (`login.test.js`; fails without the wait).
+
+### #170: the CLARA benchmark gate fails closed (`cli/clara_bench.py`)
+- The data set is checked before it is judged. Each defect is named by leg, cell, file and figure, and with the points
+  it fails; it fails them and the new point **GATE-170**.
+  - Every required cell exactly once, no other: after load 1/5/12/25, querylog 5, faults 5, resume 5; before load
+    1/25.
+  - HIGHESTSUB, a pool of at least 2 500, the same in both legs.
+  - Every step file there and readable.
+- **Samples:** they are read on their own.
+  - Parseable (only a cut last line forgiven), at least one, as many as the matrix says.
+  - Inside the step's time.
+  - Workers read and seen; `workers_live_max` and `throttled_samples` as the samples say; nothing above the cap.
+- **Status counts and latencies:**
+  - Sittings add up to their total and the step's persons, validity to the collected, executions at least the
+    sittings that ended.
+  - Latencies are ordered, non-negative figures.
+  - 5xx and fatals counted, and 0 in the after leg.
+- **Provenance:**
+  - `host.json`: plugin commit = the commit under test (`--commit`), runner, CPUs, CPU model, memory, leg, set.
+  - Engines: every component a resolved commit, exactly the pin of its set (`--pins-release`, `--pins-previous`).
+  - Comparability: CPUs and the web PHP/FPM/database settings equal between the legs. The two runners are said to be
+    two, never one machine.
+- **`--verify-report`:** reads the written report back. Every point once, statuses allowed, the waiver of #87/#88
+  `WAIVED` and nothing else waived, Markdown = JSON, nothing FAIL.
+- **Negative matrix:** `--self-test` with 37 cases, each a complete data set with one defect injected, run through the
+  command line. Every case ends nonzero, the complete one with 0. With `--protocol` it writes the table as Markdown.
+- **Reference run:** profile `0.7.78` (the matrix without the resume step) holds for e605b2e7 only.
+- `acceptance.yml`:
+  - `host.json` with CPU model, memory, kernel, leg and set;
+  - `clara-report` runs the negative matrix, then the judgement with commit and pins, then `--verify-report`.
+- New job in Release CI and CI: "Issue 170 — benchmark gate: negative matrix". It is part of "CI complete", and its
+  artifact is `catquizlab-gate-selftest`.
+- `docs/dev/clara-benchmark.md`: mandatory matrix, raw data, sample rules, provenance, waiver semantics, limits of the
+  causal statement.
+
 ## [0.7.79] — 2026-11-22 — Version 2026112201. Re-audit of e605b2e (0.7.78): a retry counted from 0, the benchmark's gate made complete
 
 No database change, no new string.
