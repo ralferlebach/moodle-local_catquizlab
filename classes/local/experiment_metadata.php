@@ -152,18 +152,63 @@ class experiment_metadata {
         $users = core_compat::users_by_id(array_values(array_unique(array_map(static fn($r) => (int) $r->userid, $rows))));
         $out = [];
         foreach ($rows as $row) {
-            $other = json_decode((string) $row->other, true);
-            if (!is_array($other)) {
-                $other = @unserialize((string) $row->other, ['allowed_classes' => false]) ?: [];
-            }
+            $other = self::decode_other($row->other);
             $user = $users[(int) $row->userid] ?? null;
+            // An entry whose values cannot be read is listed as such — never as a change from "" to "".
+            $unreadable = get_string('metadata:unreadable', 'local_catquizlab');
             $out[] = [
                 'when' => userdate((int) $row->timecreated),
                 'who' => $user ? fullname($user) : '—',
-                'oldname' => format_string((string) ($other['oldname'] ?? '')),
-                'newname' => format_string((string) ($other['newname'] ?? '')),
-                'description' => ($other['olddescription'] ?? '') !== ($other['newdescription'] ?? ''),
+                'readable' => $other !== null,
+                'oldname' => $other !== null ? format_string($other['oldname']) : $unreadable,
+                'newname' => $other !== null ? format_string($other['newname']) : $unreadable,
+                'description' => $other !== null && $other['olddescription'] !== $other['newdescription'],
             ];
+        }
+
+        return $out;
+    }
+
+    /**
+     * The "other" of a logged metadata change, as the standard log stored it (#171).
+     *
+     * The standard log writes "other" as JSON, or as a PHP-serialized array where its "jsonformat" setting is off.
+     * JSON is read here; a serialized value only through the log store's own decoder
+     * (\logstore_standard\log\store::decode_other()), never by this plugin unserializing. That decoder restricts the
+     * classes it makes; an object of any class comes back incomplete and is not read. Only the four values the
+     * history shows are taken, each a string: names and descriptions, old and new.
+     *
+     * @param string|null $raw The column as stored.
+     * @return array|null oldname, newname, olddescription, newdescription; null when the value is missing, not
+     *     readable, or not of this event (no old and new name) — then nothing is read into it.
+     */
+    public static function decode_other(?string $raw): ?array {
+        if ($raw === null || trim($raw) === '') {
+            return null;
+        }
+        $value = json_decode($raw, true);
+        $serialized = $value === null && json_last_error() !== JSON_ERROR_NONE && preg_match('~^(N;|[aO]:\d+:)~', $raw);
+        if ($serialized && class_exists(\logstore_standard\log\store::class)) {
+            // A malformed serialization warns; it is unreadable, not an error of the page.
+            set_error_handler(static fn() => true);
+            try {
+                $value = \logstore_standard\log\store::decode_other($raw);
+            } catch (\Throwable $e) {
+                $value = null;
+            } finally {
+                restore_error_handler();
+            }
+        }
+        if (!is_array($value) || !array_key_exists('oldname', $value) || !array_key_exists('newname', $value)) {
+            return null;
+        }
+        $out = [];
+        foreach (['oldname', 'newname', 'olddescription', 'newdescription'] as $key) {
+            $item = $value[$key] ?? '';
+            if (!is_scalar($item) && $item !== null) {
+                return null;
+            }
+            $out[$key] = (string) $item;
         }
 
         return $out;

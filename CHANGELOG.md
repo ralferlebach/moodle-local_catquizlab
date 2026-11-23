@@ -6,6 +6,41 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.7.81] — 2026-11-23 — Version 2026112301. #171: no unserialize(); the CI's lint toolchain pinned and the same locally
+
+No database change. One new string (EN, DE): `metadata:unreadable`.
+
+### Why 7cb86911 (0.7.80) was red in Release CI and not in the local gate
+- **The CI:** both lint jobs (PHP 8.2 and 8.3) failed on
+  `classes/local/experiment_metadata.php:157: The use of function unserialize() is forbidden
+  (moodle.PHP.ForbiddenFunctions.Found)`.
+- **Why not before:** the line was not new. The workflows installed moodle-plugin-ci as `^4`, and on 23.11. that
+  resolved to 4.5.12, with moodle-cs 3.9.2 and PHP_CodeSniffer 4.0.4, which forbid `unserialize()`. The local lint gate
+  still ran 4.5.11 with moodle-cs 3.7.0 and found nothing.
+- **What changes:**
+  - The workflows pin `MOODLE_CI: '4.5.12'`.
+  - The local gate runs exactly that version, and its first check compares the version the workflows pin with the one
+    installed. If the two differ, the gate fails before anything else runs.
+  - A new version of the toolchain arrives only deliberately, in both places at once.
+
+### `experiment_metadata::history()` reads the standard log without unserialize() (#171)
+- New `experiment_metadata::decode_other()` reads only:
+  - JSON, the standard log's default;
+  - a PHP-serialized array (the log's "jsonformat" off), and only through the log store's own decoder,
+    `\logstore_standard\log\store::decode_other()`, with its warnings caught.
+- An object of any class, stdClass included, is not read. The core decoder leaves it an incomplete class.
+- Only oldname, newname, olddescription and newdescription are taken, each a string. A value missing, unreadable, of
+  another shape (no old and new name) or not a string gives `null`.
+- In the history, such an entry is shown as "(not readable)" / "(nicht lesbar)", never as a change from "" to "".
+  Names still go through `format_string()`.
+- Tests (`experiment_metadata_test.php`):
+  - JSON and serialized arrays are read; serialized objects (stdClass, DateTime, a forged class) are not;
+  - missing, empty, `null`, `N;`, broken JSON, broken serialization, foreign shapes, lists, scalars and non-string
+    values all give `null`;
+  - in the history, an unreadable entry is marked, and a `<script>` in a name is not shown;
+  - with the log's "jsonformat" off, Moodle itself writes the change serialized (the data basis of that path), and the
+    history reads it.
+
 ## [0.7.80] — 2026-11-23 — Version 2026112300. #170: the benchmark gate fails closed; the "Invalid login" of the engine-session test explained
 
 No database change, no new string.

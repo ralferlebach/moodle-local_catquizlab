@@ -35,7 +35,11 @@ on:
       - main
 
 env:
-  MOODLE_CI: '^4'
+  # Pinned, not '^4' (#171): moodle-plugin-ci 4.5.12 brought moodle-cs 3.9.2, which forbids unserialize(); the
+  # floating constraint turned the lint red on 7cb86911 without a change to the plugin, and the local lint gate,
+  # still on 4.5.11, could not see it. The same version is installed for the local gate, and the gate checks that
+  # both say the same. Raise it here and there together, deliberately.
+  MOODLE_CI: '4.5.12'
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
   PGPASSWORD: moodle
 

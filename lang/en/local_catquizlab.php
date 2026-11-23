@@ -1162,6 +1162,7 @@ $string['metadata:history'] = 'Changes of name and description';
 $string['metadata:save'] = 'Save name and description';
 $string['metadata:saved'] = 'Name and description saved. The experimental design is unchanged.';
 $string['metadata:to'] = 'To';
+$string['metadata:unreadable'] = '(not readable)';
 $string['metadata:when'] = 'When';
 $string['metadata:who'] = 'Who';
 $string['metric:aboveshare'] = 'Share of items above twice the mean';

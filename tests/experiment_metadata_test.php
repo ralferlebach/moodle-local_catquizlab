@@ -237,4 +237,114 @@ final class experiment_metadata_test extends \advanced_testcase {
         $this->assertSame('Second name', $history[0]['oldname']);
         $this->assertNotSame('—', $history[0]['who']);
     }
+
+    /**
+     * #171: what "other" of the standard log is read, and what is not — JSON, the log's own serialized form, and
+     * nothing else; no object but stdClass; only the four values the history shows, as strings.
+     *
+     * @return void
+     */
+    public function test_decode_other_reads_json_and_the_logs_serialized_form_only(): void {
+        $names = ['oldname' => 'A', 'newname' => 'B', 'olddescription' => 'x', 'newdescription' => 'y'];
+        $want = $names;
+
+        // JSON, as the standard log writes it by default; designhash and other keys are not taken.
+        $this->assertSame($want, experiment_metadata::decode_other(json_encode($names + ['designhash' => str_repeat('a', 64)])));
+        // PHP-serialized, as it writes it with "jsonformat" off (an array: the event's other).
+        $this->assertSame($want, experiment_metadata::decode_other(serialize($names)));
+        // A serialized object, even stdClass: the log's decoder makes no usable object of it (it leaves an incomplete
+        // class), so nothing is read — and nothing is made.
+        $this->assertNull(experiment_metadata::decode_other(serialize((object) $names)));
+        // Descriptions missing (older entries): empty strings, the names read.
+        $this->assertSame(
+            ['oldname' => 'A', 'newname' => 'B', 'olddescription' => '', 'newdescription' => ''],
+            experiment_metadata::decode_other(json_encode(['oldname' => 'A', 'newname' => 'B']))
+        );
+
+        // Missing, empty, not readable: null.
+        foreach ([null, '', '   ', 'null', 'N;', '{"oldname": "A",', 'a:1:{s:7:"oldname";', 'not json, not serialized'] as $raw) {
+            $this->assertNull(experiment_metadata::decode_other($raw), var_export($raw, true));
+        }
+        // Another event's shape (no old and new name), a scalar, a list: null.
+        foreach (['{"foo": 1}', '42', '"A"', '["A", "B"]', serialize(['foo' => 1])] as $raw) {
+            $this->assertNull(experiment_metadata::decode_other($raw), $raw);
+        }
+        // A value that is not a string: null, not "Array".
+        $this->assertNull(experiment_metadata::decode_other(json_encode(['oldname' => ['A'], 'newname' => 'B'])));
+        $this->assertNull(experiment_metadata::decode_other(serialize(['oldname' => (object) ['a' => 1], 'newname' => 'B'])));
+
+        // An object of another class is not made: the log's decoder allows stdClass only, and nothing is read.
+        $raw = serialize(new \DateTime('2026-01-01'));
+        $this->assertNull(experiment_metadata::decode_other($raw));
+        $raw = 'O:16:"local_catquizlab":2:{s:7:"oldname";s:1:"A";s:7:"newname";s:1:"B";}';
+        $this->assertNull(experiment_metadata::decode_other($raw));
+    }
+
+    /**
+     * #171, the data basis of the serialized path: with the standard log's "jsonformat" off, Moodle itself writes
+     * "other" PHP-serialized (tool_log\helper\buffered_writer). Such a change is read in the history like a JSON one.
+     *
+     * @return void
+     */
+    public function test_history_reads_a_change_the_log_wrote_serialized(): void {
+        global $DB;
+        $this->resetAfterTest();
+        $this->preventResetByRollback();
+        $this->setAdminUser();
+        set_config('enabled_stores', 'logstore_standard', 'tool_log');
+        set_config('buffersize', 0, 'logstore_standard');
+        set_config('jsonformat', 0, 'logstore_standard');
+        get_log_manager(true);
+        $e = $this->experiment(registry::STATUS_RUNNING);
+        experiment_metadata::update($e['id'], 'Serialized name', 'Changed', $this->seen($e['id']));
+
+        $eventname = '\\' . \local_catquizlab\event\experiment_metadata_updated::class;
+        $raw = $DB->get_field('logstore_standard_log', 'other', ['eventname' => $eventname, 'objectid' => $e['id']]);
+        $this->assertStringStartsWith('a:', $raw, 'the log wrote it serialized');
+        $history = experiment_metadata::history($e['id']);
+        $this->assertTrue($history[0]['readable']);
+        $this->assertSame(['Original', 'Serialized name', true], [$history[0]['oldname'], $history[0]['newname'],
+            $history[0]['description']]);
+    }
+
+    /**
+     * #171: in the history, an entry whose values cannot be read says so — it is not shown as a change from "" to "".
+     * A name with markup is shown as text.
+     *
+     * @return void
+     */
+    public function test_history_marks_an_unreadable_entry(): void {
+        global $DB;
+        $this->resetAfterTest();
+        $this->setAdminUser();
+        $e = $this->experiment(registry::STATUS_RUNNING);
+        $eventname = '\\' . \local_catquizlab\event\experiment_metadata_updated::class;
+        $base = ['eventname' => $eventname, 'component' => 'local_catquizlab', 'action' => 'updated',
+            'target' => 'experiment_metadata', 'crud' => 'u', 'edulevel' => 0, 'contextid' => \context_system::instance()->id,
+            'contextlevel' => CONTEXT_SYSTEM, 'contextinstanceid' => 0, 'userid' => get_admin()->id, 'anonymous' => 0,
+            'objectid' => $e['id'], 'objecttable' => 'local_catquizlab_experiment'];
+        $DB->insert_record('logstore_standard_log', $base + ['timecreated' => 100,
+            'other' => json_encode(['oldname' => 'Old <b>bold</b><script>alert(1)</script>', 'newname' => 'New',
+                'olddescription' => '', 'newdescription' => 'd'])]);
+        $DB->insert_record('logstore_standard_log', $base + ['timecreated' => 200, 'other' => '{"broken": ']);
+        $DB->insert_record('logstore_standard_log', $base + ['timecreated' => 300,
+            'other' => serialize(['oldname' => 'New', 'newname' => 'Newer'])]);
+
+        $history = experiment_metadata::history($e['id']);
+        $this->assertCount(3, $history);
+        // Newest first: the serialized entry, read.
+        $this->assertTrue($history[0]['readable']);
+        $this->assertSame(['New', 'Newer', false], [$history[0]['oldname'], $history[0]['newname'],
+            $history[0]['description']]);
+        // The broken one: said, not guessed.
+        $this->assertFalse($history[1]['readable']);
+        $unreadable = get_string('metadata:unreadable', 'local_catquizlab');
+        $this->assertSame([$unreadable, $unreadable, false], [$history[1]['oldname'], $history[1]['newname'],
+            $history[1]['description']]);
+        // The first: read; no script in what is shown.
+        $this->assertTrue($history[2]['readable']);
+        $this->assertTrue($history[2]['description']);
+        $this->assertStringNotContainsString('<script', $history[2]['oldname']);
+        $this->assertStringContainsString('Old', $history[2]['oldname']);
+    }
 }
