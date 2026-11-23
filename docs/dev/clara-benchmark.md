@@ -1,4 +1,4 @@
-# CLARA-ähnlicher Benchmark (#110, 0.7.78)
+# CLARA-ähnlicher Benchmark (#110, 0.7.78; Nachbesserungen 0.7.79)
 
 Der Vorfall auf CLARA am 15.11.2026: HIGHESTSUB-Run #87 mit einem Pool von etwa 2 500 Items. Der Selektor der damaligen
 Engine brauchte rund eine Minute pro Frage (`strategy:select_question` 56–65 s). Die Browser liefen beim Absenden in
@@ -9,7 +9,7 @@ diesen Lauf in der CI nach, vorher und nachher, auf denselben Seeds.
 
 | Zweig | Engine-Satz | Worker | Personen je Worker | Zusatzschritte | gegated |
 |---|---|---|---|---|---|
-| after | Release (`engine-pins.env`) | 1, 5, 12, 25 | 2 | Fehler-Schritt (5 Worker), Query-Log-Schritt (5 Worker) | ja: jede Stufe PASS, 25 Worker getragen |
+| after | Release (`engine-pins.env`) | 1, 5, 12, 25 | 2 | Query-Log-, Fehler- und Wiederaufnahme-Schritt (je 5 Worker) | ja: jede Stufe PASS, 25 Worker getragen |
 | before | Vorgänger (`engine-pins-previous.env`) | 1, 25 | 1 | – | nein: zeigt, wie der Vorfall aussah |
 
 Gemeinsame Bedingungen:
@@ -64,6 +64,23 @@ Im Fehler-Schritt muss genau herauskommen, was eingespeist wurde: je Bearbeitung
 Anfrage) und zwei `response_not_delivered` (verlorene und zurückgehaltene Antwort). Jede andere Zahl und jede
 `unattributed`-Abgabe lässt den Schritt scheitern.
 
+## Wiederaufnahme-Schritt (0.7.79)
+
+Auslöser war CI e605b2e, classic mit 50 Workern: Ein Retry setzte den Engine-Versuch der ersten Ausführung fort
+(65 Antworten), zählte aber ab 0. Jede weitere Abstimmung las daher „66 gespeichert, der Worker hatte 0“ als
+Widerspruch, und die Bearbeitung ging verloren.
+
+Der Worker fragt die Engine jetzt vor der ersten Antwort einer Ausführung nach ihrem Stand und zählt von dort weiter.
+Der Schritt `resume` (`RESUME_AT=W`) prüft das mit `CATQUIZLAB_FAULTS=lostresponse@3,endexecution@4`:
+- **Erste Ausführung:** Die Antwort auf die 3. Abgabe geht verloren (gespeichert), die 4. Anfrage geht verloren, dann
+  endet die Ausführung.
+- **Zweite Ausführung:** Sie setzt den Engine-Versuch fort. Die Antwort auf ihre 3. Abgabe geht wieder verloren und
+  muss als gespeichert abgestimmt werden.
+
+Erwartet werden je Bearbeitung genau ein durch den Fehler beendeter Lauf (`--expect-injected-ends`), drei
+abgestimmte Abgaben und in der Zeitleiste 1× nicht angekommen und 2× nicht ausgeliefert. Mit der Zählung von 0.7.78
+scheitert der Schritt so wie die CI; mit 0.7.79 besteht er.
+
 ## Wann ein Schritt scheitert (`load_step_verdict.py --extras`, fail closed)
 
 Zusätzlich zu den Regeln seit 0.7.77 scheitert ein Schritt an:
@@ -88,8 +105,9 @@ ist PASS nur auf Daten; fehlen Daten, ist er FAIL.
 | Datenbankseitig | `max_connections`, höchste Verbindungszahl darunter, keine Deadlocks, keine fehlgeschlagenen Writes |
 | AK-CLARA-01 | keine Abgabe ohne Seite, Fehler-Schritt PASS mit genau den eingespeisten Ursachen |
 | AK-CLARA-03 | Selektor, Server/DB/Sperre, Client getrennt gemessen; Trace-INSERT im Query-Log-Schritt; Drosselung je Stufe |
-| AK-CLARA-04 | Worker nie über dem Safety-Cap; keine Drosselung bis 25 Worker im after-Zweig; der before-Zweig zeigt, wann und warum |
-| AK-CLARA-05 | jede Bearbeitung terminal und gültig, Recovery ohne Doppelabgabe; Pool ≈ 2 500 |
+| Vollständigkeit (0.7.79) | after 1/5/12/25 und before 1/25 vorhanden; je Zweig ein Engine-Manifest; after auf dem Release-, before auf dem Vorgänger-Satz; verschiedene Engine-Commits; derselbe Pool; Selektorzeit in jeder Laststufe. Fehlt etwas, sind DoD-CLARA-01 (und für den after-Zweig AK-CLARA-04/-05) FAIL |
+| AK-CLARA-04 | jede Laststufe mit Worker-Proben (keine Probe oder 0 Worker ist FAIL), Worker nie über dem Safety-Cap; keine Drosselung bis 25 Worker im after-Zweig; der before-Zweig zeigt, wann und warum |
+| AK-CLARA-05 | jede Bearbeitung terminal und gültig, Recovery ohne Doppelabgabe; Pool ≈ 2 500; Wiederaufnahme-Schritt PASS mit genau einem Retry je Bearbeitung |
 | DoD-CLARA-01 | vorher/nachher: Selektor, Durchsatz, Fehlerquote, UTC-Fenster, Ursache aus den Zahlen |
 
 **Nicht getestet und nicht so ausgegeben:** die historischen Runs #87/#88 auf CLARA. Ihre Datenbank, Logs und

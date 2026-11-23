@@ -137,9 +137,43 @@ def leg(path):
             'limits': load(os.path.join(path, 'limits.json'), {}), 'steps': steps}
 
 
+# The cells each leg must have (acceptance.yml, job clara-bench), and the engine sets: without all of them, the points
+# that rest on them fail (re-audit 22.11.2026: a leg with fewer cells, or with the other engine set, passed).
+AFTER_WORKERS = (1, 5, 12, 25)
+BEFORE_WORKERS = (1, 25)
+SETS = {'after': 'release', 'before': 'previous'}
+
+
+def completeness(after, before):
+    """What either leg lacks: cells, the engine manifest, the right engine set, a pool shared by both."""
+    gaps = {'after': [], 'before': [], 'both': []}
+    for which, data, required in (('after', after, AFTER_WORKERS), ('before', before, BEFORE_WORKERS)):
+        if not data:
+            gaps[which].append(f'the {which} leg is missing')
+            continue
+        have = sorted({int(s['workers']) for s in data['steps'] if s['kind'] == 'load' and s.get('workers')})
+        missing = [w for w in required if w not in have]
+        if missing:
+            gaps[which].append(f'{which}: no load step with {missing} worker(s) (has {have})')
+        engines = data.get('engines') or {}
+        if not engines.get('local_catquiz'):
+            gaps[which].append(f'{which}: no engine manifest (local_catquiz unknown)')
+        if (engines.get('engine_set') or '').split()[:1] != [SETS[which]]:
+            gaps[which].append(f"{which}: engine set {engines.get('engine_set')!r}, not {SETS[which]!r}")
+    if after and before:
+        commit = lambda d: ((d.get('engines') or {}).get('local_catquiz') or '').split()[1:2]
+        if commit(after) and commit(after) == commit(before):
+            gaps['both'].append(f'the same local_catquiz commit in both legs ({commit(after)[0]}): no before and after')
+        pools = lambda d: sorted({s['pool'] for s in d['steps'] if s['kind'] == 'load' and s['pool']})
+        if pools(after) != pools(before):
+            gaps['both'].append(f'pools differ: after {pools(after)}, before {pools(before)}')
+    return gaps
+
+
 def check(after, before):
     """The eight points, each PASS, FAIL or WAIVED with its evidence."""
     points = []
+    cover = completeness(after, before)
 
     def point(key, title, ok, evidence, waived=None):
         status = 'WAIVED' if waived else ('PASS' if ok else 'FAIL')
@@ -215,11 +249,12 @@ def check(after, before):
              f"{(querylog[0]['persistence_ms'] or {}).get('p95')} ms" if querylog else ''])
 
     # AK-CLARA-04.
-    problems = []
+    problems = [g for g in cover['after'] if 'no load step' in g]
     for s in load_steps:
         lg = s['loadguard']
-        if lg.get('workers_live_max') is None:
-            problems.append(f"{s['step']}: no worker sample")
+        # None or 0: no sample saw a worker — a load step without workers measured nothing (re-audit 22.11.2026).
+        if not lg.get('workers_live_max'):
+            problems.append(f"{s['step']}: no worker sample (workers live: {lg.get('workers_live_max')!r})")
             continue
         cap = int(lg.get('worker_cap') or 0)
         if cap and int(lg['workers_live_max']) > cap:
@@ -234,24 +269,41 @@ def check(after, before):
               f"{json.dumps(b['loadguard'].get('smoke'))}" for b in (before or {}).get('steps') or []]))
 
     # AK-CLARA-05.
-    bad = [f"{s['step']}: {s['result']} {s['sittings']}" for s in load_steps + faults
+    resume_steps = [s for s in steps if s['kind'] == 'resume']
+    bad = [f"{s['step']}: {s['result']} {s['sittings']}" for s in load_steps + faults + resume_steps
            if s['result'] != 'PASS' or s['sittings'].get('collected') != s['sittings'].get('total')
            or s['sittings'].get('queued') or s['sittings'].get('running') or s['sittings'].get('failed')]
     pools = sorted({s['pool'] for s in load_steps if s['pool']})
     if not pools or min(pools) < 2400:
         bad.append(f'pool sizes {pools}: not the benchmark\'s ~2 500 items')
+    bad += [g for g in cover['after'] if 'no load step' in g]
+    # Recovery across executions (CI e605b2e): every sitting of the resume step lost its first execution and was
+    # retried, the retry continued the engine attempt, and its reconciliation counted the earlier answers.
+    resume = [s for s in steps if s['kind'] == 'resume']
+    if not resume:
+        bad.append('no resume step: a retry continuing the engine attempt was not tried')
+    for s in resume:
+        reasons = s['executions'].get('reasons') or {}
+        retried = int(s['executions'].get('failed') or 0)
+        persons = int(s.get('persons') or 0)
+        if s['result'] != 'PASS' or retried != persons or set(reasons) != {'execution_context_destroyed'}:
+            bad.append(f"{s['step']}: {s['result']}, {retried} execution(s) retried for {persons} sitting(s), "
+                       f"causes {json.dumps(reasons)} (expected each sitting retried once, execution_context_destroyed)")
     point('AK-CLARA-05', 'Alle Sittings terminal und auswertbar; Recovery ohne Doppelabgabe', not bad,
           bad or [f"{s['step']}: {s['sittings'].get('collected')}/{s['sittings'].get('total')} collected, validity "
-                  f"{json.dumps(s['validity'])}" for s in load_steps + faults] + [f'pool {pools}'])
+                  f"{json.dumps(s['validity'])}" for s in load_steps + faults + resume] + [f'pool {pools}'])
     points.append({'id': 'AK-CLARA-05-historical', 'title': 'Runs #87/#88 auf CLARA', 'status': 'WAIVED',
                    'evidence': ['not reconstructable here'], 'waiver': WAIVED_HISTORY})
 
     # DoD-CLARA-01.
     bsteps = (before or {}).get('steps') or []
-    ok = bool(bsteps) and any((s.get('selector_ms') or {}).get('n') for s in bsteps) \
-        and any((s.get('selector_ms') or {}).get('n') for s in load_steps)
+    incomplete = cover['after'] + cover['before'] + cover['both']
+    nosel = [f"{which} {s['step']}: no selector time" for which, group in (('before', bsteps), ('after', load_steps))
+             for s in group if s['kind'] == 'load' and not (s.get('selector_ms') or {}).get('n')]
+    ok = bool(bsteps) and not incomplete and not nosel
     point('DoD-CLARA-01', 'Vorher/Nachher auf demselben Benchmark (HIGHESTSUB, ~2 500 Items, 1/5/12/25)', ok,
-          ([] if bsteps else ['the before leg is missing'])
+          incomplete + nosel
+          + [f"engines: after {json.dumps((after or {}).get('engines'))}, before {json.dumps((before or {}).get('engines'))}"]
           + [f"{which} {s['step']} {s['from']}–{s['until']}: selector p50 {(s.get('selector_ms') or {}).get('p50')} ms, "
              f"answers/min {s['answers_per_minute']}, error rate {s['error_rate']}, uncertain submissions "
              f"{json.dumps((s.get('cdp') or {}).get('sides'))}, result {s['result']}"
@@ -275,6 +327,10 @@ def root_cause(after, before):
     bsel = [((s.get('selector_ms') or {}).get('p50') or 0) for s in (before or {}).get('steps') or [] if s['kind'] == 'load']
     asel = [((s.get('selector_ms') or {}).get('p50') or 0) for s in (after or {}).get('steps') or [] if s['kind'] == 'load']
     bserver = sum(((s.get('cdp') or {}).get('sides') or {}).get('server', 0) for s in (before or {}).get('steps') or [])
+    bunknown = sum(int((s.get('cdp') or {}).get('unattributed') or 0) for s in (before or {}).get('steps') or [])
+    if bunknown:
+        lines.append(f'{bunknown} uncertain submission(s) of the before leg could not be given a side (the worker\'s '
+                     'times or the sitting missing): the cause below rests on the others only.')
     if bsel and asel and max(bsel) > 10 * max(max(asel), 1):
         lines.append(f'Cause, as measured: the selector of the previous engine set took up to {max(bsel):.0f} ms per '
                      f'question at this pool size, the release set at most {max(asel):.0f} ms; '
@@ -336,18 +392,28 @@ def self_test():
     import tempfile
     bad = 0
 
-    def make(root, kind_rows, limits=True, slow=False):
+    def make(root, kind_rows, limits=True, slow=False, engines=('release', 'a' * 40), live=None):
         os.makedirs(os.path.join(root, 'load'), exist_ok=True)
+        if engines:
+            with open(os.path.join(root, 'engine-manifest.txt'), 'w') as f:
+                f.write(f'# engine set LEGACY\nengine_set  {engines[0]}\n'
+                        'component                      ref                        commit                                   version\n'
+                        f'local_catquiz                  ALiSe-v-1.2.0-legacy       {engines[1]} 2026111707\n')
         rows = []
         for name, kind, workers, result in kind_rows:
+            retried = workers * 2 if kind == 'resume' else 0
             rows.append({'step': name, 'kind': kind, 'mode': 'highestsub', 'workers': workers, 'persons': workers * 2,
                          'result': result, 'seconds': 300, 'from': 1795352394, 'until': 1795352694,
                          'http5xx': 0, 'db_connections_max': 12, 'web_memory_limit': '512M',
-                         'workers_live_max': workers, 'workers_playing_max': workers, 'worker_limit_min': 25,
+                         'workers_live_max': workers if live is None else live, 'workers_playing_max': workers,
+                         'worker_limit_min': 25,
                          'worker_cap': 25, 'throttled_samples': 0,
                          'smoke': {'sittings': {'total': workers * 2, 'collected': workers * 2, 'queued': 0,
                                                 'running': 0, 'failed': 0},
-                                   'executions': {'total': workers * 2, 'failed': 0}, 'validity': {'valid': workers * 2}}})
+                                   'executions': {'total': workers * 2 + retried, 'failed': retried, 'reasons': (
+                                       {'execution_context_destroyed': {'n': retried, 'capacity': True}}
+                                       if retried else {})},
+                                   'validity': {'valid': workers * 2}}})
             base = os.path.join(root, 'load', name)
             json.dump({'kinds': {'next_item': {'n': 100, 'p50': 300}}, 'spans': {'strategy': {
                 'n': 100, 'p50': 60000 if slow else 250, 'p95': 65000 if slow else 400}},
@@ -370,10 +436,25 @@ def self_test():
 
     full = [('highestsub-w1', 'load', 1, 'PASS'), ('highestsub-w5', 'load', 5, 'PASS'),
             ('highestsub-w12', 'load', 12, 'PASS'), ('highestsub-w25', 'load', 25, 'PASS'),
-            ('highestsub-w5-faults', 'faults', 5, 'PASS'), ('highestsub-w5-querylog', 'querylog', 5, 'PASS')]
+            ('highestsub-w5-querylog', 'querylog', 5, 'PASS'), ('highestsub-w5-faults', 'faults', 5, 'PASS'),
+            ('highestsub-w5-resume', 'resume', 5, 'PASS')]
     before_rows = [('highestsub-w1', 'load', 1, 'FAIL'), ('highestsub-w25', 'load', 25, 'FAIL')]
+    previous = ('previous', 'b' * 40)
     cases = [
         ('all eight on data', full, True, True, []),
+        # Re-audit 22.11.2026: what passed before and must not.
+        ('no worker sample (0 live)', full, True, True, ['AK-CLARA-04'], {'live': 0}),
+        ('the 12 and 25 worker cells missing', [r for r in full if r[2] not in (12, 25) or r[1] != 'load'], True, True,
+         ['AK-CLARA-04', 'AK-CLARA-05', 'DoD-CLARA-01']),
+        ('the before leg without its 25 worker cell', full, True, True, ['DoD-CLARA-01'],
+         {'before_rows': before_rows[:1]}),
+        ('no engine manifest in the after leg', full, True, True, ['DoD-CLARA-01'], {'engines': None}),
+        ('the before leg on the release set', full, True, True, ['DoD-CLARA-01'], {'before_engines': ('release', 'b' * 40)}),
+        ('both legs on the same engine commit', full, True, True, ['DoD-CLARA-01'],
+         {'before_engines': ('previous', 'a' * 40)}),
+        ('no resume step', [r for r in full if r[1] != 'resume'], True, True, ['AK-CLARA-05']),
+        ('a resume step that failed', [(r[0], r[1], r[2], 'FAIL') if r[1] == 'resume' else r for r in full], True, True,
+         ['AK-CLARA-05']),
         ('no before leg', full, True, False, ['DoD-CLARA-01']),
         ('no limits', full, False, True, ['web-limits', 'db-limits']),
         ('no faults step', [r for r in full if r[1] != 'faults'], True, True, ['AK-CLARA-01']),
@@ -383,11 +464,15 @@ def self_test():
         ('nothing measured', [], True, True, ['db-errors', 'web-limits', 'db-limits', 'AK-CLARA-01', 'AK-CLARA-03',
                                               'AK-CLARA-04', 'AK-CLARA-05', 'DoD-CLARA-01']),
     ]
-    for label, rows, limits, with_before, failing in cases:
+    for case in cases:
+        label, rows, limits, with_before, failing = case[:5]
+        opts = case[5] if len(case) > 5 else {}
         tmp = tempfile.mkdtemp()
         try:
-            after = leg(make(os.path.join(tmp, 'a'), rows, limits))
-            before = leg(make(os.path.join(tmp, 'b'), before_rows, True, slow=True)) if with_before else None
+            after = leg(make(os.path.join(tmp, 'a'), rows, limits, engines=opts.get('engines', ('release', 'a' * 40)),
+                             live=opts.get('live')))
+            before = leg(make(os.path.join(tmp, 'b'), opts.get('before_rows', before_rows), True, slow=True,
+                              engines=opts.get('before_engines', previous))) if with_before else None
             points = write(os.path.join(tmp, 'out'), after, before)
             got = sorted(p['id'] for p in points if p['status'] == 'FAIL')
             ok = got == sorted(failing)

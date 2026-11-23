@@ -44,6 +44,10 @@ FAULTS="${FAULTS:-}"
 # QUERYLOG_AT=W adds a step with W workers and Moodle's query log on, timing the engine trace's own INSERT (#164).
 POOL="${POOL:-}"
 QUERYLOG_AT="${QUERYLOG_AT:-}"
+# 0.7.79 (CI e605b2e, classic at 50 workers): RESUME_AT=W adds a step whose sittings each lose their first execution
+# after three answers and are retried; the retry continues the engine attempt, and an answer of the retry has its
+# response lost — reconciled against the engine's count, which includes the first execution's answers.
+RESUME_AT="${RESUME_AT:-}"
 GATE="${GATE:-1}"
 STALL="${STALL:-300}"
 failed=0
@@ -58,6 +62,7 @@ for w in $WORKERS; do for mode in $MODES; do steps="$steps $mode:$w:"; done; don
 # off would hold the step after them (local run 22.11.2026: 44 throttled samples in a query-log step after faults).
 if [ -n "$QUERYLOG_AT" ]; then steps="$steps $(echo "$MODES" | awk '{print $1}'):$QUERYLOG_AT:querylog"; fi
 if [ -n "$FAULTS" ]; then steps="$steps $(echo "$MODES" | awk '{print $1}'):$FAULTS:faults"; fi
+if [ -n "$RESUME_AT" ]; then steps="$steps $(echo "$MODES" | awk '{print $1}'):$RESUME_AT:resume"; fi
 # The query log off whatever happens, and the database's state before the first step.
 trap '"$PHP" "$CLI/trace_report.php" --querylog=off > /dev/null 2>&1' EXIT
 for step in $steps; do
@@ -87,6 +92,14 @@ for step in $steps; do
             envs=(CATQUIZLAB_FAULTS=lostresponse@5,lostrequest@9,slowresponse@12)
             extra=(--no-navigation-failures --expect-recovered=$(( persons * 3 )) \
                 --expect-recovered-reasons=submit_cdp_timeout:$persons,submit_connect_failed:$(( persons * 2 )))
+        fi
+        if [ "$kind" = resume ]; then
+            # First execution: the third answer's response lost (stored), the fourth request lost, then the execution
+            # ends; the retry continues the engine attempt with three answers in it, and its third answer's response is
+            # lost too — stored, as the engine counts it (six), not as the retry alone would (two).
+            envs=(CATQUIZLAB_FAULTS=lostresponse@3,endexecution@4)
+            extra=(--no-navigation-failures --expect-injected-ends=$persons --expect-recovered=$(( persons * 3 )) \
+                --expect-recovered-reasons=submit_connect_failed:$(( persons * 3 )))
         fi
         # Every step starts with the load guard released (0.7.78): a throttle set off by the step before — the faults
         # step's timeouts are capacity causes — held the next step at a lower limit (local run 22.11.2026: 5 workers
@@ -125,6 +138,9 @@ for step in $steps; do
             > "$OUT/$name-db.json" 2>/dev/null
         expect=()
         if [ "$kind" = faults ]; then
+            expect=(--expect=request_not_received:$persons,response_not_delivered:$(( persons * 2 )))
+        fi
+        if [ "$kind" = resume ]; then
             expect=(--expect=request_not_received:$persons,response_not_delivered:$(( persons * 2 )))
         fi
         "$PHP" "$CLI/cdp_timeline.php" --from="$from" --until="$until" --json "${expect[@]}" > "$OUT/$name-cdp.json" \
@@ -175,6 +191,8 @@ for l in open(samples):
     except ValueError:
         pass
 peak = lambda k: max((x.get(k) or 0 for x in s), default=0)
+# A figure no sample had is None, not 0: "no sample" must not read as "nothing to see" (re-audit 22.11.2026).
+seen = lambda k: max((x[k] for x in s if isinstance(x.get(k), (int, float))), default=None)
 mean = lambda k: round(sum((x.get(k) or 0) for x in s) / len(s), 1) if s else None
 waits = {}
 for x in s:
@@ -185,7 +203,7 @@ row = {'step': name, 'mode': mode, 'workers': int(workers), 'persons': int(perso
        'seconds': int(secs), 'from': int(stepfrom), 'until': int(stepuntil),
        # The workers as the samples saw them (0.7.78, #110 AK-CLARA-04): most live and playing, the limit in force,
        # the cap, whether the load guard throttled.
-       'workers_live_max': peak('workerslive'), 'workers_playing_max': peak('workersplaying'),
+       'workers_live_max': seen('workerslive'), 'workers_playing_max': seen('workersplaying'),
        'worker_limit_min': min((x['workerlimit'] for x in s if x.get('workerlimit') and x.get('workerslive')),
                                default=None),
        'worker_cap': max((x.get('workercap') or 0 for x in s), default=None),

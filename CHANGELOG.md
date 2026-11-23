@@ -6,6 +6,46 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.7.79] — 2026-11-22 — Version 2026112201. Re-audit of e605b2e (0.7.78): a retry counted from 0, the benchmark's gate made complete
+
+No database change, no new string.
+
+### On e605b2e (0.7.78), Acceptance 45038234242
+- **CLARA-like benchmark:** `clara-report` judged all eight points PASS (historical runs #87/#88 waived). After leg
+  (release engine set, 2 502 items): 1/5/12/25 workers, query-log and faults steps, every step PASS, 2/10/24/50
+  sittings collected. Before leg (previous engine set): 1 worker 0 of 1 collected, 25 workers 0 of 25 collected (18
+  failed). Selector of the previous set up to 257 130 ms per question, of the release set at most 997 ms. In the before
+  leg at 25 workers, 43 uncertain submissions had no side (worker's times or sitting missing) — not explained yet; the
+  artefacts of that leg are needed.
+- **Classic at 50 workers: FAIL** — sitting 50 lost to `submit_state_mismatch`, a real worker bug (below). 1/5/12/25 and
+  the faults step PASS; classic carries the required 25.
+
+### A retry counted its answers from 0 (worker, `run_attempt.js`)
+- Sitting 50's first execution ended after 65 answers (CDP timeout under load); the retry continued the same engine
+  attempt (the activity offers "Continue") and counted from 0. The next uncertain submission was reconciled as "66
+  stored, the worker had 0" → mismatch → the execution failed, and the next retry again (67/0, 69/4).
+- Now each execution asks the engine where it stands before its first answer (`sitting_state`) and counts on from
+  there (`answeredBaseline()`; a fresh attempt has 0).
+- New test fault `endexecution@N` (first execution only): the Nth answer request lost and the execution ended; and a
+  load step `resume` (`RESUME_AT=W`): `lostresponse@3,endexecution@4` — each sitting loses its first execution after
+  three answers, the retry's third answer has its response lost and must be reconciled as stored. In the load job for
+  classic (12 workers) and in the CLARA benchmark's after leg (5 workers).
+- Locally: with the 0.7.78 count the resume step fails exactly as in CI (0 of 4 collected, "9 answered, the worker had
+  2"); with the fix it passes.
+
+### The benchmark's gate (re-audit 22.11.2026, section #110)
+- A step without any worker sample wrote `workers_live_max: 0`, and AK-CLARA-04 only refused `None`: now no sample is
+  `None` (`load_matrix.sh`) and 0 or `None` fails the point.
+- DoD-CLARA-01 (and AK-CLARA-04/-05 for the after leg) now require the whole cell set — after 1/5/12/25, before 1/25 —,
+  an engine manifest in each leg, the release set after and the previous set before, different engine commits, the same
+  pool, a selector time in every load step. AK-CLARA-05 also requires the resume step: each sitting retried once, for
+  `execution_context_destroyed` only.
+- The root cause says how many uncertain submissions of the before leg had no side, and that the cause rests on the
+  others.
+- `clara_bench.py`: 15 self-test cases, among them no worker sample, the 12 and 25 worker cells missing, the before leg
+  without its 25 worker cell, no engine manifest, the before leg on the release set, both legs on one engine commit, no
+  or a failed resume step.
+
 ## [0.7.78] — 2026-11-22 — Version 2026112200. Re-audit of 935bcceb (0.7.77): #110 CLARA-like benchmark, #168 operator inventory
 
 No database change, no new string.

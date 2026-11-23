@@ -177,10 +177,12 @@ jobs:
         include:
           # CLASSIC and ALLSUBS as the long sittings of the incidents (100 questions); HIGHESTSUB as on CLARA;
           # the short mode (ALLSUBS, 2–4 questions) as the comparison. Lost and late responses with the classic job.
-          - { mode: classic, minanswers: 100, faults: '12' }
-          - { mode: allsubs, minanswers: 100, faults: '' }
-          - { mode: highestsub, minanswers: 60, faults: '' }
-          - { mode: control, minanswers: 4, faults: '' }
+          # resume (0.7.79, CI e605b2e: classic at 50 workers lost a sitting to a retry counted from 0): each sitting
+          # loses its first execution and is retried into the same engine attempt.
+          - { mode: classic, minanswers: 100, faults: '12', resume: '12' }
+          - { mode: allsubs, minanswers: 100, faults: '', resume: '' }
+          - { mode: highestsub, minanswers: 60, faults: '', resume: '' }
+          - { mode: control, minanswers: 4, faults: '', resume: '' }
     services:
       postgres:
         image: postgres:16
@@ -219,6 +221,7 @@ jobs:
           MINANSWERS: ${{ matrix.minanswers }}
           MINUTES: '40'
           FAULTS: ${{ matrix.faults }}
+          RESUME_AT: ${{ matrix.resume }}
           WEBLIMIT: ${{ env.PHP_MEMORY_LIMIT }}
           OUT: ${{ github.workspace }}/evidence/load
         run: |
@@ -609,9 +612,9 @@ jobs:
       matrix:
         leg: [after, before]
         include:
-          - { leg: after, pins: release, workers: '1 5 12 25', per: '2', gate: '1', faults: '5', querylog: '5',
+          - { leg: after, pins: release, workers: '1 5 12 25', per: '2', gate: '1', faults: '5', querylog: '5', resume: '5',
               minutes: '40' }
-          - { leg: before, pins: previous, workers: '1 25', per: '1', gate: '0', faults: '', querylog: '',
+          - { leg: before, pins: previous, workers: '1 25', per: '1', gate: '0', faults: '', querylog: '', resume: '',
               minutes: '30' }
     services:
       postgres:
@@ -658,6 +661,7 @@ jobs:
           MINUTES: ${{ matrix.minutes }}
           FAULTS: ${{ matrix.faults }}
           QUERYLOG_AT: ${{ matrix.querylog }}
+          RESUME_AT: ${{ matrix.resume }}
           GATE: ${{ matrix.gate }}
           REQUIRED_SAFE: ${{ matrix.leg == 'after' && '25' || '0' }}
           WEBLIMIT: ${{ env.PHP_MEMORY_LIMIT }}

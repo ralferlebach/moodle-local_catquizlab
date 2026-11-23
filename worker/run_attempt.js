@@ -111,6 +111,8 @@ const CAPTURE = args.capture === 'all' ? 'all' : 'failure';
 // and the wait for the next page, 2 × 30 s: the 56–65 s POSTs of CLARA (#110).
 // Empty in every real run.
 const FAULTS = parseFaults(process.env.CATQUIZLAB_FAULTS || '');
+// Set by the "endexecution" fault: the answer loop ends the execution at its next turn (tests only).
+let faultEndExecution = false;
 const nav = require('./navigation.js');
 
 // The self test never talks to Moodle, so it must not demand credentials.
@@ -259,7 +261,8 @@ async function playAttempt(browser, job) {
         await page.setExtraHTTPHeaders(currentTrace);
     }
     if (FAULTS.length > 0) {
-        await injectFaults(page, FAULTS);
+        // "endexecution" only in a sitting's first execution: the retry is what it is there to test.
+        await injectFaults(page, FAULTS.filter((fault) => fault.kind !== 'endexecution' || Number(job.execution) <= 1));
     }
     let transport = null;
     let artefacts = null;
@@ -279,10 +282,24 @@ async function playAttempt(browser, job) {
         // used to run "while a question is visible", and an intermediate page
         // on the way to the next question ended it as if the test were over.
         let guard = 0;
-        let answeredCount = 0;
+        // Where this execution starts counting (CI e605b2e, classic at 50 workers): a sitting retried after an
+        // uncertain submission continues the engine attempt its earlier execution answered into — 65 answers in it —
+        // and counting from 0, every later reconciliation read "65 stored, the worker had 0" as a mismatch and failed
+        // the sitting. The engine's own count at the start is the baseline; a fresh attempt has 0.
+        const start = await callWs('local_catquizlab_sitting_state', {attemptid: job.attemptid})
+            .catch((stateError) => ({found: false, reason: 'unavailable: ' + stateError.message}));
+        let answeredCount = answeredBaseline(state, start);
+        if (answeredCount > 0) {
+            recorder.event('resume', `the engine has ${answeredCount} answer(s) of an earlier execution: counted from there`);
+        }
         let recoveries = 0;
         let finishedOnServer = null;
         while (state === nav.STATE.QUESTION && guard++ < 1000) {
+            if (faultEndExecution) {
+                faultEndExecution = false;
+                throw new Error('Execution context was destroyed (injected fault: endexecution, after '
+                    + `${answeredCount} answer(s)): the sitting goes back to the queue and its retry continues.`);
+            }
             if (leaseLost === job.attemptid) {
                 throw new Error(`[lease:lost] The server reports that sitting ${job.attemptid} is no longer this `
                     + `worker's: ${LEASE_FATES[leaseFate] || LEASE_FATES.requeued}; stopped after ${answeredCount} `
@@ -516,7 +533,8 @@ function parseFaults(spec) {
             const [kind, at] = part.split('@');
             return {kind, at: parseInt(at, 10)};
         })
-        .filter((fault) => ['lostresponse', 'lostrequest', 'slowresponse'].includes(fault.kind) && fault.at > 0);
+        .filter((fault) => ['lostresponse', 'lostrequest', 'slowresponse', 'endexecution'].includes(fault.kind)
+            && fault.at > 0);
 }
 
 /**
@@ -548,6 +566,12 @@ async function injectFaults(page, faults) {
             if (!atresponse) {
                 posts++;
                 fail = faults.some((fault) => fault.kind === 'lostrequest' && fault.at === posts);
+                if (faults.some((fault) => fault.kind === 'endexecution' && fault.at === posts)) {
+                    // The POST never reaches the server, and the execution ends at the next question: the sitting
+                    // is requeued and its retry continues the engine attempt (CI e605b2e).
+                    fail = true;
+                    faultEndExecution = true;
+                }
             } else {
                 fail = faults.some((fault) => fault.kind === 'lostresponse' && fault.at === posts);
                 slow = faults.some((fault) => fault.kind === 'slowresponse' && fault.at === posts);
@@ -565,7 +589,8 @@ async function injectFaults(page, faults) {
         }
         try {
             if (fail) {
-                console.error(`Injected fault: ${atresponse ? 'lostresponse' : 'lostrequest'} at answer POST ${posts}`);
+                const kind = atresponse ? 'lostresponse' : (faultEndExecution ? 'endexecution' : 'lostrequest');
+                console.error(`Injected fault: ${kind} at answer POST ${posts}`);
                 await client.send('Fetch.failRequest', {requestId: event.requestId, errorReason: 'ConnectionReset'});
             } else if (atresponse) {
                 await client.send('Fetch.continueResponse', {requestId: event.requestId});
@@ -1163,6 +1188,24 @@ function fitDiagnostics(diagnosis, limit = DIAGNOSTICS_LIMIT, fullpath = null) {
         kept.reconciliations = reconciliations;
     }
     return JSON.stringify(kept);
+}
+
+/**
+ * How many answers the engine already holds when an execution reaches its first question: the count to go on from.
+ *
+ * A fresh attempt has none. A sitting retried continues its engine attempt (the activity offers "Continue"), and the
+ * answers of the earlier execution are in it. Unknown (the server could not be asked, or no attempt yet): 0, as before.
+ *
+ * @param {string} state The state the start led to.
+ * @param {object} server sitting_state at that moment.
+ * @returns {number}
+ */
+function answeredBaseline(state, server) {
+    if (state !== nav.STATE.QUESTION || !server || !server.found || server.state === 'complete') {
+        return 0;
+    }
+    const stored = Number(server.questionsattempted);
+    return Number.isFinite(stored) && stored > 0 ? Math.floor(stored) : 0;
 }
 
 /**
@@ -1785,4 +1828,5 @@ module.exports = {
     chooseOptionIndex,
     nextIdleWait,
     submitTiming,
+    answeredBaseline,
 };

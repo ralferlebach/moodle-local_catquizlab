@@ -63,6 +63,7 @@ use local_catquizlab\local\worker_registry;
     'case' => '',
     'concurrency' => 0,
     'no-navigation-failures' => false,
+    'expect-injected-ends' => 0,
     'expect-recovered' => 0,
     'expect-recovered-reasons' => '',
     'budget' => '',
@@ -104,6 +105,8 @@ Options:
                        random number, true probabilities, category), as CSV in FILE. Fails when a twin answers the
                        same item differently in two runs, an answer was recorded otherwise than drawn, no item was
                        shared, or a run is not under RNG schema 2 (#155).
+  --expect-injected-ends=N With CATQUIZLAB_FAULTS=…endexecution@K: exactly N executions ended by it (with
+                       --no-navigation-failures; those are not navigation failures)
   --expect-recovered=N With CATQUIZLAB_FAULTS for the worker: at least N submissions reconciled, every question answered
                        exactly once (#134).
   --expect-recovered-reasons=CODE:N,…  And exactly N reconciliations with each of these reason codes, e.g.
@@ -652,7 +655,14 @@ if (!empty($options['no-navigation-failures'])) {
     );
     $started = microtime(true);
     $navigation = 0;
+    // Execution ends a test put there (worker fault "endexecution", the load step "resume"): counted apart, never as
+    // a navigation failure, and checked against what was injected (0.7.79).
+    $injected = 0;
     foreach ($executions as $execution) {
+        if (stripos((string) $execution->detail, 'injected fault: endexecution') !== false) {
+            $injected++;
+            continue;
+        }
         $pattern = '/Execution context was destroyed|did not reach the finish page|No expected state|fetch failed/i';
         if (preg_match($pattern, (string) $execution->detail)) {
             $navigation++;
@@ -665,7 +675,13 @@ if (!empty($options['no-navigation-failures'])) {
         'runid ' . $insql . ' AND outcome = :started',
         $inparams + ['started' => \local_catquizlab\local\attempt_history::STARTED]
     );
-    step($total . ' executions, ' . count($executions) . ' failed, ' . $navigation . ' of them navigation or transport.', $started);
+    step($total . ' executions, ' . count($executions) . ' failed, ' . $navigation . ' of them navigation or transport'
+        . ($injected > 0 ? ', ' . $injected . ' ended by an injected fault' : '') . '.', $started);
+    $expectends = (int) $options['expect-injected-ends'];
+    if ($expectends > 0 && $injected !== $expectends) {
+        smoke_summary(['verdict' => 'error']);
+        cli_error($injected . ' execution(s) ended by the injected fault, ' . $expectends . ' expected.');
+    }
     // Every failed execution by its reason (#107), not only the navigation
     // ones: a load test that passes on navigation can still hide failures of
     // another kind, retried until they succeeded.
@@ -767,6 +783,7 @@ if (!empty($options['no-navigation-failures'])) {
         $outcomes[(string) $row->outcome] = (int) $row->n;
     }
     smoke_summary(['executions' => ['total' => $total, 'failed' => count($executions), 'navigation' => $navigation,
+        'injected' => $injected,
         'reasons' => (object) $byreason, 'failures' => $failures, 'outcomes' => (object) $outcomes],
         'sittings' => $sittings, 'loadguard' => $guard]);
     if ($guard['trips'] > 0) {

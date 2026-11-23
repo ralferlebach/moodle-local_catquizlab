@@ -321,3 +321,24 @@ test('submitTiming: an uncertain submission to the millisecond (#110 AK-CLARA-01
     assert.deepStrictEqual(submitTiming({}, now), {postedat: '', waitedms: -1, reconciledat: '2026-11-22T08:07:19.250Z'});
     assert.deepStrictEqual(submitTiming(null, now).postedat, '');
 });
+
+test('answeredBaseline: a retry counts on from the engine\'s answers (CI e605b2e, classic at 50 workers)', () => {
+    const {answeredBaseline} = require('../run_attempt');
+    // The retry of sitting 50 continued an engine attempt with 65 answers in it and counted from 0: every later
+    // reconciliation then read "66 stored, the worker had 0" as a mismatch.
+    assert.strictEqual(answeredBaseline('question', {found: true, state: 'inprogress', questionsattempted: 65}), 65);
+    // A fresh attempt: nothing in it.
+    assert.strictEqual(answeredBaseline('question', {found: true, state: 'inprogress', questionsattempted: 0}), 0);
+    // Not asked, not found, already complete, or not on a question: as before, 0.
+    assert.strictEqual(answeredBaseline('question', {found: false, reason: 'unavailable'}), 0);
+    assert.strictEqual(answeredBaseline('question', null), 0);
+    assert.strictEqual(answeredBaseline('question', {found: true, state: 'complete', questionsattempted: 20}), 0);
+    assert.strictEqual(answeredBaseline('finish', {found: true, state: 'inprogress', questionsattempted: 5}), 0);
+    assert.strictEqual(answeredBaseline('question', {found: true, state: 'inprogress', questionsattempted: 'x'}), 0);
+});
+
+test('parseFaults: endexecution is a fault of its own', () => {
+    const {parseFaults} = require('../run_attempt');
+    assert.deepStrictEqual(parseFaults('lostresponse@3,endexecution@4,bogus@2'),
+        [{kind: 'lostresponse', at: 3}, {kind: 'endexecution', at: 4}]);
+});
