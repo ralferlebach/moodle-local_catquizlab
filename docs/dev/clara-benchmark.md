@@ -180,6 +180,44 @@ Die Matrix läuft in der Release-CI und der Entwicklungs-CI im Job „Issue 170 
 Protokoll ist das Artefakt `catquizlab-gate-selftest`. Zusätzlich läuft sie im Job `clara-report` vor der Bewertung
 (Artefakt `catquizlab-acceptance-clara-report`, `negative-matrix.md`).
 
+## Positivkontrolle mit dem Referenzlauf (#170 DoD 2, 0.7.82)
+
+Der Referenzlauf ist Acceptance 45038234242 auf e605b2e7 (0.7.78, 22.11.2026). Seine Original-Artefakte (after,
+before, Bericht) liegen byte-genau in `tests/fixtures/clara-reference-e605b2e7/`, dazu die Engine-Pins dieses
+Commits. Die SHA-256 stehen in `cli/clara_reference.py`, nicht neben den Daten.
+
+`clara_reference.py` prüft der Reihe nach:
+1. die Prüfsummen;
+2. das Entpacken ohne absolute Pfade und ohne „..“;
+3. `host.json` beider Zweige: Commit und Lauf;
+4. das unveränderte `clara_bench.py` mit `--profile 0.7.78 --commit e605b2e7…` und den damaligen Pins;
+5. `--verify-report`;
+6. den Vergleich Punkt für Punkt mit dem Originalbericht: jeder Punkt mit seinem ursprünglichen Status,
+   #87/#88 `WAIVED` in beiden, GATE-170 PASS.
+
+Jede Abweichung endet mit Exit ≠ 0, ein fehlendes Fixture eingeschlossen; übersprungen wird nichts.
+
+Die Negativkontrolle (`--self-test`) macht dasselbe mit Kopien des Fixtures, in denen je eine Sache falsch ist:
+- ein ZIP fehlt oder ist um ein Byte verändert;
+- im after-Zweig fehlt eine Datei;
+- ein Pin ist geändert;
+- der Erlass im Originalbericht ist auf PASS gesetzt;
+- ein anderer Commit;
+- kein ZIP.
+
+Jeder Fall muss scheitern. Damit diese Fälle bis zum Prüfer durchkommen und nicht schon an der Prüfsumme scheitern,
+erhält der Replay in diesen Fällen die neue Prüfsumme. Zusätzlich läuft derselbe Mechanismus auf einer synthetischen
+Referenz, mit Positiv- und Negativfällen.
+
+Beides läuft im Job „Issue 170 — benchmark gate: negative matrix, reference replay“ (Release-CI und CI). Vorher
+vergleicht der Job die Pins des Fixtures mit `git show e605b2e7:.github/engine-pins*.env`. Die Protokolle liegen im
+Artefakt `catquizlab-gate-selftest`:
+- `reference-replay.md` und `reference-replay.json` mit dem Commit des Prüfers, den Prüfsummen, den erwarteten und
+  tatsächlichen Exit-Codes und jedem Punkt;
+- `reference-negative-control.md` und `reference-negative-control.json`.
+
+Das Profil `0.7.78` bleibt streng: Es gilt nur für diesen Commit. Neue Läufe werden immer mit `current` bewertet.
+
 ## Die Punkte (`clara_bench.py`, Job `clara-report`)
 
 `clara-bench.json` enthält alle Kennzahlen, die Mängel und die Vergleichbarkeit maschinenlesbar. `clara-bench.md` ist

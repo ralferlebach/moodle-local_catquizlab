@@ -58,7 +58,7 @@ jobs:
   # command line — must end nonzero case by case, the complete one zero; the protocol is kept as an artifact (#170
   # DoD 1, DoD 3). Cheap: no Moodle, no database, seconds.
   gate-selftest:
-    name: "Issue 170 — benchmark gate: negative matrix"
+    name: "Issue 170 — benchmark gate: negative matrix, reference replay"
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
@@ -75,6 +75,40 @@ jobs:
         run: |
           set -o pipefail
           python3 cli/load_step_verdict.py --self-test | tee gate-selftest/load-step-verdict-self-test.txt
+
+      # #170 DoD 2: the reference run (Acceptance 45038234242 on e605b2e7, 22.11.2026) replayed from its original
+      # artifact ZIPs, byte for byte, in tests/fixtures/clara-reference-e605b2e7/: digests as written in
+      # cli/clara_reference.py, the legs judged by the current clara_bench.py with profile 0.7.78 (that run's matrix,
+      # accepted for that commit only) and that commit's pins, the report read back, every point as in the original
+      # report. A missing or changed fixture, an unreadable archive, a defect or a point other than the original's
+      # ends nonzero — never a skip.
+      # The fixture's pins against the repository's own history: .github/engine-pins*.env as committed in e605b2e7
+      # (re-audit 26.11.2026, section 2.3) — the pins of that run, not today's.
+      - name: "Issue 170 — the fixture's engine pins are those of e605b2e7 (git history)"
+        run: |
+          set -o pipefail
+          git fetch --no-tags --depth=1 origin e605b2e78797efae7aed2e190efea5b10b0a3ac5
+          for f in engine-pins.env engine-pins-previous.env; do
+              git show "FETCH_HEAD:.github/$f" | cmp - "tests/fixtures/clara-reference-e605b2e7/pins/$f"
+              echo "pins/$f: identical with e605b2e7:.github/$f"
+          done
+
+      - name: "Issue 170 — the reference run 45038234242 replayed from its original artifacts"
+        run: |
+          set -o pipefail
+          mkdir -p gate-selftest/reference
+          python3 cli/clara_reference.py --fixture tests/fixtures/clara-reference-e605b2e7 \
+              --out gate-selftest/reference | tee gate-selftest/reference/replay.txt
+          cat gate-selftest/reference/reference-replay.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: "Issue 170 — the replay's negative control (fixture changed or incomplete: nonzero)"
+        if: always()
+        run: |
+          set -o pipefail
+          mkdir -p gate-selftest/reference
+          python3 cli/clara_reference.py --self-test --fixture tests/fixtures/clara-reference-e605b2e7 \
+              --out gate-selftest/reference | tee gate-selftest/reference/negative-control.txt
+          cat gate-selftest/reference/reference-negative-control.md >> "$GITHUB_STEP_SUMMARY"
 
       - uses: actions/upload-artifact@v6
         if: always()

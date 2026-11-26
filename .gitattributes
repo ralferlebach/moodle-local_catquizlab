@@ -22,3 +22,8 @@
 
 # Everything not listed above ships — in particular /worker, /tests and
 # /lang, so distribution QA and maintainers can run the Moodle-native tests.
+
+# --- Byte for byte: the reference artifacts of #170 DoD 2 --------------------
+# Their SHA-256 is checked in CI (cli/clara_reference.py); no line-ending or
+# other conversion on checkout or commit, on any platform.
+/tests/fixtures/clara-reference-e605b2e7/** -text -diff

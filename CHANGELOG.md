@@ -6,6 +6,44 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.7.82] — 2026-11-26 — Version 2026112600. #170 DoD 2: the reference run replayed from its original artifacts
+
+No database change, no new string. On 70965702 (0.7.81) the CI was green on 67 of 67 jobs, and #171 is closed.
+
+### The reference replay (`cli/clara_reference.py`, new)
+- **The fixture:** acceptance run 45038234242 on e605b2e7 (0.7.78, 22.11.2026).
+  - Its three original artifact ZIPs (after, before, report), byte for byte, with the engine pins of that commit, in
+    `tests/fixtures/clara-reference-e605b2e7/` (README there).
+  - Their SHA-256 digests are written in the script, not beside the data.
+- **The replay checks**, in order:
+  - the digests;
+  - the unpacking (no absolute path, no "..");
+  - `host.json` of both legs (that commit, that run);
+  - the current `clara_bench.py`, unchanged, with `--profile 0.7.78`, that commit and its pins, expecting exit 0;
+  - `--verify-report`;
+  - every point against the original report: its original status, #87/#88 WAIVED in both, GATE-170 PASS.
+- **When it fails:** anything else ends nonzero, a missing fixture included. It writes the protocol
+  `reference-replay.md`: digests, commands, expected and actual exit, each point.
+- **The negative control** (`--self-test`): copies of the fixture with one thing wrong, each of which must fail:
+  - a ZIP missing or changed by one byte;
+  - a file removed inside the after leg;
+  - a pin changed;
+  - the original waiver turned PASS;
+  - another commit;
+  - not a ZIP.
+
+  The same mechanics also run on a synthetic reference, with a positive case and the same negative cases.
+- **Machine-readable result:** besides the Markdown protocols, it writes `reference-replay.json` and
+  `reference-negative-control.json`: the checker's commit, the digests, each exit code (expected and actual), each
+  point (original and replay).
+- **Pins against git history:** before the replay, the CI job compares the fixture's pins with `git show
+  e605b2e7:.github/engine-pins*.env` (re-audit of 26.11.2026, section 2.3).
+- Both run in the CI job "Issue 170 — benchmark gate: negative matrix, reference replay" (Release CI and CI). Their
+  protocols go into the artifact `catquizlab-gate-selftest`.
+- `.gitattributes`: the fixture is `-text -diff`, so no line-ending conversion on any platform can change a byte
+  the digests check.
+- `docs/dev/clara-benchmark.md`: new section "Positivkontrolle mit dem Referenzlauf".
+
 ## [0.7.81] — 2026-11-23 — Version 2026112301. #171: no unserialize(); the CI's lint toolchain pinned and the same locally
 
 No database change. One new string (EN, DE): `metadata:unreadable`.
