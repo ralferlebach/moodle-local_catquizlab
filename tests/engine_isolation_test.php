@@ -206,6 +206,11 @@ final class engine_isolation_test extends \advanced_testcase {
         $DB->execute('UPDATE {local_catquiz_attempts} SET id = ? WHERE id = ?', [$to, $from]);
         $DB->execute('UPDATE {local_catquiz_progress} SET attemptid = ? WHERE attemptid = ?', [$to, $from]);
         $DB->execute('UPDATE {local_catquiz_personparams} SET attemptid = ? WHERE attemptid = ?', [$to, $from]);
+        // The progress events (local_catquiz #177, 2026112700) reference the CAT attempt too. Left behind, B's head
+        // would read no events at all and the engine would end or break B on its own.
+        if ($DB->get_manager()->table_exists('local_catquiz_progress_steps')) {
+            $DB->execute('UPDATE {local_catquiz_progress_steps} SET catattemptid = ? WHERE catattemptid = ?', [$to, $from]);
+        }
     }
 
     /**
@@ -232,6 +237,9 @@ final class engine_isolation_test extends \advanced_testcase {
             ) : [],
             'cat' => $cat,
             'progress' => $DB->get_records_select('local_catquiz_progress', "attemptid IN ($in)", null, 'id'),
+            // The progress events (local_catquiz #177, 2026112700): an answer goes there, the head keeps a fixed size.
+            'progresssteps' => $DB->get_manager()->table_exists('local_catquiz_progress_steps')
+                ? $DB->get_records_select('local_catquiz_progress_steps', "catattemptid IN ($in)", null, 'id') : [],
             'personparams' => $DB->get_records('local_catquiz_personparams', ['userid' => $userid], 'id'),
             'trace' => $host ? $DB->get_records_select(
                 'local_catquiz_trace',
@@ -346,19 +354,22 @@ final class engine_isolation_test extends \advanced_testcase {
             $orphansbefore
         )), 'no new orphans');
 
-        // B goes on: the next request answers the pending item and shows the next question or ends the attempt.
+        // B goes on: the next request answers the pending item and shows the next question.
         $catb = $this->cat('B');
         $result = $this->play('B', [true]);
         $this->assertSame($this->host('B'), $result['attemptid'], 'B continues its own attempt');
         $this->assertSame($catb, $this->cat('B'), 'B continues its own CAT attempt');
         $after = $this->snapshot_b();
-        if (!$result['stopped']) {
-            $this->assertCount(count($before['questionattempts']) + 1, $after['questionattempts'], 'B was shown its next question');
-        }
-        $this->assertNotSame(
-            reset($before['progress'])->json,
-            reset($after['progress'])->json,
-            'B\'s progress took the answer'
-        );
+        // Two of B's four questions are played: its own engine has no reason to end it here.
+        $this->assertFalse($result['stopped'], 'B was not ended');
+        $this->assertCount(count($before['questionattempts']) + 1, $after['questionattempts'], 'B was shown its next question');
+        // The answer is in B's progress: its head (engines before local_catquiz #177), or its events and the head's
+        // sequence number (from 2026112700 on, the head keeps a fixed size).
+        $state = static fn(array $snapshot): string => json_encode([
+            reset($snapshot['progress'])->json,
+            reset($snapshot['progress'])->lastseq ?? null,
+            count($snapshot['progresssteps']),
+        ]);
+        $this->assertNotSame($state($before), $state($after), 'B\'s progress took the answer');
     }
 }

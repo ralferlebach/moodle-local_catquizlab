@@ -100,6 +100,40 @@ Worker fragte, „nicht gespeichert“ — und wurde kurz danach gespeichert; de
 0.7.73 fragt er nach dem Wiedereinstieg über die Aktivität (hinter der Sitzungssperre) noch einmal: eine mehr ist diese
 späte Antwort, einmal gezählt (`storedlate`); alles andere beendet die Ausführung wie bisher.
 
+Befund auf c6ec43c2 (0.7.82, Acceptance 45843506329, erster Versuch): *classic@50* FAIL, alle anderen Stufen PASS
+(1/5/12/25, Fehler- und Wiederaufnahmestufe), die geforderten 25 Worker getragen. Aus dem Artefakt
+`catquizlab-acceptance-load-classic`:
+- **Was scheiterte:** genau eine von 51 Ausführungen — `local_catquizlab_oracle_answer` nach 178 ms,
+  `UND_ERR_SOCKET: fetch failed (other side closed)`, Bearbeitung 66, Versuch 1. Sie wurde wiederholt; alle 50
+  Bearbeitungen gesammelt, 49 gültig, 1 ungültig (extremer Twin wie bisher), kein 5xx, kein Fatal, keine verloren.
+- **Warum FAIL:** `smoke.php` sagt bei jedem Navigations- oder Transportfehler „navigation“. Das Urteil erlaubt dann
+  CAPACITY nur als kontrollierte Überlast, also mit ausgelöstem Lastschutz. Der löst erst ab 5 Fehlern im Fenster aus,
+  bei einem einzigen also nie.
+- **Die Ursache, soweit belegt:** `UND_ERR_SOCKET … other side closed` heißt: Der Server hat die TCP-Verbindung
+  geschlossen, ohne zu antworten. Node's `fetch` verwendet Verbindungen wieder, wie ein Browser.
+  - In den Stichproben fällt Apaches Thread-Summe (busy + idle aus `mod_status`) 4 s vor dem Fehler von 100 auf 75.
+    Apache (event MPM) hat also einen Kindprozess mit 25 Threads beendet, vermutlich weil zu viele Threads frei waren
+    (Debians `MaxSpareThreads 75`). Seine Keep-Alive-Verbindungen schließen mit ihm. Das passt zeitlich, ist aber ein
+    Zusammenhang, kein Beweis.
+  - Ob die Anfrage PHP erreicht hat, sagt das Anfrageprotokoll nicht sicher. Bearbeitung 66 hat eine
+    Web-Service-Anfrage, die 1,7 s vorher beginnt und mit 200 endet; das kann der parallel laufende Heartbeat sein
+    oder der Aufruf selbst.
+- **Seit 0.7.83:** Ein Browser schickt die Anfrage in diesem Fall auf einer neuen Verbindung noch einmal; der Worker
+  jetzt auch (`postWs()` in `worker/run_attempt.js`). Das ist in beiden Fällen oben sicher, weil nur lesende
+  Aufrufe wiederholt werden.
+  - Nur einmal und nur für die beiden Funktionen, die nur lesen: `oracle_answer` (die Antwort ist aus dem Seed
+    gezogen, jedes Mal dieselbe) und `sitting_state`, in `db/services.php` als `read` geführt.
+  - Nur wenn der Server die Verbindung vor jeder Antwort geschlossen hat (`UND_ERR_SOCKET`, `ECONNRESET`, `EPIPE`).
+  - Ein Schreibaufruf (Claim, Heartbeat, Abschluss) wird nie doppelt geschickt. Eine Zeitüberschreitung, eine
+    abgelehnte Verbindung oder ein HTTP-Status ist weiter ein Fehler, ebenso eine zweite geschlossene Verbindung.
+- **Nicht versteckt:** Jede solche Wiederholung steht als eine Zeile im Worker-Log (`[catquizlab:resend] <Zeit> …`).
+  `smoke.php` zählt die Zeilen der Stufe (`worker_launcher::resends()`) in die Zusammenfassung (`executions.resent`),
+  und das Stufenurteil nennt sie bei PASS wie bei CAPACITY.
+- **Geprüft:** Worker-Test `worker/test/closed_connection.test.js` gegen einen echten HTTP-Server, der die Verbindung
+  ohne Antwort schließt. Node's eigenes `fetch` wirft dort genau den Fehler aus der CI. Ohne die Wiederholung schlagen
+  drei der sechs Fälle fehl.
+- **Unverändert:** die Urteilsregel, Apaches Einstellungen der Messumgebung und der Lastschutz.
+
 Die Engine-Traces jeder Stufe liest `trace_report.php` jetzt, solange die Stufe noch existiert (`--keep`, danach
 `cli/delete_experiment.php`); vorher löschte `smoke.php` sie mit dem Experiment, und die Selektorzeit kam aus fast keinem
 Trace. Lokal (4.5, control mit 1 und 2 Workern): PASS, „every step passed up to 2 worker(s)“.

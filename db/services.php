@@ -66,6 +66,13 @@ $functions = [
         'type'         => 'read',
         'capabilities' => 'local/catquizlab:worker',
     ],
+    'local_catquizlab_sitting_bind' => [
+        'classname'    => 'local_catquizlab\\external\\sitting_bind',
+        'description'  => 'Bind the activity attempt the browser is in to its sitting, as the lease holder, and return '
+            . 'the engine\'s count to go on from (#173).',
+        'type'         => 'write',
+        'capabilities' => 'local/catquizlab:worker',
+    ],
     'local_catquizlab_job_claim' => [
         'classname'   => 'local_catquizlab\\external\\job_claim',
         'methodname'  => 'execute',
@@ -115,6 +122,7 @@ $services = [
             'local_catquizlab_worker_heartbeat',
             'local_catquizlab_diagnose_attempt',
             'local_catquizlab_sitting_state',
+            'local_catquizlab_sitting_bind',
         ],
         'restrictedusers' => 1,
         'enabled'         => 0,

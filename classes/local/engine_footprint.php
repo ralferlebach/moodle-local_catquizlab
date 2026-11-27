@@ -119,6 +119,10 @@ class engine_footprint {
         foreach (['local_catquiz_progress', 'local_catquiz_personparams'] as $table) {
             $out['owned'][$table] = $has($table) ? self::by_users($table, $users) : [];
         }
+        // The progress events of the run's CAT attempts (local_catquiz #177): written beside the progress head since
+        // 2026112700, and gone with it.
+        $out['owned']['local_catquiz_progress_steps'] = $has('local_catquiz_progress_steps') && $cat !== []
+            ? self::ids_in('local_catquiz_progress_steps', 'catattemptid', $cat) : [];
         $out['owned']['local_catquiz_trace'] = $has('local_catquiz_trace') && $host !== []
             ? self::ids_in('local_catquiz_trace', 'adaptiveattemptid', $host) : [];
 

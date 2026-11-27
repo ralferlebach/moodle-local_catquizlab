@@ -92,6 +92,8 @@ class purger {
         'question_usages'            => 'usages',
         'local_catquiz_attempts'     => 'catattempts',
         'local_catquiz_progress'     => 'progress',
+        // The engine's progress events (local_catquiz #177, 2026112700): they go with their head.
+        'local_catquiz_progress_steps' => 'progresssteps',
         'local_catquiz_personparams' => 'abilities',
         'local_catquiz_trace'        => 'enginetraces',
         'local_catquiz_tests'        => 'enginetests',

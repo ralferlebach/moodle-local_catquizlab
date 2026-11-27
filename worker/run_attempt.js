@@ -114,11 +114,83 @@ const FAULTS = parseFaults(process.env.CATQUIZLAB_FAULTS || '');
 // Set by the "endexecution" fault: the answer loop ends the execution at its next turn (tests only).
 let faultEndExecution = false;
 const nav = require('./navigation.js');
+const watchModule = require('./sitting_watch.js');
+
+/**
+ * The worker contract this worker speaks (#173): sent with every claim; a server of another contract hands out
+ * nothing, and a worker given a sitting by a server that does not speak it plays nothing.
+ */
+const WORKER_CONTRACT = 1;
+
+/** How often the server is asked about a sitting before the execution ends without an answer (#173). */
+const STATE_TRIES = 3;
 
 // The self test never talks to Moodle, so it must not demand credentials.
 if (require.main === module && !SELF_TEST && (!BASE_URL || !TOKEN)) {
     console.error('Missing required --base-url and/or --token.');
     process.exit(2);
+}
+
+/**
+ * The web service functions that only read (type 'read' in db/services.php, nothing written): sending one again
+ * changes nothing on the server, and the oracle's answer is drawn from the seed, the same each time.
+ *
+ * @type {Set<string>}
+ */
+const WS_RESENDABLE = new Set(['local_catquizlab_oracle_answer', 'local_catquizlab_sitting_state']);
+
+/** @type {string} How a resend begins in the worker's log; cli/smoke.php reads it there. */
+const RESEND_MARK = '[catquizlab:resend]';
+
+/** @type {Set<string>} A connection the server closed before any response came back on it. */
+const CLOSED_CONNECTION = new Set(['UND_ERR_SOCKET', 'ECONNRESET', 'EPIPE']);
+
+/**
+ * Whether fetch failed because the server closed the connection before any response.
+ *
+ * Not a timeout, not a refused connection: those say the server is slow or not there, and stay failures.
+ *
+ * @param {Error} error What fetch threw.
+ * @returns {string} The error code, or '' when it was something else.
+ */
+function closedConnection(error) {
+    const cause = (error && error.cause) || {};
+    const code = cause.code || (error && error.code) || '';
+    return CLOSED_CONNECTION.has(code) ? code : '';
+}
+
+/**
+ * POST to the web service; a read sent once more if the server closed the connection before answering.
+ *
+ * Node's fetch keeps connections open and reuses them, as a browser does. A server closes such a connection when it
+ * likes — Apache, for one, when it ends a process (event MPM, too many idle threads) — and a request sent on it at
+ * that moment gets "other side closed" without a response (CI 26.11.2026, c6ec43c2, load classic, 50 workers:
+ * oracle_answer failed after 178 ms, 4 s after an Apache process of 25 threads had gone; its execution failed). A
+ * browser sends a request again on a new connection in that case; so does this, once, for the functions that only
+ * read (WS_RESENDABLE) — safe whether or not the first one reached PHP. A write (claim, heartbeat, completion) is
+ * never sent twice, and a second failure is the failure. The resend is said in the worker's log.
+ *
+ * @param {string} url The endpoint.
+ * @param {object} init The fetch options.
+ * @param {string} wsfunction The function called.
+ * @param {Function} fetchImpl fetch (tests pass their own).
+ * @param {Function} say Where the resend is said.
+ * @returns {Promise<Response>}
+ */
+async function postWs(url, init, wsfunction, fetchImpl = fetch, say = console.log) {
+    try {
+        return await fetchImpl(url, init);
+    } catch (error) {
+        const code = closedConnection(error);
+        if (!code || !WS_RESENDABLE.has(wsfunction)) {
+            throw error;
+        }
+        const cause = (error.cause && error.cause.message) || error.message;
+        // One line, its time first: smoke.php counts these lines of a step in the worker logs (RESEND_MARK).
+        say(`${RESEND_MARK} ${new Date().toISOString()} ${wsfunction}: the server closed the connection before any `
+            + `response (${code}: ${cause}); sent once more on a new connection, as a browser does - it only reads.`);
+        return fetchImpl(url, init);
+    }
 }
 
 /**
@@ -134,11 +206,8 @@ async function callWs(wsfunction, params) {
     let response = null;
     let data = null;
     try {
-        response = await fetch(url, {
-            method: 'POST',
-            headers,
-            body,
-        });
+        response = await postWs(url, {method: 'POST', headers, body}, wsfunction, fetch,
+            (line) => console.log(`${line} Worker ${WORKER_ID}, sitting ${currentAttemptId}.`));
         if (!response.ok) {
             throw new Error(`HTTP ${response.status}`);
         }
@@ -187,7 +256,7 @@ async function claimJob() {
     // That is not an empty queue, so the worker asks again rather than stopping.
     let idle = 0;
     for (let round = 1; ; round++) {
-        const job = await callWs('local_catquizlab_job_claim', {workerid: WORKER_ID});
+        const job = await callWs('local_catquizlab_job_claim', {workerid: WORKER_ID, contract: WORKER_CONTRACT});
         if (job && job.hasjob) {
             return job;
         }
@@ -224,6 +293,81 @@ function nextIdleWait(due, idle, maxIdle) {
 }
 
 /**
+ * Ask the server about the current sitting, a bounded number of times (#173).
+ *
+ * A server that does not answer, or is busy with the sitting, is asked again after a pause; after STATE_TRIES the
+ * execution ends with "[state:unavailable]" and nothing answered — never with a guessed state.
+ *
+ * @param {string} wsfunction local_catquizlab_sitting_state or local_catquizlab_sitting_bind.
+ * @param {object} params Its parameters.
+ * @param {function(string, object): Promise<object>} ws The call (callWs).
+ * @param {function(number): Promise<void>} sleep Waits.
+ * @param {number} tries How often to ask.
+ * @returns {Promise<object>} The server's answer.
+ */
+async function askServerWith(wsfunction, params, ws, sleep, tries = STATE_TRIES) {
+    let last = '';
+    for (let round = 1; round <= tries; round++) {
+        try {
+            const answer = await ws(wsfunction, params);
+            if (answer && answer.reason !== 'busy') {
+                return answer;
+            }
+            last = 'the sitting was busy';
+        } catch (error) {
+            last = error.message;
+        }
+        if (round < tries) {
+            await sleep(1000 * round * round);
+        }
+    }
+    throw new Error(`[state:unavailable] ${wsfunction} gave no answer after ${tries} tries (${last}): nothing answered `
+        + 'without the server\'s word.');
+}
+
+/**
+ * Ask the server about the current sitting (#173).
+ *
+ * @param {string} wsfunction The function.
+ * @param {object} params Its parameters.
+ * @returns {Promise<object>}
+ */
+function askServer(wsfunction, params) {
+    return askServerWith(wsfunction, params, callWs, (ms) => new Promise((resolve) => setTimeout(resolve, ms)));
+}
+
+/**
+ * The server's view of a sitting as the report keeps it (#176).
+ *
+ * @param {object} server sitting_state or sitting_bind.
+ * @returns {object}
+ */
+function serverEnd(server) {
+    const s = server || {};
+    return {at: new Date().toISOString(), found: Boolean(s.found), reason: s.reason || '', state: s.state || '',
+        questionsattempted: Number(s.questionsattempted) || 0, slots: Number(s.slots) || 0,
+        engineattemptid: Number(s.engineattemptid) || 0, qubaid: Number(s.qubaid) || 0};
+}
+
+/**
+ * The reason code of a failure the worker itself recognised (#175); '' leaves it to the server.
+ *
+ * @param {string} message The failure.
+ * @returns {string}
+ */
+function reasonOf(message) {
+    const text = String(message || '');
+    const tags = [['[guard:budget]', 'budget_violation'], ['[guard:noprogress]', 'no_progress'],
+        ['[identity:', 'identity_mismatch'], ['[state:unavailable]', 'state_unavailable'], ['[lease:lost]', 'lease_lost']];
+    for (const [tag, code] of tags) {
+        if (text.includes(tag)) {
+            return code;
+        }
+    }
+    return '';
+}
+
+/**
  * Play one claimed attempt end to end and report the outcome.
  *
  * @param {object} browser The Puppeteer browser.
@@ -247,6 +391,10 @@ async function playAttempt(browser, job) {
     let engineAttemptId = 0;
     let status = 'failed';
     let failure = '';
+    let reason = '';
+    // What this execution knows of its sitting's progress, and when it has to stop (#172, #173).
+    const watch = new watchModule.SittingWatch({budget: Number(job.budget) || 0, budgetkind: job.budgetkind,
+        expected: Number(job.expectedlength) || 0});
 
     // What the browser sees, kept for the attempt history and — on failure —
     // written out as screenshots, DOM and events (#107).
@@ -273,39 +421,108 @@ async function playAttempt(browser, job) {
     leaseFate = '';
 
     try {
+        // A server that does not speak this worker's contract gets nothing played (#173): this worker would bind and
+        // count by calls it does not have.
+        if (Number(job.contract || 0) !== WORKER_CONTRACT) {
+            throw new Error(`[state:unavailable] The server speaks worker contract ${Number(job.contract || 0)}, this `
+                + `worker ${WORKER_CONTRACT}: nothing played. Update the plugin or start its own worker.`);
+        }
         await login(page, job.userid, job.username, recorder);
         await gotoSettle(page, `${BASE_URL}/mod/adaptivequiz/view.php?id=${job.quizcmid}`);
-        let state = await startAttempt(page, recorder);
+        // Where the sitting stands before anything is clicked (#173): an engine attempt already complete is collected,
+        // not started again — the activity would offer a new attempt, and a second attempt of the same person is a
+        // second sitting. A server that cannot be asked, or an attempt that is not the sitting's, ends the execution
+        // here, before any answer.
+        const before = await askServer('local_catquizlab_sitting_state', {attemptid: job.attemptid});
+        let state;
+        let finishedOnServer = null;
+        if (before.found && before.state === 'complete') {
+            finishedOnServer = before;
+            watch.begin({count: before.questionsattempted, qubaid: before.qubaid, engineattemptid: before.engineattemptid,
+                slot: before.slots + 1, source: 'complete-before-start'});
+            watch.serverend = serverEnd(before);
+            recorder.event('resume', `the engine attempt ${before.engineattemptid} is already complete `
+                + `(${before.questionsattempted} answered): collected, not started again`);
+            state = nav.STATE.FINISH;
+        } else if (!before.found && before.reason !== 'no-engine-attempt') {
+            throw new Error(`[identity:${before.reason}] Before the start, the server does not know this sitting's `
+                + `engine attempt (${before.reason}): nothing answered.`);
+        } else {
+            state = await startAttempt(page, recorder);
+        }
+
+        // The first question binds the attempt the browser is in to the sitting, or checks the binding, and gives
+        // the count this execution goes on from (#173, CI e605b2e: a retry continues its engine attempt). The
+        // question shown has to be the newest of that usage.
+        let answeredCount = 0;
+        if (state === nav.STATE.QUESTION) {
+            const ref = await nav.withContextRetry(page, () => currentQuestionRef(page), 'read question', recorder);
+            const bound = await askServer('local_catquizlab_sitting_bind', {attemptid: job.attemptid, qubaid: ref.qubaid,
+                workerid: WORKER_ID});
+            const start = watchModule.baselineFrom(bound);
+            if (!start.ok || start.state !== 'inprogress') {
+                throw new Error(`[identity:${start.ok ? 'state-' + start.state : start.reason}] The question usage `
+                    + `${ref.qubaid} slot ${ref.slot} is not this sitting's attempt in progress: `
+                    + `${bound.reason || bound.state}; nothing answered.`);
+            }
+            if (ref.slot !== bound.slots) {
+                throw new Error(`[identity:sequence] The page shows slot ${ref.slot} of usage ${ref.qubaid}; the server's `
+                    + `newest is slot ${bound.slots} (${bound.questionsattempted} answered): nothing answered.`);
+            }
+            watch.begin({count: start.count, qubaid: bound.qubaid, engineattemptid: bound.engineattemptid, slot: ref.slot,
+                source: bound.newly ? 'bound' : 'confirmed'});
+            engineAttemptId = Number(bound.engineattemptid) || 0;
+            if (start.count > 0) {
+                recorder.event('resume', `the engine has ${start.count} answer(s) of an earlier execution: counted from there`);
+            }
+        }
+        answeredCount = watch.answered;
 
         // Answer loop, driven by the state each click leads to: a question, the
-        // finish page, or an error page — nothing in between (#100). The loop
-        // used to run "while a question is visible", and an intermediate page
-        // on the way to the next question ended it as if the test were over.
-        let guard = 0;
-        // Where this execution starts counting (CI e605b2e, classic at 50 workers): a sitting retried after an
-        // uncertain submission continues the engine attempt its earlier execution answered into — 65 answers in it —
-        // and counting from 0, every later reconciliation read "65 stored, the worker had 0" as a mismatch and failed
-        // the sitting. The engine's own count at the start is the baseline; a fresh attempt has 0.
-        const start = await callWs('local_catquizlab_sitting_state', {attemptid: job.attemptid})
-            .catch((stateError) => ({found: false, reason: 'unavailable: ' + stateError.message}));
-        let answeredCount = answeredBaseline(state, start);
-        if (answeredCount > 0) {
-            recorder.event('resume', `the engine has ${answeredCount} answer(s) of an earlier execution: counted from there`);
-        }
+        // finish page, or an error page — nothing in between (#100). It ends where
+        // the sitting ends, or on evidence (#172): no fixed number of turns.
         let recoveries = 0;
-        let finishedOnServer = null;
-        while (state === nav.STATE.QUESTION && guard++ < 1000) {
+        while (state === nav.STATE.QUESTION) {
             if (faultEndExecution) {
                 faultEndExecution = false;
                 throw new Error('Execution context was destroyed (injected fault: endexecution, after '
-                    + `${answeredCount} answer(s)): the sitting goes back to the queue and its retry continues.`);
+                    + `${watch.answered} answer(s)): the sitting goes back to the queue and its retry continues.`);
             }
             if (leaseLost === job.attemptid) {
                 throw new Error(`[lease:lost] The server reports that sitting ${job.attemptid} is no longer this `
-                    + `worker's: ${LEASE_FATES[leaseFate] || LEASE_FATES.requeued}; stopped after ${answeredCount} `
+                    + `worker's: ${LEASE_FATES[leaseFate] || LEASE_FATES.requeued}; stopped after ${watch.answered} `
                     + 'answer(s) rather than answer into an attempt that is not this execution\'s any more.');
             }
             const {qubaid, slot} = await nav.withContextRetry(page, () => currentQuestionRef(page), 'read question', recorder);
+            const seen = watch.see(qubaid, slot);
+            answeredCount = watch.answered;
+            if (seen === watchModule.SEEN.OTHER_USAGE || seen === watchModule.SEEN.BACKWARDS) {
+                throw new Error(`[identity:${seen === watchModule.SEEN.OTHER_USAGE ? 'usage-changed' : 'sequence'}] `
+                    + `The page shows usage ${qubaid} slot ${slot}; this execution is in usage ${watch.qubaid}, last slot `
+                    + `${watch.lastslot}, ${watch.answered} answer(s): nothing more answered.`);
+            }
+            const why = watch.check();
+            if (why !== '') {
+                // Evidence before a verdict: the server's own word on the sitting.
+                const server = await askServer('local_catquizlab_sitting_state', {attemptid: job.attemptid,
+                    qubaid: watch.qubaid});
+                watch.serverend = serverEnd(server);
+                if (server.found && server.state === 'complete') {
+                    finishedOnServer = server;
+                    state = nav.STATE.FINISH;
+                    break;
+                }
+                if (why === 'budget') {
+                    throw new Error(`[guard:budget] ${watch.answered} answer(s) confirmed and usage ${qubaid} presents `
+                        + `slot ${slot}: one more answer than the run's pool of ${watch.budget} item(s) can hold. Server: `
+                        + `${server.state || server.reason}, ${server.questionsattempted} answered, ${server.slots} `
+                        + 'presented. Not answered.');
+                }
+                throw new Error(`[guard:noprogress] Usage ${qubaid} slot ${slot}: no progress after ${watch.laststalls} `
+                    + `answer(s) that did not count, last progress at ${new Date(watch.lastprogressat).toISOString()}. `
+                    + `Server: ${server.state || server.reason}, ${server.questionsattempted} answered, `
+                    + `${server.slots} presented; the worker has ${watch.answered}.`);
+            }
             const decision = await callWs('local_catquizlab_oracle_answer', {
                 runid: job.runid,
                 // The page identifies a question by usage and slot; the browser
@@ -345,7 +562,12 @@ async function playAttempt(browser, job) {
             const kind = result.submit.class;
             if (kind === nav.SUBMIT.OK || kind === nav.SUBMIT.REDIRECT) {
                 state = result.state;
-                answeredCount++;
+                // Counted once the next page shows the engine moved on.
+                watch.sent();
+                if (state === nav.STATE.FINISH) {
+                    watch.finished();
+                }
+                answeredCount = watch.answered;
                 continue;
             }
             if (kind === nav.SUBMIT.MOODLE_ERROR_PAGE) {
@@ -359,10 +581,12 @@ async function playAttempt(browser, job) {
             }
 
             // Uncertain: the answer may have been stored with only the response
-            // lost, or not at all. The server knows; ask before going on (#134).
+            // lost, or not at all. The server knows; ask before going on (#134) —
+            // about this sitting's own attempt and usage (#173), and a server that cannot be asked is not taken
+            // for "missing".
             recoveries++;
-            const server = await callWs('local_catquizlab_sitting_state', {attemptid: job.attemptid})
-                .catch((stateError) => ({found: false, reason: 'unavailable: ' + stateError.message}));
+            const server = await askServer('local_catquizlab_sitting_state', {attemptid: job.attemptid,
+                qubaid: watch.qubaid});
             const verdict = nav.reconcile(answeredCount, server);
             // The session as well: a 404 or a redirect may be the login page.
             const sessionlost = /\/login\//.test(page.url());
@@ -373,24 +597,27 @@ async function playAttempt(browser, job) {
                 ...timing,
                 session: sessionlost ? 'lost' : 'kept',
                 server: {state: server.state || '', questionsattempted: server.questionsattempted || 0,
-                    slots: server.slots || 0, reason: server.reason || ''}});
+                    slots: server.slots || 0, reason: server.reason || '', engineattemptid: server.engineattemptid || 0,
+                    qubaid: server.qubaid || 0}});
             recorder.event('reconcile', `${nav.describeSubmit(result.submit)} → server ${server.state || server.reason}`
                 + ` ${server.questionsattempted || 0}/${server.slots || 0} → ${verdict}`);
             if (verdict === 'finished') {
                 finishedOnServer = server;
-                answeredCount = Number(server.questionsattempted) || answeredCount;
+                watch.reconciled('stored');
+                watch.serverend = serverEnd(server);
+                answeredCount = watch.answered;
                 state = nav.STATE.FINISH;
                 break;
             }
             if (verdict === 'missing' || verdict === 'mismatch') {
-                throw new Error(`${nav.describeSubmit(result.submit)} [reconcile:${verdict}] server: `
+                const tag = !server.found && server.reason && server.reason !== 'no-engine-attempt'
+                    ? `[identity:${server.reason}]` : `[reconcile:${verdict}]`;
+                throw new Error(`${nav.describeSubmit(result.submit)} ${tag} server: `
                     + `${server.state || server.reason}, ${server.questionsattempted || 0} answered, `
                     + `${server.slots || 0} presented; the worker had ${answeredCount}.`);
             }
-            if (verdict === 'stored') {
-                // Stored, only the response was lost: the engine has gone on.
-                answeredCount++;
-            }
+            watch.reconciled(verdict);
+            answeredCount = watch.answered;
             if (sessionlost) {
                 await login(page, job.userid, job.username, recorder);
             }
@@ -406,11 +633,12 @@ async function playAttempt(browser, job) {
             // the one to go on: one more than the worker's is that late answer, counted once; anything else is a real
             // mismatch, and ends the execution as before.
             if (state === nav.STATE.QUESTION && verdict === 'notstored') {
-                const again = await callWs('local_catquizlab_sitting_state', {attemptid: job.attemptid})
-                    .catch((stateError) => ({found: false, reason: 'unavailable: ' + stateError.message}));
+                const again = await askServer('local_catquizlab_sitting_state', {attemptid: job.attemptid,
+                    qubaid: watch.qubaid});
                 const late = nav.reconcileLate(answeredCount, again);
                 if (late === 'storedlate') {
-                    answeredCount++;
+                    watch.reconciled(late);
+                    answeredCount = watch.answered;
                     reconciliations.push({class: kind, verdict: late, answered: answeredCount - 1, usage: qubaid, slot,
                         ...timing, askedagainat: new Date().toISOString(),
                         session: sessionlost ? 'lost' : 'kept',
@@ -428,10 +656,22 @@ async function playAttempt(browser, job) {
         if (state === nav.STATE.ERROR) {
             const detail = await describePage(page);
             throw new Error(`[submit:${nav.SUBMIT.MOODLE_ERROR_PAGE}] Moodle showed an error page after `
-                + `${answeredCount} answer(s). ${detail}`);
+                + `${watch.answered} answer(s). ${detail}`);
         }
 
-        engineAttemptId = finishedOnServer ? Number(finishedOnServer.engineattemptid) || 0 : await readEngineAttemptId(page);
+        // The engine attempt the report names is the one bound (#173). A finish page of another attempt is not
+        // this sitting's end.
+        if (finishedOnServer) {
+            engineAttemptId = Number(finishedOnServer.engineattemptid) || engineAttemptId;
+        } else {
+            const shown = await readEngineAttemptId(page);
+            if (shown > 0 && engineAttemptId > 0 && shown !== engineAttemptId) {
+                throw new Error(`[identity:finish-page] The finish page is that of engine attempt ${shown}; this sitting's `
+                    + `is ${engineAttemptId}.`);
+            }
+            engineAttemptId = engineAttemptId || shown;
+        }
+        answeredCount = watch.answered;
 
         // An attempt that answered nothing is not a finished attempt. Reporting
         // one as finished is how a run of empty attempts would look like a
@@ -457,6 +697,7 @@ async function playAttempt(browser, job) {
         }
     } catch (error) {
         failure = error.message;
+        reason = reasonOf(failure);
         transport = error.transport || null;
         console.error(`Attempt ${job.attemptid} failed: ${error.message}`);
 
@@ -489,7 +730,7 @@ async function playAttempt(browser, job) {
     } finally {
         await page.close();
         await context.close();
-        const diagnosis = {browser: recorder.summary(), transport, artefacts, reconciliations};
+        const diagnosis = {browser: recorder.summary(), transport, artefacts, reconciliations, progress: watch.summary()};
         const fullpath = writeFullDiagnosis(diagnosis, job);
         // A report that fails must not hide what it was reporting (#111): an
         // exception thrown here replaced the attempt's own failure, and only
@@ -510,6 +751,8 @@ async function playAttempt(browser, job) {
                 // Who reports: a report from an execution that no longer holds
                 // the sitting is kept, not applied (#133).
                 workerid: WORKER_ID,
+                // Why, as a code (#175): the server decides by it whether a retry can help.
+                reason,
             });
         } catch (reportError) {
             const both = reportFailureMessage(job.attemptid, status, failure, reportError);
@@ -533,7 +776,7 @@ function parseFaults(spec) {
             const [kind, at] = part.split('@');
             return {kind, at: parseInt(at, 10)};
         })
-        .filter((fault) => ['lostresponse', 'lostrequest', 'slowresponse', 'endexecution'].includes(fault.kind)
+        .filter((fault) => ['lostresponse', 'lostrequest', 'slowresponse', 'endexecution', 'notstored'].includes(fault.kind)
             && fault.at > 0);
 }
 
@@ -565,6 +808,18 @@ async function injectFaults(page, faults) {
         if (event.request.method === 'POST') {
             if (!atresponse) {
                 posts++;
+                // From answer N on, the answer never reaches the server and the browser is sent back to the question
+                // (#175, tests only): the same question comes back after every answer, as if the server silently kept
+                // none — a failure that a retry repeats.
+                if (faults.some((fault) => fault.kind === 'notstored' && posts >= fault.at)) {
+                    const cmid = (/(?:^|&)cmid=(\d+)/.exec(String(event.request.postData || ''))
+                        || /[?&]cmid=(\d+)/.exec(page.url()) || [])[1] || '';
+                    console.error(`Injected fault: notstored at answer POST ${posts}`);
+                    await client.send('Fetch.fulfillRequest', {requestId: event.requestId, responseCode: 303,
+                        responseHeaders: [{name: 'Location', value: `${BASE_URL}/mod/adaptivequiz/attempt.php?cmid=${cmid}`}],
+                        body: ''}).catch(() => null);
+                    return;
+                }
                 fail = faults.some((fault) => fault.kind === 'lostrequest' && fault.at === posts);
                 if (faults.some((fault) => fault.kind === 'endexecution' && fault.at === posts)) {
                     // The POST never reaches the server, and the execution ends at the next question: the sitting
@@ -1220,24 +1475,6 @@ function fitDiagnostics(diagnosis, limit = DIAGNOSTICS_LIMIT, fullpath = null) {
 }
 
 /**
- * How many answers the engine already holds when an execution reaches its first question: the count to go on from.
- *
- * A fresh attempt has none. A sitting retried continues its engine attempt (the activity offers "Continue"), and the
- * answers of the earlier execution are in it. Unknown (the server could not be asked, or no attempt yet): 0, as before.
- *
- * @param {string} state The state the start led to.
- * @param {object} server sitting_state at that moment.
- * @returns {number}
- */
-function answeredBaseline(state, server) {
-    if (state !== nav.STATE.QUESTION || !server || !server.found || server.state === 'complete') {
-        return 0;
-    }
-    const stored = Number(server.questionsattempted);
-    return Number.isFinite(stored) && stored > 0 ? Math.floor(stored) : 0;
-}
-
-/**
  * When an uncertain submission began, how long the browser waited for it, and when the server was asked about it
  * (#110 AK-CLARA-01). Times as ISO 8601 with milliseconds, UTC.
  *
@@ -1837,6 +2074,10 @@ module.exports = {
     loginFormReady,
     startAttempt,
     describeTransportError,
+    closedConnection,
+    postWs,
+    RESEND_MARK,
+    WS_RESENDABLE,
     artefactPath,
     selfTest,
     parseArgs,
@@ -1858,5 +2099,8 @@ module.exports = {
     chooseOptionIndex,
     nextIdleWait,
     submitTiming,
-    answeredBaseline,
+    askServerWith,
+    reasonOf,
+    serverEnd,
+    WORKER_CONTRACT,
 };

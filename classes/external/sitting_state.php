@@ -32,6 +32,10 @@ use core_external\external_value;
  * what it has answered, and only then continues — answering again what was not
  * stored, never what was — or stops with the reason.
  *
+ * Which attempt it reads is the sitting's own (#173): the one bound to it, or — before any execution bound one — the
+ * account's only attempt on the activity (engine_identity). Two or more unbound attempts, an attempt of another account
+ * or activity, or a usage other than the one the worker sees are said as such, never resolved by taking the newest.
+ *
  * @package    local_catquizlab
  * @copyright  2026 Ralf Erlebach
  * @license    http://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
@@ -45,6 +49,12 @@ class sitting_state extends external_api {
     public static function execute_parameters(): external_function_parameters {
         return new external_function_parameters([
             'attemptid' => new external_value(PARAM_INT, 'The catquizlab sitting.'),
+            'qubaid' => new external_value(
+                PARAM_INT,
+                'The question usage the worker sees, refused when it is not the sitting\'s (#173); 0: not compared.',
+                VALUE_DEFAULT,
+                0
+            ),
         ]);
     }
 
@@ -52,67 +62,27 @@ class sitting_state extends external_api {
      * The state of the sitting's activity attempt.
      *
      * @param int $attemptid The catquizlab sitting.
+     * @param int $qubaid The question usage the worker sees, or 0.
      * @return array
      */
-    public static function execute(int $attemptid): array {
-        $params = self::validate_parameters(self::execute_parameters(), ['attemptid' => $attemptid]);
+    public static function execute(int $attemptid, int $qubaid = 0): array {
+        $params = self::validate_parameters(self::execute_parameters(), ['attemptid' => $attemptid, 'qubaid' => $qubaid]);
         $context = \context_system::instance();
         self::validate_context($context);
         require_capability('local/catquizlab:worker', $context);
 
-        return self::state((int) $params['attemptid']);
+        return self::state((int) $params['attemptid'], (int) $params['qubaid']);
     }
 
     /**
      * The state, without the web service around it.
      *
      * @param int $attemptid The catquizlab sitting.
-     * @return array found, reason, engineattemptid, state, questionsattempted, slots, timemodified.
+     * @param int $qubaid The question usage the caller sees, or 0.
+     * @return array found, reason, engineattemptid, qubaid, bound, state, questionsattempted, slots, timemodified.
      */
-    public static function state(int $attemptid): array {
-        global $DB;
-
-        $none = ['found' => false, 'reason' => '', 'engineattemptid' => 0, 'state' => '', 'questionsattempted' => 0,
-            'slots' => 0, 'timemodified' => 0];
-        $sitting = $DB->get_record('local_catquizlab_attempt', ['id' => $attemptid]);
-        if (!$sitting) {
-            return ['reason' => 'sitting-not-found'] + $none;
-        }
-        $person = $DB->get_record('local_catquizlab_person', ['id' => (int) $sitting->personid]);
-        $run = $DB->get_record('local_catquizlab_run', ['id' => (int) $sitting->runid]);
-        if (!$person || !$run || (int) $person->moodleuserid === 0 || (int) $run->testcmid === 0) {
-            return ['reason' => 'sitting-incomplete'] + $none;
-        }
-        $instance = (int) $DB->get_field('course_modules', 'instance', ['id' => (int) $run->testcmid]);
-        if ($instance === 0) {
-            return ['reason' => 'no-test-instance'] + $none;
-        }
-        // The newest attempt of this person on this test: the one the browser was in.
-        $attempts = $DB->get_records(
-            'adaptivequiz_attempt',
-            ['instance' => $instance, 'userid' => (int) $person->moodleuserid],
-            'id DESC',
-            'id, uniqueid, attemptstate, questionsattempted, timemodified',
-            0,
-            1
-        );
-        $attempt = reset($attempts);
-        if (!$attempt) {
-            return ['reason' => 'no-engine-attempt'] + $none;
-        }
-        $slots = (int) $attempt->uniqueid > 0
-            ? $DB->count_records('question_attempts', ['questionusageid' => (int) $attempt->uniqueid])
-            : 0;
-
-        return [
-            'found' => true,
-            'reason' => '',
-            'engineattemptid' => (int) $attempt->id,
-            'state' => (string) $attempt->attemptstate,
-            'questionsattempted' => (int) $attempt->questionsattempted,
-            'slots' => $slots,
-            'timemodified' => (int) $attempt->timemodified,
-        ];
+    public static function state(int $attemptid, int $qubaid = 0): array {
+        return \local_catquizlab\local\engine_identity::resolve($attemptid, $qubaid);
     }
 
     /**
@@ -125,6 +95,8 @@ class sitting_state extends external_api {
             'found' => new external_value(PARAM_BOOL, 'Whether the activity attempt was found.'),
             'reason' => new external_value(PARAM_ALPHANUMEXT, 'Why not, otherwise.'),
             'engineattemptid' => new external_value(PARAM_INT, 'The adaptivequiz_attempt id.'),
+            'qubaid' => new external_value(PARAM_INT, 'Its question usage (adaptivequiz_attempt.uniqueid).', VALUE_OPTIONAL),
+            'bound' => new external_value(PARAM_BOOL, 'Whether it is bound to the sitting (#173).', VALUE_OPTIONAL),
             'state' => new external_value(PARAM_ALPHANUMEXT, 'Its attemptstate: inprogress or complete.'),
             'questionsattempted' => new external_value(PARAM_INT, 'Questions answered and stored.'),
             'slots' => new external_value(PARAM_INT, 'Questions presented: the slots of its question usage.'),

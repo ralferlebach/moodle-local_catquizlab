@@ -6,6 +6,202 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.7.84] — 2026-11-27 — Version 2026112700. Long sittings, a bound engine identity, retries that keep the estimates (#172–#177)
+
+No database table changes. Changes for operators:
+- one new web service function, `local_catquizlab_sitting_bind`;
+- a worker contract: workers older than 0.7.84 are given no sitting;
+- strings in EN and DE.
+
+The trigger was CLARA run 103 (27.11.2026). 18 first executions stopped after exactly 1000 answers, a retry
+continuing at 264 after 1264, and all 19 were requeued as `navigation_error`.
+
+### Engine pins moved to the heads of 27.11.2026 (`.github/engine-pins.env`; the old set is now `previous`)
+- **Why:** every delivery pins the newest heads, so that the local gate and the CI after the delivery test the same
+  engine and it is the current one.
+- **The heads:**
+  - local_catquiz `53b809e2` (1.2.1, 2026112700) and `e7d07d78` (1.3.0, 2026112701);
+  - mod_adaptivequiz `5a037404` / `f587a1ee`;
+  - adaptivequizcatmodel_catquiz `4c081901` / `ed2fca18`;
+  - local_wunderbyte_table `3e4a0db6`.
+- **The engine's progress is now a head of fixed size and its events** (local_catquiz #177, table
+  `local_catquiz_progress_steps`).
+  - The collector reads it through the engine's own `progress::stored_structure()` where the engine has it, and as
+    before where it does not.
+  - The run's engine footprint and the deep deletion check count the events too (`progresssteps`).
+  - `engine_isolation_test` crosses the CAT attempt ids of A and B. It now renumbers the events with them; left
+    behind, B's head read no events, and the new engine ended B (Moodle 4.5) or broke on it (Moodle 5.x,
+    `filterbystandarderror`). B going on to its next question is asserted without exception again.
+- **`lifecycle_export_test`** gives back the exception handler `request_trace::begin()` installs (PHPUnit 11 marked
+  it risky).
+
+### #172 — no fixed number of turns (`worker/run_attempt.js`, `worker/sitting_watch.js`, `sitting_budget`)
+- **Removed:** the answer loop's `guard++ < 1000`. The loop now ends where the sitting ends: the activity's finish
+  page, or the server's word.
+- **What stops it early, and only on evidence:**
+  - the question usage changes, or the slot goes backwards (`[identity:…]`);
+  - the same question comes back after an answer three times in a row, or nothing moves for 10 minutes
+    (`[guard:noprogress]`, after asking the server);
+  - one more answer would exceed the run's pool (`[guard:budget]`, after asking the server).
+- **The bound:** the server sends it with the claim (`budget`, `budgetkind`, `expectedlength`). It is the run's pool,
+  `local_catquizlab_item` — the poolsize the collector and the validity rules use — because the engine presents an
+  item at most once. A run without items has no bound, and none is invented.
+- **Counts kept apart, and reported in the diagnosis's `progress`:**
+  - start and its source;
+  - confirmed answers, loop turns, reconciliations;
+  - last slot, usage, engine attempt;
+  - bound;
+  - the server's last word.
+- An answer counts only once the next question or the finish page shows that the engine moved on.
+
+### #173 — the sitting's own engine attempt (`engine_identity`, `sitting_bind`, `sitting_state`)
+- **Binding:** the first execution that reaches a question binds the activity attempt behind the usage it shows
+  (`local_catquizlab_attempt.engineattemptid`).
+  - It does so under the sitting's lock, and only as the lease holder.
+  - Every later execution confirms the binding and gets the engine's count as its start.
+- **What is refused, and changes nothing:**
+  - a usage of another account or activity;
+  - a second attempt beside the one shown;
+  - a bound attempt of another identity.
+- **The page has to agree:** it must show the newest slot of that usage.
+- **No more "newest attempt":** `sitting_state`, a finished report, a late report and an experiment's resumption all
+  read the bound attempt. Without a binding they read the account's only attempt; two unbound attempts are
+  "ambiguous". Until 0.7.83 each of them took the newest.
+- **No start of 0 by default:**
+  - A server that cannot be asked is asked three times, then the execution ends with `[state:unavailable]`,
+    unanswered.
+  - A count that is not a non-negative whole number is refused.
+- **An attempt already complete before the start** is collected, not started again. The activity would have
+  offered a new attempt.
+- **Mixed versions:** `job_claim` takes `contract`. A worker without it gets nothing (`job:outdatedworker`), and a
+  worker given a sitting by a server of another contract plays nothing.
+
+### #174 — the engine's estimates survive a failed execution (`job_complete`, `resume_integrity`)
+- **Engine read analysis (`docs/dev/engine-personenparameter.md`), both pins:**
+  - A running attempt continues from its own intermediate estimates (provisional personparams of its CAT attempt).
+  - These estimates are no one else's prior.
+- **What 0.7.83 did wrong:**
+  - It deleted them at every failed report, so the retry's next estimate started from ability 0 with prior mean 0.
+  - It deleted them in the TRACE_PENDING path too, before the collector read the standard errors from them.
+- **Now:** `job_complete` deletes nothing. The collector removes the parameters once the trace is stored, as before.
+- **Audit of past runs:** `cli/resume_integrity.php --runid=N [--mark]` lists every sitting that went on after such a
+  failure (at-risk / after-fix / new-attempt). With `--mark` it gives each at-risk sitting one history row
+  ("audited"), results unchanged.
+- **Measured, not only in the code** (local, Moodle 4.5, new pins; CLASSIC and FASTEST, 3 twins each, every first
+  execution ended after 19 answers and resumed):
+  - With 0.7.84 every twin is identical to its uninterrupted run, and the control agrees too.
+  - With the deletion of 0.7.83 put back locally, 4 of 6 twins part. The ability path parts at the first step after
+    the resumption, and FASTEST's final SE moves.
+- **Paired comparison:** `cli/paired_resume_check.php` compares, twin by twin, played through against interrupted and
+  resumed, with a control. It covers items, answers, the ability after every step, the final ability, SE and stop
+  reason, against fixed tolerances.
+
+### #175 — a broken invariant is held, not retried (`reason_catalog`, `attempt_scheduler::hold()`, `circuit_breaker`)
+- **New codes:** `budget_violation`, `no_progress`, `identity_mismatch`, `state_unavailable`. The worker sends the
+  code with its report (`job_complete` parameter `reason`); without one, the code is read from the message as
+  before.
+- **Recorded first:** the code is written to the history before the retry decision and the breaker read it.
+- **Held:**
+  - `budget_violation`, `no_progress` and `identity_mismatch` fail the sitting at once, with a "held" row.
+  - The engine attempt and the parameters are kept.
+  - A person puts it back with the existing actions.
+- **The run:** three held sittings in a row with the same cause pause the run.
+- **Not counted towards the streak:** lost leases, operator stops and the breaker's own pause.
+- `state_unavailable` is transient and retried with backoff, as before.
+
+### #176 — executions correlated, a complete lifecycle export (`log_view`, `logs.php`, `cli/export_lifecycle.php`)
+- **Request lines:** they carry their execution (from the header's second number) and the worker that started it
+  (from the execution's start record). New filter: `execution`. The worker filter finds the requests of its
+  executions.
+- **History lines:** they carry the execution, the engine attempt and the execution's progress.
+- **"Lifecycle only":** history and run records without the requests.
+- **"Download the lifecycle":** complete, NDJSON, streamed, oldest first, UTC with milliseconds. Each line carries
+  a cursor; `--limit`/`--after` page it without a line twice or lost, within the same millisecond too.
+- **Every download says more:**
+  - the requested window in UTC;
+  - the span its lines cover;
+  - `complete` (neither cut nor partial).
+- **Ordering fix:** a source row without milliseconds is placed at its second, no longer at 1970.
+
+### #177 — latency by page (`cli/request_report.php`)
+- **Per page:** n, p50, p95, p99, max.
+- **Outliers:** requests above their page's p99, with sitting and execution.
+- **Synchronous peaks:** windows of `--peak-seconds` in which requests of two or more sittings were slow together.
+  They are said, not explained.
+- **Procedure for CLARA:** `docs/dev/clara-latenz.md`.
+
+### Tests
+- **Worker, against a stand-in for Moodle (real worker process, real browser):**
+  - 999, 1000, 1001 and 2500 answers;
+  - a retry from 264 to 2500;
+  - complete before the start;
+  - server unavailable;
+  - foreign attempt;
+  - an answer beyond the pool;
+  - no progress;
+  - the contract.
+  - Run with the worker of 0.7.83, all of them fail, the first two exactly as on CLARA ("after 1000 answer(s)",
+    "after 1264 answer(s)").
+- **PHPUnit:** `engine_identity_test`, `retry_integrity_test`, `lifecycle_export_test`.
+- **Fault `notstored@N`** (tests only): from answer N on, the answer never reaches the server and the browser is sent
+  back to the question. It is a failure a retry repeats. The acceptance steps stop the workers of an earlier smoke run
+  before a run with other faults, because a worker keeps the faults it was started with.
+- **Acceptance, jobs `long-run-2500` and `long-run`:**
+  - 2502 items alone, and 20 sittings of 1101 items at once (20 of 2502 at once is for CLARA: about three hours of
+    server time alone on the runner);
+  - a retry past 1000;
+  - the paired comparison (CLASSIC, FASTEST);
+  - 20 sittings with a broken invariant against a transient fault.
+
+## [0.7.83] — 2026-11-26 — Version 2026112601. A read sent once more when the server closed the connection (#110)
+
+No database change, no new string. On c6ec43c2 (0.7.82) Release CI, Interface and Worker CI were green, and so was
+the #170 replay job. Acceptance was red in one job: load classic, 50-worker step.
+
+### Why classic@50 was red (Acceptance 45843506329, first attempt)
+- **What failed:** one execution of 51.
+  - The call: `local_catquizlab_oracle_answer` after 178 ms, `UND_ERR_SOCKET: fetch failed (other side closed)`: the
+    server closed the connection without a response.
+  - Retried; all 50 sittings collected, no 5xx, no fatal.
+- **Why that failed the step:** `smoke.php` says "navigation" on any transport failure. The step's verdict allows
+  CAPACITY then only with the load guard tripped, and the guard needs 5 failures in its window.
+- **What the samples show:** Apache's thread total fell from 100 to 75 four seconds before: a process of 25 threads
+  ended, and its keep-alive connections with it. That fits the time; it is no proof.
+- **Not known:** whether the request reached PHP.
+- Every other step of classic passed, and the 25 workers required were carried.
+
+### The worker sends a read once more on a new connection (`worker/run_attempt.js`, `postWs()`)
+- **When:** only when the server closed the connection before any response (`UND_ERR_SOCKET`, `ECONNRESET`, `EPIPE`),
+  as a browser does.
+- **What:** only the two functions that only read, `oracle_answer` (its answer drawn from the seed) and `sitting_state`
+  (both `read` in `db/services.php`).
+- **How often:** once. A second closed connection is the failure.
+- **Never:** a write (claim, heartbeat, completion) is never sent twice. A timeout, a refused connection or an HTTP
+  status stays a failure.
+
+### Counted, not hidden
+- Each resend is one line in the worker's log, `[catquizlab:resend] <ISO time> …`.
+- `smoke.php` counts the step's lines (`worker_launcher::resends()`) into its summary (`executions.resent`, up to 20
+  lines kept). The step's verdict names them, with PASS as with CAPACITY.
+
+### Tests
+- `worker/test/closed_connection.test.js` (new, 6 cases), against a real HTTP server that closes the connection
+  without a response: Node's own fetch throws the error of the CI there.
+  - A read is sent twice and said; a second close fails.
+  - The writes are sent once.
+  - A refused connection, a timeout and a 503 are not resent.
+  - Without the resend, 3 of the 6 fail.
+- `tests/worker_launcher_test.php::test_resends`: lines of the step counted; lines before it, not at the start of a
+  line, without a time, or in a log not written since, not counted. The mark is the same string in PHP and JS.
+- `cli/load_step_verdict.py --self-test`: 56 cases, two of them new (a resend named under PASS and under CAPACITY).
+
+### Unchanged
+- The verdict rule.
+- The load guard.
+- Apache's settings in the measuring environment.
+
+---
+
 ## [0.7.82] — 2026-11-26 — Version 2026112600. #170 DoD 2: the reference run replayed from its original artifacts
 
 No database change, no new string. On 70965702 (0.7.81) the CI was green on 67 of 67 jobs, and #171 is closed.

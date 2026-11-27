@@ -58,6 +58,9 @@ $filter = [
     'workerid'      => optional_param('workerid', '', PARAM_ALPHANUMEXT),
     'taskid'        => optional_param('taskid', 0, PARAM_INT),
     'attemptid'     => optional_param('attemptid', 0, PARAM_INT),
+    // Which execution of the sitting (#176), and the sittings' and runs' records without the requests.
+    'execution'     => optional_param('execution', 0, PARAM_INT),
+    'lifecycleonly' => optional_param('lifecycleonly', 0, PARAM_BOOL),
 ];
 
 // An explicit window wins over "the last N hours": somebody who knows when it
@@ -120,6 +123,33 @@ if (optional_param('downloadjson', 0, PARAM_BOOL)) {
         true,
         'application/json'
     );
+    exit;
+}
+
+// The lifecycle of the selection, complete (#176): no line limit, streamed, one JSON object per line, the first saying
+// what was asked for and the last what the file covers.
+if (optional_param('downloadlifecycle', 0, PARAM_BOOL)) {
+    if (!data_submitted()) {
+        throw new moodle_exception('invalidrequest', 'error');
+    }
+    require_sesskey();
+    \core\session\manager::write_close();
+    header('Content-Type: application/x-ndjson; charset=utf-8');
+    header('Content-Disposition: attachment; filename="catquizlab-lifecycle-' . date('Ymd-His') . '.ndjson"');
+    header('Cache-Control: private, must-revalidate');
+    $requested = array_filter($filter, static fn($value): bool => $value !== '' && $value !== 0 && $value !== null);
+    echo json_encode(
+        ['meta' => ['generated' => gmdate('Y-m-d\TH:i:s\Z'), 'timezone' => 'UTC', 'filter' => $requested,
+        'requested' => ['from' => !empty($filter['since']) ? gmdate('Y-m-d\TH:i:s\Z', (int) $filter['since']) : null,
+            'to' => gmdate('Y-m-d\TH:i:s\Z', !empty($filter['until']) ? (int) $filter['until'] : time())],
+        'sources' => ['attempt', 'lifecycle'], 'redacted' => get_string('logs:redactednote', $component)]],
+        JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE
+    ) . "\n";
+    $end = log_view::stream_lifecycle($filter, static function (array $line): void {
+        echo json_encode(['time' => log_view::utc_ms((int) $line['ms']), 'cursor' => log_view::cursor_of($line)]
+            + array_diff_key($line, ['stamp' => 1, 'hasms' => 1]), JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE) . "\n";
+    });
+    echo json_encode(['end' => $end + ['complete' => $end['nextcursor'] === null]], JSON_UNESCAPED_SLASHES) . "\n";
     exit;
 }
 
@@ -244,7 +274,8 @@ echo html_writer::empty_tag('input', [
 // filters" (#131), open whenever one of them is set.
 $advanced = $filter['from'] !== '' || $filter['to'] !== '' || $filter['action'] !== '' || $filter['correlationid'] !== ''
     || $filter['workerid'] !== '' || $filter['taskid'] > 0 || $filter['attemptno'] > 0 || $filter['attemptid'] > 0
-    || $filter['severity'] !== '' || !empty($filter['newestfirst']);
+    || $filter['severity'] !== '' || !empty($filter['newestfirst']) || $filter['execution'] > 0
+    || !empty($filter['lifecycleonly']);
 echo html_writer::empty_tag('input', [
     'type' => 'submit', 'class' => 'btn btn-secondary mr-3', 'value' => get_string('logs:apply', $component),
 ]);
@@ -262,10 +293,11 @@ $fields = [
     'taskid'        => ['logs:taskid', 'number'],
     'attemptno'     => ['logs:attemptno', 'number'],
     'attemptid'     => ['logs:attemptid', 'number'],
+    'execution'     => ['logs:execution', 'number'],
 ];
 foreach ($fields as $name => [$label, $type]) {
     $value = $name === 'logaction' ? $filter['action'] : ($filter[$name] ?? '');
-    if (in_array($name, ['taskid', 'attemptno', 'attemptid'], true) && (int) $value === 0) {
+    if (in_array($name, ['taskid', 'attemptno', 'attemptid', 'execution'], true) && (int) $value === 0) {
         $value = '';
     }
     echo html_writer::label(get_string($label, $component), 'catquizlab-' . $name, true, ['class' => 'mr-2']);
@@ -295,6 +327,13 @@ echo html_writer::checkbox(
     get_string('logs:newestfirst', $component),
     ['id' => 'catquizlab-newestfirst', 'class' => 'mr-3']
 );
+echo html_writer::checkbox(
+    'lifecycleonly',
+    1,
+    !empty($filter['lifecycleonly']),
+    get_string('logs:lifecycleonly', $component),
+    ['id' => 'catquizlab-lifecycleonly', 'class' => 'mr-3']
+);
 
 echo html_writer::end_div();
 echo html_writer::end_tag('details');
@@ -313,7 +352,7 @@ if ($lines === []) {
     $latest = log_view::latest();
     $filtered = array_filter([$filter['channel'], $filter['search'], $filter['severity'], $filter['action'],
         $filter['correlationid'], $filter['workerid'], $filter['from'], $filter['to'], $filter['runid'],
-        $filter['attemptid'], $filter['taskid'], $filter['attemptno']]);
+        $filter['attemptid'], $filter['taskid'], $filter['attemptno'], $filter['execution'], $filter['lifecycleonly']]);
     if ($latest === 0) {
         $message = get_string('logs:emptynothing', $component);
     } else if ($filtered !== []) {
@@ -445,6 +484,11 @@ if ($lines === []) {
         . $OUTPUT->single_button(
             new moodle_url($pageurl, $filter + ['downloadjson' => 1, 'sesskey' => sesskey()]),
             get_string('logs:downloadjson', $component),
+            'post'
+        )
+        . $OUTPUT->single_button(
+            new moodle_url($pageurl, $filter + ['downloadlifecycle' => 1, 'sesskey' => sesskey()]),
+            get_string('logs:downloadlifecycle', $component),
             'post'
         )
         . html_writer::tag(

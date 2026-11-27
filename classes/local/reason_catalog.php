@@ -191,7 +191,23 @@ class reason_catalog {
         'submit_state_mismatch',
         // The lease ran out while the worker was still on the sitting (#133).
         'lease_lost',
+        // Invariants the worker found broken, and a server it could not ask (#172, #173, #175).
+        'budget_violation',
+        'no_progress',
+        'identity_mismatch',
+        'state_unavailable',
         'unknown_failure',
+    ];
+
+    /** @var string[] The codes a worker may report itself (#175); the rest are the server's to decide. */
+    public const WORKER_REASONS = ['budget_violation', 'no_progress', 'identity_mismatch', 'state_unavailable', 'lease_lost'];
+
+    /** @var array<string, string> The tags a worker's message carries => their code (#172, #173, #175). */
+    public const WORKER_TAGS = [
+        '[guard:budget]' => 'budget_violation',
+        '[guard:noprogress]' => 'no_progress',
+        '[identity:' => 'identity_mismatch',
+        '[state:unavailable]' => 'state_unavailable',
     ];
 
     /** @var string[] The submission classes the worker reports as "[submit:<class>]" (#134). */
@@ -237,6 +253,14 @@ class reason_catalog {
         $events = array_column((array) ($diagnosis['browser']['events'] ?? []), 'type');
         $status = (int) ($diagnosis['transport']['status'] ?? 0);
 
+        // What a worker found broken says so in a tag of its own (#172, #173, #175); it comes first, because the
+        // message goes on to quote the page or the server, whose words the patterns below would match.
+        foreach (self::WORKER_TAGS as $tag => $code) {
+            if (strpos($message, $tag) !== false) {
+                return $code;
+            }
+        }
+
         // A submission the worker classified says its cause itself (#134): a 404
         // answered with Moodle's error page is a 404, not an engine exception.
         if (strpos($message, '[lease:lost]') !== false) {
@@ -281,6 +305,22 @@ class reason_catalog {
         }
 
         return 'unknown_failure';
+    }
+
+    /**
+     * The code of a reported failure: the worker's own, when it sent a known one, otherwise read from the message (#175).
+     *
+     * @param string $reason The code the worker sent, '' from workers before 0.7.84.
+     * @param string $message The reported failure.
+     * @param array $diagnosis The worker's diagnosis.
+     * @return string One of FAILURES.
+     */
+    public static function reported(string $reason, string $message, array $diagnosis = []): string {
+        if (in_array($reason, self::WORKER_REASONS, true)) {
+            return $reason;
+        }
+
+        return self::failure($message, $diagnosis);
     }
 
     /**

@@ -44,11 +44,26 @@ class circuit_breaker {
 
     /** @var string[] Causes that say the server or the network was overloaded: worth retrying later. */
     public const CAPACITY_CAUSES = ['submit_http_5xx', 'submit_connect_timeout', 'submit_connect_failed', 'submit_cdp_timeout',
-        'worker_timeout', 'fetch_failed', 'http_error', 'navigation_error', 'execution_context_destroyed', 'submit_no_state'];
+        'worker_timeout', 'fetch_failed', 'http_error', 'navigation_error', 'execution_context_destroyed', 'submit_no_state',
+        'state_unavailable'];
 
     /** @var string[] Causes that repeat the same way whatever the load: retrying without a change repeats them. */
     public const DETERMINISTIC_CAUSES = ['engine_exception', 'submit_moodle_error_page', 'login_failed', 'submit_http_404',
-        'submit_http_4xx', 'submit_unexpected_redirect', 'submit_state_mismatch'];
+        'submit_http_4xx', 'submit_unexpected_redirect', 'submit_state_mismatch', 'budget_violation', 'no_progress',
+        'identity_mismatch'];
+
+    /**
+     * @var string[] Invariants a worker found broken (#175): the sitting is held at once, not retried. Played again it
+     *     ends the same way, and the retries are what turned eighteen failures into a stream of thousand-answer
+     *     executions (CLARA run 103).
+     */
+    public const HOLD_CAUSES = ['budget_violation', 'no_progress', 'identity_mismatch'];
+
+    /** @var int Held sittings in a row with the same invariant cause after which the run is held (#175). */
+    public const HOLD_THRESHOLD = 3;
+
+    /** @var string[] Ends that are not the run failing: a lost lease, an operator's stop, the breaker's own pause (#175). */
+    public const NOT_RUN_FAILURES = ['lease_lost', 'manual_stop', 'circuit_breaker_pause'];
 
     /**
      * Whether this run has just tripped, and hold it if so.
@@ -67,7 +82,9 @@ class circuit_breaker {
 
         $streak = self::failure_streak($runid);
 
-        if ($streak['count'] < self::THRESHOLD) {
+        // The same broken invariant three times in a row is the run's, not the sittings' (#175).
+        $held = (int) ($streak['heldsame'] ?? 0) >= self::HOLD_THRESHOLD;
+        if ($streak['count'] < self::THRESHOLD && !$held) {
             return ['tripped' => false, 'failures' => $streak['count'], 'lasterror' => $streak['lasterror']];
         }
 
@@ -120,6 +137,16 @@ class circuit_breaker {
     }
 
     /**
+     * Whether a failure with this code holds its sitting instead of retrying it (#175).
+     *
+     * @param string $cause A reason code.
+     * @return bool
+     */
+    public static function holds(string $cause): bool {
+        return in_array($cause, self::HOLD_CAUSES, true);
+    }
+
+    /**
      * Whether a run is held by the breaker: paused by it, or failed by it before 0.7.38.
      *
      * @param \stdClass $run The run record (status, manifestjson).
@@ -160,7 +187,8 @@ class circuit_breaker {
      * How many of this run's most recent sittings failed in a row, why, and by which causes.
      *
      * @param int $runid The run.
-     * @return array{count: int, lasterror: string, causes: array<string, int>}
+     * @return array{count: int, lasterror: string, causes: array<string, int>, heldsame: int} heldsame: how many of
+     *     the newest failures in a row share one invariant cause (#175).
      */
     public static function failure_streak(int $runid): array {
         global $DB;
@@ -180,6 +208,7 @@ class circuit_breaker {
         );
 
         $count = 0;
+        $heldsame = 0;
         $lasterror = '';
         $failed = [];
         foreach ($recent as $attempt) {
@@ -208,13 +237,32 @@ class circuit_breaker {
                        GROUP BY attemptid) last ON last.lastid = l.id",
                 $params + ['failedoutcome' => attempt_history::FAILED]
             );
+            $leading = null;
+            $leadingopen = true;
             foreach ($failed as $id) {
                 $code = (string) ($rows[$id]->reasoncode ?? '') ?: 'unknown_failure';
+                // A lost lease, an operator's stop and the breaker's own pause are not the run failing (#175): they
+                // neither count towards the streak nor end it.
+                if (in_array($code, self::NOT_RUN_FAILURES, true)) {
+                    $count--;
+                    continue;
+                }
                 $causes[$code] = ($causes[$code] ?? 0) + 1;
+                // The newest failures in a row that share one invariant cause (#175).
+                if ($leadingopen) {
+                    if ($leading === null && self::holds($code)) {
+                        $leading = $code;
+                        $heldsame = 1;
+                    } else if ($leading !== null && $code === $leading) {
+                        $heldsame++;
+                    } else {
+                        $leadingopen = false;
+                    }
+                }
             }
         }
 
-        return ['count' => $count, 'lasterror' => $lasterror, 'causes' => $causes];
+        return ['count' => $count, 'lasterror' => $lasterror, 'causes' => $causes, 'heldsame' => $heldsame];
     }
 
     /**

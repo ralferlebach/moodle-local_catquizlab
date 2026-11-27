@@ -73,6 +73,13 @@ class job_complete extends external_api {
                 VALUE_DEFAULT,
                 ''
             ),
+            'reason'          => new external_value(
+                PARAM_ALPHANUMEXT,
+                'Why it failed, as a code of the reason catalogue (#175); without it, or with an unknown one, the '
+                    . 'code is read from the message as before.',
+                VALUE_DEFAULT,
+                ''
+            ),
         ]);
     }
 
@@ -86,6 +93,7 @@ class job_complete extends external_api {
      * @param string $message The worker's reason, when the attempt did not finish.
      * @param string $diagnostics What the browser saw, as JSON.
      * @param string $workerid The reporting worker; '' from workers before 0.7.38.
+     * @param string $reason The failure's code (#175); '' to read it from the message.
      * @return array The acknowledgement.
      */
     public static function execute(
@@ -95,7 +103,8 @@ class job_complete extends external_api {
         int $engineattemptid = 0,
         string $message = '',
         string $diagnostics = '',
-        string $workerid = ''
+        string $workerid = '',
+        string $reason = ''
     ): array {
         $params = self::validate_parameters(self::execute_parameters(), [
             'attemptid'       => $attemptid,
@@ -105,6 +114,7 @@ class job_complete extends external_api {
             'message'         => $message,
             'diagnostics'     => $diagnostics,
             'workerid'        => $workerid,
+            'reason'          => $reason,
         ]);
 
         $context = \context_system::instance();
@@ -162,9 +172,12 @@ class job_complete extends external_api {
             $reporter !== '' && ((int) $attempt->status !== attempt_scheduler::STATUS_RUNNING
                 || (string) ($attempt->leaseowner ?? '') !== $reporter)
         ) {
+            // The sitting's own engine attempt (#173): bound, or the account's only one — and the one the late report
+            // names, when it names one. A complete attempt of another identity is not this sitting's result.
             $late = \local_catquizlab\external\sitting_state::state($attemptid);
             $accept = $status === 'finished' && (int) $attempt->status === attempt_scheduler::STATUS_QUEUED
-                && $late['found'] && $late['state'] === 'complete';
+                && $late['found'] && $late['state'] === 'complete'
+                && ($engineattemptid <= 0 || $engineattemptid === (int) $late['engineattemptid']);
             if (!$accept) {
                 \local_catquizlab\local\attempt_history::record($attemptid, \local_catquizlab\local\attempt_history::STALE, [
                     'workerid' => $reporter,
@@ -181,13 +194,15 @@ class job_complete extends external_api {
             $attempt->leaseowner = $reporter;
         }
 
-        // The worker reads the engine attempt id off the finish page, which it
-        // does not always render. The server can look it up instead: it knows
-        // the run's activity and the person's user, which is all the engine
-        // needs. Making the worker scrape a value the server already has was
-        // the fragile half of this contract.
-        if ($status === 'finished' && $engineattemptid <= 0) {
-            $engineattemptid = self::engine_attempt_for($attempt);
+        // The engine attempt a finished report is collected from is the sitting's own (#173): the one bound to it,
+        // or — for a sitting no execution bound — the account's only attempt on the activity. The worker's id, when
+        // it sends one, has to be that one; a report naming another attempt, or a sitting with two unbound attempts,
+        // is not collected: it is failed with the reason and held for a person to look at.
+        $identityproblem = '';
+        if ($status === 'finished') {
+            $resolved = \local_catquizlab\local\engine_identity::for_collection($attemptid, $engineattemptid);
+            $engineattemptid = (int) $resolved['id'];
+            $identityproblem = (string) $resolved['reason'];
         }
 
         // A finished attempt has an engine attempt behind it. Without one there
@@ -197,10 +212,21 @@ class job_complete extends external_api {
         $finished = ($status === 'finished') && $engineattemptid > 0;
         if ($status === 'finished' && $engineattemptid <= 0) {
             debugging(
-                'Worker reported attempt ' . $attemptid . ' as finished without an engine attempt id.',
+                'Worker reported attempt ' . $attemptid . ' as finished without an engine attempt of its own ('
+                    . $identityproblem . ').',
                 DEBUG_DEVELOPER
             );
         }
+        // Why it failed, as a code, decided before anything else happens to the sitting (#175): the retry decision
+        // and the breaker read it, so it is recorded first.
+        $message = (string) ($params['message'] ?? '');
+        if ($status === 'finished' && !$finished) {
+            $message = '[identity:' . ($identityproblem !== '' ? $identityproblem : 'none') . '] '
+                . get_string('job:noengineidentity', 'local_catquizlab', $identityproblem)
+                . ($message !== '' ? ' | ' . $message : '');
+        }
+        $extra = (array) (json_decode((string) ($params['diagnostics'] ?? ''), true) ?: []);
+        $code = $finished ? '' : \local_catquizlab\local\reason_catalog::reported((string) $params['reason'], $message, $extra);
 
         // Collected means: with a trace (#138). Set where the collector has one.
         $collected = false;
@@ -218,44 +244,23 @@ class job_complete extends external_api {
                 // (#136, local run against the engine heads, 18.10.2026).
                 // Collected only with a trace (#138). Without one the sitting waits for it — not collected,
                 // not valid, not finished — and is looked at again by the pipeline tick.
+                // The engine's person parameters of this person are not touched here (#174): the collector removes
+                // them once the trace is stored, and a sitting still waiting for its trace needs them — its standard
+                // errors are read from them.
                 $collected = attempt_scheduler::collect_or_hold($attemptid, $reporter, $engineattemptid, $set);
-
-                // The sitting is in this plugin's tables now. The engine's
-                // person parameters for this simulated person go, so the next
-                // person is estimated from their own answers and not from the
-                // people before them — and so the context never fills with
-                // identical abilities whose standard deviation is zero.
-                \local_catquizlab\local\user_provisioner::forget_engine_person_params(
-                    (int) $attempt->runid,
-                    (int) $DB->get_field('local_catquizlab_person', 'moodleuserid', ['id' => $attempt->personid])
-                );
             }
         } else {
-            // Requeue with backoff while tries remain, otherwise fail for good.
-            attempt_scheduler::retry_or_fail($attemptid);
-
-            // A failed sitting leaves the engine's person parameters behind
-            // too, and they count towards the same prior.
-            \local_catquizlab\local\user_provisioner::forget_engine_person_params(
-                (int) $attempt->runid,
-                (int) $DB->get_field('local_catquizlab_person', 'moodleuserid', ['id' => $attempt->personid])
-            );
-        }
-
-        // Every terminal attempt asks the lifecycle whether the run is done.
-        // It answers at most once — a retried worker or a re-collected attempt
-        // must not queue the aggregation twice.
-        // The worker's own reason for a failure, kept where the interface can
-        // show it. Without this a retried attempt gives no clue why, and the
-        // person looking has only a rising try count.
-        if (!$finished && $params['status'] !== 'finished') {
+            // The worker's own reason for a failure, kept where the interface can
+            // show it. Without this a retried attempt gives no clue why, and the
+            // person looking has only a rising try count.
             \local_catquizlab\local\attempt_scheduler::record_error(
                 $attemptid,
-                (string) ($params['message'] ?? 'worker reported failure')
+                $message !== '' ? $message : 'worker reported failure'
             );
         }
 
-        // What this execution did, kept where a retry cannot erase it.
+        // What this execution did, kept where a retry cannot erase it — and, for a failure, with its code, before the
+        // retry decision and the breaker read it (#175).
         $logid = \local_catquizlab\local\attempt_history::record(
             $attemptid,
             $finished
@@ -268,8 +273,9 @@ class job_complete extends external_api {
                 'workerid'        => (string) ($attempt->leaseowner ?? ''),
                 'engineattemptid' => (int) ($params['engineattemptid'] ?? 0),
                 'runtimems'       => (int) ($params['runtimems'] ?? 0),
-                'detail'          => (string) ($params['message'] ?? ''),
+                'detail'          => $finished ? (string) ($params['message'] ?? '') : $message,
                 'tryno'           => (int) $attempt->tries,
+                'reasoncode'      => $finished ? null : $code,
                 // The browser's own record, kept with the diagnosis (#100) —
                 // and how long the lease was held, from the claim (#133).
                 'extra'           => (array) (json_decode((string) ($params['diagnostics'] ?? ''), true) ?: [])
@@ -279,7 +285,6 @@ class job_complete extends external_api {
 
         // Every submission that ended uncertainly and was reconciled with the
         // server keeps a row of its own, with its cause (#134).
-        $extra = (array) (json_decode((string) ($params['diagnostics'] ?? ''), true) ?: []);
         if (!empty($extra['reconciliations']) && is_array($extra['reconciliations'])) {
             \local_catquizlab\local\attempt_history::record_reconciliations($attemptid, $extra['reconciliations'], [
                 'workerid' => (string) ($attempt->leaseowner ?? ''),
@@ -295,8 +300,22 @@ class job_complete extends external_api {
                 $attemptid,
                 \local_catquizlab\local\attempt_history::FAILED,
                 (string) $DB->get_field('local_catquizlab_attemptlog', 'reasoncode', ['id' => $logid]),
-                (string) ($params['message'] ?? '')
+                $message
             );
+        }
+
+        // What becomes of a failed sitting, by its code (#175). A worker that found an invariant broken — an answer
+        // beyond the run's pool, no progress the server confirms, another identity than the sitting's — fails the
+        // same way when played again: the sitting is held, its engine attempt and person parameters kept, until a
+        // person puts it back. Anything else is retried with backoff while tries remain, as before. The engine's
+        // person parameters are kept in both cases (#174): the retry continues the same engine attempt, which goes
+        // on from its own intermediate estimates.
+        if (!$finished) {
+            if (\local_catquizlab\local\circuit_breaker::holds($code)) {
+                attempt_scheduler::hold($attemptid, $code);
+            } else {
+                attempt_scheduler::retry_or_fail($attemptid);
+            }
         }
 
         // The lease is over either way: the attempt is no longer being played.
@@ -318,40 +337,6 @@ class job_complete extends external_api {
             'acknowledged' => true,
             'message'      => get_string('job:acknowledged', 'local_catquizlab'),
         ];
-    }
-
-    /**
-     * Find the engine attempt of a lab attempt.
-     *
-     * @param \stdClass $attempt The lab attempt row.
-     * @return int The engine attempt id, or 0 when there is none.
-     */
-    protected static function engine_attempt_for(\stdClass $attempt): int {
-        global $DB;
-
-        $userid = (int) $DB->get_field('local_catquizlab_person', 'moodleuserid', ['id' => $attempt->personid]);
-        $run = $DB->get_record('local_catquizlab_run', ['id' => $attempt->runid]);
-        if ($userid <= 0 || !$run || empty($run->testcmid)) {
-            return 0;
-        }
-
-        $cm = get_coursemodule_from_id('adaptivequiz', (int) $run->testcmid, 0, false, IGNORE_MISSING);
-        if (!$cm) {
-            return 0;
-        }
-
-        // The most recent attempt of this user on this activity. A simulated
-        // person sits one test once, so "most recent" is unambiguous here.
-        $rows = $DB->get_records(
-            'adaptivequiz_attempt',
-            ['instance' => (int) $cm->instance, 'userid' => $userid],
-            'id DESC',
-            'id',
-            0,
-            1
-        );
-
-        return $rows ? (int) reset($rows)->id : 0;
     }
 
     /**

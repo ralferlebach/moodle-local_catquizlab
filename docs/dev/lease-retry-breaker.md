@@ -42,3 +42,27 @@ erhalten, zweites Fortsetzen ohne Wirkung), Pause nach Ursache,
 Lease-Verlängerung und -Verlust über den Heartbeat, Rückstellung mit
 Serverzustand, späte Meldung. `tests/external_test.php`: zehn Fehlschläge über
 `job_complete` pausieren den Lauf.
+
+## Angehalten statt wiederholt (0.7.84, #175)
+
+Ein Worker, der eine Invariante verletzt findet, meldet den Grund als Code (`job_complete`, Parameter `reason`).
+Gemeint sind drei Fälle:
+- eine Antwort über den Pool des Laufs hinaus (`budget_violation`);
+- kein Fortschritt, den der Server bestätigt (`no_progress`);
+- ein Engine-Versuch, der nicht der der Bearbeitung ist (`identity_mismatch`).
+
+**Reihenfolge:** Die Historie schreibt den Code, bevor die Wiederholungsentscheidung und der Breaker ihn lesen.
+
+**Folgen für die Bearbeitung:**
+- Sie wird sofort fehlgeschlagen und *angehalten* (Zeile `held`). Sie wird nicht wiederholt.
+- Engine-Versuch und Personenparameter bleiben, wie sie sind (#174).
+- Eine Person gibt sie mit „Fehlgeschlagene erneut einreihen“ oder der Wiederaufnahme nach dem Breaker zurück.
+
+**Folgen für den Lauf:**
+- Drei angehaltene Bearbeitungen in Folge mit derselben Ursache halten ihn an (`HOLD_THRESHOLD`).
+- Eine verlorene Lease, ein Stopp durch eine Person und die eigene Pause des Breakers zählen weder für noch gegen die
+  Serie.
+
+`state_unavailable` (der Server war nicht zu befragen) gilt als vorübergehend und wird wie bisher mit Backoff
+wiederholt.
+

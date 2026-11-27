@@ -333,8 +333,8 @@ class experiment_resume {
     /**
      * The engine attempts of the sittings a stop closed, where there are: finished or in progress (AK4).
      *
-     * The newest attempt of the sitting's simulated person in the run's activity, started after the sitting was last
-     * claimed or not at all — never one of an earlier try, which a retry has already left behind.
+     * The sitting's own attempt in the run's activity (#173): the one an execution bound to it, or the account's only
+     * one there. The newest of several was taken until 0.7.83.
      *
      * @param int[] $runids The runs.
      * @return array<int, array<int, array{id: int, complete: bool}>> Run id => sitting id => its engine attempt.
@@ -347,6 +347,9 @@ class experiment_resume {
             return $out;
         }
         [$insql, $params] = $DB->get_in_or_equal($runids, SQL_PARAMS_NAMED, 'run');
+        // The sitting's own attempt (#173): the one bound to it, or — when none was bound — the account's only one on
+        // the activity. A bound attempt of another account or activity, or two unbound ones, is not taken: the
+        // sitting is queued again like the others and its next execution says what it found.
         $rows = $DB->get_recordset_sql(
             "SELECT a.id AS sittingid, a.runid, aa.id AS engineid, aa.attemptstate
                FROM {local_catquizlab_attempt} a
@@ -355,8 +358,10 @@ class experiment_resume {
                JOIN {course_modules} cm ON cm.id = r.testcmid
                JOIN {adaptivequiz_attempt} aa ON aa.userid = p.moodleuserid AND aa.instance = cm.instance
               WHERE a.runid {$insql} AND a.status = :cancelled AND a.tries > 0
-                    AND aa.id = (SELECT MAX(n.id) FROM {adaptivequiz_attempt} n
-                                  WHERE n.userid = aa.userid AND n.instance = aa.instance)",
+                    AND ((a.engineattemptid > 0 AND aa.id = a.engineattemptid)
+                         OR ((a.engineattemptid IS NULL OR a.engineattemptid = 0)
+                             AND (SELECT COUNT(1) FROM {adaptivequiz_attempt} n
+                                   WHERE n.userid = aa.userid AND n.instance = aa.instance) = 1))",
             $params + ['cancelled' => attempt_scheduler::STATUS_CANCELLED]
         );
         foreach ($rows as $row) {

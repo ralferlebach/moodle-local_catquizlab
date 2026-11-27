@@ -44,6 +44,12 @@ class job_claim extends external_api {
     /** @var int Seconds a claim waits for another claim to finish. */
     public const LOCK_TIMEOUT = 10;
 
+    /**
+     * @var int The worker contract this server speaks (#173): a worker that does not send it, or sends an older one,
+     *     is given no sitting. It would play without binding its engine attempt and count from an unverified start.
+     */
+    public const WORKER_CONTRACT = 1;
+
     /** @var int Seconds a worker is asked to wait while the holder's last sittings are in play (#163). */
     public const IN_PLAY_WAIT = 20;
 
@@ -55,6 +61,12 @@ class job_claim extends external_api {
     public static function execute_parameters(): external_function_parameters {
         return new external_function_parameters([
             'workerid' => new external_value(PARAM_ALPHANUMEXT, 'Stable identifier of the calling worker.'),
+            'contract' => new external_value(
+                PARAM_INT,
+                'The worker contract the caller speaks (#173); a worker without one is given nothing.',
+                VALUE_DEFAULT,
+                0
+            ),
         ]);
     }
 
@@ -62,13 +74,15 @@ class job_claim extends external_api {
      * Claim the next queued attempt job.
      *
      * @param string $workerid Stable identifier of the calling worker.
+     * @param int $contract The worker contract the caller speaks; this server's own when called from PHP.
      * @return array The claim result.
      */
-    public static function execute(string $workerid): array {
+    public static function execute(string $workerid, int $contract = self::WORKER_CONTRACT): array {
         global $DB;
 
         $params = self::validate_parameters(self::execute_parameters(), [
             'workerid' => $workerid,
+            'contract' => $contract,
         ]);
 
         $context = \context_system::instance();
@@ -87,6 +101,12 @@ class job_claim extends external_api {
             'correlationid' => '',
             'message'   => get_string('job:none', 'local_catquizlab'),
         ];
+
+        // A worker of an older contract gets nothing (#173): it would answer from a starting count it never checked
+        // and into whichever engine attempt it found. Said, not guessed around.
+        if ((int) $params['contract'] < self::WORKER_CONTRACT) {
+            return ['message' => get_string('job:outdatedworker', 'local_catquizlab', self::WORKER_CONTRACT)] + $none;
+        }
 
         // A worker asked to stop, or in a slot above the limit in force, gets
         // nothing new (#124): it finishes what it plays and goes.
@@ -199,6 +219,8 @@ class job_claim extends external_api {
             : '';
 
         $transaction->allow_commit();
+        // The most answers a sitting of this run can hold (#172): the run's pool, or unknown.
+        $budget = \local_catquizlab\local\sitting_budget::for_run((int) $attempt->runid);
 
         return [
             'hasjob'    => true,
@@ -215,6 +237,10 @@ class job_claim extends external_api {
             // carries it in its artefacts and sends it with every request of the
             // sitting, so that browser, server and history meet (#107, #110).
             'correlationid' => \local_catquizlab\local\debug_trace::correlation_id(),
+            'budget' => (int) $budget['limit'],
+            'budgetkind' => (string) $budget['kind'],
+            'expectedlength' => (int) $budget['expected'],
+            'contract' => self::WORKER_CONTRACT,
             'message'   => get_string('job:claimed', 'local_catquizlab'),
         ];
     }
@@ -408,6 +434,20 @@ class job_claim extends external_api {
                 VALUE_OPTIONAL,
                 0
             ),
+            'budget' => new external_value(
+                PARAM_INT,
+                'The most answers a sitting of this run can hold: its pool (#172); 0 when unknown.',
+                VALUE_OPTIONAL,
+                0
+            ),
+            'budgetkind' => new external_value(PARAM_ALPHA, 'pool or unknown (#172).', VALUE_OPTIONAL, 'unknown'),
+            'expectedlength' => new external_value(
+                PARAM_INT,
+                'The length the design fixes or caps (the classical form, a maximum); 0 when it does not (#172).',
+                VALUE_OPTIONAL,
+                0
+            ),
+            'contract' => new external_value(PARAM_INT, 'The worker contract of this server (#173).', VALUE_OPTIONAL, 0),
             'message'   => new external_value(PARAM_TEXT, 'Human-readable status.'),
         ]);
     }

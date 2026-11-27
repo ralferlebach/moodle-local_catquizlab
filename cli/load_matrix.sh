@@ -7,7 +7,7 @@
 # processes, their resident memory and the database's connections, request_report.php reads every traced request of
 # the step (status, PHP peak, process RSS, queries, 5xx, fatals, exceptions) and capacity_report.php the workers.
 #
-#     WORKERS="1 5 10 25 50" PER=2 MOODLE_ROOT=/var/www/moodle local/catquizlab/cli/load_matrix.sh
+#     WORKERS="1 5 12 20 25 50" PER=2 MOODLE_ROOT=/var/www/moodle local/catquizlab/cli/load_matrix.sh
 #
 # The web server's memory_limit is its own; say it with WEBLIMIT=512M for the report. Writes everything to $OUT.
 #
@@ -31,7 +31,8 @@
 # read before the experiment is deleted — deleting first took the traces with it.
 set -u
 MOODLE="${MOODLE_ROOT:-/home/claude/moodle}"
-WORKERS="${WORKERS:-1 5 10 25 50}"
+# 0.7.84 (#177): the steps of the CLARA measurement, 20 among them; the acceptance workflow sets its own.
+WORKERS="${WORKERS:-1 5 12 20 25 50}"
 MODES="${MODES:-classic allsubs control}"
 PER="${PER:-2}"
 MINANSWERS="${MINANSWERS:-120}"

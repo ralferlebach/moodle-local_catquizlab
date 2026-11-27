@@ -23,6 +23,10 @@
 #                     attempts left open across the engine upgrade previous →
 #                     release; the cost of a sitting by length and pool size,
 #                     previous against release (.github/engine-pins*.env).
+#   long-run    #172–#176  a classical sitting of 2502 items (long-run-2500),
+#                     twenty of 1101 at once; every first execution ended after 1100 answers
+#                     and continued; the same twins played through twice and
+#                     interrupted, compared twin by twin (CLASSIC, FASTEST).
 #   manifest          every job's components and commits in one file.
 #
 # Every job uploads what it measured; nothing here is judged by eye. The
@@ -270,6 +274,219 @@ jobs:
         if: always()
         with:
           name: manifest-load-${{ matrix.mode }}
+          path: manifest
+          retention-days: 30
+
+  long-run-2500:
+    name: "Issue 172 — one classical sitting of 2502 items"
+    runs-on: ubuntu-24.04
+    timeout-minutes: 200
+    services:
+      postgres:
+        image: postgres:16
+        env: { POSTGRES_USER: postgres, POSTGRES_PASSWORD: moodle, POSTGRES_DB: moodle }
+        ports: ['5432:5432']
+        options: --health-cmd pg_isready --health-interval 10s --health-timeout 5s --health-retries 5
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          path: plugin
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+      - name: Moodle 4.5, the release engine set, PostgreSQL, Apache + PHP-FPM (64 processes, 512M)
+        env: { MOODLE_BRANCH: MOODLE_405_STABLE, PINS: release, DB: pgsql, WEB: apache, FPM_CHILDREN: '64' }
+        run: bash plugin/.github/scripts/acceptance-setup.sh
+
+      # CLARA run 103 (27.11.2026): 18 classical sittings of a 2500-item test stopped at 1000 answers, a retry at 1264.
+      # One sitting of the whole pool (2502 items over three subscales), about an hour; checked on the server: collected, its trace holding every answer, its engine attempt bound, complete and its account's only
+      # one, no execution failed, the engine's person parameters gone after collection.
+      - name: Issue 172 — one classical sitting of 2502 items
+        working-directory: ${{ env.MOODLE_ROOT }}
+        timeout-minutes: 170
+        run: |
+          set -o pipefail
+          mkdir -p "$GITHUB_WORKSPACE/evidence/long"
+          php local/catquizlab/cli/smoke.php --strategy=classic --persons=1 --pool=2500 --minanswers=2502 --minutes=150 \
+            --no-navigation-failures --require-all --keep --summary="$GITHUB_WORKSPACE/evidence/long/one.json" \
+            | tee "$GITHUB_WORKSPACE/evidence/long/one.txt"
+          exp=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["experimentid"])' \
+            "$GITHUB_WORKSPACE/evidence/long/one.json")
+          php local/catquizlab/cli/long_run_check.php --experimentid="$exp" --answers=2502 \
+            | tee "$GITHUB_WORKSPACE/evidence/long/one-check.txt"
+
+      - name: Release manifest of this job
+        if: always()
+        env:
+          JOB_NAME: "long-run-2500"
+        run: |
+          mkdir -p evidence manifest
+          bash plugin/.github/scripts/release-manifest.sh > "manifest/manifest-long-run-2500.json"
+          cp engine-manifest.txt installed-versions.txt evidence/ 2>/dev/null || true
+          cp /tmp/apache-error.log evidence/ 2>/dev/null || true
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: catquizlab-acceptance-long-run-2500
+          path: evidence
+          retention-days: 30
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: manifest-long-run-2500
+          path: manifest
+          retention-days: 30
+
+  long-run:
+    name: "Issues 172–176 — twenty past 1000 at once, a retry past 1000, held against retried, paired resume"
+    runs-on: ubuntu-24.04
+    timeout-minutes: 330
+    services:
+      postgres:
+        image: postgres:16
+        env: { POSTGRES_USER: postgres, POSTGRES_PASSWORD: moodle, POSTGRES_DB: moodle }
+        ports: ['5432:5432']
+        options: --health-cmd pg_isready --health-interval 10s --health-timeout 5s --health-retries 5
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          path: plugin
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+      - name: Moodle 4.5, the release engine set, PostgreSQL, Apache + PHP-FPM (64 processes, 512M)
+        env: { MOODLE_BRANCH: MOODLE_405_STABLE, PINS: release, DB: pgsql, WEB: apache, FPM_CHILDREN: '64' }
+        run: bash plugin/.github/scripts/acceptance-setup.sh
+
+      # Twenty at once past the old limit: 1101 items each (2502 each would take the runner's four cores about three
+      # hours of server time alone — the engine's time per answer grows with the answers given, about 0.56 ms per
+      # answer with the release pins; measured locally 27.11.2026). Twenty at once with the whole 2502-item pool is for CLARA, with the same check.
+      - name: Issue 172 — twenty classical sittings of 1101 items at once
+        working-directory: ${{ env.MOODLE_ROOT }}
+        timeout-minutes: 150
+        run: |
+          set -o pipefail
+          # Workers of an earlier smoke run keep their environment (CATQUIZLAB_FAULTS) for as long as they live: none is
+          # left to play this run's sittings with another run's faults.
+          stopworkers() { for p in $(pgrep -f 'worker/run_attempt.js' || true); do kill "$p" || true; done; sleep 5; }
+          stopworkers
+          mkdir -p "$GITHUB_WORKSPACE/evidence/long"
+          # Twenty browsers on four cores: a login may time out and its execution be retried (local run 27.11.2026). Such
+          # a retry is counted and listed by the check, never a broken invariant, and every sitting must be collected.
+          php local/catquizlab/cli/smoke.php --strategy=classic --persons=20 --concurrency=20 --pool=1100 --minanswers=1101 \
+            --minutes=140 --require-all --keep \
+            --summary="$GITHUB_WORKSPACE/evidence/long/twenty.json" | tee "$GITHUB_WORKSPACE/evidence/long/twenty.txt"
+          exp=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["experimentid"])' \
+            "$GITHUB_WORKSPACE/evidence/long/twenty.json")
+          php local/catquizlab/cli/long_run_check.php --experimentid="$exp" --answers=1101 --allow-transient \
+            | tee "$GITHUB_WORKSPACE/evidence/long/twenty-check.txt"
+
+      # #173 DoD 2: every first execution ends after 1100 answers; the retry continues the same engine attempt from
+      # the engine's count, more than 1000, and finishes it.
+      - name: Issue 173 — a retry past 1000 answers, continued from the engine's count
+        working-directory: ${{ env.MOODLE_ROOT }}
+        timeout-minutes: 90
+        env:
+          CATQUIZLAB_FAULTS: endexecution@1100
+        run: |
+          set -o pipefail
+          # Workers of an earlier smoke run keep their environment (CATQUIZLAB_FAULTS) for as long as they live: none is
+          # left to play this run's sittings with another run's faults.
+          stopworkers() { for p in $(pgrep -f 'worker/run_attempt.js' || true); do kill "$p" || true; done; sleep 5; }
+          stopworkers
+          out="$GITHUB_WORKSPACE/evidence/long"
+          php local/catquizlab/cli/smoke.php --strategy=classic --persons=2 --pool=1300 --minanswers=1302 --minutes=80 \
+            --no-navigation-failures --require-all --keep --expect-injected-ends=2 --summary="$out/resumed.json" \
+            | tee "$out/resumed.txt"
+          e=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["experimentid"])' "$out/resumed.json")
+          php local/catquizlab/cli/long_run_check.php --experimentid="$e" --answers=1302 --min-baseline=1100 \
+            --allowed-failures=execution_context_destroyed | tee "$out/resumed-check.txt"
+
+      # #174 AK 3, DoD 2: the same twins played through, played through again (the control), and interrupted after 20
+      # answers and resumed — CLASSIC and an adaptive mode (FASTEST). Twin by twin: the items, the answers, the ability
+      # after every step, the final ability, SE and stop reason, against a tolerance fixed in the script.
+      - name: Issue 174 — paired comparison, uninterrupted against interrupted and resumed, CLASSIC and FASTEST
+        working-directory: ${{ env.MOODLE_ROOT }}
+        timeout-minutes: 60
+        run: |
+          set -o pipefail
+          # Workers of an earlier smoke run keep their environment (CATQUIZLAB_FAULTS) for as long as they live: none is
+          # left to play this run's sittings with another run's faults.
+          stopworkers() { for p in $(pgrep -f 'worker/run_attempt.js' || true); do kill "$p" || true; done; sleep 5; }
+          stopworkers
+          out="$GITHUB_WORKSPACE/evidence/long"
+          exp() { python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["experimentid"])' "$1"; }
+          for kind in clean control; do
+            stopworkers
+            php local/catquizlab/cli/smoke.php --strategies=classic,fastest --persons=3 --minanswers=40 --minutes=20 \
+              --no-navigation-failures --require-all --keep --summary="$out/paired-$kind.json" | tee "$out/paired-$kind.txt"
+            stopworkers
+          done
+          CATQUIZLAB_FAULTS=endexecution@20 php local/catquizlab/cli/smoke.php --strategies=classic,fastest --persons=3 \
+            --minanswers=40 --minutes=20 --no-navigation-failures --require-all --keep --expect-injected-ends=6 \
+            --summary="$out/paired-resumed.json" | tee "$out/paired-resumed.txt"
+          php local/catquizlab/cli/paired_resume_check.php --clean="$(exp "$out/paired-clean.json")" \
+            --resumed="$(exp "$out/paired-resumed.json")" --control="$(exp "$out/paired-control.json")" --json \
+            | tee "$out/paired-compare.json"
+
+      # #175 DoD 2: twenty sittings at once, twice. A broken invariant (the answer never stored, the same question
+      # back after every answer): every sitting held after one execution with its code, nothing put back in the
+      # queue, the run paused by the breaker with that cause. A transient fault (the execution ends after 5 answers):
+      # every sitting retried once and collected, nothing held.
+      - name: Issue 175 — twenty sittings, a broken invariant against a transient fault
+        working-directory: ${{ env.MOODLE_ROOT }}
+        timeout-minutes: 45
+        run: |
+          set -o pipefail
+          # Workers of an earlier smoke run keep their environment (CATQUIZLAB_FAULTS) for as long as they live: none is
+          # left to play this run's sittings with another run's faults.
+          stopworkers() { for p in $(pgrep -f 'worker/run_attempt.js' || true); do kill "$p" || true; done; sleep 5; }
+          stopworkers
+          out="$GITHUB_WORKSPACE/evidence/long"
+          exp() { python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["experimentid"])' "$1"; }
+          CATQUIZLAB_FAULTS=notstored@5 php local/catquizlab/cli/smoke.php --strategy=classic --persons=20 --concurrency=20 \
+            --minanswers=20 --minutes=10 --keep --summary="$out/held.json" > "$out/held.txt" 2>&1 || true
+          php local/catquizlab/cli/failure_policy_check.php --experimentid="$(exp "$out/held.json")" --expect=held --json \
+            | tee "$out/held-check.json"
+          stopworkers
+          CATQUIZLAB_FAULTS=endexecution@5 php local/catquizlab/cli/smoke.php --strategy=classic --persons=20 \
+            --concurrency=20 --minanswers=20 --minutes=20 --require-all --keep \
+            --summary="$out/retried.json" | tee "$out/retried.txt"
+          php local/catquizlab/cli/failure_policy_check.php --experimentid="$(exp "$out/retried.json")" --expect=retried \
+            --json | tee "$out/retried-check.json"
+
+      # #176 DoD 3: the lifecycle of the retried sittings, complete, without the requests beside it.
+      - name: Issue 176 — the lifecycle of the retried sittings, complete
+        if: always()
+        working-directory: ${{ env.MOODLE_ROOT }}
+        run: |
+          out="$GITHUB_WORKSPACE/evidence/long"
+          if [ -f "$out/resumed.json" ]; then
+            e=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["experimentid"])' "$out/resumed.json")
+            php local/catquizlab/cli/export_lifecycle.php --experimentid="$e" > "$out/resumed-lifecycle.ndjson"
+            tail -n 1 "$out/resumed-lifecycle.ndjson"
+          fi
+          php local/catquizlab/cli/request_report.php --from=$(( $(date +%s) - 21000 )) --json > "$out/requests.json" || true
+
+      - name: Release manifest of this job
+        if: always()
+        env:
+          JOB_NAME: "long-run"
+        run: |
+          mkdir -p evidence manifest
+          bash plugin/.github/scripts/release-manifest.sh > "manifest/manifest-long-run.json"
+          cp engine-manifest.txt installed-versions.txt evidence/ 2>/dev/null || true
+          cp /tmp/apache-error.log evidence/ 2>/dev/null || true
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: catquizlab-acceptance-long-run
+          path: evidence
+          retention-days: 30
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: manifest-long-run
           path: manifest
           retention-days: 30
 
@@ -749,7 +966,7 @@ jobs:
   manifest:
     name: "Release manifest (every gate job of this commit, one file)"
     runs-on: ubuntu-24.04
-    needs: [scheduler, load, trace, engine-session, engine-migration, engine-bench, clara-bench, clara-report]
+    needs: [scheduler, load, long-run-2500, long-run, trace, engine-session, engine-migration, engine-bench, clara-bench, clara-report]
     if: ${{ !cancelled() }}
     permissions:
       contents: read

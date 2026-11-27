@@ -135,4 +135,47 @@ final class worker_launcher_test extends \advanced_testcase {
         $this->assertStringContainsString('worker_token', $bare['reason']);
         $this->assertStringContainsString('worker_node_path', $bare['reason']);
     }
+
+    /**
+     * resends counts the workers' resend lines of a time span, and only those (CI 26.11.2026, c6ec43c2).
+     *
+     * @return void
+     */
+    public function test_resends(): void {
+        global $CFG;
+        $this->resetAfterTest();
+
+        // The mark is the worker's own: one string in two languages.
+        $js = file_get_contents($CFG->dirroot . '/local/catquizlab/worker/run_attempt.js');
+        $this->assertStringContainsString("const RESEND_MARK = '" . worker_launcher::RESEND_MARK . "';", $js);
+
+        $dir = $CFG->dataroot . '/local_catquizlab/worker-logs';
+        @mkdir($dir, 0700, true);
+        $since = 1795707000;
+        $line = static fn(int $at, string $what): string => worker_launcher::RESEND_MARK . ' '
+            . gmdate('Y-m-d\TH:i:s', $at) . '.123Z local_catquizlab_oracle_answer: the server closed the connection '
+            . 'before any response (UND_ERR_SOCKET: other side closed); ' . $what;
+        file_put_contents($dir . '/w-1.log', implode("\n", [
+            'Worker w-1 claimed sitting 66.',
+            $line($since - 60, 'before the step'),
+            $line($since + 981, 'in the step'),
+            '  ' . $line($since + 982, 'not at the start of a line'),
+            worker_launcher::RESEND_MARK . ' not-a-time local_catquizlab_oracle_answer',
+        ]) . "\n");
+        file_put_contents($dir . '/w-2.log', $line($since + 990, 'second worker') . "\n");
+        // A log not written since: not read at all.
+        file_put_contents($dir . '/w-3.log', $line($since + 995, 'old file') . "\n");
+        touch($dir . '/w-3.log', $since - 3600);
+        touch($dir . '/w-1.log', $since + 1000);
+        touch($dir . '/w-2.log', $since + 1000);
+
+        $found = worker_launcher::resends($since);
+        $this->assertSame(2, $found['n']);
+        $this->assertCount(2, $found['lines']);
+        $this->assertStringContainsString('in the step', implode("\n", $found['lines']));
+        $this->assertStringContainsString('second worker', implode("\n", $found['lines']));
+
+        $this->assertSame(['n' => 2, 'lines' => []], worker_launcher::resends($since, 0));
+        $this->assertSame(0, worker_launcher::resends($since + 2000)['n']);
+    }
 }

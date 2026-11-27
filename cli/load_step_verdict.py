@@ -115,6 +115,13 @@ def accounting(smoke):
     return problems, sittings or {}, executions or {}
 
 
+def resent_note(executions):
+    """The reads the workers sent once more on a new connection (CI 26.11.2026, c6ec43c2): said, never hidden."""
+    n = int(((executions or {}).get('resent') or {}).get('n') or 0)
+    return (f'; {n} read(s) sent once more on a new connection, the server having closed the one used before any '
+            'response') if n else ''
+
+
 def verdict(smoke, requests, smoke_exit, workers):
     """(result, reasons) of one step."""
     reasons = []
@@ -157,7 +164,7 @@ def verdict(smoke, requests, smoke_exit, workers):
         return 'PASS', [f'{queued} of {queued} sitting(s) collected in the time limit, {valid} valid'
                         + (f', {json.dumps(others)} as the engine judged them' if others else '')
                         + (f'; {retried} execution(s) failed and were retried, each explained: {json.dumps(causes)}'
-                           if retried else '; no execution failed')]
+                           if retried else '; no execution failed') + resent_note(executions)]
     if said == 'deadline':
         late = int(limit.get('notfinished') or 0)
         stalled = int(limit.get('stalled') or 0)
@@ -241,6 +248,7 @@ def overload(smoke, said, reasons, valid, others, workers):
             f'{int(sittings.get("failed") or 0)} lost for good (each to overload), '
             f'{after.get("inplay", 0)} still in play, no result from them; {valid} valid'
             + (f', {json.dumps(others)}' if others else '') + '; no 5xx, no fatal')
+    line += resent_note(executions)
     if said == 'overload':
         line += '; the sittings were not compared: the run was still moving'
     else:
@@ -412,6 +420,16 @@ def self_test():
     for label, smoke, requests, code, workers, expected in cases:
         got, why = verdict(smoke, requests, code, workers)
         ok = got == expected
+        bad += not ok
+        print(('ok   ' if ok else 'FAIL ') + f'{label}: {got} (expected {expected}) — {"; ".join(why)}')
+    # A read sent once more on a new connection is no failed execution, and is said (CI 26.11.2026, c6ec43c2).
+    for label, smoke, expected in [
+            ('pass, a read sent once more', dict(good, executions=dict(runs(5), resent={'n': 1, 'lines': ['x']})), 'PASS'),
+            ('overload, a read sent once more',
+             dict(over, executions=dict(over['executions'], resent={'n': 2, 'lines': []})), 'CAPACITY')]:
+        got, why = verdict(smoke, req, 0 if expected == 'PASS' else 1, 50)
+        n = smoke['executions']['resent']['n']
+        ok = got == expected and f'{n} read(s) sent once more on a new connection' in why[0]
         bad += not ok
         print(('ok   ' if ok else 'FAIL ') + f'{label}: {got} (expected {expected}) — {"; ".join(why)}')
     matrix = [{'mode': 'm', 'kind': 'load', 'workers': w, 'result': r}

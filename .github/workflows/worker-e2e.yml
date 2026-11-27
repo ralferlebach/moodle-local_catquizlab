@@ -68,8 +68,14 @@ jobs:
         working-directory: worker
         run: npm run check
 
+      # With the long sittings of #172/#173 against a stand-in for Moodle: the real worker process and a real browser,
+      # 999, 1000, 1001 and 2500 answers in one sitting, a retry from 264 to 2500, and the faults that end an
+      # execution before any answer (test/long_run.test.js, about 20 minutes).
       - name: Run worker unit tests
         working-directory: worker
+        timeout-minutes: 45
+        env:
+          CATQUIZLAB_LONG_RUN: '1'
         run: npm test
 
       # This is what the old step was actually meant to prove: that Puppeteer

@@ -269,6 +269,54 @@ class worker_launcher {
         return $dir . '/' . preg_replace('/[^A-Za-z0-9_.-]/', '_', $workerid) . '.log';
     }
 
+    /** @var string How a worker's log line says it sent a read once more (worker/run_attempt.js, RESEND_MARK). */
+    public const RESEND_MARK = '[catquizlab:resend]';
+
+    /**
+     * The reads the workers sent once more because the server had closed the connection, from a time on.
+     *
+     * A worker sends a web service read again on a new connection when the server closed the one it used before any
+     * response (CI 26.11.2026, c6ec43c2: Apache ended a process under load). Said in its log, one line each, its time
+     * first; counted here so that a load step reports them rather than hiding them (#100: a failure a retry covered is
+     * still one).
+     *
+     * @param int $since Unix time: lines from then on.
+     * @param int $keep How many lines to return as they are.
+     * @return array{n: int, lines: string[]}
+     */
+    public static function resends(int $since, int $keep = 20): array {
+        global $CFG;
+
+        $dir = $CFG->dataroot . '/local_catquizlab/worker-logs';
+        $found = ['n' => 0, 'lines' => []];
+        foreach (glob($dir . '/*.log') ?: [] as $path) {
+            clearstatcache(true, $path);
+            if ((int) @filemtime($path) < $since) {
+                continue;
+            }
+            $handle = @fopen($path, 'r');
+            if (!$handle) {
+                continue;
+            }
+            while (($line = fgets($handle)) !== false) {
+                if (strpos($line, self::RESEND_MARK . ' ') !== 0) {
+                    continue;
+                }
+                $at = strtotime((string) strtok(substr($line, strlen(self::RESEND_MARK) + 1), ' '));
+                if ($at === false || $at < $since) {
+                    continue;
+                }
+                $found['n']++;
+                if (count($found['lines']) < $keep) {
+                    $found['lines'][] = \core_text::substr(rtrim($line), 0, 600);
+                }
+            }
+            fclose($handle);
+        }
+
+        return $found;
+    }
+
     /**
      * The tail of a worker's log, for the interface.
      *

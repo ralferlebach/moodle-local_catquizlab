@@ -73,6 +73,15 @@ class attempt_history {
     /** @var string A report from an execution that no longer held the sitting: kept, not applied (#133). */
     public const STALE = 'stale';
 
+    /** @var string The execution bound the sitting to the engine attempt and question usage it is in (#173). */
+    public const BOUND = 'bound';
+
+    /** @var string Failed on a broken invariant and held, not retried, until a person puts it back (#175). */
+    public const HELD = 'held';
+
+    /** @var string Found at risk by an audit of a past run and marked, its data unchanged (#174). */
+    public const AUDITED = 'audited';
+
     /**
      * Ends found before their collected row was written: sitting id => reason code (#134).
      *
@@ -221,7 +230,9 @@ class attempt_history {
         $extra = (array) ($detail['extra'] ?? []);
         // The entry 'truncated' says what was cut and where the full diagnosis is (#111).
         // 'trace': where a sitting whose trace never came can be found (#138 AK4).
-        $keys = ['browser', 'transport', 'artefacts', 'truncated', 'reconciliations', 'reconciliation', 'lease', 'trace'];
+        // 'progress': where the execution started, what it confirmed, its budget and the server's last word (#176).
+        $keys = ['browser', 'transport', 'artefacts', 'truncated', 'reconciliations', 'reconciliation', 'lease', 'trace',
+            'progress'];
         foreach ($keys as $key) {
             if (!empty($extra[$key])) {
                 $diagnosis[$key] = json_decode(self::redact(json_encode($extra[$key], JSON_UNESCAPED_SLASHES)), true);

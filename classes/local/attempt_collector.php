@@ -574,7 +574,13 @@ class attempt_collector {
             return [];
         }
         $record = reset($record);
-        $decoded = json_decode((string) ($record->json ?? ''), true);
+        // The engine's own reader where it has one (local_catquiz #177, 2026112700): the progress is a head of fixed
+        // size and its events, and only replaying the events gives the played questions, responses and abilities in
+        // the structure before. Older engines keep everything in the head's JSON.
+        $reader = [\local_catquiz\teststrategy\progress::class, 'stored_structure'];
+        $decoded = is_callable($reader) && $catattemptid > 0
+            ? $reader($catattemptid, (string) ($record->json ?? ''))
+            : json_decode((string) ($record->json ?? ''), true);
         if (!is_array($decoded)) {
             return [];
         }

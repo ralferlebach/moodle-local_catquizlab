@@ -77,16 +77,18 @@ class log_view {
         $keep = $limit * ($page + 1) + 1;
 
         $lines = [];
-        foreach (
-            [
+        // Lifecycle only (#176): the sittings' and runs' own records, whatever the number of requests beside them.
+        $sources = !empty($filter['lifecycleonly'])
+            ? [self::from_runlog($filter, $keep), self::from_attemptlog($filter, $keep)]
+            : [
                 self::from_debug($filter, $keep),
                 self::from_runlog($filter, $keep),
                 self::from_attemptlog($filter, $keep),
                 self::from_tasks($filter),
                 self::from_dispatch($filter),
                 self::from_requests($filter, $keep, $scan),
-            ] as $source
-        ) {
+            ];
+        foreach ($sources as $source) {
             $matching = array_values(array_filter($source, static fn(array $line): bool => self::matches($line, $filter)));
             $lines = array_merge($lines, self::newest($matching, $keep));
         }
@@ -209,11 +211,23 @@ class log_view {
         $until = (int) ($filter['until'] ?? 0);
         $since = (int) ($filter['since'] ?? 0);
 
+        $first = $window['lines'] === [] ? null : $window['lines'][0];
+        $last = $window['lines'] === [] ? null : $window['lines'][count($window['lines']) - 1];
+        if (!empty($filter['newestfirst'])) {
+            [$first, $last] = [$last, $first];
+        }
+
         return [
             'generated' => date('c'),
             'filter' => array_filter($filter, static fn($value): bool => $value !== '' && $value !== 0 && $value !== null),
             'from' => $since > 0 ? date('c', $since) : null,
             'to' => date('c', $until > 0 ? $until : time()),
+            // The same window in UTC, and what the file actually covers (#176): a window asked for is not the window
+            // the lines span — a cut file starts later than asked.
+            'requested' => ['from' => $since > 0 ? gmdate('Y-m-d\TH:i:s\Z', $since) : null,
+                'to' => gmdate('Y-m-d\TH:i:s\Z', $until > 0 ? $until : time())],
+            'covered' => ['first' => $first ? self::utc_ms((int) $first['ms']) : null,
+                'last' => $last ? self::utc_ms((int) $last['ms']) : null],
             'order' => get_string(!empty($filter['newestfirst']) ? 'logs:ordernewest' : 'logs:orderoldest', 'local_catquizlab'),
             // The time zone of the stamps (#131).
             'timezone' => usertimezone(),
@@ -224,8 +238,146 @@ class log_view {
             'truncated' => (bool) $window['hasolder'],
             // Not read: the request traces were larger than one view reads.
             'partial' => (bool) $window['scan']['partial'],
+            // Everything the filter selects is in the file only when it is neither cut nor partial (#176): "partial"
+            // false alone said nothing about the lines the limit left out.
+            'complete' => !$window['hasolder'] && !$window['scan']['partial'],
             'scan' => $window['scan'],
         ];
+    }
+
+    /**
+     * A time in milliseconds as UTC with milliseconds.
+     *
+     * @param int $ms Epoch milliseconds.
+     * @return string
+     */
+    public static function utc_ms(int $ms): string {
+        return gmdate('Y-m-d\TH:i:s', intdiv($ms, 1000)) . sprintf('.%03dZ', $ms % 1000);
+    }
+
+    /**
+     * The position of a line in the merged log (#176): milliseconds, then the source's own sequence, then the source.
+     *
+     * @param array $line A line.
+     * @return string ms:seq:source
+     */
+    public static function cursor_of(array $line): string {
+        return (int) $line['ms'] . ':' . (int) $line['seq'] . ':' . $line['source'];
+    }
+
+    /**
+     * Whether a line comes after a cursor in the merged order.
+     *
+     * @param array $line A line.
+     * @param array|null $cursor [ms, seq, source]; null for the beginning.
+     * @return bool
+     */
+    protected static function after_cursor(array $line, ?array $cursor): bool {
+        if ($cursor === null) {
+            return true;
+        }
+
+        return ((int) $line['ms'] <=> $cursor[0] ?: (int) $line['seq'] <=> $cursor[1]
+            ?: strcmp((string) $line['source'], $cursor[2])) > 0;
+    }
+
+    /**
+     * The lifecycle of the selected sittings and runs, complete, oldest first, streamed (#176 AK3).
+     *
+     * The records of executions (started, bound, failed, held, requeued, collected …) and of runs, without the
+     * requests: whatever their number, they cannot push a lifecycle line out of the file. Both tables are read as
+     * record sets in the merged order and handed to $emit one line at a time, so memory does not grow with the
+     * selection. A limit ends the file early and says where to go on: the next call with 'after' => nextcursor
+     * gives exactly the lines after it — none twice, none left out, also within one millisecond.
+     *
+     * @param array $filter As for lines(); 'after' a cursor (cursor_of()) to start behind.
+     * @param callable $emit Called with each line.
+     * @param int $limit The most lines; 0 for all.
+     * @return array{count: int, nextcursor: ?string, first: ?string, last: ?string}
+     */
+    public static function stream_lifecycle(array $filter, callable $emit, int $limit = 0): array {
+        global $DB;
+
+        $cursor = null;
+        if (preg_match('/^(\d+):(\d+):([a-z]+)$/', (string) ($filter['after'] ?? ''), $match)) {
+            $cursor = [(int) $match[1], (int) $match[2], $match[3]];
+        }
+        $since = max((int) ($filter['since'] ?? 0), $cursor ? intdiv($cursor[0], 1000) : 0);
+        $until = (int) ($filter['until'] ?? 0);
+        $sources = [];
+        foreach (['attempt' => 'local_catquizlab_attemptlog', 'lifecycle' => 'local_catquizlab_runlog'] as $source => $table) {
+            if (!empty($filter['channel']) && $filter['channel'] !== $source) {
+                continue;
+            }
+            $where = ['timecreated >= :since'];
+            $params = ['since' => $since];
+            if ($until > 0) {
+                $where[] = 'timecreated <= :until';
+                $params['until'] = $until;
+            }
+            foreach (['runid', 'experimentid'] as $key) {
+                if (!empty($filter[$key])) {
+                    $where[] = $key === 'runid' ? 'runid = :runid'
+                        : 'runid IN (SELECT id FROM {local_catquizlab_run} WHERE experimentid = :experimentid)';
+                    $params[$key] = (int) $filter[$key];
+                }
+            }
+            if ($source === 'attempt' && !empty($filter['attemptid'])) {
+                $where[] = 'attemptid = :attemptid';
+                $params['attemptid'] = (int) $filter['attemptid'];
+            }
+            // The order of the merged log: milliseconds, then id.
+            $order = $source === 'attempt' ? 'timecreated ASC, id ASC'
+                : 'CASE WHEN timecreatedms > 0 THEN timecreatedms ELSE timecreated * 1000 END ASC, id ASC';
+            $sources[$source] = $DB->get_recordset_select($table, implode(' AND ', $where), $params, $order);
+        }
+        $build = ['attempt' => 'attemptlog_line', 'lifecycle' => 'runlog_line'];
+        $heads = [];
+        $next = static function (string $source) use (&$sources, &$heads, $build, $cursor, $filter): void {
+            $set = $sources[$source];
+            while ($set->valid()) {
+                $method = $build[$source];
+                $line = self::$method($set->current());
+                $set->next();
+                if (self::after_cursor($line, $cursor) && self::matches($line, $filter)) {
+                    $heads[$source] = $line;
+                    return;
+                }
+            }
+            unset($heads[$source]);
+        };
+        foreach (array_keys($sources) as $source) {
+            $next($source);
+        }
+
+        $count = 0;
+        $first = null;
+        $last = null;
+        $nextcursor = null;
+        while ($heads !== []) {
+            uasort($heads, static fn(array $a, array $b): int => $a['ms'] <=> $b['ms'] ?: $a['seq'] <=> $b['seq']
+                ?: strcmp($a['source'], $b['source']));
+            $source = array_key_first($heads);
+            $line = $heads[$source];
+            if ($limit > 0 && $count >= $limit) {
+                $nextcursor = self::cursor_of($last);
+                break;
+            }
+            $line['stamp'] = self::stamp($line);
+            $line['text'] = self::redact((string) $line['text']);
+            $emit($line);
+            $count++;
+            $first = $first ?? $line;
+            $last = $line;
+            $next($source);
+        }
+        foreach ($sources as $set) {
+            $set->close();
+        }
+
+        return ['count' => $count, 'nextcursor' => $nextcursor,
+            'first' => $first ? self::utc_ms((int) $first['ms']) : null,
+            'last' => $last ? self::utc_ms((int) $last['ms']) : null];
     }
 
     /** @var string[] Patterns of secrets a log line must not carry, and what replaces them (#131). */
@@ -322,6 +474,20 @@ class log_view {
             )));
         }
         $wanted = (int) ($filter['attemptid'] ?? 0);
+        // A worker asked for (#176): the executions it started, from their start records, read once. A request carries
+        // its sitting and execution, not its worker; the history says who started which execution.
+        $byworker = null;
+        $worker = trim((string) ($filter['workerid'] ?? ''));
+        if ($worker !== '') {
+            $byworker = [];
+            $startrows = $DB->get_recordset_select('local_catquizlab_attemptlog', 'outcome = :started AND '
+                . $DB->sql_like('workerid', ':worker', false), ['started' => attempt_history::STARTED,
+                'worker' => '%' . $DB->sql_like_escape($worker) . '%'], '', 'id, attemptid, tryno');
+            foreach ($startrows as $row) {
+                $byworker[(int) $row->attemptid . '.' . (int) $row->tryno] = true;
+            }
+            $startrows->close();
+        }
 
         $plan = request_trace::scan_plan($since, $until, request_trace::SCAN_BYTES);
         $scan['bytes'] = $plan['bytes'];
@@ -336,6 +502,10 @@ class log_view {
                 continue;
             }
             if ($allowed !== null && !isset($allowed[$attemptid])) {
+                continue;
+            }
+            $execution = (int) ($request['execution'] ?? 0);
+            if ($byworker !== null && !isset($byworker[$attemptid . '.' . $execution])) {
                 continue;
             }
             $runid = 0;
@@ -374,6 +544,9 @@ class log_view {
                 'ms' => $ms,
                 'runid' => $runid,
                 'attemptid' => $attemptid,
+                'execution' => $execution,
+                // Matched by its execution above, not by this field: it is filled in below for the lines kept.
+                'workerid' => $worker,
                 'correlationid' => (string) ($request['correlationid'] ?? ''),
                 'failed' => $failed,
                 'severity' => $failed ? self::ERROR : ($slow ? self::WARNING : self::INFO),
@@ -382,6 +555,7 @@ class log_view {
             if (!self::matches($line, $filter)) {
                 continue;
             }
+            $line['workerid'] = '';
             $lines[] = $line;
             // Trimmed in batches and by position in the file, which is the order
             // the requests ended in: no sort per batch. Twice what is needed is
@@ -393,13 +567,26 @@ class log_view {
         }
         $lines = self::newest($lines, $keep);
 
-        // The run of each line kept, in one query.
+        // The run of each line kept, and the worker of its execution (#176), in one query each.
         $ids = array_values(array_unique(array_filter(array_map('intval', array_column($lines, 'attemptid')))));
         if ($ids !== []) {
             [$insql, $params] = $DB->get_in_or_equal($ids, SQL_PARAMS_NAMED, 'att');
             $runs = $DB->get_records_select_menu('local_catquizlab_attempt', 'id ' . $insql, $params, '', 'id, runid');
+            $workers = [];
+            $startrows = $DB->get_recordset_select(
+                'local_catquizlab_attemptlog',
+                'outcome = :started AND attemptid ' . $insql,
+                $params + ['started' => attempt_history::STARTED],
+                'id ASC',
+                'id, attemptid, tryno, workerid'
+            );
+            foreach ($startrows as $row) {
+                $workers[(int) $row->attemptid . '.' . (int) $row->tryno] = (string) ($row->workerid ?? '');
+            }
+            $startrows->close();
             foreach ($lines as &$line) {
                 $line['runid'] = (int) ($runs[$line['attemptid']] ?? 0);
+                $line['workerid'] = $workers[$line['attemptid'] . '.' . $line['execution']] ?? '';
             }
             unset($line);
         }
@@ -533,24 +720,100 @@ class log_view {
 
         $lines = [];
         foreach ($rows as $row) {
-            $failed = in_array($row->outcome, [attempt_history::FAILED, attempt_history::ABANDONED], true);
-            $text = 'sitting=' . $row->attemptid . ' run=' . $row->runid . ' try=' . $row->tryno . ' ' . $row->outcome
-                . (!empty($row->reasoncode) ? ' reason=' . $row->reasoncode : '')
-                . (!empty($row->workerid) ? ' worker=' . $row->workerid : '')
-                . (!empty($row->detail) ? ' ' . attempt_history::redact((string) $row->detail) : '');
-            $lines[] = self::line((int) $row->timecreated, (int) $row->id, 'attempt', $text, [
-                'runid'         => (int) $row->runid,
-                'attemptid'     => (int) $row->attemptid,
-                'correlationid' => (string) ($row->correlationid ?? ''),
-                'failed'        => $failed,
-                'severity'      => $failed ? self::ERROR
-                    : ($row->outcome === attempt_history::RECOVERED ? self::WARNING : self::INFO),
-                'action'        => 'attempt_' . $row->outcome,
-                'workerid'      => (string) ($row->workerid ?? ''),
-            ]);
+            $lines[] = self::attemptlog_line($row);
         }
 
         return $lines;
+    }
+
+    /**
+     * One line of a sitting's history (#90, #176).
+     *
+     * @param \stdClass $row A local_catquizlab_attemptlog row.
+     * @return array
+     */
+    protected static function attemptlog_line(\stdClass $row): array {
+        $failed = in_array($row->outcome, [attempt_history::FAILED, attempt_history::ABANDONED, attempt_history::HELD], true);
+        $text = 'sitting=' . $row->attemptid . ' run=' . $row->runid . ' try=' . $row->tryno . ' ' . $row->outcome
+            . (!empty($row->reasoncode) ? ' reason=' . $row->reasoncode : '')
+            . (!empty($row->workerid) ? ' worker=' . $row->workerid : '')
+            . (!empty($row->engineattemptid) ? ' engine=' . $row->engineattemptid : '')
+            . self::progress_text((string) ($row->diagnosis ?? ''))
+            . (!empty($row->detail) ? ' ' . attempt_history::redact((string) $row->detail) : '');
+        return self::line((int) $row->timecreated, (int) $row->id, 'attempt', $text, [
+            'runid'         => (int) $row->runid,
+            'attemptid'     => (int) $row->attemptid,
+            'correlationid' => (string) ($row->correlationid ?? ''),
+            'failed'        => $failed,
+            'severity'      => $failed ? self::ERROR
+                : (in_array($row->outcome, [attempt_history::RECOVERED, attempt_history::AUDITED], true)
+                    ? self::WARNING : self::INFO),
+            'action'        => 'attempt_' . $row->outcome,
+            'workerid'      => (string) ($row->workerid ?? ''),
+            'execution'     => (int) $row->tryno,
+        ]);
+    }
+
+    /**
+     * One line of a run's lifecycle record.
+     *
+     * @param \stdClass $row A local_catquizlab_runlog row.
+     * @return array
+     */
+    protected static function runlog_line(\stdClass $row): array {
+        $detail = json_decode((string) $row->detail, true) ?: [];
+        // Run 0 is the installation: worker limit, draining, load guard (#124).
+        $text = ((int) $row->runid === 0 ? get_string('logline:installation', 'local_catquizlab')
+            : 'run=' . $row->runid . ' attempt#' . $row->attemptno)
+            . ' ' . $row->event
+            . ($row->stage ? ' stage=' . $row->stage : '')
+            . ($row->dbqueries ? ' queries=' . $row->dbqueries : '')
+            . ($detail !== [] ? ' ' . json_encode($detail, JSON_UNESCAPED_SLASHES) : '');
+
+        return self::line((int) $row->timecreated, (int) $row->id, 'lifecycle', $text, [
+            'runid'         => (int) $row->runid,
+            'correlationid' => (string) ($row->correlationid ?? ''),
+            'failed'        => $row->event === run_log::STAGE_FAILED || $row->event === run_log::RUN_FAILED,
+            'severity'      => in_array($row->event, [run_log::STAGE_FAILED, run_log::RUN_FAILED], true)
+                ? self::ERROR
+                : (in_array($row->event, [run_log::RUN_AUTOPAUSED, run_log::ABILITIES_OUTSIDE,
+                    run_log::WORKERS_DRAINING, run_log::LOAD_THROTTLED], true)
+                    ? self::WARNING : self::INFO),
+            'action'        => (string) $row->event,
+            'attemptno'     => (int) ($row->attemptno ?? 0),
+            'userid'        => (int) ($row->userid ?? 0),
+            'ms'            => (int) ($row->timecreatedms ?? 0),
+            'taskid'        => (int) ($row->taskid ?? 0),
+        ]);
+    }
+
+    /**
+     * An execution's progress as its history row keeps it, in one line (#176): where it started and from what, what it
+     * confirmed, its bound, and the server's last word.
+     *
+     * @param string $diagnosis The row's diagnosis JSON.
+     * @return string '' when it has none.
+     */
+    public static function progress_text(string $diagnosis): string {
+        // Only rows that carry one are decoded: a browser record can be long.
+        if ($diagnosis === '' || strpos($diagnosis, '"progress"') === false) {
+            return '';
+        }
+        $progress = (array) ((json_decode($diagnosis, true) ?: [])['progress'] ?? []);
+        if ($progress === []) {
+            return '';
+        }
+        $server = (array) ($progress['serverend'] ?? []);
+
+        return ' baseline=' . ($progress['baseline'] ?? '?') . '(' . ($progress['baselinesource'] ?? '') . ')'
+            . ' answered=' . (int) ($progress['answered'] ?? 0)
+            . ' actions=' . (int) ($progress['actions'] ?? 0)
+            . ' reconciliations=' . (int) ($progress['reconciliations'] ?? 0)
+            . ' lastslot=' . (int) ($progress['lastslot'] ?? 0)
+            . ' usage=' . (int) ($progress['qubaid'] ?? 0)
+            . ' budget=' . (int) ($progress['budget'] ?? 0) . '(' . ($progress['budgetkind'] ?? '') . ')'
+            . ($server !== [] ? ' server=' . ($server['state'] ?: ($server['reason'] ?? '')) . ' '
+                . (int) ($server['questionsattempted'] ?? 0) . '/' . (int) ($server['slots'] ?? 0) : '');
     }
 
     /**
@@ -604,30 +867,7 @@ class log_view {
 
         $lines = [];
         foreach ($rows as $row) {
-            $detail = json_decode((string) $row->detail, true) ?: [];
-            // Run 0 is the installation: worker limit, draining, load guard (#124).
-            $text = ((int) $row->runid === 0 ? get_string('logline:installation', 'local_catquizlab')
-                : 'run=' . $row->runid . ' attempt#' . $row->attemptno)
-                . ' ' . $row->event
-                . ($row->stage ? ' stage=' . $row->stage : '')
-                . ($row->dbqueries ? ' queries=' . $row->dbqueries : '')
-                . ($detail !== [] ? ' ' . json_encode($detail, JSON_UNESCAPED_SLASHES) : '');
-
-            $lines[] = self::line((int) $row->timecreated, (int) $row->id, 'lifecycle', $text, [
-                'runid'         => (int) $row->runid,
-                'correlationid' => (string) ($row->correlationid ?? ''),
-                'failed'        => $row->event === run_log::STAGE_FAILED || $row->event === run_log::RUN_FAILED,
-                'severity'      => in_array($row->event, [run_log::STAGE_FAILED, run_log::RUN_FAILED], true)
-                    ? self::ERROR
-                    : (in_array($row->event, [run_log::RUN_AUTOPAUSED, run_log::ABILITIES_OUTSIDE,
-                        run_log::WORKERS_DRAINING, run_log::LOAD_THROTTLED], true)
-                        ? self::WARNING : self::INFO),
-                'action'        => (string) $row->event,
-                'attemptno'     => (int) ($row->attemptno ?? 0),
-                'userid'        => (int) ($row->userid ?? 0),
-                'ms'            => (int) ($row->timecreatedms ?? 0),
-                'taskid'        => (int) ($row->taskid ?? 0),
-            ]);
+            $lines[] = self::runlog_line($row);
         }
 
         return $lines;
@@ -812,7 +1052,8 @@ class log_view {
             // Filled in for the lines that are shown, not for every line read (#132).
             'stamp'  => '',
             'hasms'  => isset($meta['ms']) && $meta['ms'] > 0,
-            'ms'     => (int) ($meta['ms'] ?? ((int) $time * 1000)),
+            // A source without milliseconds for this row (0 or none) is placed at its second, not at 1970 (#176).
+            'ms'     => (int) ($meta['ms'] ?? 0) > 0 ? (int) $meta['ms'] : (int) $time * 1000,
             'workerid' => (string) ($meta['workerid'] ?? ''),
             'taskid'   => (int) ($meta['taskid'] ?? 0),
             'runid'  => (int) ($meta['runid'] ?? 0),
@@ -824,6 +1065,8 @@ class log_view {
             'action'   => (string) ($meta['action'] ?? ''),
             'attemptno' => (int) ($meta['attemptno'] ?? 0),
             'attemptid' => (int) ($meta['attemptid'] ?? 0),
+            // Which execution of the sitting (#176): the header's second number on a request, the try of a history row.
+            'execution' => (int) ($meta['execution'] ?? 0),
             'userid'   => (int) ($meta['userid'] ?? 0),
         ];
     }
@@ -895,6 +1138,7 @@ class log_view {
         $worker = trim((string) ($filter['workerid'] ?? ''));
         $task = (int) ($filter['taskid'] ?? 0);
         $sitting = (int) ($filter['attemptid'] ?? 0);
+        $execution = (int) ($filter['execution'] ?? 0);
 
         return ($search === '' || stripos((string) $line['text'], $search) !== false)
             && ($severity === '' || self::at_least((string) $line['severity'], $severity))
@@ -905,7 +1149,8 @@ class log_view {
             && ($userid <= 0 || (int) $line['userid'] === $userid)
             && ($until <= 0 || (int) $line['time'] <= $until)
             && ($worker === '' || stripos((string) $line['workerid'], $worker) !== false)
-            && ($task <= 0 || (int) $line['taskid'] === $task);
+            && ($task <= 0 || (int) $line['taskid'] === $task)
+            && ($execution <= 0 || (int) $line['execution'] === $execution);
     }
 
     /**

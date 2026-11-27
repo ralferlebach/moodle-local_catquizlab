@@ -782,8 +782,18 @@ if (!empty($options['no-navigation-failures'])) {
     foreach ($byoutcome as $row) {
         $outcomes[(string) $row->outcome] = (int) $row->n;
     }
+    // The reads a worker sent once more because the server had closed the connection before any response (CI
+    // 26.11.2026, c6ec43c2): no failed execution, and still counted and said, not hidden by the resend.
+    $resent = \local_catquizlab\local\worker_launcher::resends($experimentsince);
+    if ($resent['n'] > 0) {
+        cli_writeln('  ' . $resent['n'] . ' read(s) sent once more on a new connection, the server having closed the '
+            . 'one used before any response:');
+        foreach ($resent['lines'] as $line) {
+            cli_writeln('    ' . $line);
+        }
+    }
     smoke_summary(['executions' => ['total' => $total, 'failed' => count($executions), 'navigation' => $navigation,
-        'injected' => $injected,
+        'injected' => $injected, 'resent' => $resent,
         'reasons' => (object) $byreason, 'failures' => $failures, 'outcomes' => (object) $outcomes],
         'sittings' => $sittings, 'loadguard' => $guard]);
     if ($guard['trips'] > 0) {

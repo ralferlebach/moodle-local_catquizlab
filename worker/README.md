@@ -51,6 +51,26 @@ as a temporary manager (credentials in `CATQUIZLAB_WATCH_USER` / `CATQUIZLAB_WAT
 line), opens step 3 for the experiment and writes what the page shows every 5 s, one JSON line each. The smoke test
 checks those readings against its own snapshots and deletes the user afterwards.
 
+## Long sittings, the engine identity, faults (0.7.84, #172–#175)
+
+- **No fixed number of turns.** A sitting ends at the activity's finish page or by the server's word. It stops early
+  only on evidence (`sitting_watch.js`):
+  - another usage, or a slot going backwards: `[identity:…]`;
+  - the same question back three times after an answer, or 10 minutes without progress: `[guard:noprogress]`;
+  - an answer beyond the run's pool, which the claim sends as `budget`: `[guard:budget]`.
+- **The engine identity.** At its first question every execution calls `local_catquizlab_sitting_bind`. That call
+  binds or confirms the activity attempt and gives the count to start from. A server that cannot be asked is asked
+  three times, then the execution ends with `[state:unavailable]`, nothing answered. An attempt already complete
+  before the start is collected, not started again.
+- **The contract.** The worker sends `contract` (1) with every claim and plays nothing for a server of another
+  contract.
+- **Faults for tests** (`CATQUIZLAB_FAULTS`): `notstored@N` — from answer N on, the answer never reaches the server
+  and the browser is sent back to the question. This is a failure a retry repeats (#175).
+- **Tests.** `test/long_run.test.js` runs the real worker and a real browser against a stand-in for Moodle
+  (`testlib/fake_moodle.js`): 999, 1000, 1001 and 2500 answers, a retry from 264, and the faults.
+  - `CATQUIZLAB_LONG_RUN=0` keeps it to 1001 answers.
+  - `CATQUIZLAB_WORKER_SCRIPT` runs it against another worker, for example 0.7.83's, as a negative control.
+
 ## Roadmap
 
 See `../docs/design/backlog.md`, epic E3.

@@ -541,6 +541,42 @@ class attempt_scheduler {
     }
 
     /**
+     * Hold a sitting whose execution broke an invariant: failed now, not retried, kept as it is (#175).
+     *
+     * A worker that found an answer beyond the run's pool, no progress the server confirms, or an engine attempt that
+     * is not the sitting's would find the same when played again; retried until its tries run out, eighteen such
+     * sittings were nineteen executions of a thousand answers each (CLARA run 103). The sitting is failed with its
+     * code instead, its engine attempt and the engine's person parameters are left as they are, and it stays where a
+     * person can put it back (run_lifecycle::requeue_failed(), the breaker's resume) once the cause is dealt with.
+     *
+     * @param int $attemptid The sitting.
+     * @param string $code The reason code.
+     * @return int The resulting status (STATUS_FAILED).
+     */
+    public static function hold(int $attemptid, string $code): int {
+        global $DB;
+
+        $tries = (int) $DB->get_field('local_catquizlab_attempt', 'tries', ['id' => $attemptid]);
+        $DB->update_record('local_catquizlab_attempt', (object) [
+            'id' => $attemptid,
+            'status' => self::STATUS_FAILED,
+            'nextruntime' => 0,
+            'timemodified' => time(),
+        ]);
+        attempt_history::record($attemptid, attempt_history::HELD, [
+            'tryno' => $tries,
+            'reasoncode' => $code,
+            'detail' => get_string('history:held', 'local_catquizlab', reason_catalog::label($code)),
+        ]);
+        $runid = (int) $DB->get_field('local_catquizlab_attempt', 'runid', ['id' => $attemptid]);
+        if ($runid > 0) {
+            circuit_breaker::check($runid);
+        }
+
+        return self::STATUS_FAILED;
+    }
+
+    /**
      * Abort a run: close every sitting that has not reached a terminal state, as cancelled by an operator (#166).
      *
      * @param int $runid The run.

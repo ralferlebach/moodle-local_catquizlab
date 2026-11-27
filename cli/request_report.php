@@ -27,7 +27,13 @@
  * Options: --from=UNIXTIME (required), --until=UNIXTIME (default now), --json,
  *          --max-5xx=N, --max-fatals=N, --max-peak-mb=N,
  *          --raw=FILE (every request of the window as a CSV line: page, status, duration, peak, RSS, queries — for
- *          statistics over the whole sample, #164).
+ *          statistics over the whole sample, #164),
+ *          --peak-seconds=N (10: the width of the windows in which slow requests of several sittings are counted
+ *          together, #177).
+ *
+ * Per page the request time as n, p50, p95, p99 and maximum; the requests above their page's p99 (the outliers,
+ * with sitting and execution); and the windows in which requests of several sittings were slow at the same time —
+ * a synchronous peak, said as such, not explained: what it coincided with is for the samples beside it to say (#177).
  *
  * @package    local_catquizlab
  * @copyright  2026 Ralf Erlebach
@@ -43,7 +49,7 @@ use local_catquizlab\local\request_trace;
 
 [$options] = cli_get_params([
     'from' => 0, 'until' => 0, 'json' => false, 'raw' => '',
-    'max-5xx' => -1, 'max-fatals' => -1, 'max-peak-mb' => -1,
+    'max-5xx' => -1, 'max-fatals' => -1, 'max-peak-mb' => -1, 'peak-seconds' => 10,
 ]);
 $from = (int) $options['from'];
 $until = (int) $options['until'] > 0 ? (int) $options['until'] : time();
@@ -67,6 +73,8 @@ $sittings = [];
 $correlations = [];
 $starts = [];
 $durations = [];
+// Request time per page (#177).
+$pagedurations = [];
 // Every request of the window as one CSV line, for statistics over the whole sample (#164 AK-08): no values of
 // parameters, only the page, the status and the figures.
 $raw = (string) $options['raw'] !== '' ? fopen((string) $options['raw'], 'w') : null;
@@ -83,6 +91,7 @@ foreach (request_trace::each($from, $until) as $line) {
     }
     if (isset($line['durationms'])) {
         $durations[] = (int) $line['durationms'];
+        $pagedurations[(string) strtok((string) ($line['path'] ?? ''), '?')][] = (int) $line['durationms'];
     }
     if ($raw) {
         fputcsv($raw, [(int) ($line['unixms'] ?? 0), (string) strtok((string) ($line['path'] ?? ''), '?'),
@@ -194,6 +203,58 @@ foreach ($starts as $ms) {
 }
 $figures['startgap'] = $gaps === [] ? null : ['min' => round(min($gaps), 2), 'max' => round(max($gaps), 2),
     'mean' => round(array_sum($gaps) / count($gaps), 2)];
+// Per page: n, p50, p95, p99, max of the request time (#177 AK1). Then a second pass over the same window: the
+// requests above their page's p99, and the windows of --peak-seconds in which requests of two or more sittings were
+// above their page's p95 together. Two passes, so that no request has to be held: the first pass keeps only figures.
+$thresholds = [];
+foreach ($pagedurations as $page => $values) {
+    sort($values);
+    $n = count($values);
+    $q = static fn(float $p): int => $values[(int) min($n - 1, floor($p * ($n - 1) + 0.5))];
+    $figures['bypage'][$page]['durationms'] = ['n' => $n, 'p50' => $q(0.5), 'p95' => $q(0.95), 'p99' => $q(0.99),
+        'max' => end($values)];
+    $thresholds[$page] = ['p95' => $q(0.95), 'p99' => $q(0.99)];
+}
+unset($pagedurations);
+$width = max(1, (int) $options['peak-seconds']) * 1000;
+$outliers = [];
+$buckets = [];
+foreach ($thresholds === [] ? [] : request_trace::each($from, $until) as $line) {
+    if (!isset($line['durationms'])) {
+        continue;
+    }
+    $page = (string) strtok((string) ($line['path'] ?? ''), '?');
+    $ms = (int) $line['durationms'];
+    $limits = $thresholds[$page] ?? null;
+    if ($limits === null || $ms <= $limits['p95']) {
+        continue;
+    }
+    $at = (int) ($line['unixms'] ?? 0);
+    if ($ms > $limits['p99']) {
+        $outliers[] = ['time' => (string) ($line['time'] ?? ''), 'page' => $page, 'durationms' => $ms,
+            'p99' => $limits['p99'], 'attemptid' => (int) ($line['attemptid'] ?? 0),
+            'execution' => (int) ($line['execution'] ?? 0), 'pid' => (int) ($line['pid'] ?? 0)];
+    }
+    $key = intdiv($at, $width);
+    $buckets[$key]['slow'] = ($buckets[$key]['slow'] ?? 0) + 1;
+    $buckets[$key]['sittings'][(int) ($line['attemptid'] ?? 0)] = true;
+    $buckets[$key]['pages'][$page] = ($buckets[$key]['pages'][$page] ?? 0) + 1;
+    $buckets[$key]['maxms'] = max((int) ($buckets[$key]['maxms'] ?? 0), $ms);
+}
+usort($outliers, static fn(array $a, array $b): int => $b['durationms'] <=> $a['durationms']);
+$figures['outliers'] = ['n' => count($outliers), 'top' => array_slice($outliers, 0, 20)];
+$peaks2 = [];
+foreach ($buckets as $key => $bucket) {
+    $sittingsinpeak = count(array_filter(array_keys($bucket['sittings'])));
+    if ($sittingsinpeak >= 2 && $bucket['slow'] >= 3) {
+        arsort($bucket['pages']);
+        $peaks2[] = ['from' => gmdate('Y-m-d\TH:i:s\Z', intdiv($key * $width, 1000)), 'seconds' => $width / 1000,
+            'slow' => $bucket['slow'], 'sittings' => $sittingsinpeak, 'maxms' => $bucket['maxms'], 'pages' => $bucket['pages']];
+    }
+}
+usort($peaks2, static fn(array $a, array $b): int => $b['slow'] <=> $a['slow'] ?: strcmp($a['from'], $b['from']));
+$figures['synchronouspeaks'] = ['n' => count($peaks2), 'top' => array_slice($peaks2, 0, 10)];
+
 // Until 0.7.77 'memorylimit' was this script's own (the command line's) — read as the web server's, it was wrong
 // (local run 22.11.2026: 1024M beside the web server's 512M). Now the web requests' own, the most frequent first,
 // and the command line's apart.
@@ -275,7 +336,43 @@ if (!empty($options['json'])) {
         cli_writeln(sprintf('  status %d: %d', $status, $n));
     }
     foreach ($figures['bypage'] as $page => $p) {
-        cli_writeln(sprintf('  %-48s n=%-6d peak %6.1f MB  5xx %d', substr($page, 0, 48), $p['n'], $p['peakmb'], $p['http5xx']));
+        $d = $p['durationms'] ?? null;
+        cli_writeln(sprintf(
+            '  %-48s n=%-6d peak %6.1f MB  5xx %d%s',
+            substr($page, 0, 48),
+            $p['n'],
+            $p['peakmb'],
+            $p['http5xx'],
+            $d ? sprintf('  ms p50 %d p95 %d p99 %d max %d', $d['p50'], $d['p95'], $d['p99'], $d['max']) : ''
+        ));
+    }
+    cli_writeln(sprintf('Outliers (above their page\'s p99): %d', $figures['outliers']['n']));
+    foreach (array_slice($figures['outliers']['top'], 0, 10) as $o) {
+        cli_writeln(sprintf(
+            '  %s  %-40s %6d ms (p99 %d)  sitting %d.%d  pid %d',
+            $o['time'],
+            substr($o['page'], 0, 40),
+            $o['durationms'],
+            $o['p99'],
+            $o['attemptid'],
+            $o['execution'],
+            $o['pid']
+        ));
+    }
+    cli_writeln(sprintf(
+        'Synchronous peaks (%d s windows, >= 3 requests of >= 2 sittings above their page\'s p95): %d',
+        (int) $options['peak-seconds'],
+        $figures['synchronouspeaks']['n']
+    ));
+    foreach ($figures['synchronouspeaks']['top'] as $peak) {
+        cli_writeln(sprintf(
+            '  %s  %d slow, %d sittings, max %d ms  %s',
+            $peak['from'],
+            $peak['slow'],
+            $peak['sittings'],
+            $peak['maxms'],
+            json_encode($peak['pages'], JSON_UNESCAPED_SLASHES)
+        ));
     }
     if ($figures['problems'] !== []) {
         cli_writeln('Requests with 4xx/5xx, an exception, a fatal or a broken connection:');

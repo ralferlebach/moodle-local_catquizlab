@@ -322,19 +322,27 @@ test('submitTiming: an uncertain submission to the millisecond (#110 AK-CLARA-01
     assert.deepStrictEqual(submitTiming(null, now).postedat, '');
 });
 
-test('answeredBaseline: a retry counts on from the engine\'s answers (CI e605b2e, classic at 50 workers)', () => {
-    const {answeredBaseline} = require('../run_attempt');
-    // The retry of sitting 50 continued an engine attempt with 65 answers in it and counted from 0: every later
-    // reconciliation then read "66 stored, the worker had 0" as a mismatch.
-    assert.strictEqual(answeredBaseline('question', {found: true, state: 'inprogress', questionsattempted: 65}), 65);
-    // A fresh attempt: nothing in it.
-    assert.strictEqual(answeredBaseline('question', {found: true, state: 'inprogress', questionsattempted: 0}), 0);
-    // Not asked, not found, already complete, or not on a question: as before, 0.
-    assert.strictEqual(answeredBaseline('question', {found: false, reason: 'unavailable'}), 0);
-    assert.strictEqual(answeredBaseline('question', null), 0);
-    assert.strictEqual(answeredBaseline('question', {found: true, state: 'complete', questionsattempted: 20}), 0);
-    assert.strictEqual(answeredBaseline('finish', {found: true, state: 'inprogress', questionsattempted: 5}), 0);
-    assert.strictEqual(answeredBaseline('question', {found: true, state: 'inprogress', questionsattempted: 'x'}), 0);
+test('baselineFrom: a retry counts on from the engine\'s answers, and nothing stands in for a count (#173)', () => {
+    const {baselineFrom} = require('../sitting_watch');
+    // CI e605b2e, classic at 50 workers: the retry's engine attempt holds 65 answers.
+    assert.deepStrictEqual(baselineFrom({found: true, state: 'inprogress', questionsattempted: 65, slots: 66}),
+        {ok: true, count: 65, state: 'inprogress', reason: ''});
+    assert.deepStrictEqual(baselineFrom({found: true, state: 'inprogress', questionsattempted: 0, slots: 1}),
+        {ok: true, count: 0, state: 'inprogress', reason: ''});
+    // Until 0.7.83 each of these was a 0, and the execution counted from there.
+    assert.strictEqual(baselineFrom({found: false, reason: 'unavailable'}).ok, false);
+    assert.strictEqual(baselineFrom(null).ok, false);
+    assert.strictEqual(baselineFrom({found: true, state: 'inprogress', questionsattempted: 'x', slots: 1}).reason,
+        'invalid-count');
+    assert.strictEqual(baselineFrom({found: true, state: 'inprogress', questionsattempted: -1, slots: 1}).reason,
+        'invalid-count');
+    assert.strictEqual(baselineFrom({found: true, state: 'inprogress', questionsattempted: 2.5, slots: 3}).reason,
+        'invalid-count');
+    assert.strictEqual(baselineFrom({found: true, state: 'inprogress', questionsattempted: 5, slots: 4}).reason,
+        'invalid-count');
+    assert.strictEqual(baselineFrom({found: true, state: 'paused', questionsattempted: 5, slots: 6}).reason,
+        'unknown-state');
+    assert.strictEqual(baselineFrom({found: false, reason: 'ambiguous-engine-attempt'}).reason, 'ambiguous-engine-attempt');
 });
 
 test('parseFaults: endexecution is a fault of its own', () => {
