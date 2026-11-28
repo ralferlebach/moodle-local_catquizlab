@@ -130,7 +130,10 @@ final class artefact_store_test extends \advanced_testcase {
             0,
             0,
             'Execution context was destroyed, most likely because of a navigation.',
-            ''
+            '',
+            'worker-z',
+            '',
+            (int) $claim['executionid']
         );
 
         return [(int) $run->id, $attemptid, $dir];

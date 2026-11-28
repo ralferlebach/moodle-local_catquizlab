@@ -261,6 +261,13 @@ class reason_catalog {
             }
         }
 
+        // The host's question page bound to its own attempt (mod_adaptivequiz #27, f4ed4bef/772fe171): "attemptlost" —
+        // the attempt was reset or deleted meanwhile. Not a page to try again on: the sitting's engine attempt is gone,
+        // held like any identity in doubt (#173), never restarted without a decision.
+        if ((string) ($diagnosis['errorcode'] ?? '') === 'attemptlost' || preg_match('/errorcode="?attemptlost\b/', $message)) {
+            return 'identity_mismatch';
+        }
+
         // A submission the worker classified says its cause itself (#134): a 404
         // answered with Moodle's error page is a 404, not an engine exception.
         if (strpos($message, '[lease:lost]') !== false) {
@@ -361,14 +368,16 @@ class reason_catalog {
             }
         }
 
-        if ($code === 'reachedmaximumquestions') {
-            return 'max_items_reached';
-        }
         // The engine spells it "Time exeeded" (attemptstatus_8); both codes count.
         if ($code === 'exceededmaxattempttime' || $code === 'attemptclosedbytimelimit') {
             return 'timeout';
         }
         $strategy = (string) ($facts['strategy'] ?? '');
+        // A fixed form is judged by its form before any maximum (re-audit 27.11.2026): "maximum reached" after 1000 of
+        // 2500 items of a classical test is a form broken off, not the design's end.
+        if ($code === 'reachedmaximumquestions' && !($strategy !== '' && strategy_catalog::fixed_form($strategy))) {
+            return 'max_items_reached';
+        }
         if ($strategy !== '' && strategy_catalog::fixed_form($strategy)) {
             // A fixed form is complete when it was played in full (#112): every
             // item of the scale. Fewer is a form broken off, whatever ended it.

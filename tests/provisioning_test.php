@@ -483,10 +483,12 @@ final class provisioning_test extends \advanced_testcase {
         $run = $generator->create_run();
         $attemptid = (int) $DB->insert_record('local_catquizlab_attempt', (object) [
             'runid' => $run->id, 'personid' => 0, 'status' => 10,
-            'tries' => 1, 'timecreated' => time(), 'timemodified' => time(),
+            'tries' => 1, 'executionid' => 1, 'leaseowner' => 'w', 'leaseexpires' => time() + 300, 'timecreated' => time(),
+            'timemodified' => time(),
         ]);
 
-        \local_catquizlab\external\job_complete::execute($attemptid, 'finished', 1200, 0);
+        // From the lease holder (#173): a report of anybody else is not applied at all.
+        \local_catquizlab\external\job_complete::execute($attemptid, 'finished', 1200, 0, '', '', 'w', '', 1);
 
         // The mismatch is worth a developer notice: a worker reporting success
         // with nothing behind it is a bug in the worker, not routine.

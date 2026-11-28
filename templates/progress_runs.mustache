@@ -31,9 +31,11 @@
         "hasruns": true,
         "manyruns": false,
         "runs": [{"runid": 86, "cellkey": "fastest", "strategylabel": "Fastest", "statuslabel": "Running", "url": "#",
-            "percent": 99,
+            "percent": 99, "barpercent": 99, "barkind": "estimate",
+            "bartext": "Questions: 24910 of about 24985 (estimated from the sittings collected so far)",
+            "sittingsshort": "997 / 1000 sittings",
             "done": 997, "total": 1000, "held": false, "sittingstext": "997 of 1000 sittings",
-            "questions": {"text": "24910 of about 24985", "discardedtext": ""},
+            "questions": {"text": "24910 of about 24985", "aparttext": ""},
             "time": {"started": "14/11/26, 10:00", "elapsed": "1 hour 25 mins", "own": "≈ 75 questions · 3 sittings",
                 "owntime": "No worker on it right now", "remaining": "≈ 2 mins", "finish": "14/11/26, 11:27",
                 "ahead": "", "reason": ""} }]
@@ -70,16 +72,18 @@
                             <div class="progress-bar{{#held}} bg-danger{{/held}}"
                                  role="progressbar"
                                  data-region="catquizlab-run-{{runid}}-bar"
-                                 style="width: {{percent}}%;"
-                                 aria-valuenow="{{percent}}" aria-valuemin="0" aria-valuemax="100"
-                                 aria-valuetext="{{sittingstext}}"
-                                 aria-label="{{#str}}progress:runbar, local_catquizlab, {{runid}}{{/str}}"></div>
+                                 data-kind="{{barkind}}"
+                                 style="width: {{barpercent}}%;"
+                                 aria-valuenow="{{barpercent}}" aria-valuemin="0" aria-valuemax="100"
+                                 aria-valuetext="{{bartext}}"
+                                 aria-label="{{#str}}progress:runbarlabel, local_catquizlab, {{runid}}{{/str}}"></div>
                         </div>
+                        <span class="small text-muted" data-region="catquizlab-run-{{runid}}-bartext">{{bartext}}</span>
                     </td>
                     <td class="small text-right" style="width: 7rem;">
-                        <span data-region="catquizlab-run-{{runid}}-progress">{{done}} / {{total}}</span>
+                        <span data-region="catquizlab-run-{{runid}}-progress">{{sittingsshort}}</span>
                         <br><span class="text-muted" data-region="catquizlab-run-{{runid}}-questions" data-done="{{questions.done}}">{{questions.text}}</span>
-                        <br><span class="text-muted" data-region="catquizlab-run-{{runid}}-discarded">{{questions.discardedtext}}</span>
+                        <br><span class="text-muted" data-region="catquizlab-run-{{runid}}-apart">{{questions.aparttext}}</span>
                     </td>
                     <td class="small" data-region="catquizlab-run-{{runid}}-started">{{time.started}}</td>
                     <td class="small" data-region="catquizlab-run-{{runid}}-elapsed">{{time.elapsed}}</td>

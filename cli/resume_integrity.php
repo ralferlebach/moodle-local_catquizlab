@@ -15,12 +15,13 @@
 // along with Moodle.  If not, see <https://www.gnu.org/licenses/>.
 
 /**
- * Which sittings of a run went on after a failure that deleted the engine's intermediate estimates (#174 AK05).
+ * What a past run's sittings went through, from what is on record — fail-closed (#174 AK05, AK07–AK09).
  *
- * Reads only, unless --mark is given; then each sitting found at risk gets one history row ("audited", reason
- * resume_after_param_deletion) — its result, trace and status stay as they are. The figures cannot say whether a
- * result changed: the deleted rows are gone. They say which sittings were exposed, so that a decision about them can
- * be made and documented.
+ * Every sitting of the run, every engine attempt of its person on the activity, every resume in its history. Findings
+ * per sitting (no-engine-attempt, ambiguous, broken-binding), per engine attempt (timeout, incomplete, regular, unknown)
+ * and per resume (compromised-before-fix, after-fix, new-attempt, resume-unknown), counted with their denominators.
+ * What cannot be established is said as such — no "none", no all-clear. Reads only, unless --mark is given; then each
+ * finding gets one history row per sitting ("audited") — results, traces, statuses and bindings stay as they are.
  *
  *     php local/catquizlab/cli/resume_integrity.php --runid=103 [--json] [--mark]
  *
@@ -38,10 +39,10 @@ use local_catquizlab\local\resume_integrity;
 
 [$options] = cli_get_params(['runid' => 0, 'json' => false, 'mark' => false, 'help' => false], ['h' => 'help']);
 if ($options['help'] || (int) $options['runid'] <= 0) {
-    echo "Sittings of a run that went on after a failure that deleted the engine's intermediate estimates (#174).\n"
+    echo "What a past run's sittings went through, fail-closed (#174). Reads only without --mark.\n"
         . "  --runid=N   The run.\n"
         . "  --json      As JSON.\n"
-        . "  --mark      Record the finding in each at-risk sitting's history (once; nothing else changes).\n";
+        . "  --mark      Record each finding in the sitting's history (once; nothing else changes).\n";
     exit(0);
 }
 
@@ -53,31 +54,39 @@ if ($options['json']) {
     exit(0);
 }
 
-cli_writeln('Run ' . $audit['run'] . ' (' . ($audit['strategy'] ?: 'strategy unknown') . '); fix in place since: '
-    . ($audit['fixedsince'] ? date('c', $audit['fixedsince']) : 'not yet'));
-foreach ($audit['counts'] as $risk => $n) {
-    cli_writeln(sprintf('  %-12s %d', $risk, $n));
+cli_writeln('Run ' . $audit['run'] . ' (' . ($audit['strategy'] ?: 'strategy unknown')
+    . ($audit['form'] !== null ? ', form of ' . $audit['form'] : '') . '), audit rules ' . $audit['rules']
+    . '; fix installed since: ' . ($audit['fixedsince'] ? gmdate('c', $audit['fixedsince']) : 'not yet')
+    . ' (a risk boundary, not proof of what a worker ran)');
+$d = $audit['denominators'];
+cli_writeln("Sittings {$d['sittings']}, engine attempts {$d['engineattempts']}, resumes {$d['resumes']}.");
+$of = [resume_integrity::NO_ENGINE => 'sittings', resume_integrity::AMBIGUOUS => 'sittings',
+    resume_integrity::BROKEN_BINDING => 'sittings', resume_integrity::TIMEOUT => 'engine attempts',
+    resume_integrity::INCOMPLETE => 'engine attempts', resume_integrity::REGULAR => 'engine attempts',
+    resume_integrity::UNKNOWN => 'engine attempts', resume_integrity::AT_RISK => 'resumes',
+    resume_integrity::AFTER_FIX => 'resumes', resume_integrity::NEW_ATTEMPT => 'resumes',
+    resume_integrity::RESUME_UNKNOWN => 'resumes'];
+foreach ($audit['counts'] as $finding => $n) {
+    cli_writeln(sprintf('  %-24s %6d  of %s', $finding, $n, $of[$finding] ?? '?'));
 }
 foreach ($audit['sittings'] as $s) {
-    if ($s['risk'] === resume_integrity::NONE) {
-        continue;
-    }
-    $resumes = array_map(static fn(array $r): string => sprintf(
-        'try %d after %s (%s, %s answered)',
-        $r['tryno'],
-        date('c', $r['failedat']),
-        $r['failurecode'] ?: '?',
-        $r['answeredbefore'] ?? '?'
-    ), $s['resumes']);
+    $attempts = array_map(static fn(array $a): string => sprintf(
+        '%d/%d %s %d answered%s%s [%s]',
+        $a['engineattemptid'],
+        $a['qubaid'],
+        $a['state'],
+        $a['answered'],
+        $a['bound'] ? ' bound' : '',
+        $a['retired'] ? ' retired' : '',
+        $a['finding']
+    ), $s['attempts']);
     cli_writeln(sprintf(
-        'sitting %d  %-10s engine %d usage %d (%d answered, %s)  %s',
+        'sitting %d  %-10s tries %d  findings: %s  attempts: %s',
         $s['sitting'],
-        $s['risk'],
-        $s['engineattemptid'],
-        $s['qubaid'],
-        $s['questionsattempted'],
         $s['status'],
-        implode('; ', $resumes)
+        $s['tries'],
+        $s['findings'] === [] ? '-' : implode(', ', $s['findings']),
+        $attempts === [] ? '-' : implode('; ', $attempts)
     ));
 }
 if ($options['mark']) {

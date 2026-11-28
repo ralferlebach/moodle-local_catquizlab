@@ -16,6 +16,11 @@
 
 namespace local_catquizlab;
 
+defined('MOODLE_INTERNAL') || die();
+
+global $CFG;
+require_once($CFG->dirroot . '/local/catquizlab/tests/fixtures/engine_world.php');
+
 use local_catquizlab\external\job_claim;
 use local_catquizlab\external\job_complete;
 use local_catquizlab\local\attempt_history;
@@ -36,6 +41,8 @@ use local_catquizlab\local\run_lifecycle;
  * @covers     \local_catquizlab\local\run_lifecycle
  */
 final class attempt_recovery_test extends \advanced_testcase {
+    use \local_catquizlab\tests\engine_world;
+
     /** @var string A failure as the worker reports it, taken from a live installation. */
     const FAILURE = 'Attempt did not reach the finish page after 1 answer(s). '
         . 'url=https://example.org/mod/adaptivequiz/attempt.php?cmid=12&sesskey=abc123 '
@@ -55,6 +62,8 @@ final class attempt_recovery_test extends \advanced_testcase {
         $generator = $this->getDataGenerator()->get_plugin_generator('local_catquizlab');
         $run = $generator->create_run();
         $DB->set_field('local_catquizlab_run', 'status', registry::STATUS_READY, ['id' => $run->id]);
+        // What a report is checked against (#173): the run's activity; accounts and engine attempts come per sitting.
+        $this->world_activity((int) $run->id);
 
         $ids = [];
         for ($i = 0; $i < 3; $i++) {
@@ -81,8 +90,8 @@ final class attempt_recovery_test extends \advanced_testcase {
 
         [$runid, $ids] = $this->run_of_three();
 
-        // The engine attempts reported here do not exist, so a finished sitting waits for its trace (#138);
-        // the trace then arrives through the retry the pipeline makes, with the engine's data stood in for.
+        // The engine attempts reported here have no engine data behind them, so a finished sitting waits for its trace
+        // (#138); the trace then arrives through the retry the pipeline makes, with the engine's data stood in for.
         $arrive = static function () use ($DB): void {
             attempt_scheduler::retry_pending_traces(
                 time() + attempt_scheduler::TRACE_RETRY_DELAY + 1,
@@ -99,13 +108,24 @@ final class attempt_recovery_test extends \advanced_testcase {
         // Two sittings play through; the third fails on its last try.
         foreach ([0, 1] as $index) {
             $claim = job_claim::execute('worker-a');
-            job_complete::execute((int) $claim['attemptid'], 'finished', 5000, 900 + $index);
+            [$engine] = $this->world_engine((int) $claim['attemptid']);
+            job_complete::execute(
+                (int) $claim['attemptid'],
+                'finished',
+                5000,
+                $engine,
+                '',
+                '',
+                'worker-a',
+                '',
+                (int) $claim['executionid']
+            );
         }
         $arrive();
         $claim = job_claim::execute('worker-b');
         $failing = (int) $claim['attemptid'];
         $DB->set_field('local_catquizlab_attempt', 'tries', attempt_scheduler::MAX_TRIES, ['id' => $failing]);
-        job_complete::execute($failing, 'failed', 0, 0, self::FAILURE);
+        job_complete::execute($failing, 'failed', 0, 0, self::FAILURE, '', 'worker-b', '', (int) $claim['executionid']);
 
         $status = (int) $DB->get_field('local_catquizlab_attempt', 'status', ['id' => $failing]);
         $this->assertSame(attempt_scheduler::STATUS_FAILED, $status);
@@ -146,7 +166,8 @@ final class attempt_recovery_test extends \advanced_testcase {
         // Success on the retry.
         $claim = job_claim::execute('worker-c');
         $this->assertSame($failing, (int) $claim['attemptid']);
-        job_complete::execute($failing, 'finished', 5000, 999);
+        [$engine] = $this->world_engine($failing);
+        job_complete::execute($failing, 'finished', 5000, $engine, '', '', 'worker-c', '', (int) $claim['executionid']);
         $arrive();
 
         $this->assertTrue(run_lifecycle::is_complete($runid), 'every planned sitting collected, yet not complete');
@@ -248,7 +269,7 @@ final class attempt_recovery_test extends \advanced_testcase {
             'transport' => ['wsfunction' => 'local_catquizlab_oracle_answer', 'status' => 0, 'code' => 'ECONNRESET',
                 'elapsedms' => 1234],
             'artefacts' => ['path' => 'experiment-1/run-2/attempt-3/execution-1', 'files' => ['screenshot-last.jpg']],
-        ]));
+        ]), 'worker-x', '', (int) $claim['executionid']);
 
         $failure = null;
         foreach (attempt_history::of_attempt($attemptid) as $row) {

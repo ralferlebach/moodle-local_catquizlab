@@ -24,6 +24,11 @@
 
 namespace local_catquizlab;
 
+defined('MOODLE_INTERNAL') || die();
+
+global $CFG;
+require_once($CFG->dirroot . '/local/catquizlab/tests/fixtures/engine_world.php');
+
 use local_catquizlab\external\oracle_answer;
 use local_catquizlab\external\job_claim;
 use local_catquizlab\external\job_complete;
@@ -41,6 +46,8 @@ use local_catquizlab\external\hub_fetch_results;
  * @covers \local_catquizlab\external\hub_fetch_results
  */
 final class external_test extends \advanced_testcase {
+    use \local_catquizlab\tests\engine_world;
+
     /**
      * The oracle returns a well-formed not-ready response when the engine or the
      * bound test is unavailable (as in CI); the assertion holds regardless of the
@@ -95,6 +102,8 @@ final class external_test extends \advanced_testcase {
         // with claimable attempts is the defect this guards against.
         $DB->set_field('local_catquizlab_run', 'status', \local_catquizlab\local\registry::STATUS_READY, []);
 
+        // What a report is checked against (#173): the run's activity.
+        $this->world_activity((int) $run->id);
         $claim = job_claim::execute('worker-a');
         $this->assertTrue($claim['hasjob']);
         $this->assertSame((int) $first, $claim['attemptid']);
@@ -104,15 +113,21 @@ final class external_test extends \advanced_testcase {
         );
 
         // Second claim gets the next; a third finds nothing.
-        $this->assertSame((int) $second, job_claim::execute('worker-a')['attemptid']);
+        $secondclaim = job_claim::execute('worker-a');
+        $this->assertSame((int) $second, $secondclaim['attemptid']);
+        // Each execution has an identity of its own (#173).
+        $this->assertGreaterThan(0, (int) $claim['executionid']);
+        $this->assertNotSame((int) $claim['executionid'], (int) $secondclaim['executionid']);
         $this->assertFalse(job_claim::execute('worker-a')['hasjob']);
 
         // Completing records the outcome. The engine attempt id is part of the
         // report: a finished attempt has an engine attempt behind it, and
-        // without one there is nothing to collect a trace from. Engine attempt
-        // 4711 does not exist here, so there is no trace: the sitting waits
-        // for one instead of counting as collected (#138).
-        $complete = job_complete::execute($first, 'finished', 1234, 4711);
+        // without one there is nothing to collect a trace from. The engine
+        // attempt here has no engine data behind it, so there is no trace: the
+        // sitting waits for one instead of counting as collected (#138). The
+        // report is the lease holder's, execution 1 (#173).
+        [$engine] = $this->world_engine((int) $first);
+        $complete = job_complete::execute($first, 'finished', 1234, $engine, '', '', 'worker-a', '', (int) $claim['executionid']);
         $this->assertTrue($complete['acknowledged']);
         $this->assertSame(
             \local_catquizlab\local\attempt_scheduler::STATUS_TRACEPENDING,
@@ -122,7 +137,7 @@ final class external_test extends \advanced_testcase {
 
         // A failure requeues the attempt while retries remain (it was claimed once);
         // an unknown id is rejected.
-        job_complete::execute($second, 'failed', 0, 0);
+        job_complete::execute($second, 'failed', 0, 0, '', '', 'worker-a', '', (int) $secondclaim['executionid']);
         $this->assertSame(
             \local_catquizlab\local\attempt_scheduler::STATUS_QUEUED,
             (int) $DB->get_field('local_catquizlab_attempt', 'status', ['id' => $second])
@@ -214,7 +229,8 @@ final class external_test extends \advanced_testcase {
                 // Claimed for the last time: the claim counts the try, so this
                 // is the third, and its failure is terminal.
                 'tries' => \local_catquizlab\local\attempt_scheduler::MAX_TRIES,
-                'leaseowner' => 'w', 'leaseexpires' => time() + 600,
+                'executionid' => \local_catquizlab\local\attempt_scheduler::MAX_TRIES, 'leaseowner' => 'w',
+                'leaseexpires' => time() + 600,
                 'timecreated' => time(), 'timemodified' => time(),
             ]);
         }
@@ -230,7 +246,17 @@ final class external_test extends \advanced_testcase {
         // which is the path that fires in practice. The breaker used to be
         // wired only to the scheduler's retry path, and never tripped here.
         foreach ($failing as $index => $attemptid) {
-            job_complete::execute($attemptid, 'failed', 0, 0, 'Division by zero at attempt ' . $index);
+            job_complete::execute(
+                $attemptid,
+                'failed',
+                0,
+                0,
+                'Division by zero at attempt ' . $index,
+                '',
+                'w',
+                '',
+                \local_catquizlab\local\attempt_scheduler::MAX_TRIES
+            );
 
             if ($index < 9) {
                 $this->assertFalse(
@@ -303,7 +329,8 @@ final class external_test extends \advanced_testcase {
         $run = $generator->create_run();
         $attemptid = (int) $DB->insert_record('local_catquizlab_attempt', (object) [
             'runid' => $run->id, 'personid' => 0, 'status' => 10,
-            'tries' => 1, 'timecreated' => time(), 'timemodified' => time(),
+            'tries' => 1, 'executionid' => 1, 'leaseowner' => 'w', 'leaseexpires' => time() + 300, 'timecreated' => time(),
+            'timemodified' => time(),
         ]);
         // About the size the worker sends at most, as it sends it: cut by structure, the full one referenced.
         $events = [];
@@ -323,7 +350,10 @@ final class external_test extends \advanced_testcase {
             4100,
             0,
             'Attempt did not reach the finish page: HTTP 500',
-            $diagnostics
+            $diagnostics,
+            'w',
+            '',
+            1
         );
 
         $row = $DB->get_record_select('local_catquizlab_attemptlog', 'attemptid = ? AND outcome = ?', [$attemptid, 'failed']);

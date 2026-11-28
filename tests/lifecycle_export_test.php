@@ -16,7 +16,20 @@
 
 namespace local_catquizlab;
 
+defined('MOODLE_INTERNAL') || die();
+
+global $CFG;
+require_once($CFG->dirroot . '/local/catquizlab/tests/fixtures/engine_world.php');
+
+use local_catquizlab\external\job_claim;
+use local_catquizlab\external\job_complete;
+use local_catquizlab\external\sitting_bind;
 use local_catquizlab\local\attempt_history;
+use local_catquizlab\local\attempt_scheduler;
+use local_catquizlab\local\completion_contract;
+use local_catquizlab\local\registry;
+use local_catquizlab\local\run_lifecycle;
+use local_catquizlab\local\sitting_recovery;
 use local_catquizlab\local\log_view;
 use local_catquizlab\local\request_trace;
 
@@ -32,8 +45,11 @@ use local_catquizlab\local\request_trace;
  * @license    https://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
  * @covers     \local_catquizlab\local\log_view
  * @covers     \local_catquizlab\local\request_trace
+ * @covers     \local_catquizlab\local\attempt_collector
  */
 final class lifecycle_export_test extends \advanced_testcase {
+    use \local_catquizlab\tests\engine_world;
+
     /**
      * Request lines written straight to the day file, as the trace leaves them.
      *
@@ -86,7 +102,120 @@ final class lifecycle_export_test extends \advanced_testcase {
         restore_exception_handler();
         $old = (new \ReflectionProperty(request_trace::class, 'request'))->getValue();
         $this->assertSame([46794, 0], [$old['attemptid'], $old['execution']]);
+        // From 0.7.85 on the execution's identity is the third part (#173, #176); without it: 0, not made up.
+        $this->assertSame(0, $old['executionid']);
         request_trace::reset();
+        $this->assertTrue(request_trace::begin(['HTTP_X_CATQUIZLAB_ATTEMPT' => '46794.2.771204'] + $server));
+        restore_exception_handler();
+        $new = (new \ReflectionProperty(request_trace::class, 'request'))->getValue();
+        $this->assertSame([46794, 2, 771204], [$new['attemptid'], $new['execution'], $new['executionid']]);
+        $this->assertSame(771204, request_trace::record($new, 200, 1795749022.6, 0, 0, null, null)['executionid']);
+        request_trace::reset();
+    }
+
+    /**
+     * One sitting's whole life in the lifecycle export (#176 AK05, AK06, DoD04): a failure, a reset of its try counter,
+     * the host's time limit, a decision for a new generation, a regular end — each execution and generation told apart
+     * by its identity, the host's end with its own time beside the lab's.
+     *
+     * @return void
+     */
+    public function test_the_lifecycle_of_a_sitting_through_a_reset_a_timeout_and_a_new_generation(): void {
+        global $DB;
+        $this->resetAfterTest();
+        $this->setAdminUser();
+        /** @var \local_catquizlab_generator $generator */
+        $generator = $this->getDataGenerator()->get_plugin_generator('local_catquizlab');
+        $run = $generator->create_run(['status' => registry::STATUS_READY,
+            'manifestjson' => json_encode(['config' => ['definition' => ['strategy' => 'fastest']]])]);
+        $this->world_activity((int) $run->id);
+        $person = $generator->create_person(['runid' => $run->id]);
+        $sitting = (int) $DB->insert_record('local_catquizlab_attempt', (object) ['runid' => $run->id,
+            'personid' => $person->id, 'status' => attempt_scheduler::STATUS_QUEUED, 'tries' => 0, 'nextruntime' => 0,
+            'timecreated' => time() - 100, 'timemodified' => time() - 100]);
+        $columns = $DB->get_columns('adaptivequiz_attempt');
+
+        // Execution 1: binds generation A, fails on a broken invariant, held; a person puts it back (try counter reset).
+        $first = job_claim::execute('w1');
+        [$a, $usagea] = $this->world_engine($sitting, 3, 'inprogress', 4);
+        $this->assertTrue(sitting_bind::execute($sitting, $usagea, 'w1', (int) $first['executionid'])['found']);
+        job_complete::execute(
+            $sitting,
+            'failed',
+            10,
+            0,
+            '[guard:budget] x',
+            '',
+            'w1',
+            'budget_violation',
+            (int) $first['executionid']
+        );
+        $this->assertSame(1, run_lifecycle::requeue_failed((int) $run->id));
+
+        // Execution 2, try 1 again: the host closes A on its time limit; the report collects it as a technical end.
+        $second = job_claim::execute('w1');
+        $this->assertSame(1, (int) $second['execution']);
+        $this->assertTrue(sitting_bind::execute($sitting, $usagea, 'w1', (int) $second['executionid'])['found']);
+        $DB->update_record('adaptivequiz_attempt', (object) (['id' => $a, 'attemptstate' => 'complete',
+            'attemptstopcriteria' => 'attemptclosedbytimelimit'] + (isset($columns['stopcode']) ? ['stopcode' => 'timelimit'] : [])
+            + (isset($columns['timefinished']) ? ['timefinished' => time() - 30] : [])));
+        job_complete::execute($sitting, 'finished', 10, $a, '', '', 'w1', '', (int) $second['executionid']);
+        $verdict = json_decode((string) $DB->get_field('local_catquizlab_attempt', 'completionjson', ['id' => $sitting]), true);
+        $this->assertSame(
+            [completion_contract::TECHNICAL, completion_contract::HOST_TIMEOUT],
+            [$verdict['class'], $verdict['technical']]
+        );
+
+        // A person decides for a new generation; the sitting is put back; execution 3 binds generation C and ends.
+        $this->assertTrue(sitting_recovery::decide($sitting, sitting_recovery::NEW_GENERATION, 'play it again', 0, 2)['ok']);
+        $DB->update_record('local_catquizlab_attempt', (object) ['id' => $sitting, 'status' => attempt_scheduler::STATUS_QUEUED,
+            'nextruntime' => 0]);
+        $third = job_claim::execute('w2');
+        [$c, $usagec] = $this->world_engine($sitting, 0, 'inprogress', 1);
+        $bound = sitting_bind::execute($sitting, $usagec, 'w2', (int) $third['executionid']);
+        $this->assertTrue($bound['found'], $bound['reason']);
+        $DB->update_record('adaptivequiz_attempt', (object) ['id' => $c, 'attemptstate' => 'complete',
+            'questionsattempted' => 12]);
+        job_complete::execute($sitting, 'finished', 10, $c, '', '', 'w2', '', (int) $third['executionid']);
+
+        // The export, as cli/export_lifecycle.php writes it.
+        $lines = [];
+        log_view::stream_lifecycle(['runid' => (int) $run->id, 'channel' => 'attempt'], static function (array $line) use (
+            &$lines
+        ): void {
+            $lines[] = $line;
+        });
+        $executions = array_map('intval', [$first['executionid'], $second['executionid'], $third['executionid']]);
+        $this->assertCount(3, array_unique($executions), 'three executions, three identities');
+        $started = array_values(array_filter($lines, static fn($l) => $l['action'] === 'attempt_' . attempt_history::STARTED));
+        $this->assertSame($executions, array_map(static fn($l) => $l['executionid'], $started));
+        $this->assertSame([1, 1, 2], array_map(static fn($l) => $l['execution'], $started), 'the try numbers repeat');
+        // Each generation's baseline from the server, by execution.
+        $bounds = array_values(array_filter($lines, static fn($l) => $l['action'] === 'attempt_' . attempt_history::BOUND));
+        $this->assertSame(
+            [[$executions[0], $a, $usagea], [$executions[1], $a, $usagea], [$executions[2], $c, $usagec]],
+            array_map(static fn($l) => [$l['executionid'], $l['server']['engineattemptid'], $l['server']['qubaid']], $bounds)
+        );
+        // The host's end, once, its time and the lab's apart; the decision, no execution of its own.
+        $hostend = array_values(array_filter($lines, static fn($l) => $l['action'] === 'attempt_'
+            . attempt_history::HOST_CLOSED));
+        $this->assertCount(1, $hostend);
+        $this->assertSame(completion_contract::HOST_TIMEOUT, $hostend[0]['hostend']['technical']);
+        $this->assertNotEmpty($hostend[0]['hostend']['detectedat']);
+        $this->assertArrayHasKey('closedat', $hostend[0]['hostend'], 'null where the host keeps no time, never made up');
+        $decided = array_values(array_filter($lines, static fn($l) => $l['action'] === 'attempt_' . attempt_history::DECIDED));
+        $this->assertSame([0], array_column($decided, 'executionid'));
+        // Every row of an execution carries it; filtered by it, the export holds that execution alone.
+        $only = [];
+        log_view::stream_lifecycle(
+            ['runid' => (int) $run->id, 'channel' => 'attempt', 'executionid' => $executions[1]],
+            static function (array $line) use (&$only): void {
+                $only[] = $line;
+            }
+        );
+        $this->assertNotEmpty($only);
+        $this->assertSame([$executions[1]], array_values(array_unique(array_column($only, 'executionid'))));
+        $this->assertContains('attempt_' . attempt_history::STARTED, array_column($only, 'action'));
     }
 
     /**
@@ -137,10 +266,29 @@ final class lifecycle_export_test extends \advanced_testcase {
             'answered' => 1264, 'actions' => 1001, 'reconciliations' => 0, 'lastslot' => 1265, 'qubaid' => 4711,
             'budget' => 2500, 'budgetkind' => 'pool', 'serverend' => ['state' => 'inprogress', 'questionsattempted' => 1264,
                 'slots' => 1265]]]));
-        $this->assertSame(' baseline=264(confirmed) answered=1264 actions=1001 reconciliations=0 lastslot=1265 usage=4711'
-            . ' budget=2500(pool) server=inprogress 1264/1265', $text);
+        // The worker's own count and what it saw of the server are said as the worker's (re-audit 27.11.2026, AK02).
+        $this->assertSame(' baseline=264(confirmed) answered(worker)=1264 actions=1001 reconciliations=0 lastslot=1265'
+            . ' usage=4711 budget=2500(pool) server-as-seen-by-worker=inprogress 1264/1265', $text);
         $this->assertSame('', log_view::progress_text(''));
         $this->assertSame('', log_view::progress_text('{"browser":{}}'));
+
+        // The server's own reading, apart from it: engine, usage, its count, slots, state, when and on which path.
+        $server = ['at' => '2026-11-27T03:12:44.120Z', 'source' => 'job_complete', 'found' => true, 'reason' => '',
+            'engineattemptid' => 1230, 'qubaid' => 960, 'bound' => true, 'state' => 'complete', 'questionsattempted' => 1101,
+            'slots' => 1101];
+        $both = json_encode(['progress' => ['baseline' => 1049, 'baselinesource' => 'confirmed', 'answered' => 52,
+            'serverend' => ['state' => 'complete', 'questionsattempted' => 1101, 'slots' => 1101,
+            'source' => 'sitting_state:finish-page']], 'server' => $server]);
+        $this->assertStringEndsWith(
+            ' server-as-seen-by-worker=complete 1101/1101(sitting_state:finish-page) server=complete'
+            . ' engine=1230 usage=960 answered(server)=1101 slots=1101 at=2026-11-27T03:12:44.120Z source=job_complete',
+            log_view::progress_text($both)
+        );
+        $fields = log_view::progress_fields($both);
+        $this->assertSame($server, $fields['server']);
+        $this->assertSame(52, $fields['worker']['answered']);
+        $this->assertSame(['server' => $server], log_view::progress_fields(json_encode(['server' => $server])));
+        $this->assertSame([], log_view::progress_fields('{"browser":{}}'));
     }
 
     /**

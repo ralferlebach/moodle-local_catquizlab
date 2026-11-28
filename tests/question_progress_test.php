@@ -25,7 +25,7 @@ use local_catquizlab\local\registry;
 use local_catquizlab\local\worker_registry;
 
 /**
- * Progress and ETA in questions, on a fake clock (#141, #142).
+ * Progress and ETA in questions, on a fake clock (#141, #142), by identity (#180).
  *
  * @package    local_catquizlab
  * @copyright  2026 Ralf Erlebach
@@ -235,23 +235,204 @@ final class question_progress_test extends \advanced_testcase {
     }
 
     /**
-     * A retry starts a new engine attempt: only the newest one of the person counts, never both.
+     * The projection of one run, read fresh.
+     *
+     * @param array $run From make_run().
+     * @return array
+     */
+    protected function project(array $run): array {
+        question_progress::reset_caches();
+
+        return question_progress::for_runs([$run['runid'] => []])[$run['runid']];
+    }
+
+    /**
+     * A sitting's state, and its binding.
+     *
+     * @param array $sitting From sitting().
+     * @param int $status The status.
+     * @param int|null $engine The engine attempt bound, or null to leave it.
+     * @return void
+     */
+    protected function move(array $sitting, int $status, ?int $engine = null): void {
+        global $DB;
+        $set = ['id' => $sitting['attemptid'], 'status' => $status,
+            'leaseowner' => $status === attempt_scheduler::STATUS_RUNNING ? 'w-1' : null,
+            'leaseexpires' => $status === attempt_scheduler::STATUS_RUNNING ? self::T0 + 100000 : 0];
+        if ($engine !== null) {
+            $set['engineattemptid'] = $engine;
+        }
+        $DB->update_record('local_catquizlab_attempt', (object) $set);
+    }
+
+    /**
+     * The same engine attempt through a retry: 300 answered, requeued (its binding kept), on hold, running again at
+     * 340 — the answers stay counted throughout, the remaining work falls with them, nothing is discarded (#180 AK02,
+     * DoD01; CLARA run 121: 1162 answers of two requeued sittings shown as "discarded"). Until 0.7.84 a queued or held
+     * sitting's answers fell out of the progress into "discarded".
      *
      * @return void
      */
-    public function test_a_retry_is_not_counted_twice(): void {
+    public function test_a_retry_of_the_same_engine_attempt_keeps_its_answers(): void {
+        global $DB;
         $run = $this->make_run('classic', 625);
         $sitting = $this->sitting($run, attempt_scheduler::STATUS_RUNNING, 300);
-        // The first try was abandoned at 300; the second has 40 so far.
+        $this->sitting($run, attempt_scheduler::STATUS_QUEUED);
+        $figures = fn(array $q): array => [$q['done'], $q['remaining'], $q['notahead'], $q['discarded'], $q['unknown'],
+            $q['percent'], $q['diagnostics']];
+
+        $this->assertSame([300, 950, 0, 0, 0, 24, []], $figures($this->project($run)), 'running at 300');
+        // Requeued after a fetch failure: the engine attempt and its binding stay; the retry goes on in it.
+        $this->move($sitting, attempt_scheduler::STATUS_QUEUED);
+        $q = $this->project($run);
+        $this->assertSame([300, 950, 0, 0, 0, 24, []], $figures($q), 'waiting for its retry: the same');
+        $this->assertSame(300, $q['queuedanswered']);
+        $this->assertSame([1, 300], $q['buckets']['queued']);
+        // Held (failed, its engine attempt open): kept, but not ahead without a decision.
+        $this->move($sitting, attempt_scheduler::STATUS_FAILED);
+        $q = $this->project($run);
+        $this->assertSame([300, 625, 325, 0, 0, 24, []], $figures($q), 'held: kept, its rest not ahead');
+        $this->assertSame(300, $q['held']);
+        // Requeued by hand and running again, in the same engine attempt: 340, counted once.
+        $this->move($sitting, attempt_scheduler::STATUS_RUNNING);
+        $DB->set_field('adaptivequiz_attempt', 'questionsattempted', 340, ['id' => $sitting['engine']]);
+        $q = $this->project($run);
+        $this->assertSame([340, 910, 0, 0, 0, 27, []], $figures($q), 'running again at 340');
+        $this->assertSame(1250, $q['done'] + $q['remaining'] + $q['notahead'], 'the planned questions, all accounted for');
+
+        // The page says the same: no "discarded", the kept answers in the figure.
+        $snapshot = $this->snapshot(0);
+        $this->assertSame(340, $snapshot['questions']['done']);
+        $this->assertSame('', $snapshot['questions']['discardedtext']);
+    }
+
+    /**
+     * A new generation by explicit decision: the 300 of the retired attempt are discarded — the decision is the
+     * evidence —, the new attempt's 40 count (#180 AK03).
+     *
+     * @return void
+     */
+    public function test_a_new_generation_discards_only_what_was_retired(): void {
+        $run = $this->make_run('classic', 625);
+        $sitting = $this->sitting($run, attempt_scheduler::STATUS_RUNNING, 300);
+        $this->move($sitting, attempt_scheduler::STATUS_FAILED);
+        $this->setAdminUser();
+        $decided = \local_catquizlab\local\sitting_recovery::decide(
+            $sitting['attemptid'],
+            \local_catquizlab\local\sitting_recovery::NEW_GENERATION,
+            'test: replay from the start'
+        );
+        $this->assertTrue($decided['ok'], $decided['reason']);
+        $q = $this->project($run);
+        $this->assertSame([0, 300, 0, 625], [$q['done'], $q['discarded'], $q['unknown'], $q['remaining'] + $q['notahead']]);
+
+        $new = $this->engine_attempt($run, $sitting['userid'], 40, 'inprogress');
+        $this->move($sitting, attempt_scheduler::STATUS_RUNNING, $new);
+        $q = $this->project($run);
+        $this->assertSame([40, 300, 0, 585, 0, []], [$q['done'], $q['discarded'], $q['unknown'], $q['remaining'],
+            $q['notahead'], $q['diagnostics']]);
+        $snapshot = $this->snapshot(0);
+        $this->assertStringContainsString('300', $snapshot['questions']['discardedtext']);
+    }
+
+    /**
+     * A newer engine attempt of the person that no sitting owns is not taken for the sitting's (until 0.7.84 the
+     * newest id was): the bound one counts, the other is said apart as unknown, never discarded (#180 AK01, AK03).
+     *
+     * @return void
+     */
+    public function test_a_newer_unbound_engine_attempt_is_not_the_sittings(): void {
+        $run = $this->make_run('classic', 625);
+        $sitting = $this->sitting($run, attempt_scheduler::STATUS_RUNNING, 300);
         $this->engine_attempt($run, $sitting['userid'], 40, 'inprogress');
 
+        $q = $this->project($run);
+        $this->assertSame([300, 40, 0, 325, []], [$q['done'], $q['unknown'], $q['discarded'], $q['remaining'],
+            $q['diagnostics']]);
+        $this->assertSame([1, 40], $q['buckets']['unknown']);
         $snapshot = $this->snapshot(0);
-        $this->assertSame(40, $snapshot['questions']['done']);
-        $this->assertSame(625, $snapshot['questions']['expected']);
-        // The 300 of the abandoned try: work done, said apart, never counted (#141 AK5).
-        $this->assertSame(300, $snapshot['questions']['discarded']);
-        $this->assertStringContainsString('300', $snapshot['questions']['discardedtext']);
-        $this->assertSame(300, $snapshot['runs'][0]['questions']['discarded']);
+        $this->assertSame(300, $snapshot['questions']['done']);
+        $this->assertSame('', $snapshot['questions']['discardedtext']);
+        $this->assertStringContainsString('40', $snapshot['questions']['unknowntext']);
+    }
+
+    /**
+     * No binding, two engine attempts: nothing is chosen. The answers are unknown, the person ambiguous, the sitting's
+     * whole form ahead (#180 AK01, #173).
+     *
+     * @return void
+     */
+    public function test_an_unbound_sitting_with_two_attempts_is_ambiguous(): void {
+        global $DB;
+        $run = $this->make_run('classic', 625);
+        $sitting = $this->sitting($run, attempt_scheduler::STATUS_RUNNING, 120);
+        $this->engine_attempt($run, $sitting['userid'], 80, 'inprogress');
+        $DB->set_field('local_catquizlab_attempt', 'engineattemptid', null, ['id' => $sitting['attemptid']]);
+
+        $q = $this->project($run);
+        $this->assertSame([0, 200, 1, 1, 625, []], [$q['done'], $q['unknown'], $q['ambiguous'], $q['unbound'],
+            $q['remaining'], $q['diagnostics']]);
+    }
+
+    /**
+     * Bindings that are wrong are said, not counted: one to another person's attempt, one to an attempt gone from the
+     * host (#180 AK06).
+     *
+     * @return void
+     */
+    public function test_a_wrong_binding_is_diagnosed(): void {
+        global $DB;
+        $run = $this->make_run('classic', 625);
+        $one = $this->sitting($run, attempt_scheduler::STATUS_RUNNING, 10);
+        $two = $this->sitting($run, attempt_scheduler::STATUS_RUNNING, 20);
+        $stranger = $this->engine_attempt($run, (int) $this->getDataGenerator()->create_user()->id, 99, 'inprogress');
+        $this->move($one, attempt_scheduler::STATUS_RUNNING, $stranger);
+        $DB->delete_records('adaptivequiz_attempt', ['id' => $two['engine']]);
+
+        $q = $this->project($run);
+        $this->assertSame(0, $q['done']);
+        $this->assertSame(10, $q['unknown'], 'the person\'s own attempt, no longer bound');
+        $this->assertSame(['foreign', 'missing'], $q['diagnostics']);
+        $this->assertSame([1, 1], [$q['sittings']['foreign'], $q['sittings']['missing']]);
+    }
+
+    /**
+     * A fixed form of 2500 items for 50 sittings plans 125000 answers, whatever happens to them: collected, waiting for
+     * its trace, ended by the host's time limit, held, queued with its answers, running, not bound yet (#180 AK04).
+     *
+     * @return void
+     */
+    public function test_a_fixed_form_plans_its_whole_pool_for_every_sitting(): void {
+        global $DB;
+        $run = $this->make_run('classic', 2500);
+        $this->sitting($run, attempt_scheduler::STATUS_COLLECTED, 2500, 3000);
+        $this->sitting($run, attempt_scheduler::STATUS_TRACEPENDING, 2500);
+        $timeout = $this->sitting($run, attempt_scheduler::STATUS_COLLECTED, 1000, 1200);
+        $DB->set_field('local_catquizlab_attempt', 'completionjson', json_encode(['class' => 'technical',
+            'technical' => 'host_timeout']), ['id' => $timeout['attemptid']]);
+        $held = $this->sitting($run, attempt_scheduler::STATUS_RUNNING, 587);
+        $this->move($held, attempt_scheduler::STATUS_FAILED);
+        $queued = $this->sitting($run, attempt_scheduler::STATUS_RUNNING, 575);
+        $this->move($queued, attempt_scheduler::STATUS_QUEUED);
+        for ($i = 0; $i < 40; $i++) {
+            $this->sitting($run, attempt_scheduler::STATUS_RUNNING, 1200);
+        }
+        for ($i = 0; $i < 5; $i++) {
+            $this->sitting($run, attempt_scheduler::STATUS_QUEUED);
+        }
+
+        $q = $this->project($run);
+        $done = 2500 + 2500 + 1000 + 587 + 575 + 40 * 1200;
+        $this->assertSame(question_progress::EXACT, $q['kind']);
+        $this->assertSame(125000, $q['expected']);
+        $this->assertSame($done, $q['done']);
+        $this->assertSame((2500 - 575) + 40 * 1300 + 5 * 2500, $q['remaining']);
+        $this->assertSame((2500 - 1000) + (2500 - 587), $q['notahead']);
+        $this->assertSame(125000, $q['done'] + $q['remaining'] + $q['notahead']);
+        $this->assertSame([2, 1], [$q['buckets']['collected'][0], $q['buckets']['technical'][0]]);
+        $this->assertSame(50, $q['sittings']['total']);
+        $this->assertSame([], $q['diagnostics']);
+        $this->assertSame((int) floor(100 * $done / 125000), $q['percent']);
     }
 
     /**

@@ -73,7 +73,10 @@ class attempt_history {
     /** @var string A report from an execution that no longer held the sitting: kept, not applied (#133). */
     public const STALE = 'stale';
 
-    /** @var string The execution bound the sitting to the engine attempt and question usage it is in (#173). */
+    /**
+     * @var string The execution bound the sitting to the engine attempt and question usage it is in, or confirmed the
+     * binding (#173): one row per execution, with the server's baseline ('server').
+     */
     public const BOUND = 'bound';
 
     /** @var string Failed on a broken invariant and held, not retried, until a person puts it back (#175). */
@@ -81,6 +84,24 @@ class attempt_history {
 
     /** @var string Found at risk by an audit of a past run and marked, its data unchanged (#174). */
     public const AUDITED = 'audited';
+
+    /**
+     * @var string A person decided on the sitting's engine attempt (#173 AK08, sitting_recovery): bound one, retired
+     *     them for a new generation, or kept the end as it stands. With the decision's code and note.
+     */
+    public const DECIDED = 'decided';
+
+    /**
+     * @var string The host closed the sitting's engine attempt for a technical reason — its time limit, an error, a
+     *     person (#176 AK06): once per engine attempt, with when the host closed it (if it says) and when the lab found it.
+     */
+    public const HOST_CLOSED = 'hostclosed';
+
+    /**
+     * @var string The engine hygiene found the sitting's start without a question usage and kept it (#178, #176 AK06):
+     *     once per engine attempt, with its state and age. Until 0.7.84 it deleted it.
+     */
+    public const HYGIENE_KEPT = 'hygienekept';
 
     /**
      * Ends found before their collected row was written: sitting id => reason code (#134).
@@ -99,7 +120,8 @@ class attempt_history {
      *
      * @param int $attemptid The sitting.
      * @param string $outcome One of the constants above.
-     * @param array $detail workerid, engineattemptid, runtimems, tryno, detail.
+     * @param array $detail workerid, engineattemptid, runtimems, tryno, executionid (the sitting's current one by
+     *     default), detail, extra, reasoncode.
      * @return int The new row's id, or 0 when nothing was written.
      */
     public static function record(int $attemptid, string $outcome, array $detail = []): int {
@@ -109,15 +131,18 @@ class attempt_history {
             return 0;
         }
 
-        $attempt = $DB->get_record('local_catquizlab_attempt', ['id' => $attemptid], 'id, runid, tries');
+        $attempt = $DB->get_record('local_catquizlab_attempt', ['id' => $attemptid], 'id, runid, tries, executionid');
         if (!$attempt) {
             return 0;
         }
+        // The execution the row belongs to (#173, #176): the one named, or the one holding the sitting now.
+        $execution = array_key_exists('executionid', $detail) ? (int) $detail['executionid'] : (int) $attempt->executionid;
 
         return (int) $DB->insert_record('local_catquizlab_attemptlog', (object) [
             'attemptid'       => $attemptid,
             'runid'           => (int) $attempt->runid,
             'tryno'           => (int) ($detail['tryno'] ?? $attempt->tries),
+            'executionid'     => $execution > 0 ? $execution : null,
             'outcome'         => $outcome,
             'workerid'        => $detail['workerid'] ?? null,
             'engineattemptid' => isset($detail['engineattemptid']) ? (int) $detail['engineattemptid'] : null,
@@ -231,8 +256,10 @@ class attempt_history {
         // The entry 'truncated' says what was cut and where the full diagnosis is (#111).
         // 'trace': where a sitting whose trace never came can be found (#138 AK4).
         // 'progress': where the execution started, what it confirmed, its budget and the server's last word (#176).
+        // 'server': the engine attempt as the server itself read it when it decided (#176 AK02); 'fence' and
+        // 'reported': why a report was not applied, and what it said (#173).
         $keys = ['browser', 'transport', 'artefacts', 'truncated', 'reconciliations', 'reconciliation', 'lease', 'trace',
-            'progress'];
+            'progress', 'server', 'fence', 'reported', 'hostend', 'hygiene'];
         foreach ($keys as $key) {
             if (!empty($extra[$key])) {
                 $diagnosis[$key] = json_decode(self::redact(json_encode($extra[$key], JSON_UNESCAPED_SLASHES)), true);

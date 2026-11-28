@@ -88,6 +88,8 @@ class experiment_status {
             $turn = execution_queue::turn($experimentid);
         }
         $held = count(array_filter($progress['runs'], static fn(array $run): bool => !empty($run['held'])));
+        // On hold (resumable after a decision) apart from failed for good (#175 AK05, #181 AK06).
+        $onhold = (int) ($progress['now']['heldsittings'] ?? 0);
         $failed = (int) $progress['now']['failed'];
         $phase = self::phase($progress, $runner, $queued, $held);
 
@@ -105,10 +107,11 @@ class experiment_status {
             'sittings'     => get_string('status:sittings', $component, (object) [
                 'done' => $progress['done'], 'total' => $progress['total'], 'percent' => $progress['percent'],
             ]),
-            'problems'     => $failed + $held,
-            'hasproblems'  => $failed + $held > 0,
-            'problemtext'  => $failed + $held > 0
-                ? get_string('status:problems', $component, (object) ['failed' => $failed, 'held' => $held])
+            'problems'     => $failed + $held + $onhold,
+            'hasproblems'  => $failed + $held + $onhold > 0,
+            'problemtext'  => $failed + $held + $onhold > 0
+                ? get_string('status:problemsonhold', $component, (object) ['failed' => $failed, 'held' => $held,
+                    'onhold' => $onhold])
                 : get_string('status:noproblems', $component),
             'next'         => self::next($phase, $experimentid, $runner, $queued),
             'technical'    => get_string('status:technical', $component, (object) [

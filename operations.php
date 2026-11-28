@@ -300,13 +300,8 @@ if ($action !== '') {
     }
 
     if ($action === 'purgeempty') {
-        $purged = \local_catquizlab\local\engine_hygiene::purge_empty_attempts();
-        redirect(
-            $pageurl,
-            $purged > 0
-                ? get_string('ops:emptypurged', $component, $purged)
-                : get_string('ops:noempty', $component)
-        );
+        // Not any more (#178): deleting attempts without a question usage deleted starts in progress too.
+        redirect($pageurl, get_string('ops:emptydisabled', $component));
     }
 
     if ($action === 'reap') {

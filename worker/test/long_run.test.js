@@ -168,7 +168,7 @@ test('the same question back after every answer: no progress, stopped, the answe
 
 test('the worker sends its contract with every claim (#173)', async() => {
     const {moodle} = await sit({length: 3, budget: 3, strictcontract: true});
-    assert.ok(moodle.state.contracts.every((c) => Number(c) === 1), JSON.stringify(moodle.state.contracts));
+    assert.ok(moodle.state.contracts.every((c) => Number(c) === 2), JSON.stringify(moodle.state.contracts));
 });
 
 test('the fault "notstored" (#175 acceptance): the answers never reach the server, no progress, held by its code',

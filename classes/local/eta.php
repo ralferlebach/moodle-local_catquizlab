@@ -63,6 +63,9 @@ class eta {
     /** @var string Nothing left to play because a person stopped it (#166): not done, and no end to forecast. */
     public const STOPPED = 'stopped';
 
+    /** @var string Nothing to play, but sittings on hold that a decision can resume (#181 AK06). */
+    public const RECOVERABLE = 'recoverable';
+
     /** @var int Finished executions needed before there is an estimate. */
     public const MIN_SAMPLE = 3;
 
@@ -159,6 +162,15 @@ class eta {
             $out['remaining'] = 0;
             $out['cancelled'] = $cancelled;
             $out['reason'] = 'eta:whystopped';
+
+            return self::labelled($out);
+        }
+        // Nothing to play, but sittings on hold a decision can resume (#181 AK06): not finished, nothing forecast.
+        $held = array_sum(array_map(static fn(array $run): int => (int) ($run['held'] ?? 0), $out['runs']));
+        if ($pending === 0 && $held > 0) {
+            $out['reliability'] = self::RECOVERABLE;
+            $out['reason'] = 'eta:whyrecoverable';
+            $out['held'] = $held;
 
             return self::labelled($out);
         }
@@ -281,6 +293,11 @@ class eta {
             $inflightwork += $left * $mean;
             $inflightvar += ($left * $se) ** 2;
         }
+        // A queued sitting that keeps its engine attempt goes on where it was (#180): its kept answers are not ahead.
+        $credit = [];
+        foreach ($questions as $runid => $q) {
+            $credit[$runid] = self::queued_credit($q);
+        }
         $clock = (float) $now + $inflightwork / $slots;
         $done = $inflightwork;
         $variance = $inflightvar;
@@ -324,6 +341,9 @@ class eta {
                 continue;
             }
             $units = (float) self::queued_units($group['n']);
+            $take = min($units, $credit[$runid] ?? 0.0);
+            $units -= $take;
+            $credit[$runid] = ($credit[$runid] ?? 0.0) - $take;
             $clock += $units * $work[$runid]['mean'] / $slots;
             $done += $units * $work[$runid]['mean'];
             $variance += ($units * $work[$runid]['se']) ** 2;
@@ -372,7 +392,8 @@ class eta {
                 'remaining' => (int) max(0, ceil($finish - $now)),
                 'margin' => min(1.0, max(self::MIN_MARGIN, self::Z975 * $spread / $remaining)),
                 // Work of other runs claimed before this run's last sitting: what it waits behind.
-                'ahead' => max(0.0, $upto - ($w['inflight'] + self::queued_units($run['queued'] + $run['stale']) * $w['mean'])),
+                'ahead' => max(0.0, $upto - ($w['inflight'] + max(0.0, self::queued_units($run['queued'] + $run['stale'])
+                    - self::queued_credit($questions[$runid] ?? null)) * $w['mean'])),
                 'alone' => $alone,
             ];
         }
@@ -401,8 +422,8 @@ class eta {
         $pace = $f !== null ? self::pace_of($f, $q, $now) : null;
         $work = null;
         if ($mean > 0 && $f !== null) {
-            $units = self::inflight_left($f, $q, $mean, $now)
-                + self::queued_units(max(0, $left - $inflight - (int) $f['tracepending']));
+            $queued = self::queued_units(max(0, $left - $inflight - (int) $f['tracepending']));
+            $units = self::inflight_left($f, $q, $mean, $now) + max(0.0, $queued - self::queued_credit($q));
             $work = $units * $mean;
         }
         $span = $f !== null && $f['busyfrom'] !== null ? max(1, min((int) $f['window'], $now - (int) $f['busyfrom'])) : 0;
@@ -413,6 +434,9 @@ class eta {
         return [
             'sittings' => $left,
             'cancelled' => (int) ($row['cancelled'] ?? 0),
+            // On hold, resumable by a decision (#180 projection): not work a worker will do, not done either.
+            'held' => (int) ($q['sittings']['held'] ?? 0),
+            'failed' => (int) ($row['failed'] ?? 0),
             'inflight' => $inflight,
             'questions' => $q['remaining'] ?? null,
             'questionkind' => $q['kind'] ?? question_progress::UNKNOWN,
@@ -451,10 +475,26 @@ class eta {
             return $out;
         }
         if ($own['sittings'] === 0) {
+            $held = (int) ($own['held'] ?? 0);
+            if ($held > 0) {
+                // Nothing to play, but sittings on hold that a decision can resume (#181 AK06): not "nothing left", and
+                // no end yet. No forecast either: what is left waits for a person.
+                $out['reliability'] = self::RECOVERABLE;
+                $out['reason'] = 'eta:whyrecoverable';
+                $out['held'] = $held;
+                $out['elapsed'] = $started !== null && ($f['lastend'] ?? null) !== null
+                    ? max(0, (int) $f['lastend'] - $started) : null;
+
+                return $out;
+            }
+            // The recorded end: the run's run_finished, else the end of its last execution — never the clock (#181
+            // AK05). Unknown stays unknown, and so does the time it took.
+            $end = $f['finishedat'] ?? $f['lastend'] ?? null;
             $out['reliability'] = self::FINAL;
             $out['remaining'] = 0;
-            $out['finish'] = $f['lastend'] ?? null;
-            $out['elapsed'] = $started !== null ? max(0, (int) ($f['lastend'] ?? $now) - $started) : null;
+            $out['finish'] = $end;
+            $out['elapsed'] = $started !== null && $end !== null ? max(0, (int) $end - $started) : null;
+            $out['missing'] = (int) ($own['failed'] ?? 0);
 
             return $out;
         }
@@ -721,7 +761,20 @@ class eta {
     }
 
     /**
-     * Queued sittings in sitting units: each a whole sitting, it has answered nothing yet.
+     * What queued sittings have already answered, in sitting units: a sitting requeued for a retry keeps its engine
+     * attempt and goes on where it stopped (#180). Zero without a length per sitting.
+     *
+     * @param array|null $q A run's question figures (question_progress::for_runs()).
+     * @return float
+     */
+    protected static function queued_credit(?array $q): float {
+        $persitting = (float) ($q['persitting'] ?? 0);
+
+        return $persitting > 0 ? (float) ($q['queuedanswered'] ?? 0) / $persitting : 0.0;
+    }
+
+    /**
+     * Queued sittings in sitting units: each a whole sitting, net of what they kept (queued_credit()).
      *
      * @param int $n Queued sittings.
      * @return float
@@ -739,7 +792,12 @@ class eta {
      * @return array{seconds: float, questions: int}|null Null below MIN_QUESTIONS.
      */
     protected static function pace_of(array $run, ?array $q, int $now): ?array {
-        $answered = (int) ($q['inflight'] ?? 0);
+        // The answers of these executions, not the whole count of their engine attempts: a resumed sitting that went
+        // on at 1000 had answered 1000 before its execution's clock began (#181 AK02). Without every baseline, no pace.
+        if (($run['flyingbaseline'] ?? 0) === null) {
+            return null;
+        }
+        $answered = (int) ($q['inflight'] ?? 0) - (int) ($run['flyingbaseline'] ?? 0);
         $n = (int) $run['flying'];
         if ($answered < self::MIN_QUESTIONS || $n === 0) {
             return null;
@@ -909,6 +967,10 @@ class eta {
         if ($out['reliability'] === self::STOPPED) {
             $out['text']['remaining'] = get_string('eta:stoppedleft', $component, (int) ($out['cancelled'] ?? 0));
         }
+        if ($out['reliability'] === self::RECOVERABLE) {
+            $out['text']['remaining'] = get_string('eta:heldleft', $component, (int) ($out['held'] ?? 0));
+            $out['text']['method'] = '';
+        }
         if ($out['reliability'] === self::FINAL) {
             $out['text']['finish'] = $out['finish'] !== null
                 ? get_string('eta:finishedat', $component, self::when($out['finish'])) : $na;
@@ -931,25 +993,34 @@ class eta {
                 'own' => self::own_text($own),
                 'owntime' => $run['reliability'] === self::STOPPED
                     ? get_string('eta:stoppedleft', $component, (int) ($own['cancelled'] ?? 0))
-                    : ($run['reliability'] === self::FINAL ? get_string('eta:nothingleft', $component)
+                    : ($run['reliability'] === self::RECOVERABLE
+                        ? get_string('eta:heldleft', $component, (int) ($run['held'] ?? 0))
+                    : ($run['reliability'] === self::FINAL ? self::final_text((int) ($run['missing'] ?? 0))
                     : ($own['seconds'] !== null
                         ? get_string('eta:ownat', $component, (object) ['time' => self::span($own['seconds']),
                             'slots' => format_float($own['slots'], 1)])
-                        : get_string('eta:ownnoworker', $component))),
+                        : get_string('eta:ownnoworker', $component)))),
                 'remaining' => $run['reliability'] === self::STOPPED ? get_string('eta:stopped', $component)
+                    : ($run['reliability'] === self::RECOVERABLE
+                        ? get_string('eta:heldleft', $component, (int) ($run['held'] ?? 0))
                     : ($run['remaining'] !== null
-                    ? ($run['reliability'] === self::FINAL ? get_string('eta:nothingleft', $component)
+                    ? ($run['reliability'] === self::FINAL ? self::final_text((int) ($run['missing'] ?? 0))
                         : get_string('eta:range', $component, (object) [
                             'remaining' => self::span((int) $run['remaining']),
                             'low' => self::span((int) floor($run['remaining'] * (1 - (float) $run['margin']))),
                             'high' => self::span((int) ceil($run['remaining'] * (1 + (float) $run['margin']))),
                         ]))
-                    : get_string('eta:' . $run['reliability'], $component)),
-                // On what its duration rests, and how sure the figure is (#160 AK10).
-                'basis' => in_array($run['reliability'], [self::FINAL, self::STOPPED], true) || $own['basis'] === 'none' ? ''
+                    : get_string('eta:' . $run['reliability'], $component))),
+                // On what its duration rests, and how sure the figure is (#160 AK10). A finished, stopped or held run
+                // shows no basis, band or sample: it has no forecast (#181 AK05).
+                'basis' => in_array($run['reliability'], [self::FINAL, self::STOPPED, self::RECOVERABLE], true)
+                    || $own['basis'] === 'none' ? ''
                     : get_string('eta:basis' . $own['basis'], $component, (object) [
                         'n' => (int) ($run['sample'] ?? 0), 'status' => get_string('eta:' . $run['reliability'], $component)]),
-                'finish' => $run['finish'] !== null ? self::when($run['finish']) : $na,
+                // A finished run's recorded end, said as such; a forecast's end, said as one (#181 AK05).
+                'finish' => $run['finish'] === null ? $na : ($run['reliability'] === self::FINAL
+                    ? get_string('eta:finishedat', $component, self::when((int) $run['finish']))
+                    : self::when((int) $run['finish'])),
                 'ahead' => $run['ahead'] !== null && $run['ahead'] > 0
                     ? get_string('eta:ahead', $component, self::span((int) $run['ahead'])) : '',
                 'reason' => $run['reason'] !== '' ? get_string($run['reason'], $component) : '',
@@ -958,6 +1029,17 @@ class eta {
         $out['runs'] = array_values($out['runs']);
 
         return $out;
+    }
+
+    /**
+     * What a finished run has left: nothing — and, where sittings failed for good, that they have no result (#181 AK06).
+     *
+     * @param int $missing Sittings failed for good.
+     * @return string
+     */
+    protected static function final_text(int $missing): string {
+        return $missing > 0 ? get_string('eta:finishedmissing', 'local_catquizlab', $missing)
+            : get_string('eta:nothingleft', 'local_catquizlab');
     }
 
     /**

@@ -37,12 +37,14 @@ require_once($CFG->libdir . '/clilib.php');
 
 use local_catquizlab\local\log_view;
 
-[$options] = cli_get_params(['runid' => 0, 'experimentid' => 0, 'attemptid' => 0, 'execution' => 0, 'from' => '',
+[$options] = cli_get_params(['runid' => 0, 'experimentid' => 0, 'attemptid' => 0, 'execution' => 0, 'executionid' => 0,
+    'from' => '',
     'to' => '', 'limit' => 0, 'after' => '', 'help' => false], ['h' => 'help']);
 if ($options['help'] || ((int) $options['runid'] <= 0 && (int) $options['experimentid'] <= 0 && (int) $options['attemptid'] <= 0)) {
     echo "The lifecycle of a run, experiment or sitting, complete, as NDJSON (#176).\n"
         . "  --runid=N | --experimentid=N | --attemptid=N   What to export.\n"
-        . "  --execution=N     Only this execution of the sitting.\n"
+        . "  --execution=N     Only this execution (try number) of the sitting.\n"
+        . "  --executionid=N   Only this execution, by its identity (#173): unique where try numbers repeat.\n"
         . "  --from, --to      Window (any strtotime form; UTC recommended).\n"
         . "  --limit=N         At most N lines; the last line says where to go on.\n"
         . "  --after=CURSOR    Go on after this cursor.\n";
@@ -50,6 +52,7 @@ if ($options['help'] || ((int) $options['runid'] <= 0 && (int) $options['experim
 }
 $filter = ['runid' => (int) $options['runid'], 'experimentid' => (int) $options['experimentid'],
     'attemptid' => (int) $options['attemptid'], 'execution' => (int) $options['execution'],
+    'executionid' => (int) $options['executionid'],
     'since' => $options['from'] !== '' ? (int) strtotime((string) $options['from']) : 0,
     'until' => $options['to'] !== '' ? (int) strtotime((string) $options['to']) : 0, 'after' => (string) $options['after']];
 echo json_encode(

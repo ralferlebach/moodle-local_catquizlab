@@ -67,7 +67,7 @@ final class retry_integrity_test extends \advanced_testcase {
             $user = $this->getDataGenerator()->create_user();
             $person = $generator->create_person(['runid' => $run->id, 'moodleuserid' => $user->id]);
             $sittings[] = (int) $DB->insert_record('local_catquizlab_attempt', (object) ['runid' => $run->id,
-                'personid' => $person->id, 'status' => attempt_scheduler::STATUS_RUNNING, 'tries' => 1,
+                'personid' => $person->id, 'status' => attempt_scheduler::STATUS_RUNNING, 'tries' => 1, 'executionid' => 1,
                 'leaseowner' => 'w1', 'leaseexpires' => time() + 600, 'timecreated' => time() - $n + $i,
                 'timemodified' => time() - $n + $i]);
             $users[] = (int) $user->id;
@@ -122,7 +122,8 @@ final class retry_integrity_test extends \advanced_testcase {
             '[state:unavailable] sitting_state gave no answer',
             '',
             'w1',
-            'state_unavailable'
+            'state_unavailable',
+            1
         );
 
         $this->assertSame(
@@ -134,8 +135,19 @@ final class retry_integrity_test extends \advanced_testcase {
 
         // A second failure, the tries used up: failed for good, and still kept — a person may put it back.
         $DB->update_record('local_catquizlab_attempt', (object) ['id' => $sitting, 'status' => attempt_scheduler::STATUS_RUNNING,
-            'tries' => attempt_scheduler::MAX_TRIES, 'leaseowner' => 'w1']);
-        job_complete::execute($sitting, 'failed', 1000, 0, 'Attempt did not reach the finish page', '', 'w1');
+            'tries' => attempt_scheduler::MAX_TRIES, 'executionid' => attempt_scheduler::MAX_TRIES, 'leaseowner' => 'w1',
+            'leaseexpires' => time() + 300]);
+        job_complete::execute(
+            $sitting,
+            'failed',
+            1000,
+            0,
+            'Attempt did not reach the finish page',
+            '',
+            'w1',
+            '',
+            attempt_scheduler::MAX_TRIES
+        );
         $this->assertSame(
             attempt_scheduler::STATUS_FAILED,
             (int) $DB->get_field('local_catquizlab_attempt', 'status', ['id' => $sitting])
@@ -161,7 +173,7 @@ final class retry_integrity_test extends \advanced_testcase {
         [$runid, [$sitting]] = $this->run_with_sittings(1);
 
         job_complete::execute($sitting, 'failed', 1000, 0, '[guard:budget] 2500 answer(s) confirmed and usage 7 presents slot '
-            . '2501', '{"progress":{"answered":2500,"budget":2500}}', 'w1', 'budget_violation');
+            . '2501', '{"progress":{"answered":2500,"budget":2500}}', 'w1', 'budget_violation', 1);
 
         $row = $DB->get_record('local_catquizlab_attempt', ['id' => $sitting]);
         $this->assertSame(attempt_scheduler::STATUS_FAILED, (int) $row->status, 'held');
@@ -189,6 +201,10 @@ final class retry_integrity_test extends \advanced_testcase {
         $this->assertSame('budget_violation', reason_catalog::reported('', '[guard:budget] 1000 answer(s) confirmed'));
         $this->assertSame('identity_mismatch', reason_catalog::reported('', '[submit:http_404] x [identity:quba-mismatch] y'));
         $this->assertSame('state_unavailable', reason_catalog::reported('', '[state:unavailable] sitting_state ...'));
+        // The host's own word that the attempt is gone (mod_adaptivequiz #27): an identity in doubt, held.
+        $this->assertSame('identity_mismatch', reason_catalog::reported('', 'Moodle error page on attempt.php: '
+            . 'errorcode="attemptlost" "This attempt does not exist any more"'));
+        $this->assertSame('identity_mismatch', reason_catalog::failure('error page', ['errorcode' => 'attemptlost']));
         // What a worker may not claim is read from the message instead.
         $this->assertSame('navigation_error', reason_catalog::reported(
             'engine_exception',
@@ -222,10 +238,10 @@ final class retry_integrity_test extends \advanced_testcase {
         [$runid, $sittings] = $this->run_with_sittings(4);
 
         foreach (array_slice($sittings, 0, 2) as $sitting) {
-            job_complete::execute($sitting, 'failed', 1000, 0, '[guard:budget] x', '', 'w1', 'budget_violation');
+            job_complete::execute($sitting, 'failed', 1000, 0, '[guard:budget] x', '', 'w1', 'budget_violation', 1);
         }
         $this->assertFalse(run_lifecycle::is_paused($runid), 'two are two sittings');
-        job_complete::execute($sittings[2], 'failed', 1000, 0, '[guard:budget] x', '', 'w1', 'budget_violation');
+        job_complete::execute($sittings[2], 'failed', 1000, 0, '[guard:budget] x', '', 'w1', 'budget_violation', 1);
         $this->assertTrue(run_lifecycle::is_paused($runid), 'three are the run');
         $this->assertStringContainsString('budget_violation', run_lifecycle::pause_reason($runid));
         $this->assertSame(3, $DB->count_records('local_catquizlab_attemptlog', ['outcome' => attempt_history::FAILED]));
@@ -330,24 +346,38 @@ final class retry_integrity_test extends \advanced_testcase {
         }
         // The fix arrived between the two failures.
         $audit = resume_integrity::audit($runid, $t + 3000);
-        $risk = array_column($audit['sittings'], 'risk', 'sitting');
-        $this->assertSame(resume_integrity::AT_RISK, $risk[$risky]);
-        $this->assertSame(resume_integrity::AFTER_FIX, $risk[$later]);
-        // Its failures came before any engine attempt existed: nothing was continued.
-        $this->assertSame(resume_integrity::NO_ENGINE, $risk[$noengine]);
-        $this->assertArrayNotHasKey($untouched, $risk);
-        $this->assertSame(1, $audit['counts'][resume_integrity::NONE]);
-        $first = array_values(array_filter($audit['sittings'], static fn($s) => $s['sitting'] === $risky))[0];
-        $this->assertSame(1000, $first['resumes'][0]['answeredbefore']);
+        $by = array_column($audit['sittings'], null, 'sitting');
+        $resumes = static fn(int $s): array => array_column($by[$s]['resumes'], 'finding');
+        // One engine attempt, created before the failure: the resume can only have continued it (said as inferred).
+        $this->assertSame([resume_integrity::AT_RISK], $resumes($risky));
+        $this->assertSame('single-attempt-created-before-the-failure', $by[$risky]['resumes'][0]['evidence']);
+        $this->assertSame([resume_integrity::AFTER_FIX], $resumes($later));
+        // No engine attempt today: which went on is not on record — not "nothing was continued" (re-audit 27.11.2026).
+        $this->assertSame([resume_integrity::RESUME_UNKNOWN], $resumes($noengine));
+        $this->assertContains(resume_integrity::NO_ENGINE, $by[$noengine]['findings']);
+        // Every sitting is reported, the one never resumed too; nothing is counted as harmless.
+        $this->assertSame([resume_integrity::NO_ENGINE], $by[$untouched]['findings']);
+        $this->assertSame([], $by[$untouched]['resumes']);
+        $this->assertSame([1, 1, 1, 2], [$audit['counts'][resume_integrity::AT_RISK],
+            $audit['counts'][resume_integrity::AFTER_FIX], $audit['counts'][resume_integrity::RESUME_UNKNOWN],
+            $audit['counts'][resume_integrity::NO_ENGINE]]);
+        $this->assertSame(['sittings' => 4, 'engineattempts' => 2, 'resumes' => 3], $audit['denominators']);
+        $this->assertSame(1000, $by[$risky]['resumes'][0]['answeredbefore']);
 
-        // Marked once, results untouched.
+        // Marked once per sitting and finding, results untouched.
         $before = $DB->get_record('local_catquizlab_attempt', ['id' => $risky]);
-        $this->assertSame(1, resume_integrity::mark($audit));
+        $this->assertSame(2, resume_integrity::mark($audit));
         $this->assertSame(0, resume_integrity::mark($audit), 'once');
         $this->assertEquals($before, $DB->get_record('local_catquizlab_attempt', ['id' => $risky]));
-        $marks = $DB->get_records('local_catquizlab_attemptlog', ['outcome' => attempt_history::AUDITED]);
-        $this->assertCount(1, $marks);
-        $this->assertSame(resume_integrity::REASON, reset($marks)->reasoncode);
+        $marks = $DB->get_records_menu(
+            'local_catquizlab_attemptlog',
+            ['outcome' => attempt_history::AUDITED],
+            'attemptid',
+            'attemptid, reasoncode'
+        );
+        $expected = [$risky => resume_integrity::REASON, $noengine => 'audit_resume_unknown'];
+        ksort($expected);
+        $this->assertSame($expected, array_map('strval', $marks));
 
         // Before any upgrade to the fix, every such resume is at risk.
         $this->assertSame(2, resume_integrity::audit($runid, null)['counts'][resume_integrity::AT_RISK]);

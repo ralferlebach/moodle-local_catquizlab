@@ -67,6 +67,12 @@ class engine_identity {
     /** @var string The engine's count is not a non-negative whole number. */
     public const INVALID_COUNT = 'invalid-count';
 
+    /** @var string The engine attempt was taken out of the sitting by an explicit recovery decision (generations). */
+    public const RETIRED = 'retired-engine-attempt';
+
+    /** @var string A finished report, and the sitting's engine attempt is not complete on the server. */
+    public const NOT_COMPLETE = 'engine-not-complete';
+
     /**
      * The sitting's account and the run's activity instance.
      *
@@ -123,9 +129,12 @@ class engine_identity {
             }
             $answer = self::describe($attempt, true);
         } else {
-            $candidates = $DB->get_records(
+            // Attempts an explicit decision retired from the sitting are no candidates (a new generation, #173).
+            [$notretired, $params] = self::not_retired($sittingid);
+            $candidates = $DB->get_records_select(
                 'adaptivequiz_attempt',
-                ['instance' => $instance, 'userid' => $userid],
+                'instance = :instance AND userid = :userid' . $notretired,
+                ['instance' => $instance, 'userid' => $userid] + $params,
                 'id ASC',
                 'id, userid, instance, uniqueid, attemptstate, questionsattempted, timemodified',
                 0,
@@ -149,35 +158,36 @@ class engine_identity {
     /**
      * Bind the activity attempt behind the usage the browser shows to the sitting, or confirm the binding (#173).
      *
-     * Call with the sitting's lock held. Only the execution holding the lease may bind; a usage that is not an attempt
-     * of the sitting's account on the run's activity, a binding to another attempt, or a second attempt of the account
-     * beside the one shown is refused and changes nothing.
+     * Call with the sitting's lock held. Only the execution holding the lease may bind (lease_fence: this worker, this
+     * execution, a lease that has not run out); a usage that is not an attempt of the sitting's account on the run's
+     * activity, a binding to another attempt, or a second attempt of the account beside the one shown is refused and
+     * changes nothing.
      *
      * @param int $sittingid The sitting.
      * @param int $qubaid The question usage the browser shows.
      * @param string $workerid The calling worker.
-     * @return array As resolve(), plus 'newly' (true when this call made the binding).
+     * @param int $execution The execution's identity (the claim's "executionid").
+     * @return array As resolve(), plus 'newly' (true when this call made the binding) and 'fence' (why the caller does
+     *     not hold the lease, '' when it does).
      */
-    public static function bind(int $sittingid, int $qubaid, string $workerid): array {
+    public static function bind(int $sittingid, int $qubaid, string $workerid, int $execution): array {
         global $DB;
 
         $sitting = $DB->get_record(
             'local_catquizlab_attempt',
             ['id' => $sittingid],
-            'id, runid, personid, engineattemptid, status, leaseowner'
+            'id, runid, personid, engineattemptid, status, leaseowner, executionid, leaseexpires'
         );
         if (!$sitting) {
-            return self::none(self::SITTING_NOT_FOUND) + ['newly' => false];
+            return self::none(self::SITTING_NOT_FOUND) + ['newly' => false, 'fence' => ''];
         }
-        if (
-            $workerid === '' || (int) $sitting->status !== attempt_scheduler::STATUS_RUNNING
-                || (string) ($sitting->leaseowner ?? '') !== $workerid
-        ) {
-            return self::none(self::NOT_LEASE_HOLDER) + ['newly' => false];
+        $fence = lease_fence::check($sitting, $workerid, $execution);
+        if ($fence !== lease_fence::HOLDS) {
+            return self::none(self::NOT_LEASE_HOLDER) + ['newly' => false, 'fence' => $fence];
         }
         [$userid, $instance, $why] = self::owner($sitting);
         if ($why !== '') {
-            return self::none($why) + ['newly' => false];
+            return self::none($why) + ['newly' => false, 'fence' => ''];
         }
         $shown = $qubaid > 0 ? $DB->get_record(
             'adaptivequiz_attempt',
@@ -185,58 +195,130 @@ class engine_identity {
             'id, userid, instance, uniqueid, attemptstate, questionsattempted, timemodified'
         ) : false;
         if (!$shown || (int) $shown->userid !== $userid || (int) $shown->instance !== $instance) {
-            return self::none(self::FOREIGN_USAGE) + ['newly' => false];
+            return self::none(self::FOREIGN_USAGE) + ['newly' => false, 'fence' => ''];
+        }
+        if (in_array((int) $shown->id, self::retired($sittingid), true)) {
+            return self::none(self::RETIRED, (int) $shown->id) + ['newly' => false, 'fence' => ''];
         }
         $bound = (int) ($sitting->engineattemptid ?? 0);
         if ($bound > 0) {
             if ($bound !== (int) $shown->id) {
-                return self::none(self::IDENTITY_MISMATCH, $bound) + ['newly' => false];
+                return self::none(self::IDENTITY_MISMATCH, $bound) + ['newly' => false, 'fence' => ''];
             }
 
-            return self::describe($shown, true) + ['newly' => false];
+            return self::describe($shown, true) + ['newly' => false, 'fence' => ''];
         }
-        // Not bound yet: the attempt shown is the sitting's only if it is the account's only one on the activity.
+        // Not bound yet: the attempt shown is the sitting's only if it is the account's only one on the activity —
+        // apart from those an explicit decision retired from the sitting.
+        [$notretired, $params] = self::not_retired($sittingid);
         $others = $DB->count_records_select(
             'adaptivequiz_attempt',
-            'instance = :instance AND userid = :userid AND id <> :shown',
-            ['instance' => $instance, 'userid' => $userid, 'shown' => (int) $shown->id]
+            'instance = :instance AND userid = :userid AND id <> :shown' . $notretired,
+            ['instance' => $instance, 'userid' => $userid, 'shown' => (int) $shown->id] + $params
         );
         if ($others > 0) {
-            return self::none(self::AMBIGUOUS) + ['newly' => false];
+            return self::none(self::AMBIGUOUS) + ['newly' => false, 'fence' => ''];
         }
         $DB->set_field('local_catquizlab_attempt', 'engineattemptid', (int) $shown->id, ['id' => $sittingid]);
 
-        return self::describe($shown, true) + ['newly' => true];
+        return self::describe($shown, true) + ['newly' => true, 'fence' => ''];
     }
 
     /**
-     * The engine attempt a finished report may be collected from: the bound one, or the account's only one (#173).
+     * The engine attempt a finished report may be collected from (#173): the sitting's own, and complete.
+     *
+     * Fail-closed (re-audit 27.11.2026). Until 0.7.84 a sitting without an account or an activity, or an installation
+     * without the activity module, had its reported attempt collected as reported, unchecked. A sitting whose owner,
+     * activity or attempt cannot be established is now not collected: it is held with the reason. Collected is only
+     * an attempt that is the sitting's (bound, or the account's only one on the activity), is the one the report
+     * names when it names one, and is complete on the server — the worker's word that it saw the finish page does
+     * not stand in for the engine's own state. Whether the trace is whole the collector decides (#138).
      *
      * @param int $sittingid The sitting.
      * @param int $reported The engine attempt the worker reported, 0 when it had none.
      * @return array{id: int, reason: string} The attempt to collect, or 0 and why not.
      */
     public static function for_collection(int $sittingid, int $reported): array {
-        global $DB;
-
         $state = self::resolve($sittingid);
         if (!$state['found']) {
-            // Nothing to hold the report against: without the activity module, or for a sitting without an account
-            // or an activity — which no browser can have played — the reported attempt stands as reported, as before
-            // 0.7.84; the collector finds out whether it holds anything.
-            $unverifiable = !$DB->get_manager()->table_exists('adaptivequiz_attempt')
-                || in_array($state['reason'], [self::SITTING_INCOMPLETE, self::NO_TEST_INSTANCE], true);
-            if ($reported > 0 && $unverifiable) {
-                return ['id' => $reported, 'reason' => ''];
-            }
-
             return ['id' => 0, 'reason' => (string) $state['reason']];
         }
         if ($reported > 0 && $reported !== (int) $state['engineattemptid']) {
             return ['id' => 0, 'reason' => self::IDENTITY_MISMATCH];
         }
+        if ($state['state'] !== 'complete') {
+            return ['id' => 0, 'reason' => self::NOT_COMPLETE];
+        }
 
         return ['id' => (int) $state['engineattemptid'], 'reason' => ''];
+    }
+
+    /**
+     * The sitting's engine attempt as the server reads it now, for the history (#176 AK02, re-audit 27.11.2026).
+     *
+     * The server's own numbers, read by the server at the moment it decides — never the worker's count: engine
+     * attempt, question usage, whether it is bound, its state, the count the engine stored, the slots presented, when
+     * and on which path it was read.
+     *
+     * @param int $sittingid The sitting.
+     * @param string $source The path that read it (job_complete, sitting_bind, lease-recovery, fenced-report-recovery).
+     * @return array
+     */
+    public static function snapshot(int $sittingid, string $source): array {
+        $state = self::resolve($sittingid);
+        $now = microtime(true);
+
+        return [
+            'at' => gmdate('Y-m-d\TH:i:s', (int) $now) . sprintf('.%03dZ', (int) (($now - floor($now)) * 1000)),
+            'source' => $source,
+            'found' => (bool) $state['found'],
+            'reason' => (string) $state['reason'],
+            'engineattemptid' => (int) $state['engineattemptid'],
+            'qubaid' => (int) $state['qubaid'],
+            'bound' => (bool) $state['bound'],
+            'state' => (string) $state['state'],
+            'questionsattempted' => (int) $state['questionsattempted'],
+            'slots' => (int) $state['slots'],
+        ];
+    }
+
+    /**
+     * The engine attempts an explicit recovery decision retired from a sitting (local_catquizlab_retired).
+     *
+     * @param int $sittingid The sitting.
+     * @return int[]
+     */
+    public static function retired(int $sittingid): array {
+        global $DB;
+
+        if (!$DB->get_manager()->table_exists('local_catquizlab_retired')) {
+            return [];
+        }
+
+        return array_map('intval', $DB->get_fieldset_select(
+            'local_catquizlab_retired',
+            'engineattemptid',
+            'attemptid = :attemptid',
+            ['attemptid' => $sittingid]
+        ));
+    }
+
+    /**
+     * A condition leaving out the retired attempts of a sitting, for a select on adaptivequiz_attempt.
+     *
+     * @param int $sittingid The sitting.
+     * @return array{0: string, 1: array} ' AND id NOT IN (...)' or '', and its parameters.
+     */
+    protected static function not_retired(int $sittingid): array {
+        global $DB;
+
+        $retired = self::retired($sittingid);
+        if ($retired === []) {
+            return ['', []];
+        }
+        [$sql, $params] = $DB->get_in_or_equal($retired, SQL_PARAMS_NAMED, 'retired', false);
+
+        return [' AND id ' . $sql, $params];
     }
 
     /**

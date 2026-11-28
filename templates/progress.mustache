@@ -182,7 +182,7 @@
                              aria-label="{{#str}}questions:bar, local_catquizlab{{/str}}"></div>
                     </div>
                     <span class="small text-muted" data-region="catquizlab-questions-kind">{{kindlabel}}</span>
-                    <span class="small text-muted" data-region="catquizlab-questions-discarded">{{discardedtext}}</span>
+                    <span class="small text-muted" data-region="catquizlab-questions-apart">{{aparttext}}</span>
                 </div>
             {{/questions}}
 
@@ -239,6 +239,7 @@
                 <li>{{#str}}progress:nowqueued, local_catquizlab, {{now.queued}}{{/str}}</li>
                 <li>{{#str}}progress:nowcollected, local_catquizlab, {{now.collected}}{{/str}}</li>
                 <li>{{#str}}progress:nowfailed, local_catquizlab, {{now.failed}}{{/str}}</li>
+                {{#now.heldsittings}}<li data-region="catquizlab-progress-heldsittings">{{#str}}progress:nowheldsittings, local_catquizlab, {{now.heldsittings}}{{/str}}</li>{{/now.heldsittings}}
                 {{#now.cancelled}}<li data-region="catquizlab-progress-cancelled">{{#str}}progress:nowcancelled, local_catquizlab, {{now.cancelled}}{{/str}}</li>{{/now.cancelled}}
             </ul>
         </div>
@@ -569,6 +570,8 @@
                 <span data-region="catquizlab-collected">{{queue.collected}}</span></li>
             <li>{{#str}}queue:failedlabel, local_catquizlab{{/str}}
                 <span data-region="catquizlab-failed">{{queue.failed}}</span></li>
+            <li>{{#str}}queue:heldsittingslabel, local_catquizlab{{/str}}
+                <span data-region="catquizlab-heldsittings">{{queue.heldsittings}}</span></li>
             <li>{{#str}}queue:cancelledlabel, local_catquizlab{{/str}}
                 <span data-region="catquizlab-cancelled">{{queue.cancelled}}</span></li>
             {{#queue.hasblocked}}

@@ -130,11 +130,20 @@ class pipeline_tick extends \core\task\scheduled_task {
                 . "{$traces['givenup']} given up, {$traces['waiting']} still waiting.");
         }
 
-        // Engine attempts that never got a first question. Every retry of a
-        // failing attempt makes another, so they accumulate rather than appear.
-        $purged = \local_catquizlab\local\engine_hygiene::purge_empty_attempts();
-        if ($purged > 0) {
-            mtrace("local_catquizlab: removed {$purged} engine attempt(s) that never started.");
+        // Open engine attempts the host's time limit will close soon (P0 "[ENGINE-LIFECYCLE]"): said, not acted on.
+        foreach (\local_catquizlab\local\host_time_limit::warn_near() as $runid => $said) {
+            mtrace("local_catquizlab: run {$runid}: {$said['near']} open engine attempt(s) near the host's time limit, "
+                . "{$said['past']} past it.");
+        }
+
+        // Engine attempts without a question usage: counted, never deleted (#178). Until 0.7.84 this deleted every one
+        // of them — also a start in progress, between the host's attempt and its question usage (CLARA run 120).
+        $empty = \local_catquizlab\local\engine_hygiene::inventory(20);
+        if ($empty['count'] > 0) {
+            mtrace("local_catquizlab: {$empty['count']} engine attempt(s) without a question usage, kept "
+                . "({$empty['initialising']} of a sitting being played, {$empty['notplayed']} of none).");
+            \local_catquizlab\local\debug_trace::record('task', 'engine_attempts_without_usage', $empty);
+            \local_catquizlab\local\engine_hygiene::record_decisions($empty);
         }
 
         $reclaimed = attempt_scheduler::reclaim_stale(null, self::STALE_SECONDS);

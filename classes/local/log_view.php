@@ -485,6 +485,8 @@ class log_view {
                 'worker' => '%' . $DB->sql_like_escape($worker) . '%'], '', 'id, attemptid, tryno');
             foreach ($startrows as $row) {
                 $byworker[(int) $row->attemptid . '.' . (int) $row->tryno] = true;
+                // A request naming the execution's identity is matched by it (#173): the STARTED row is the identity.
+                $byworker['#' . (int) $row->id] = true;
             }
             $startrows->close();
         }
@@ -505,7 +507,8 @@ class log_view {
                 continue;
             }
             $execution = (int) ($request['execution'] ?? 0);
-            if ($byworker !== null && !isset($byworker[$attemptid . '.' . $execution])) {
+            $executionid = (int) ($request['executionid'] ?? 0);
+            if ($byworker !== null && !isset($byworker[$executionid > 0 ? '#' . $executionid : $attemptid . '.' . $execution])) {
                 continue;
             }
             $runid = 0;
@@ -545,6 +548,7 @@ class log_view {
                 'runid' => $runid,
                 'attemptid' => $attemptid,
                 'execution' => $execution,
+                'executionid' => $executionid,
                 // Matched by its execution above, not by this field: it is filled in below for the lines kept.
                 'workerid' => $worker,
                 'correlationid' => (string) ($request['correlationid'] ?? ''),
@@ -580,13 +584,23 @@ class log_view {
                 'id ASC',
                 'id, attemptid, tryno, workerid'
             );
+            // By the execution's identity where the request names it (#173); by sitting and try number otherwise — and
+            // there only where the try number names one execution: after a reset it names several, and which of them
+            // sent the request is not known (re-audit 27.11.2026: no made-up attribution).
+            $byid = [];
+            $seen = [];
             foreach ($startrows as $row) {
-                $workers[(int) $row->attemptid . '.' . (int) $row->tryno] = (string) ($row->workerid ?? '');
+                $key = (int) $row->attemptid . '.' . (int) $row->tryno;
+                $byid['#' . (int) $row->id] = (string) ($row->workerid ?? '');
+                $workers[$key] = isset($seen[$key]) && $workers[$key] !== (string) ($row->workerid ?? '')
+                    ? '' : (string) ($row->workerid ?? '');
+                $seen[$key] = true;
             }
             $startrows->close();
             foreach ($lines as &$line) {
                 $line['runid'] = (int) ($runs[$line['attemptid']] ?? 0);
-                $line['workerid'] = $workers[$line['attemptid'] . '.' . $line['execution']] ?? '';
+                $line['workerid'] = (int) $line['executionid'] > 0 ? ($byid['#' . (int) $line['executionid']] ?? '')
+                    : ($workers[$line['attemptid'] . '.' . $line['execution']] ?? '');
             }
             unset($line);
         }
@@ -751,7 +765,8 @@ class log_view {
             'action'        => 'attempt_' . $row->outcome,
             'workerid'      => (string) ($row->workerid ?? ''),
             'execution'     => (int) $row->tryno,
-        ]);
+            'executionid'   => (int) ($row->executionid ?? 0),
+        ]) + self::progress_fields((string) ($row->diagnosis ?? ''));
     }
 
     /**
@@ -788,32 +803,71 @@ class log_view {
     }
 
     /**
-     * An execution's progress as its history row keeps it, in one line (#176): where it started and from what, what it
-     * confirmed, its bound, and the server's last word.
+     * An execution's progress as its history row keeps it, in one line (#176): the worker's side — where it started
+     * and from what, what it confirmed, its bound, the server as the worker last saw it — and, apart from it, the
+     * engine attempt as the server itself read it when it decided (re-audit 27.11.2026, AK02).
      *
      * @param string $diagnosis The row's diagnosis JSON.
      * @return string '' when it has none.
      */
     public static function progress_text(string $diagnosis): string {
-        // Only rows that carry one are decoded: a browser record can be long.
-        if ($diagnosis === '' || strpos($diagnosis, '"progress"') === false) {
-            return '';
+        $parts = self::progress_fields($diagnosis);
+        $text = '';
+        if (isset($parts['worker'])) {
+            $progress = $parts['worker'];
+            $seen = (array) ($progress['serverend'] ?? []);
+            $text .= ' baseline=' . ($progress['baseline'] ?? '?') . '(' . ($progress['baselinesource'] ?? '') . ')'
+                . ' answered(worker)=' . (int) ($progress['answered'] ?? 0)
+                . ' actions=' . (int) ($progress['actions'] ?? 0)
+                . ' reconciliations=' . (int) ($progress['reconciliations'] ?? 0)
+                . ' lastslot=' . (int) ($progress['lastslot'] ?? 0)
+                . ' usage=' . (int) ($progress['qubaid'] ?? 0)
+                . ' budget=' . (int) ($progress['budget'] ?? 0) . '(' . ($progress['budgetkind'] ?? '') . ')'
+                . ($seen !== [] ? ' server-as-seen-by-worker=' . ($seen['state'] ?: ($seen['reason'] ?? '')) . ' '
+                    . (int) ($seen['questionsattempted'] ?? 0) . '/' . (int) ($seen['slots'] ?? 0)
+                    . (!empty($seen['source']) ? '(' . $seen['source'] . ')' : '') : '');
         }
-        $progress = (array) ((json_decode($diagnosis, true) ?: [])['progress'] ?? []);
-        if ($progress === []) {
-            return '';
+        if (isset($parts['server'])) {
+            $server = $parts['server'];
+            $text .= ' server=' . ($server['found'] ? $server['state'] : ($server['reason'] ?? '?'))
+                . ' engine=' . (int) ($server['engineattemptid'] ?? 0) . ' usage=' . (int) ($server['qubaid'] ?? 0)
+                . ' answered(server)=' . (int) ($server['questionsattempted'] ?? 0)
+                . ' slots=' . (int) ($server['slots'] ?? 0)
+                . ' at=' . ($server['at'] ?? '?') . ' source=' . ($server['source'] ?? '?');
         }
-        $server = (array) ($progress['serverend'] ?? []);
 
-        return ' baseline=' . ($progress['baseline'] ?? '?') . '(' . ($progress['baselinesource'] ?? '') . ')'
-            . ' answered=' . (int) ($progress['answered'] ?? 0)
-            . ' actions=' . (int) ($progress['actions'] ?? 0)
-            . ' reconciliations=' . (int) ($progress['reconciliations'] ?? 0)
-            . ' lastslot=' . (int) ($progress['lastslot'] ?? 0)
-            . ' usage=' . (int) ($progress['qubaid'] ?? 0)
-            . ' budget=' . (int) ($progress['budget'] ?? 0) . '(' . ($progress['budgetkind'] ?? '') . ')'
-            . ($server !== [] ? ' server=' . ($server['state'] ?: ($server['reason'] ?? '')) . ' '
-                . (int) ($server['questionsattempted'] ?? 0) . '/' . (int) ($server['slots'] ?? 0) : '');
+        return $text;
+    }
+
+    /**
+     * The progress a history row keeps, as fields (#176 AK02): 'worker' (the execution's own progress) and 'server'
+     * (the engine attempt as the server read it), each only when the row has it.
+     *
+     * @param string $diagnosis The row's diagnosis JSON.
+     * @return array
+     */
+    public static function progress_fields(string $diagnosis): array {
+        // Only rows that carry one are decoded: a browser record can be long.
+        if (
+            $diagnosis === '' || (strpos($diagnosis, '"progress"') === false && strpos($diagnosis, '"server"') === false
+                && strpos($diagnosis, '"hostend"') === false)
+        ) {
+            return [];
+        }
+        $decoded = json_decode($diagnosis, true) ?: [];
+        $out = [];
+        if (!empty($decoded['progress']) && is_array($decoded['progress'])) {
+            $out['worker'] = $decoded['progress'];
+        }
+        if (!empty($decoded['server']) && is_array($decoded['server'])) {
+            $out['server'] = $decoded['server'];
+        }
+        // The host's own technical end (#176 AK06): its time and the lab's, apart.
+        if (!empty($decoded['hostend']) && is_array($decoded['hostend'])) {
+            $out['hostend'] = $decoded['hostend'];
+        }
+
+        return $out;
     }
 
     /**
@@ -1067,6 +1121,8 @@ class log_view {
             'attemptid' => (int) ($meta['attemptid'] ?? 0),
             // Which execution of the sitting (#176): the header's second number on a request, the try of a history row.
             'execution' => (int) ($meta['execution'] ?? 0),
+            // The execution's identity (#173, #176): unique, where the source has it; 0 is unknown, not made up.
+            'executionid' => (int) ($meta['executionid'] ?? 0),
             'userid'   => (int) ($meta['userid'] ?? 0),
         ];
     }
@@ -1139,6 +1195,7 @@ class log_view {
         $task = (int) ($filter['taskid'] ?? 0);
         $sitting = (int) ($filter['attemptid'] ?? 0);
         $execution = (int) ($filter['execution'] ?? 0);
+        $executionid = (int) ($filter['executionid'] ?? 0);
 
         return ($search === '' || stripos((string) $line['text'], $search) !== false)
             && ($severity === '' || self::at_least((string) $line['severity'], $severity))
@@ -1150,7 +1207,8 @@ class log_view {
             && ($until <= 0 || (int) $line['time'] <= $until)
             && ($worker === '' || stripos((string) $line['workerid'], $worker) !== false)
             && ($task <= 0 || (int) $line['taskid'] === $task)
-            && ($execution <= 0 || (int) $line['execution'] === $execution);
+            && ($execution <= 0 || (int) $line['execution'] === $execution)
+            && ($executionid <= 0 || (int) ($line['executionid'] ?? 0) === $executionid);
     }
 
     /**

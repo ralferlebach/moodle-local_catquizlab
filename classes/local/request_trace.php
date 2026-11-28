@@ -48,7 +48,11 @@ class request_trace {
     /** @var string The header the worker sends with every request of a sitting. */
     public const HEADER_CORRELATION = 'X-CatQuizLab-Correlation';
 
-    /** @var string The header naming the sitting and its execution: "attemptid.execution". */
+    /**
+     * @var string The header naming the sitting and its execution: "attemptid.execution.executionid" — the try number
+     *     and, from 0.7.85 on, the execution's identity (#173, #176), which a reset does not repeat. Two parts from a
+     *     worker before 0.7.85: no identity (0), and none is made up.
+     */
     public const HEADER_ATTEMPT = 'X-CatQuizLab-Attempt';
 
     /** @var string The directory under the data root the lines are written to, one file per day. */
@@ -91,7 +95,7 @@ class request_trace {
             return false;
         }
         $attempt = self::header($server, self::HEADER_ATTEMPT);
-        [$attemptid, $execution] = array_map('intval', explode('.', $attempt . '.0')) + [0, 0];
+        [$attemptid, $execution, $executionid] = array_slice(array_map('intval', explode('.', $attempt . '.0.0')), 0, 3);
 
         self::$active = true;
         self::$exception = null;
@@ -99,6 +103,7 @@ class request_trace {
             'correlationid' => $correlation,
             'attemptid' => $attemptid,
             'execution' => $execution,
+            'executionid' => $executionid,
             'method' => (string) ($server['REQUEST_METHOD'] ?? ''),
             'path' => self::redact_uri((string) ($server['REQUEST_URI'] ?? '')),
             'started' => (float) ($server['REQUEST_TIME_FLOAT'] ?? microtime(true)),
@@ -211,6 +216,7 @@ class request_trace {
             'correlationid' => (string) $request['correlationid'],
             'attemptid' => (int) $request['attemptid'],
             'execution' => (int) $request['execution'],
+            'executionid' => (int) ($request['executionid'] ?? 0),
             'method' => (string) $request['method'],
             'path' => (string) $request['path'],
             'status' => $status,

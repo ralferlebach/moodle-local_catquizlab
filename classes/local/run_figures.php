@@ -102,8 +102,17 @@ class run_figures {
                 'total' => 0, 'collected' => 0, 'failed' => 0, 'cancelled' => 0, 'queued' => 0, 'inflight' => 0, 'stale' => 0,
                 'tracepending' => 0, 'open' => 0,
                 'sample' => ['n' => 0, 's' => 0.0, 'ss' => 0.0], 'lastend' => null, 'firststart' => null,
+                // Ended executions that are no sitting's whole duration (#181): failed, given up, a part of a sitting
+                // that was retried, a technical end. Counted, said, never a sample.
+                'partial' => 0,
+                // When the run was recorded as finished (run_log run_finished), or null: never "now" (#181 AK05).
+                'finishedat' => null,
                 'requested' => null,
                 'flying' => 0, 'flyingstarts' => 0, 'flyinglast' => null,
+                // What the sittings in flight had answered when their execution bound its engine attempt (the
+                // server's own count at bind, #173/#176): the pace is of the answers since, not of the whole count.
+                // Null where a sitting in flight has no such count yet (#181 AK02).
+                'flyingbaseline' => 0,
                 // The durations of its last RECENT finished executions: a duration that drifts (a site under more
                 // load than an hour ago) shows as a gap between these and the whole sample.
                 'recent' => ['n' => 0, 's' => 0.0, 'ss' => 0.0],
@@ -160,36 +169,62 @@ class run_figures {
         }
         $rows->close();
 
-        // Finished executions: their number and durations, and when the last one ended.
+        // Durations (#181 AK01): a sample is a whole sitting — collected regularly in one execution, with a running
+        // time. A failed or abandoned execution, the last part of a retried sitting, a technical or incomplete end
+        // (completion contract, #179) is not; they are counted apart (partial). One execution: at most one start in
+        // the sitting's history (rows of releases that wrote none count as one). Until 0.7.84 every collected and
+        // failed execution was a "finished sitting": twenty executions broken off by a connection timeout made a
+        // sample of twenty sittings that never were (CLARA run 121).
+        // Inlined, not bound: the condition stands three times in one statement, and a named parameter may be used once.
+        $whole = "l.outcome = '" . attempt_history::COLLECTED . "' AND COALESCE(l.runtimems, 0) > 0
+                  AND NOT (COALESCE(a.completionjson, '') LIKE '%\"class\":\"" . completion_contract::TECHNICAL . "\"%'
+                       OR COALESCE(a.completionjson, '') LIKE '%\"class\":\"" . completion_contract::INCOMPLETE . "\"%')
+                  AND (SELECT COUNT(1) FROM {local_catquizlab_attemptlog} p
+                        WHERE p.attemptid = l.attemptid AND p.outcome = '" . attempt_history::STARTED . "') <= 1";
         $finished = $DB->get_recordset_sql(
-            "SELECT runid, COUNT(1) AS n, SUM(runtimems) AS s, SUM(runtimems * runtimems) AS ss, MAX(timecreated) AS lastend
-               FROM {local_catquizlab_attemptlog}
-              WHERE runid {$insql} AND outcome IN (:collected, :failed)
-           GROUP BY runid",
-            $params + ['collected' => attempt_history::COLLECTED, 'failed' => attempt_history::FAILED]
+            "SELECT l.runid,
+                    SUM(CASE WHEN {$whole} THEN 1 ELSE 0 END) AS n,
+                    SUM(CASE WHEN {$whole} THEN l.runtimems ELSE 0 END) AS s,
+                    SUM(CASE WHEN {$whole} THEN l.runtimems * l.runtimems ELSE 0 END) AS ss,
+                    COUNT(1) AS ended, MAX(l.timecreated) AS lastend
+               FROM {local_catquizlab_attemptlog} l
+          LEFT JOIN {local_catquizlab_attempt} a ON a.id = l.attemptid
+              WHERE l.runid {$insql} AND l.outcome IN (:collected2, :failed)
+           GROUP BY l.runid",
+            $params + ['collected2' => attempt_history::COLLECTED, 'failed' => attempt_history::FAILED]
         );
         foreach ($finished as $row) {
             $out['runs'][(int) $row->runid]['sample'] = ['n' => (int) $row->n, 's' => (float) $row->s / 1000,
                 'ss' => (float) $row->ss / 1e6];
+            $out['runs'][(int) $row->runid]['partial'] = (int) $row->ended - (int) $row->n;
             $out['runs'][(int) $row->runid]['lastend'] = (int) $row->lastend;
         }
         $finished->close();
         $recent = $DB->get_recordset_sql(
             "SELECT x.runid, COUNT(1) AS n, SUM(x.runtimems) AS s, SUM(x.runtimems * x.runtimems) AS ss
-               FROM (SELECT runid, runtimems,
-                            ROW_NUMBER() OVER (PARTITION BY runid ORDER BY timecreated DESC, id DESC) AS position
-                       FROM {local_catquizlab_attemptlog}
-                      WHERE runid {$insql} AND outcome IN (:collected, :failed)) x
+               FROM (SELECT l.runid, l.runtimems,
+                            ROW_NUMBER() OVER (PARTITION BY l.runid ORDER BY l.timecreated DESC, l.id DESC) AS position
+                       FROM {local_catquizlab_attemptlog} l
+                  LEFT JOIN {local_catquizlab_attempt} a ON a.id = l.attemptid
+                      WHERE l.runid {$insql} AND {$whole}) x
               WHERE x.position <= :recent
            GROUP BY x.runid",
-            $params + ['collected' => attempt_history::COLLECTED, 'failed' => attempt_history::FAILED,
-                'recent' => self::RECENT]
+            $params + ['recent' => self::RECENT]
         );
         foreach ($recent as $row) {
             $out['runs'][(int) $row->runid]['recent'] = ['n' => (int) $row->n, 's' => (float) $row->s / 1000,
                 'ss' => (float) $row->ss / 1e6];
         }
         $recent->close();
+        // The recorded end of a finished run (#181 AK05): its run_finished event.
+        $ends = $DB->get_records_sql_menu(
+            "SELECT runid, MAX(timecreated) FROM {local_catquizlab_runlog}
+              WHERE runid {$insql} AND event = :finishedevent GROUP BY runid",
+            $params + ['finishedevent' => run_log::RUN_FINISHED]
+        );
+        foreach ($ends as $runid => $end) {
+            $out['runs'][(int) $runid]['finishedat'] = (int) $end;
+        }
 
         // The first start of each run: persisted, so it never moves with a poll.
         $firsts = $DB->get_records_sql_menu(
@@ -276,8 +311,30 @@ class run_figures {
             unset($r);
         }
         $flying->close();
+        // Their baselines: the server's count when the current execution bound its engine attempt. One row per
+        // sitting in flight (as many as there are workers), read with the bind's own snapshot.
+        $bound = $DB->get_recordset_sql(
+            "SELECT l.id, a.runid, l.diagnosis
+               FROM {local_catquizlab_attempt} a
+               JOIN {local_catquizlab_attemptlog} l ON l.attemptid = a.id AND l.outcome = :bound
+                                                   AND l.executionid = a.executionid
+              WHERE a.runid {$insql} AND a.status = :running AND a.leaseexpires > :now",
+            $params + ['bound' => attempt_history::BOUND, 'running' => attempt_scheduler::STATUS_RUNNING, 'now' => $now]
+        );
+        $baselines = [];
+        foreach ($bound as $row) {
+            $server = (json_decode((string) $row->diagnosis, true) ?: [])['server'] ?? [];
+            $count = isset($server['questionsattempted']) && ($server['found'] ?? false)
+                ? (int) $server['questionsattempted'] : null;
+            $baselines[(int) $row->runid][] = $count;
+        }
+        $bound->close();
         foreach ($out['runs'] as $runid => $run) {
             $out['runs'][$runid]['window'] = $window;
+            $known = $baselines[$runid] ?? [];
+            // Every sitting in flight needs its own: one without makes the run's pace unknown, not a guess.
+            $out['runs'][$runid]['flyingbaseline'] = count($known) === $run['flying'] && !in_array(null, $known, true)
+                ? array_sum($known) : ($run['flying'] === 0 ? 0 : null);
         }
 
         // The queue as job_claim reads it (#163): the experiment's place in the line, then timecreated, then id; the

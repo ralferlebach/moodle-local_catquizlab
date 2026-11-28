@@ -117,6 +117,18 @@ class run_log {
     public const LOAD_RELEASED = 'load_released';
 
     /**
+     * @var string Open engine attempts of the run are near the host's time limit, or past it (P0 "[ENGINE-LIFECYCLE]"):
+     *     the host will close them as a technical end. Said at most once an hour per run.
+     */
+    public const TIME_LIMIT_NEAR = 'time_limit_near';
+
+    /**
+     * @var string No sitting handed out: the engine could take the admissible abilities in the run's contexts as a
+     *     population (#174 AK04, population_guard). Said at most every ten minutes per run.
+     */
+    public const POPULATION_HELD = 'population_held';
+
+    /**
      * Record one event.
      *
      * @param int $runid The run.

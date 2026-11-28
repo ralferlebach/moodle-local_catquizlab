@@ -47,8 +47,10 @@ class job_claim extends external_api {
     /**
      * @var int The worker contract this server speaks (#173): a worker that does not send it, or sends an older one,
      *     is given no sitting. It would play without binding its engine attempt and count from an unverified start.
+     *     Contract 2 (re-audit 27.11.2026): bind, heartbeat and report carry the claim's execution, and are applied
+     *     only for the execution holding the lease (lease_fence); a worker of contract 1 sends none of it.
      */
-    public const WORKER_CONTRACT = 1;
+    public const WORKER_CONTRACT = 2;
 
     /** @var int Seconds a worker is asked to wait while the holder's last sittings are in play (#163). */
     public const IN_PLAY_WAIT = 20;
@@ -98,6 +100,7 @@ class job_claim extends external_api {
             'username'  => '',
             'experimentid' => 0,
             'execution' => 0,
+            'executionid' => 0,
             'correlationid' => '',
             'message'   => get_string('job:none', 'local_catquizlab'),
         ];
@@ -189,12 +192,16 @@ class job_claim extends external_api {
         ]);
 
         // The execution starts here, and the history says so before anything
-        // can go wrong with it.
-        \local_catquizlab\local\attempt_history::record(
+        // can go wrong with it. Its row's id is the execution's identity (#173):
+        // unique and never reused, unlike the try number, which a reset clears.
+        // Every call that changes the sitting from now on has to name it.
+        $executionid = \local_catquizlab\local\attempt_history::record(
             (int) $attempt->id,
             \local_catquizlab\local\attempt_history::STARTED,
-            ['workerid' => $params['workerid'], 'tryno' => (int) $attempt->tries + 1]
+            ['workerid' => $params['workerid'], 'tryno' => (int) $attempt->tries + 1, 'executionid' => 0]
         );
+        $DB->set_field('local_catquizlab_attempt', 'executionid', $executionid, ['id' => $attempt->id]);
+        $DB->set_field('local_catquizlab_attemptlog', 'executionid', $executionid, ['id' => $executionid]);
 
         // The documented lifecycle is READY → first attempt claimed → RUNNING,
         // and this is the moment it happens. Inside the transaction with the
@@ -233,6 +240,8 @@ class job_claim extends external_api {
             // attempt and which try this is.
             'experimentid' => $run ? (int) $run->experimentid : 0,
             'execution' => (int) $attempt->tries + 1,
+            // The execution's identity (#173): sent back with every bind, heartbeat and report.
+            'executionid' => $executionid,
             // The id the start of this execution was recorded under: the worker
             // carries it in its artefacts and sends it with every request of the
             // sitting, so that browser, server and history meet (#107, #110).
@@ -326,6 +335,22 @@ class job_claim extends external_api {
         // out work again, however its attempts got into the queue. A pause can change at any moment, so it is
         // checked here and not taken from the run list.
         if (\local_catquizlab\local\run_lifecycle::is_paused($runid)) {
+            return false;
+        }
+        // No twin's estimate may be another's prior (#174 AK04): while the engine could take the admissible abilities
+        // in the run's contexts as a population — at its threshold, counting the sittings being played, each of which
+        // may end before it is collected — nothing more is handed out. Said in the run's log, not more than every ten
+        // minutes; it lifts by itself as soon as the collections catch up.
+        $population = \local_catquizlab\local\population_guard::state($runid);
+        if ($population['blocked']) {
+            global $DB;
+            $recent = $DB->record_exists_select('local_catquizlab_runlog', 'runid = :runid AND event = :event AND '
+                . 'timecreated > :since', ['runid' => $runid, 'event' => \local_catquizlab\local\run_log::POPULATION_HELD,
+                'since' => time() - 600]);
+            if (!$recent) {
+                \local_catquizlab\local\run_log::record($runid, \local_catquizlab\local\run_log::POPULATION_HELD, $population);
+            }
+
             return false;
         }
         // A run with a twin more than once is not executed (#117): its results would count people twice. It is
@@ -427,6 +452,12 @@ class job_claim extends external_api {
                 false
             ),
             'execution'    => new external_value(PARAM_INT, 'Which try of the sitting this is (0 when none).', VALUE_OPTIONAL, 0),
+            'executionid'  => new external_value(
+                PARAM_INT,
+                'The execution\'s identity (#173): unique, never reused; every call that changes the sitting names it.',
+                VALUE_OPTIONAL,
+                0
+            ),
             'nextdue' => new external_value(
                 PARAM_INT,
                 'Without a job: seconds until the next queued sitting may be claimed (a retry\'s backoff, a busy person); '

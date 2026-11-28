@@ -24,6 +24,7 @@ use local_catquizlab\local\question_progress;
 use local_catquizlab\local\registry;
 use local_catquizlab\local\run_figures;
 use local_catquizlab\local\run_lifecycle;
+use local_catquizlab\local\run_log;
 use local_catquizlab\local\worker_registry;
 
 /**
@@ -74,6 +75,9 @@ final class eta_test extends \advanced_testcase {
 
         return (int) $generator->create_experiment()->id;
     }
+
+    /** @var int Simulated users of collected sittings handed out (no account needed: only the ids are compared). */
+    protected int $userids = 7100000;
 
     /**
      * A run with a given id, strategy and status, and its test.
@@ -144,11 +148,16 @@ final class eta_test extends \advanced_testcase {
         $logs = [];
         for ($i = 0; $i < $n; $i++) {
             $q = is_array($answered) ? $answered[$i] : $answered;
+            // Its person and the person's engine attempt, bound as the collector binds it (#180 counts by identity).
+            $userid = $this->userids++;
+            $personid = (int) $DB->insert_record('local_catquizlab_person', (object) ['runid' => $run['runid'],
+                'twinid' => 't' . $userid, 'twinindex' => 1, 'stratum' => 'conforming', 'abilityglobal' => 0,
+                'profilejson' => '{}', 'moodleuserid' => $userid, 'timecreated' => self::NOW, 'timemodified' => self::NOW]);
             $engine = (int) $DB->insert_record('adaptivequiz_attempt', (object) ['instance' => $run['instance'],
-                'userid' => 0, 'uniqueid' => 0, 'attemptstate' => 'complete', 'attemptstopcriteria' => '',
+                'userid' => $userid, 'uniqueid' => 0, 'attemptstate' => 'complete', 'attemptstopcriteria' => '',
                 'questionsattempted' => $q, 'timecreated' => self::NOW, 'timemodified' => self::NOW]);
             $attemptid = (int) $DB->insert_record('local_catquizlab_attempt', (object) ['runid' => $run['runid'],
-                'personid' => 0, 'engineattemptid' => $engine, 'status' => attempt_scheduler::STATUS_COLLECTED,
+                'personid' => $personid, 'engineattemptid' => $engine, 'status' => attempt_scheduler::STATUS_COLLECTED,
                 'tries' => 1, 'runtimems' => $seconds * 1000, 'timecreated' => self::NOW - 100000,
                 'timemodified' => self::NOW]);
             // Sitting i ends (n - 1 - i) / slots durations before the last one.
@@ -162,29 +171,39 @@ final class eta_test extends \advanced_testcase {
     }
 
     /**
-     * A sitting being played: started $since seconds ago, $answered questions in.
+     * A sitting being played: started $since seconds ago, $answered questions in, $baseline of them before this execution
+     * began (a resumed sitting), bound as the worker binds it — with the server's count at the bind (#173, #181).
      *
      * @param array $run From run().
      * @param int $since Seconds before NOW it started.
      * @param int $answered Questions the engine has stored.
-     * @return void
+     * @param int $baseline Questions answered before this execution (0: a first execution).
+     * @return int The sitting.
      */
-    protected function flying(array $run, int $since, int $answered): void {
+    protected function flying(array $run, int $since, int $answered, int $baseline = 0): int {
         global $DB;
 
         $user = $this->getDataGenerator()->create_user();
         $personid = (int) $DB->insert_record('local_catquizlab_person', (object) ['runid' => $run['runid'],
             'twinid' => 't' . $user->id, 'twinindex' => 1, 'stratum' => 'conforming', 'abilityglobal' => 0,
             'profilejson' => '{}', 'moodleuserid' => $user->id, 'timecreated' => self::NOW, 'timemodified' => self::NOW]);
-        $DB->insert_record('adaptivequiz_attempt', (object) ['instance' => $run['instance'], 'userid' => $user->id,
-            'uniqueid' => 0, 'attemptstate' => 'inprogress', 'attemptstopcriteria' => '', 'questionsattempted' => $answered,
-            'timecreated' => self::NOW, 'timemodified' => self::NOW]);
+        $engine = (int) $DB->insert_record('adaptivequiz_attempt', (object) ['instance' => $run['instance'],
+            'userid' => $user->id, 'uniqueid' => 0, 'attemptstate' => 'inprogress', 'attemptstopcriteria' => '',
+            'questionsattempted' => $answered, 'timecreated' => self::NOW, 'timemodified' => self::NOW]);
+        // Bound, as the worker binds it at the first page (#173): progress counts by that binding (#180).
         $attemptid = (int) $DB->insert_record('local_catquizlab_attempt', (object) ['runid' => $run['runid'],
-            'personid' => $personid, 'status' => attempt_scheduler::STATUS_RUNNING, 'tries' => 1,
+            'personid' => $personid, 'engineattemptid' => $engine, 'status' => attempt_scheduler::STATUS_RUNNING, 'tries' => 1,
             'leaseowner' => 'w', 'leaseexpires' => self::NOW + 3600, 'timecreated' => self::NOW - 100000,
             'timemodified' => self::NOW]);
+        $execution = (int) $DB->insert_record('local_catquizlab_attemptlog', (object) ['attemptid' => $attemptid,
+            'runid' => $run['runid'], 'tryno' => 1, 'outcome' => attempt_history::STARTED, 'timecreated' => self::NOW - $since]);
+        $DB->set_field('local_catquizlab_attempt', 'executionid', $execution, ['id' => $attemptid]);
         $DB->insert_record('local_catquizlab_attemptlog', (object) ['attemptid' => $attemptid, 'runid' => $run['runid'],
-            'tryno' => 1, 'outcome' => attempt_history::STARTED, 'timecreated' => self::NOW - $since]);
+            'tryno' => 1, 'executionid' => $execution, 'outcome' => attempt_history::BOUND, 'engineattemptid' => $engine,
+            'diagnosis' => json_encode(['server' => ['source' => 'sitting_bind', 'found' => true, 'engineattemptid' => $engine,
+                'questionsattempted' => $baseline]]), 'timecreated' => self::NOW - $since + 1]);
+
+        return $attemptid;
     }
 
     /**
@@ -823,5 +842,150 @@ final class eta_test extends \advanced_testcase {
             $this->assertArrayHasKey('owntime', $row['time']);
         }
         $this->assertNotSame('', $snapshot['time']['text']['own']);
+    }
+
+    /**
+     * A pool of $n items for a run: a classical run's questions are its whole pool (question_progress EXACT).
+     *
+     * @param array $run From make_run().
+     * @param int $n Items.
+     * @return void
+     */
+    protected function pool(array $run, int $n): void {
+        global $DB;
+        $items = [];
+        for ($i = 0; $i < $n; $i++) {
+            $items[] = (object) ['runid' => $run['runid'], 'poolid' => 0, 'questionid' => 0, 'itemname' => 'i' . $i,
+                'model' => 'raschbirnbaum', 'truedifficulty' => 0, 'storeddifficulty' => 0, 'discrimination' => 1,
+                'guessing' => 0, 'timecreated' => self::NOW];
+        }
+        $DB->insert_records('local_catquizlab_item', $items);
+    }
+
+    /**
+     * An execution that ended without its sitting (a connection timeout): the history's failed row, its running time.
+     *
+     * @param int $attemptid The sitting.
+     * @param int $runid The run.
+     * @param int $seconds How long it ran.
+     * @param int $endedago When it ended, seconds before NOW.
+     * @return void
+     */
+    protected function failed_execution(int $attemptid, int $runid, int $seconds, int $endedago): void {
+        global $DB;
+        $DB->insert_record('local_catquizlab_attemptlog', (object) ['attemptid' => $attemptid, 'runid' => $runid,
+            'tryno' => 1, 'outcome' => attempt_history::STARTED, 'timecreated' => self::NOW - $endedago - $seconds]);
+        $DB->insert_record('local_catquizlab_attemptlog', (object) ['attemptid' => $attemptid, 'runid' => $runid,
+            'tryno' => 1, 'outcome' => attempt_history::FAILED, 'runtimems' => $seconds * 1000,
+            'reasoncode' => 'fetch_failed', 'timecreated' => self::NOW - $endedago]);
+    }
+
+    /**
+     * #181 DoD01, CLARA run 121: a classical run of 50 sittings of 2500 items, none collected; 20 executions broke off
+     * after ten minutes on a connection timeout and were requeued; 18 of them go on in their engine attempt (baseline
+     * 600), 2 wait with 587 and 575 answers; 30 first executions are 1200 in. One second a question throughout.
+     *
+     * Until 0.7.84 the twenty broken-off executions were "its own 20 finished sittings" of ten minutes each, the forecast
+     * an estimate from them, and the pace of the resumed ones counted their 600 earlier answers as answered in this
+     * execution's time. Now: no sample, the pace of the answers since each execution bound its attempt — one second —,
+     * and the questions ahead are the whole form less every answer kept, queued ones too.
+     *
+     * @return void
+     */
+    public function test_broken_off_executions_are_no_sittings_and_a_resume_counts_from_its_baseline(): void {
+        global $DB;
+        $experimentid = $this->experiment();
+        $run = $this->make_run($experimentid, 0, 'classic');
+        $this->pool($run, 2500);
+        $this->workers(48);
+        for ($i = 0; $i < 30; $i++) {
+            $this->flying($run, 1200, 1200);
+        }
+        for ($i = 0; $i < 18; $i++) {
+            $sitting = $this->flying($run, 600, 1200, 600);
+            $this->failed_execution($sitting, $run['runid'], 600, 700);
+        }
+        foreach ([587, 575] as $kept) {
+            $sitting = $this->flying($run, 600, $kept);
+            $DB->update_record('local_catquizlab_attempt', (object) ['id' => $sitting,
+                'status' => attempt_scheduler::STATUS_QUEUED, 'leaseowner' => null, 'leaseexpires' => 0, 'nextruntime' => 0]);
+            $this->failed_execution($sitting, $run['runid'], 600, 30);
+        }
+
+        $snapshot = $this->snapshot($experimentid);
+        $row = array_column($snapshot['runs'], null, 'runid')[$run['runid']];
+        $t = $this->times($snapshot, $run['runid']);
+        $done = 48 * 1200 + 587 + 575;
+        // Questions: the whole form of 50 sittings, every kept answer counted, the rest ahead.
+        $this->assertSame([125000, $done, 125000 - $done, 0], [$row['questions']['expected'], $row['questions']['done'],
+            $row['questions']['remaining'], $row['questions']['notahead']]);
+        $this->assertSame((int) floor(100 * $done / 125000), $row['barpercent'], 'the bar is the questions, not 0 sittings');
+        $this->assertSame('exact', $row['barkind']);
+        $this->assertSame(0, $row['done'], 'and the sittings say 0 collected, apart');
+        // No sample: none of the twenty was a sitting.
+        $this->assertSame(0, $t['sample']);
+        $this->assertNotSame('run', $t['basis']);
+        // The pace of these executions: 30 × 1200 + 18 × 600 answers in 30 × 1200 + 18 × 600 seconds.
+        $this->assertSame(30 * 1200 + 18 * 600, $t['own']['pace']['questions']);
+        $this->assertEqualsWithDelta(1.0, $t['own']['pace']['seconds'], 0.001);
+        // The work ahead in seconds is the questions ahead at that pace — the queued ones net of what they kept.
+        $this->assertEqualsWithDelta(125000 - $done, $t['own']['workseconds'], 1);
+    }
+
+    /**
+     * A finished run (#181 AK05): its recorded end, a time that no longer moves, no forecast, no basis.
+     *
+     * @return void
+     */
+    public function test_a_finished_run_keeps_its_recorded_end(): void {
+        global $DB;
+        $experimentid = $this->experiment();
+        $run = $this->make_run($experimentid, 0, 'fastest', registry::STATUS_FINISHED);
+        $this->collected($run, 3, 60, 1, 20, 4000);
+        $DB->insert_record('local_catquizlab_runlog', (object) ['runid' => $run['runid'], 'event' => run_log::RUN_FINISHED,
+            'timecreated' => self::NOW - 3500]);
+        $now = $this->times($this->snapshot($experimentid), $run['runid']);
+        $later = $this->times($this->snapshot($experimentid, 7200), $run['runid']);
+        $this->assertSame(eta::FINAL, $now['reliability']);
+        $this->assertSame(self::NOW - 3500, $now['finish'], 'run_finished, not the last execution\'s end');
+        $this->assertSame($now['elapsed'], $later['elapsed'], 'the time it took does not grow with the clock');
+        $this->assertSame([null, ''], [$now['margin'], $now['text']['basis']]);
+        $this->assertStringContainsString(get_string('eta:finishedat', 'local_catquizlab', ''), $now['text']['finish']);
+    }
+
+    /**
+     * 49 of 50 collected, one on hold with its engine attempt open (#181 AK06, CLARA run 120): not "nothing left" —
+     * held, waiting for a decision; and a sitting failed for good is said as a missing result.
+     *
+     * @return void
+     */
+    public function test_a_held_sitting_is_no_finished_run(): void {
+        global $DB;
+        $experimentid = $this->experiment();
+        $run = $this->make_run($experimentid, 0, 'fastest');
+        $this->collected($run, 4, 60, 1, 20);
+        $held = $this->flying($run, 600, 12);
+        $DB->update_record('local_catquizlab_attempt', (object) ['id' => $held, 'status' => attempt_scheduler::STATUS_FAILED,
+            'leaseowner' => null, 'leaseexpires' => 0]);
+        $snapshot = $this->snapshot($experimentid);
+        $t = $this->times($snapshot, $run['runid']);
+        $this->assertSame(eta::RECOVERABLE, $t['reliability']);
+        $this->assertSame(1, $t['held']);
+        $this->assertNotSame(get_string('eta:nothingleft', 'local_catquizlab'), $t['text']['remaining']);
+        $this->assertSame(get_string('eta:heldleft', 'local_catquizlab', 1), $t['text']['remaining']);
+        $this->assertSame(eta::RECOVERABLE, $snapshot['time']['reliability'], 'and so is the experiment');
+        // Counted as on hold, not as failed for good — in the snapshot and in the queue the page shows (#175 AK05).
+        $this->assertSame([1, 0], [$snapshot['now']['heldsittings'], $snapshot['now']['failed']]);
+        $queue = attempt_scheduler::queue_breakdown($experimentid);
+        $this->assertSame([1, 0], [$queue['heldsittings'], $queue['failed']]);
+
+        // Its engine attempt closed: failed for good — finished, with one sitting without a result.
+        $engine = (int) $DB->get_field('local_catquizlab_attempt', 'engineattemptid', ['id' => $held]);
+        $DB->set_field('adaptivequiz_attempt', 'attemptstate', 'complete', ['id' => $engine]);
+        $snapshot = $this->snapshot($experimentid);
+        $t = $this->times($snapshot, $run['runid']);
+        $this->assertSame([0, 1], [$snapshot['now']['heldsittings'], $snapshot['now']['failed']]);
+        $this->assertSame(eta::FINAL, $t['reliability']);
+        $this->assertSame(get_string('eta:finishedmissing', 'local_catquizlab', 1), $t['text']['remaining']);
     }
 }

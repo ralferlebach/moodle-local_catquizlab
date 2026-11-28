@@ -28,7 +28,8 @@ use core_external\external_value;
  * the attempt behind the question usage it sees, every later one confirms it. The answer is the engine's own count at
  * that moment — the count the execution goes on from — and nothing else: a usage of another account or activity, a
  * second attempt beside the bound one, or a caller that does not hold the lease is refused, and the worker answers
- * nothing until it is cleared.
+ * nothing until it is cleared. The caller holds the lease when it is the claim's worker, in the claim's execution, and
+ * the lease has not run out (lease_fence); a call from any other execution is fenced, recorded, and binds nothing.
  *
  * @package    local_catquizlab
  * @copyright  2026 Ralf Erlebach
@@ -45,6 +46,14 @@ class sitting_bind extends external_api {
             'attemptid' => new external_value(PARAM_INT, 'The catquizlab sitting.'),
             'qubaid' => new external_value(PARAM_INT, 'The question usage the browser shows.'),
             'workerid' => new external_value(PARAM_ALPHANUMEXT, 'The calling worker: only the lease holder binds.'),
+            'executionid' => new external_value(
+                PARAM_INT,
+                'The execution\'s identity the worker was handed the sitting with (the claim\'s "executionid"): with '
+                    . 'the worker, the '
+                    . 'lease it binds under (#173, re-audit 27.11.2026). Without it nothing is bound.',
+                VALUE_DEFAULT,
+                0
+            ),
         ]);
     }
 
@@ -54,13 +63,17 @@ class sitting_bind extends external_api {
      * @param int $attemptid The sitting.
      * @param int $qubaid The question usage the browser shows.
      * @param string $workerid The calling worker.
+     * @param int $execution The execution's identity it was handed the sitting with.
      * @return array
      */
-    public static function execute(int $attemptid, int $qubaid, string $workerid): array {
+    public static function execute(int $attemptid, int $qubaid, string $workerid, int $execution = 0): array {
+        global $DB;
+
         $params = self::validate_parameters(self::execute_parameters(), [
             'attemptid' => $attemptid,
             'qubaid' => $qubaid,
             'workerid' => $workerid,
+            'executionid' => $execution,
         ]);
         $context = \context_system::instance();
         self::validate_context($context);
@@ -72,22 +85,50 @@ class sitting_bind extends external_api {
             static fn(): array => \local_catquizlab\local\engine_identity::bind(
                 (int) $params['attemptid'],
                 (int) $params['qubaid'],
-                (string) $params['workerid']
+                (string) $params['workerid'],
+                (int) $params['executionid']
             )
         );
         if (!$had) {
             // Busy is not an answer about the identity: the worker asks again, a bounded number of times.
             return ['found' => false, 'reason' => 'busy', 'engineattemptid' => 0, 'qubaid' => 0, 'bound' => false,
-                'state' => '', 'questionsattempted' => 0, 'slots' => 0, 'timemodified' => 0, 'newly' => false];
+                'state' => '', 'questionsattempted' => 0, 'slots' => 0, 'timemodified' => 0, 'newly' => false,
+                'fence' => ''];
         }
-        if (!empty($answer['newly'])) {
+        if ((string) $answer['fence'] !== '') {
+            // A call of an execution that does not hold the lease (#173): said in the history, nothing bound.
             $history = \local_catquizlab\local\attempt_history::class;
-            $history::record((int) $params['attemptid'], $history::BOUND, [
-                'workerid' => (string) $params['workerid'],
-                'engineattemptid' => (int) $answer['engineattemptid'],
-                'detail' => 'usage ' . (int) $answer['qubaid'] . ', ' . (int) $answer['questionsattempted'] . ' answered, '
-                    . (int) $answer['slots'] . ' presented',
+            $history::record((int) $params['attemptid'], $history::STALE, [
+                'workerid' => (string) $params['workerid'] !== '' ? (string) $params['workerid'] : null,
+                'executionid' => (int) $params['executionid'],
+                'detail' => sprintf(
+                    'bind of usage %d by %s, execution #%d, fenced (%s): nothing bound',
+                    (int) $params['qubaid'],
+                    (string) $params['workerid'] !== '' ? (string) $params['workerid'] : '?',
+                    (int) $params['executionid'],
+                    (string) $answer['fence']
+                ),
             ]);
+        }
+        // Each execution's baseline, as the server read it under the lock, once per execution (#173, #176 AK02): the
+        // binding itself, or the confirmation by a later execution — which until 0.7.84 left no row, so a retry's
+        // starting count was the worker's word alone.
+        if (!empty($answer['found'])) {
+            $history = \local_catquizlab\local\attempt_history::class;
+            $already = $DB->record_exists('local_catquizlab_attemptlog', ['attemptid' => (int) $params['attemptid'],
+                'executionid' => (int) $params['executionid'], 'outcome' => $history::BOUND]);
+            if (!empty($answer['newly']) || !$already) {
+                $history::record((int) $params['attemptid'], $history::BOUND, [
+                    'workerid' => (string) $params['workerid'],
+                    'engineattemptid' => (int) $answer['engineattemptid'],
+                    'detail' => (!empty($answer['newly']) ? 'bound' : 'confirmed') . ': usage ' . (int) $answer['qubaid']
+                        . ', ' . (int) $answer['questionsattempted'] . ' answered, ' . (int) $answer['slots'] . ' presented',
+                    'extra' => ['server' => \local_catquizlab\local\engine_identity::snapshot(
+                        (int) $params['attemptid'],
+                        'sitting_bind'
+                    )],
+                ]);
+            }
         }
 
         return $answer;
@@ -110,6 +151,13 @@ class sitting_bind extends external_api {
             'slots' => new external_value(PARAM_INT, 'Questions presented: the slots of its question usage.'),
             'timemodified' => new external_value(PARAM_INT, 'When the attempt last changed.'),
             'newly' => new external_value(PARAM_BOOL, 'Whether this call made the binding.'),
+            'fence' => new external_value(
+                PARAM_ALPHANUMEXT,
+                'Why the caller does not hold the lease (no-identity, not-running, other-owner, other-execution, '
+                    . 'lease-expired); empty when it does.',
+                VALUE_DEFAULT,
+                ''
+            ),
         ]);
     }
 }

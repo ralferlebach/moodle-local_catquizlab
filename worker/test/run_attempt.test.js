@@ -213,18 +213,21 @@ test('a failed report does not hide the attempt it was reporting (#111)', () => 
 });
 
 test('a sitting\'s requests name it on the server (#110)', () => {
-    const headers = worker.traceHeaders({correlationid: 'abc123', attemptid: 19084, execution: 2});
-    assert.deepEqual(headers, {'X-CatQuizLab-Correlation': 'abc123', 'X-CatQuizLab-Attempt': '19084.2'});
+    const headers = worker.traceHeaders({correlationid: 'abc123', attemptid: 19084, execution: 2, executionid: 771204});
+    assert.deepEqual(headers, {'X-CatQuizLab-Correlation': 'abc123', 'X-CatQuizLab-Attempt': '19084.2.771204'});
+    // Sitting, try number and the execution's identity (#173, #176): a claim without one names none, not a made-up one.
+    assert.deepEqual(worker.traceHeaders({correlationid: 'abc123', attemptid: 19084, execution: 2}),
+        {'X-CatQuizLab-Correlation': 'abc123', 'X-CatQuizLab-Attempt': '19084.2.0'});
     // Without a correlation id from the server, nothing to send.
     assert.deepEqual(worker.traceHeaders({attemptid: 5}), {});
     assert.deepEqual(worker.traceHeaders(null), {});
 });
 
 test('a web service call carries the trace headers, and no secret in them (#110)', () => {
-    const trace = worker.traceHeaders({correlationid: 'abc123', attemptid: 7, execution: 1});
+    const trace = worker.traceHeaders({correlationid: 'abc123', attemptid: 7, execution: 1, executionid: 55});
     const request = worker.buildWsRequest('http://x', 'secret-token', 'local_catquizlab_oracle_answer', {q: 1}, trace);
     assert.equal(request.headers['X-CatQuizLab-Correlation'], 'abc123');
-    assert.equal(request.headers['X-CatQuizLab-Attempt'], '7.1');
+    assert.equal(request.headers['X-CatQuizLab-Attempt'], '7.1.55');
     assert.equal(request.headers['Content-Type'], 'application/x-www-form-urlencoded');
     assert.ok(!JSON.stringify(request.headers).includes('secret-token'));
     // Without them, the content type alone, as before.

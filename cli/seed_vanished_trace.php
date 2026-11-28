@@ -35,6 +35,7 @@ define('CLI_SCRIPT', true);
 
 require(__DIR__ . '/../../../config.php');
 require_once($CFG->libdir . '/clilib.php');
+require_once($CFG->dirroot . '/course/lib.php');
 
 use local_catquizlab\external\job_complete;
 use local_catquizlab\local\attempt_history;
@@ -71,9 +72,18 @@ $personid = (int) $DB->insert_record('local_catquizlab_person', (object) [
     'abilityglobal' => 0.0, 'profilejson' => json_encode(['global' => 0.0]), 'moodleuserid' => $user->id,
     'timecreated' => time(), 'timemodified' => time(),
 ]);
+// The run's activity (#173): a report is collected only from an attempt on the run's activity, of the person's account.
+// A hidden course of its own holds the stand-in, so that no page of a real course lists it.
+$course = create_course((object) ['fullname' => 'CatQuizLab trace seed ' . $runid, 'shortname' => 'cqltrace' . $runid,
+    'category' => \core_course_category::get_default()->id, 'visible' => 0]);
+$instance = 900000000 + $runid;
+$cmid = (int) $DB->insert_record('course_modules', (object) ['course' => $course->id,
+    'module' => (int) $DB->get_field('modules', 'id', ['name' => 'adaptivequiz']), 'instance' => $instance, 'section' => 0,
+    'visible' => 0, 'added' => time()]);
+$DB->set_field('local_catquizlab_run', 'testcmid', $cmid, ['id' => $runid]);
 // Complete, twelve answered — and no question usage behind it: the trace is gone.
 $engine = (int) $DB->insert_record('adaptivequiz_attempt', (object) [
-    'instance' => 0, 'userid' => $user->id, 'uniqueid' => 0, 'attemptstate' => 'complete',
+    'instance' => $instance, 'userid' => $user->id, 'uniqueid' => 0, 'attemptstate' => 'complete',
     'attemptstopcriteria' => '', 'questionsattempted' => 12, 'timecreated' => time(), 'timemodified' => time(),
 ]);
 $worker = 'catquizlab-exec-trace';
@@ -84,7 +94,7 @@ $attemptid = (int) $DB->insert_record('local_catquizlab_attempt', (object) [
 attempt_history::record($attemptid, attempt_history::STARTED, ['workerid' => $worker, 'tryno' => 1]);
 
 // The worker's report, through the worker's own function.
-$result = job_complete::execute($attemptid, 'finished', 4200, $engine);
+$result = job_complete::execute($attemptid, 'finished', 4200, $engine, '', '', $worker, '', 1);
 $status = (int) $DB->get_field('local_catquizlab_attempt', 'status', ['id' => $attemptid]);
 if ($status !== attempt_scheduler::STATUS_TRACEPENDING) {
     cli_error("Expected the sitting to wait for its trace, found status {$status}: " . $result['message']);

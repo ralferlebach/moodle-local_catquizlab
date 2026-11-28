@@ -1090,7 +1090,7 @@ if ($runid > 0) {
         $where,
         $filterparams,
         'id ASC',
-        'id, personid, status, tries, engineattemptid, leaseowner, lasterror, timemodified',
+        'id, personid, status, tries, engineattemptid, leaseowner, lasterror, timemodified, completionjson',
         0,
         200
     );
@@ -1184,6 +1184,7 @@ if ($runid > 0) {
 
         foreach ($troubled as $row) {
             $history = \local_catquizlab\local\attempt_history::of_attempt((int) $row->id);
+            $state = \local_catquizlab\local\attempt_scheduler::state_in_words($row, $history);
             $error = \local_catquizlab\local\attempt_history::redact((string) ($row->lasterror ?? ''));
             if ((int) $row->status === \local_catquizlab\local\attempt_scheduler::STATUS_CANCELLED) {
                 // The stop's own reason, in the reader's language (#166): stored as a code, not as text.
@@ -1305,7 +1306,7 @@ if ($runid > 0) {
             $attempttable->data[] = [
                 html_writer::link($logurl, $row->id, ['title' => get_string('attempt:openlog', $component)]),
                 $row->personid,
-                \local_catquizlab\local\attempt_scheduler::status_label((int) $row->status),
+                html_writer::span(s($state['label']), '', ['data-state' => $state['code']]),
                 $row->tries,
                 $row->engineattemptid ?: '-',
                 $row->leaseowner ?: '-',

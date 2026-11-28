@@ -28,7 +28,15 @@
  * repeatat (from this slot on, an answer is not stored and the same question comes back), unavailable (sitting_state
  * and sitting_bind answer HTTP 503), foreign (the bound attempt is another), extraslots (the engine presents more
  * questions than `length` without ending: an answer beyond the pool), strictcontract (refuse claims without the
- * worker contract).
+ * worker contract), execution (the claim's try number, 1 by default; 2 with a baseline; its identity "executionid"
+ * is 5000 + it), bindfence (sitting_bind answers this fence reason), latecommit (the answer of this
+ * number is answered HTTP 502 and stored late: after the first sitting_state that follows, or — latecommitat "view" — when
+ * the activity page is asked for; the last answer completes the attempt then: re-audit 27.11.2026, #173),
+ * ambiguousafter (from the second sitting_state after the late answer on, the server no longer knows the sitting's
+ * attempt: "ambiguous-engine-attempt").
+ *
+ * The worker's calls are kept with their execution (state.executions): bind, heartbeat (with a sitting) and report.
+ * contract: the worker contract the claim names (2; 1 to serve a worker before 0.7.85 for a negative control).
  *
  * @copyright  2026 Ralf Erlebach
  * @license    https://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
@@ -59,6 +67,27 @@ async function start(options = {}) {
         binds: 0,
         oracle: 0,
         contracts: [],
+        executions: {bind: [], heartbeat: [], report: []},
+        late: null,
+        statesafterlate: 0,
+    };
+    const execution = options.execution || (options.baseline ? 2 : 1);
+    const executionid = 5000 + execution;
+    // A stand-in of contract 1 fences nothing: it serves a worker before 0.7.85, which names no execution.
+    const fences = (options.contract || 2) >= 2;
+    // The late answer, stored now: one more answered, and the attempt complete when it was the last.
+    const commitLate = () => {
+        if (!state.late || state.late.done) {
+            return;
+        }
+        const a = state.late.attempt;
+        a.answered++;
+        if (a.answered >= length && !options.extraslots) {
+            a.state = 'complete';
+        } else {
+            a.slots++;
+        }
+        state.late.done = true;
     };
     if (options.baseline !== undefined || options.complete) {
         const answered = options.complete ? length : options.baseline;
@@ -87,7 +116,7 @@ async function start(options = {}) {
         switch (fn) {
             case 'local_catquizlab_job_claim': {
                 state.contracts.push(params.contract);
-                if (options.strictcontract && Number(params.contract || 0) < 1) {
+                if (options.strictcontract && Number(params.contract || 0) < 2) {
                     return {hasjob: false, message: 'outdated worker', nextdue: 0};
                 }
                 state.claims++;
@@ -95,16 +124,31 @@ async function start(options = {}) {
                     return {hasjob: false, message: 'none', nextdue: 0};
                 }
                 return {hasjob: true, runid: 1, attemptid: 77, quizcmid: 5, userid: 2, username: 'catlab_u2',
-                    experimentid: 1, execution: options.baseline ? 2 : 1, correlationid: 'c0ffee',
+                    experimentid: 1, execution, executionid, correlationid: 'c0ffee',
                     budget: options.budget || 0, budgetkind: options.budget ? 'pool' : 'unknown',
-                    expectedlength: length, contract: 1, message: 'claimed'};
+                    expectedlength: length, contract: options.contract || 2, message: 'claimed'};
             }
             case 'local_catquizlab_worker_heartbeat':
-                return {acknowledged: true, stop: false};
+                if (Number(params.attemptid || 0) > 0) {
+                    state.executions.heartbeat.push(Number(params.executionid || 0));
+                }
+                return {acknowledged: true, stop: false, leaselost: fences && Number(params.attemptid || 0) > 0
+                    && Number(params.executionid || 0) !== executionid, leasefate: ''};
             case 'local_catquizlab_oracle_answer':
                 state.oracle++;
                 return {ready: true, choice: -1, fraction: 1, message: ''};
             case 'local_catquizlab_sitting_state': {
+                if (state.late) {
+                    state.statesafterlate++;
+                    if (options.ambiguousafter && state.statesafterlate >= 2) {
+                        return {found: false, reason: 'ambiguous-engine-attempt', engineattemptid: 0, qubaid: 0,
+                            bound: false, state: '', questionsattempted: 0, slots: 0, timemodified: 0};
+                    }
+                    if (!options.ambiguousafter && options.latecommitat !== 'view' && state.statesafterlate === 2) {
+                        // Stored after the first reconciliation had looked, before the worker is back in.
+                        commitLate();
+                    }
+                }
                 const a = bound ? state.attempts.find((x) => x.id === bound) : newest();
                 if (bound && !a) {
                     return {found: false, reason: 'identity-mismatch', engineattemptid: bound, qubaid: 0, bound: false,
@@ -118,6 +162,11 @@ async function start(options = {}) {
             }
             case 'local_catquizlab_sitting_bind': {
                 state.binds++;
+                state.executions.bind.push(Number(params.executionid || 0));
+                if (options.bindfence || (fences && Number(params.executionid || 0) !== executionid)) {
+                    return {...describe(null), reason: 'not-lease-holder', newly: false,
+                        fence: options.bindfence || 'other-execution'};
+                }
                 const shown = state.attempts.find((x) => x.quba === Number(params.qubaid));
                 if (!shown) {
                     return {...describe(null), reason: 'foreign-usage', newly: false};
@@ -131,6 +180,10 @@ async function start(options = {}) {
             }
             case 'local_catquizlab_job_complete':
                 state.reports.push(params);
+                state.executions.report.push(Number(params.executionid || 0));
+                if (fences && Number(params.executionid || 0) !== executionid) {
+                    return {acknowledged: false, message: 'stale', fence: 'other-execution', recovered: ''};
+                }
                 return {acknowledged: true, message: 'ok'};
             default:
                 return {};
@@ -180,6 +233,10 @@ async function start(options = {}) {
                 return send(200, PAGE('Dashboard', '<p>Dashboard</p>'));
             }
             if (path === '/mod/adaptivequiz/view.php') {
+                if (state.late && !state.late.done && options.latecommitat === 'view') {
+                    // Stored while the worker is on its way back in: the page it gets is the one after.
+                    commitLate();
+                }
                 const a = current();
                 if (a) {
                     return send(200, PAGE('Activity', `<form method="post" action="/mod/adaptivequiz/attempt.php">
@@ -211,6 +268,12 @@ async function start(options = {}) {
                     if (options.repeatat && slot >= options.repeatat) {
                         // Not stored: the same question again.
                         return redirect('/mod/adaptivequiz/attempt.php?cmid=5');
+                    }
+                    if (options.latecommit && !state.late && a.answered + 1 === options.latecommit) {
+                        // Taken in, not yet stored, and the browser gets a gateway error: an uncertain submission
+                        // whose answer the server stores later (re-audit 27.11.2026).
+                        state.late = {attempt: a, done: false, slot};
+                        return send(502, PAGE('Bad gateway', '<p>Bad gateway</p>'));
                     }
                     a.answered++;
                     if (a.answered >= length && !options.extraslots) {

@@ -73,7 +73,7 @@ const setQuestions = (questions) => {
     }
     setRegion('catquizlab-questions-text', questions.text);
     setRegion('catquizlab-questions-kind', questions.kindlabel);
-    setRegion('catquizlab-questions-discarded', questions.discardedtext || '');
+    setRegion('catquizlab-questions-apart', questions.aparttext || '');
     const bar = document.querySelector('[data-region="catquizlab-questions-bar"]');
     if (bar) {
         bar.style.width = `${questions.percent}%`;
@@ -219,19 +219,22 @@ const setBar = (region, percent, valuetext) => {
  */
 const applyRunRows = (runs) => {
     (runs || []).forEach((run) => {
-        setRegion(`catquizlab-run-${run.runid}-progress`, `${run.done} / ${run.total}`);
+        setRegion(`catquizlab-run-${run.runid}-progress`, run.sittingsshort || `${run.done} / ${run.total}`);
         if (run.questions) {
             setRegion(`catquizlab-run-${run.runid}-questions`, run.questions.text);
             const count = document.querySelector(`[data-region="catquizlab-run-${run.runid}-questions"]`);
             if (count && run.questions.done !== undefined) {
                 count.setAttribute('data-done', String(run.questions.done));
             }
-            setRegion(`catquizlab-run-${run.runid}-discarded`, run.questions.discardedtext || '');
+            setRegion(`catquizlab-run-${run.runid}-apart`, run.questions.aparttext || '');
         }
         if (run.statuslabel !== undefined) {
             setRegion(`catquizlab-run-${run.runid}-status`, run.statuslabel);
         }
-        setBar(`catquizlab-run-${run.runid}-bar`, run.percent, run.sittingstext);
+        // The run's bar is its questions where their total is known (#181), its sittings otherwise.
+        const percent = run.barpercent !== undefined ? run.barpercent : run.percent;
+        setBar(`catquizlab-run-${run.runid}-bar`, percent, run.bartext || run.sittingstext);
+        setRegion(`catquizlab-run-${run.runid}-bartext`, run.bartext || '');
         const bar = document.querySelector(`[data-region="catquizlab-run-${run.runid}-bar"]`);
         if (bar) {
             bar.classList.toggle('bg-danger', Boolean(run.held));
@@ -385,6 +388,7 @@ const applySnapshot = (status) => {
     setRegion('catquizlab-running', status.running);
     setRegion('catquizlab-collected', status.collected);
     setRegion('catquizlab-failed', status.failed);
+    setRegion('catquizlab-heldsittings', status.heldsittings);
     setRegion('catquizlab-cancelled', status.cancelled);
 
     (status.regions || []).forEach((region) => {

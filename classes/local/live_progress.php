@@ -158,9 +158,28 @@ class live_progress {
         // forecast's own reading, so the counter and the times rest on the same figures (#160 AK09).
         $questions = array_intersect_key($forecast['questions'], array_flip(array_column($rows, 'runid')));
         foreach ($rows as $i => $row) {
-            $rows[$i]['questions'] = self::question_text($questions[$row['runid']]);
+            $q = self::question_text($questions[$row['runid']]);
+            $rows[$i]['questions'] = $q;
+            // The run's bar is its questions where their total is known or estimated (#181 AK04): a classical run
+            // half way through its 2500 items with no sitting collected yet is at half, not at 0. Labelled with what
+            // the total is (exact, estimate, upper bound); the sittings are said beside it, apart.
+            $byquestions = $q['hasexpected'];
+            $rows[$i]['barpercent'] = $byquestions ? (int) $q['percent'] : $row['percent'];
+            $rows[$i]['barkind'] = $byquestions ? $q['kind'] : 'sittings';
+            $rows[$i]['bartext'] = $byquestions
+                ? get_string('progress:runbarquestions', $component, (object) ['text' => $q['text'], 'kind' => $q['kindlabel']])
+                : $row['sittingstext'];
+            $rows[$i]['sittingsshort'] = get_string(
+                'progress:sittingsshort',
+                $component,
+                (object) ['done' => $row['done'], 'total' => $row['total']]
+            );
         }
         $questiontotal = self::question_text(question_progress::total($questions));
+        $onhold = 0;
+        foreach ($questions as $q) {
+            $onhold += (int) ($q['sittings']['held'] ?? 0);
+        }
 
         $workers = $figures['workers'];
         $state = self::derive($runs, $totals, $workers, $experimentid, $rows);
@@ -188,7 +207,9 @@ class live_progress {
                 'inflight'  => $totals['running'],
                 'queued'    => $totals['queued'],
                 'collected' => $totals['done'],
-                'failed'    => $totals['failed'],
+                // Failed for good; those on hold (engine attempt open, resumable after a decision) apart (#181 AK06).
+                'failed'    => max(0, $totals['failed'] - $onhold),
+                'heldsittings' => $onhold,
                 'cancelled' => $totals['cancelled'],
             ],
         ];
@@ -304,9 +325,27 @@ class live_progress {
             ? get_string('questions:doneunknown', $component, $a)
             : get_string('questions:done' . $q['kind'], $component, $a);
         $q['kindlabel'] = get_string('questions:kind' . $q['kind'], $component);
-        // Work done that does not count, said apart (#141 AK5): never part of done or of the bar.
-        $q['discarded'] = (int) ($q['discarded'] ?? 0);
-        $q['discardedtext'] = $q['discarded'] > 0 ? get_string('questions:discarded', $component, $q['discarded']) : '';
+        // Said apart, never part of done or of the bar (#141 AK5, #180): answers of engine attempts a decision retired,
+        // answers of engine attempts no sitting owns; and, counted but not ahead, the kept answers of sittings on hold
+        // and what ended sittings will not answer without a decision. What does not add up is said too.
+        $apart = [];
+        foreach (['discarded', 'unknown', 'held', 'notahead'] as $key) {
+            $q[$key] = $key === 'notahead' && ($q[$key] ?? null) === null ? null : (int) ($q[$key] ?? 0);
+            $q[$key . 'text'] = (int) ($q[$key] ?? 0) > 0 ? get_string('questions:' . $key, $component, $q[$key]) : '';
+            if ($q[$key . 'text'] !== '') {
+                $apart[] = $q[$key . 'text'];
+            }
+        }
+        if (!empty($q['ambiguous'])) {
+            $apart[] = get_string('questions:ambiguous', $component, (int) $q['ambiguous']);
+        }
+        $q['diagnostics'] = $q['diagnostics'] ?? [];
+        $q['diagnosticstext'] = $q['diagnostics'] === [] ? ''
+            : get_string('questions:diagnostics', $component, implode(', ', $q['diagnostics']));
+        if ($q['diagnosticstext'] !== '') {
+            $apart[] = $q['diagnosticstext'];
+        }
+        $q['aparttext'] = implode(' · ', $apart);
         $q['hasexpected'] = $q['expected'] !== null;
         $q['percent'] = $q['percent'] ?? 0;
 

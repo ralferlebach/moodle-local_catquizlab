@@ -291,7 +291,7 @@ final class worker_capacity_test extends \advanced_testcase {
         for ($slot = 1; $slot <= 3; $slot++) {
             $person = $generator->create_person(['runid' => $run->id]);
             $held[$slot] = (int) $DB->insert_record('local_catquizlab_attempt', (object) ['runid' => $run->id,
-                'personid' => $person->id, 'status' => attempt_scheduler::STATUS_RUNNING, 'tries' => 1,
+                'personid' => $person->id, 'status' => attempt_scheduler::STATUS_RUNNING, 'tries' => 1, 'executionid' => 1,
                 'leaseowner' => 'w-' . $slot, 'leaseexpires' => time() + 120,
                 'timecreated' => time(), 'timemodified' => time()]);
         }
@@ -304,7 +304,7 @@ final class worker_capacity_test extends \advanced_testcase {
         $this->assertSame(1, worker_capacity::note_change());
 
         // The draining worker keeps its sitting: the lease renews, the reaper leaves it alone.
-        $this->assertTrue(attempt_scheduler::renew_lease('w-3', $held[3]));
+        $this->assertTrue(attempt_scheduler::renew_lease('w-3', $held[3], 1));
         $this->assertSame(0, attempt_scheduler::reclaim_stale(null, 600));
         $this->assertSame('w-3', (string) $DB->get_field('local_catquizlab_attempt', 'leaseowner', ['id' => $held[3]]));
         // It takes nothing new; the queued sitting goes to a worker below the limit, and only once.

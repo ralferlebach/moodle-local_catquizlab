@@ -108,7 +108,9 @@ class live_status extends external_api {
             'queued'         => $count(attempt_scheduler::STATUS_QUEUED),
             'running'        => $count(attempt_scheduler::STATUS_RUNNING),
             'collected'      => $count(attempt_scheduler::STATUS_COLLECTED),
-            'failed'         => $count(attempt_scheduler::STATUS_FAILED),
+            // Failed for good, as the page's queue says it; those on hold apart (#175 AK05, #181 AK06).
+            'failed'         => (int) $breakdown['failed'],
+            'heldsittings'   => (int) $breakdown['heldsittings'],
             // Closed by an operator (#166), never among the failed.
             'cancelled'      => $count(attempt_scheduler::STATUS_CANCELLED),
             'state'          => $verdict['state'],
@@ -209,9 +211,12 @@ class live_status extends external_api {
         $run = static fn(array $r): array => [
             'runid' => (int) $r['runid'], 'done' => (int) $r['done'], 'total' => (int) $r['total'],
             'percent' => (int) $r['percent'], 'held' => (bool) $r['held'], 'sittingstext' => (string) $r['sittingstext'],
+            'sittingsshort' => (string) ($r['sittingsshort'] ?? ''), 'barpercent' => (int) ($r['barpercent'] ?? $r['percent']),
+            'barkind' => (string) ($r['barkind'] ?? 'sittings'), 'bartext' => (string) ($r['bartext'] ?? $r['sittingstext']),
             'statuslabel' => (string) $r['statuslabel'],
             'questions' => ['text' => (string) $r['questions']['text'],
-                'discardedtext' => (string) $r['questions']['discardedtext']],
+                'discardedtext' => (string) $r['questions']['discardedtext'],
+                'aparttext' => (string) $r['questions']['aparttext']],
         ];
         $times = static fn(array $t): array => array_map(static fn(array $r): array => [
             'runid' => (int) $r['runid'], 'reliability' => (string) $r['reliability'],
@@ -416,9 +421,14 @@ class live_status extends external_api {
                     'percent' => new external_value(PARAM_INT, 'How far along.'),
                     'held' => new external_value(PARAM_BOOL, 'Held.'),
                     'sittingstext' => $text('Done of planned sittings.'),
+                    'sittingsshort' => $text('Done / planned sittings (#181).'),
+                    'barpercent' => new external_value(PARAM_INT, 'The bar: questions where known, else sittings (#181).'),
+                    'barkind' => new external_value(PARAM_ALPHA, 'exact, estimate, bound or sittings (#181).'),
+                    'bartext' => $text('The bar in words (#181).'),
                     'statuslabel' => $text('Its status.'),
                     'questions' => new external_single_structure(['text' => $text('Questions.'),
-                        'discardedtext' => $text('Questions that do not count.')]),
+                        'discardedtext' => $text('Questions that do not count.'),
+                        'aparttext' => $text('What is said apart from the count (#180).')]),
                 ])),
             ])),
         ], 'All experiments (#158), with experimentid 0 only.', VALUE_OPTIONAL);
@@ -437,7 +447,13 @@ class live_status extends external_api {
             'queued'         => new external_value(PARAM_INT, 'Attempts waiting.'),
             'running'        => new external_value(PARAM_INT, 'Attempts being played.'),
             'collected'      => new external_value(PARAM_INT, 'Attempts with a trace.'),
-            'failed'         => new external_value(PARAM_INT, 'Attempts that failed.'),
+            'failed'         => new external_value(PARAM_INT, 'Sittings failed for good (those on hold apart).'),
+            'heldsittings'   => new external_value(
+                PARAM_INT,
+                'Sittings on hold, resumable after a decision (#181).',
+                VALUE_DEFAULT,
+                0
+            ),
             'cancelled'      => new external_value(PARAM_INT, 'Attempts closed by an operator (#166).'),
             'state'          => new external_value(PARAM_ALPHA, 'The overall verdict.'),
             'headline'       => new external_value(PARAM_TEXT, 'One sentence about what is going on.'),
@@ -488,8 +504,28 @@ class live_status extends external_api {
                     'percent'     => new external_value(PARAM_INT, 'How far along, in questions.'),
                     'hasexpected' => new external_value(PARAM_BOOL, 'Whether there is a denominator.'),
                     'text'        => new external_value(PARAM_TEXT, 'Done of expected, in words.'),
-                    'discarded'   => new external_value(PARAM_INT, 'Answered in executions that do not count.'),
+                    'discarded'   => new external_value(PARAM_INT, 'Answered in engine attempts a recovery decision retired.'),
                     'discardedtext' => new external_value(PARAM_TEXT, 'That, in words, or empty.'),
+                    'unknown'     => new external_value(
+                        PARAM_INT,
+                        'Answered in engine attempts no sitting is bound to (#180).',
+                        VALUE_DEFAULT,
+                        0
+                    ),
+                    'held'        => new external_value(PARAM_INT, 'Kept in sittings on hold (#180).', VALUE_DEFAULT, 0),
+                    'notahead'    => new external_value(
+                        PARAM_INT,
+                        'Planned, not ahead: ended or on hold (#180); null unless a fixed form.',
+                        VALUE_DEFAULT,
+                        null,
+                        NULL_ALLOWED
+                    ),
+                    'aparttext'   => new external_value(
+                        PARAM_TEXT,
+                        'What is said apart from the count, in words, or empty (#180).',
+                        VALUE_DEFAULT,
+                        ''
+                    ),
                 ], 'Progress in questions (#141).', VALUE_OPTIONAL),
                 'runs'         => new \core_external\external_multiple_structure(
                     new external_single_structure([
@@ -503,6 +539,25 @@ class live_status extends external_api {
                         'cancelled' => new external_value(PARAM_INT, 'Closed by an operator (#166).', VALUE_DEFAULT, 0),
                         'complete' => new external_value(PARAM_BOOL, 'Whether it is done.'),
                         'sittingstext' => new external_value(PARAM_TEXT, 'Done of planned sittings, in words.', VALUE_OPTIONAL),
+                        'sittingsshort' => new external_value(PARAM_TEXT, 'Done / planned sittings (#181).', VALUE_DEFAULT, ''),
+                        'barpercent' => new external_value(
+                            PARAM_INT,
+                            'The bar: questions where known, else sittings (#181).',
+                            VALUE_DEFAULT,
+                            0
+                        ),
+                        'barkind' => new external_value(
+                            PARAM_ALPHA,
+                            'exact, estimate, bound or sittings (#181).',
+                            VALUE_DEFAULT,
+                            'sittings'
+                        ),
+                        'bartext' => new external_value(
+                            PARAM_TEXT,
+                            'The bar in words, for its value text (#181).',
+                            VALUE_DEFAULT,
+                            ''
+                        ),
                         'held'     => new external_value(PARAM_BOOL, 'Whether it was stopped.'),
                         'questions' => new external_single_structure([
                         'done'        => new external_value(PARAM_INT, 'Questions answered, confirmed by the engine.'),
@@ -518,8 +573,28 @@ class live_status extends external_api {
                         'percent'     => new external_value(PARAM_INT, 'How far along, in questions.'),
                         'hasexpected' => new external_value(PARAM_BOOL, 'Whether there is a denominator.'),
                         'text'        => new external_value(PARAM_TEXT, 'Done of expected, in words.'),
-                        'discarded'   => new external_value(PARAM_INT, 'Answered in executions that do not count.'),
+                        'discarded'   => new external_value(PARAM_INT, 'Answered in engine attempts a recovery decision retired.'),
                         'discardedtext' => new external_value(PARAM_TEXT, 'That, in words, or empty.'),
+                        'unknown'     => new external_value(
+                            PARAM_INT,
+                            'Answered in engine attempts no sitting is bound to (#180).',
+                            VALUE_DEFAULT,
+                            0
+                        ),
+                        'held'        => new external_value(PARAM_INT, 'Kept in sittings on hold (#180).', VALUE_DEFAULT, 0),
+                        'notahead'    => new external_value(
+                            PARAM_INT,
+                            'Planned, not ahead: ended or on hold (#180); null unless a fixed form.',
+                            VALUE_DEFAULT,
+                            null,
+                            NULL_ALLOWED
+                        ),
+                        'aparttext'   => new external_value(
+                            PARAM_TEXT,
+                            'What is said apart from the count, in words, or empty (#180).',
+                            VALUE_DEFAULT,
+                            ''
+                        ),
                         ], 'Progress in questions (#141).', VALUE_OPTIONAL),
                     ]),
                     'Per run.'
@@ -530,7 +605,13 @@ class live_status extends external_api {
                     'inflight'  => new external_value(PARAM_INT, 'Sittings being played.'),
                     'queued'    => new external_value(PARAM_INT, 'Sittings waiting.'),
                     'collected' => new external_value(PARAM_INT, 'Sittings done.'),
-                    'failed'    => new external_value(PARAM_INT, 'Sittings failed for good.'),
+                    'failed'    => new external_value(PARAM_INT, 'Sittings failed for good (those on hold apart, #181).'),
+                    'heldsittings' => new external_value(
+                        PARAM_INT,
+                        'Sittings on hold, resumable after a decision (#181).',
+                        VALUE_DEFAULT,
+                        0
+                    ),
                     'cancelled' => new external_value(PARAM_INT, 'Sittings closed by an operator (#166).', VALUE_DEFAULT, 0),
                 ], 'What is happening this second.'),
                 // Started, elapsed, finish, remaining (#125): computed on the

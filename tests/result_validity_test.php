@@ -88,9 +88,10 @@ final class result_validity_test extends \advanced_testcase {
         $v = $this->evaluate('fastest', 6, ['facts' => ['enginestatus' => 1]]);
         $this->assertSame([false, 'no_eligible_item_before_minimum'], [$v['valid'], $v['endcode']]);
 
-        // A time limit: valid where the minimum was reached, not valid before it — neither as such.
+        // A time limit: never a result, before or after the minimum (0.7.85, the completion contract: no lab design sets
+        // a time limit, so an end by one is the host's, not the design's — docs/dev/host-timeout.md).
         $v = $this->evaluate('fastest', 12, ['facts' => ['enginestatus' => 8]]);
-        $this->assertSame([true, 'timeout', []], [$v['valid'], $v['endcode'], $v['reasons']]);
+        $this->assertSame([false, 'timeout', ['timeout']], [$v['valid'], $v['endcode'], $v['reasons']]);
         $v = $this->evaluate('fastest', 5, ['facts' => ['enginestatus' => 8]]);
         $this->assertSame([false, 'timeout', ['timeout']], [$v['valid'], $v['endcode'], $v['reasons']]);
     }

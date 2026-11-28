@@ -80,6 +80,16 @@ class job_complete extends external_api {
                 VALUE_DEFAULT,
                 ''
             ),
+            // Last, as in execute(): Moodle hands the parameters over in this order (a report of 0.7.85 before
+            // this order failed in every web service call: its code went into the execution, #173).
+            'executionid'     => new external_value(
+                PARAM_INT,
+                'The execution\'s identity the worker was handed the sitting with (the claim\'s "executionid"). With '
+                    . 'the worker, the lease the report is applied under (#173, re-audit 27.11.2026); without it the '
+                    . 'report is fenced.',
+                VALUE_DEFAULT,
+                0
+            ),
         ]);
     }
 
@@ -94,6 +104,7 @@ class job_complete extends external_api {
      * @param string $diagnostics What the browser saw, as JSON.
      * @param string $workerid The reporting worker; '' from workers before 0.7.38.
      * @param string $reason The failure's code (#175); '' to read it from the message.
+     * @param int $execution The execution's identity the worker was handed the sitting with (#173).
      * @return array The acknowledgement.
      */
     public static function execute(
@@ -104,7 +115,8 @@ class job_complete extends external_api {
         string $message = '',
         string $diagnostics = '',
         string $workerid = '',
-        string $reason = ''
+        string $reason = '',
+        int $execution = 0
     ): array {
         $params = self::validate_parameters(self::execute_parameters(), [
             'attemptid'       => $attemptid,
@@ -115,6 +127,7 @@ class job_complete extends external_api {
             'diagnostics'     => $diagnostics,
             'workerid'        => $workerid,
             'reason'          => $reason,
+            'executionid'     => $execution,
         ]);
 
         $context = \context_system::instance();
@@ -161,43 +174,49 @@ class job_complete extends external_api {
             ];
         }
 
-        // A report from an execution that no longer holds the sitting (#133):
-        // its lease ran out and the sitting went back to the queue, or another
-        // worker has it now. Applied, it would overwrite the state of the
-        // execution that came after. Recorded, not applied — except a finished
-        // engine attempt for a sitting still waiting in the queue: that is a
-        // result, and playing it again would be the double sitting of #134.
+        // Applied is only the report of the execution that holds the lease (#133, #173): this worker, the execution
+        // it was handed the sitting as, and a lease that has not run out (lease_fence). Until 0.7.84 the worker's name
+        // was asked for alone, and only when it was sent: an old execution of a worker started again under the same
+        // name, or a report without a name, was applied to the sitting of the execution after it. A fenced report is
+        // recorded and changes nothing it says — not the status, not the trace, not the binding. What is left to do,
+        // the server decides from its own state (recover_after_fenced_report()): a lapsed lease is handed back, a
+        // sitting whose own engine attempt is complete is collected — once, however often the report comes.
         $reporter = (string) $params['workerid'];
-        if (
-            $reporter !== '' && ((int) $attempt->status !== attempt_scheduler::STATUS_RUNNING
-                || (string) ($attempt->leaseowner ?? '') !== $reporter)
-        ) {
-            // The sitting's own engine attempt (#173): bound, or the account's only one — and the one the late report
-            // names, when it names one. A complete attempt of another identity is not this sitting's result.
-            $late = \local_catquizlab\external\sitting_state::state($attemptid);
-            $accept = $status === 'finished' && (int) $attempt->status === attempt_scheduler::STATUS_QUEUED
-                && $late['found'] && $late['state'] === 'complete'
-                && ($engineattemptid <= 0 || $engineattemptid === (int) $late['engineattemptid']);
-            if (!$accept) {
-                \local_catquizlab\local\attempt_history::record($attemptid, \local_catquizlab\local\attempt_history::STALE, [
-                    'workerid' => $reporter,
-                    'detail' => sprintf('late report from %s ignored (%s): %s', $reporter, $status, (string) $params['message']),
-                    'extra' => (array) (json_decode((string) $params['diagnostics'], true) ?: []),
-                ]);
-                return [
-                    'acknowledged' => false,
-                    'message'      => get_string('job:stale', 'local_catquizlab'),
-                ];
-            }
-            $engineattemptid = (int) $late['engineattemptid'];
-            $DB->set_field('local_catquizlab_attempt', 'leaseowner', $reporter, ['id' => $attemptid]);
-            $attempt->leaseowner = $reporter;
+        $execution = (int) $params['executionid'];
+        $fence = \local_catquizlab\local\lease_fence::check($attempt, $reporter, $execution);
+        if ($fence !== \local_catquizlab\local\lease_fence::HOLDS) {
+            \local_catquizlab\local\attempt_history::record($attemptid, \local_catquizlab\local\attempt_history::STALE, [
+                'workerid' => $reporter !== '' ? $reporter : null,
+                'executionid' => $execution,
+                'detail' => sprintf(
+                    'report of %s, execution #%d (%s), fenced (%s), not applied: %s',
+                    $reporter !== '' ? $reporter : '?',
+                    $execution,
+                    $status,
+                    $fence,
+                    (string) $params['message']
+                ),
+                'extra' => (array) (json_decode((string) $params['diagnostics'], true) ?: []) + ['fence' => $fence,
+                    'reported' => ['status' => $status, 'engineattemptid' => $engineattemptid, 'runtimems' => $runtimems],
+                    'server' => \local_catquizlab\local\engine_identity::snapshot($attemptid, 'job_complete:fenced')],
+            ]);
+            $recovered = attempt_scheduler::recover_after_fenced_report($attemptid, $execution);
+
+            return [
+                'acknowledged' => false,
+                'message'      => get_string('job:stale', 'local_catquizlab'),
+                'fence'        => $fence,
+                'recovered'    => $recovered,
+            ];
         }
 
         // The engine attempt a finished report is collected from is the sitting's own (#173): the one bound to it,
         // or — for a sitting no execution bound — the account's only attempt on the activity. The worker's id, when
         // it sends one, has to be that one; a report naming another attempt, or a sitting with two unbound attempts,
         // is not collected: it is failed with the reason and held for a person to look at.
+        // What the server itself reads of the sitting's engine attempt now (#176 AK02): kept with the outcome, beside
+        // what the worker reports — the worker's count is the worker's, this is the engine's.
+        $server = \local_catquizlab\local\engine_identity::snapshot($attemptid, 'job_complete');
         $identityproblem = '';
         if ($status === 'finished') {
             $resolved = \local_catquizlab\local\engine_identity::for_collection($attemptid, $engineattemptid);
@@ -247,7 +266,13 @@ class job_complete extends external_api {
                 // The engine's person parameters of this person are not touched here (#174): the collector removes
                 // them once the trace is stored, and a sitting still waiting for its trace needs them — its standard
                 // errors are read from them.
-                $collected = attempt_scheduler::collect_or_hold($attemptid, $reporter, $engineattemptid, $set);
+                $collected = attempt_scheduler::collect_or_hold(
+                    $attemptid,
+                    $reporter,
+                    $engineattemptid,
+                    $set,
+                    'worker-report'
+                );
             }
         } else {
             // The worker's own reason for a failure, kept where the interface can
@@ -279,7 +304,8 @@ class job_complete extends external_api {
                 // The browser's own record, kept with the diagnosis (#100) —
                 // and how long the lease was held, from the claim (#133).
                 'extra'           => (array) (json_decode((string) ($params['diagnostics'] ?? ''), true) ?: [])
-                    + ['lease' => self::lease_held($attemptid, (int) $attempt->tries, (int) ($attempt->leaseexpires ?? 0))],
+                    + ['lease' => self::lease_held($attemptid, (int) $attempt->tries, (int) ($attempt->leaseexpires ?? 0)),
+                        'server' => $server],
             ]
         );
 
@@ -372,6 +398,17 @@ class job_complete extends external_api {
             // angle brackets and newlines, and the input side already had to
             // be widened for exactly that.
             'message'      => new external_value(PARAM_RAW, 'Human-readable status.'),
+            'fence'        => new external_value(
+                PARAM_ALPHANUMEXT,
+                'Why the report was not applied: the reporter does not hold the lease (#173); empty when it was.',
+                VALUE_OPTIONAL
+            ),
+            'recovered'    => new external_value(
+                PARAM_ALPHA,
+                'What the server did from its own state after a fenced report: reclaimed, collected, tracepending; '
+                    . 'empty for nothing.',
+                VALUE_OPTIONAL
+            ),
         ]);
     }
 }

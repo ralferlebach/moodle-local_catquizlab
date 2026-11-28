@@ -202,7 +202,7 @@ class experiment_resume {
         global $DB;
 
         $none = ['runs' => 0, 'prepared' => 0, 'requeued' => 0, 'collecting' => 0, 'blocked' => 0, 'held' => 0,
-            'queue' => []];
+            'ambiguous' => 0, 'queue' => []];
         $lock = \core\lock\lock_config::get_lock_factory('local_catquizlab_resume')->get_lock('e' . $experimentid, 10);
         if (!$lock) {
             return ['ok' => false, 'reason' => 'busy'] + $none;
@@ -213,6 +213,7 @@ class experiment_resume {
                 return ['ok' => false, 'reason' => $preview['reason']] + $none;
             }
             $engine = self::engine_attempts(array_column($preview['runs'], 'runid'));
+            $ambiguous = self::ambiguous_sittings(array_column($preview['runs'], 'runid'));
             $done = $none;
             $transaction = $DB->start_delegated_transaction();
             foreach ($preview['runs'] as $run) {
@@ -226,6 +227,15 @@ class experiment_resume {
                     $done['prepared']++;
                     $done['runs']++;
                     continue;
+                }
+                // Two or more engine attempts of the person, none bound (#173 AK08, re-audit 27.11.2026; CLARA run 103:
+                // all fifty sittings): which one is the sitting's is not known. Not queued again — the next execution
+                // would only find the same — but held, with the reason, until a person decides (cli/sitting_recovery.php).
+                foreach ($ambiguous[$runid] ?? [] as $sittingid => $count) {
+                    $DB->set_field('local_catquizlab_attempt', 'lasterror', '[identity:' . engine_identity::AMBIGUOUS . '] '
+                        . get_string('history:resumeambiguous', 'local_catquizlab', $count), ['id' => $sittingid]);
+                    attempt_scheduler::hold($sittingid, 'identity_mismatch');
+                    $done['ambiguous']++;
                 }
                 // Finished in the engine after the stop: collected from its engine attempt, not played again (AK4).
                 foreach ($engine[$runid] ?? [] as $sittingid => $attempt) {
@@ -267,6 +277,8 @@ class experiment_resume {
                 }
                 $done['requeued'] += count($ids);
                 $done['held'] += $run['held'] !== '' ? 1 : 0;
+                // The host's limit as it applies now: the stop did not stop its clock (AK05).
+                host_time_limit::record($runid, 'resumed');
                 run_lifecycle::set_status($runid, registry::STATUS_READY, self::REASON, ['timemodified' => time()]);
                 run_log::record($runid, run_log::RUN_RESUMED, ['requeued' => count($ids), 'why' => self::REASON]);
                 $done['runs']++;
@@ -358,15 +370,57 @@ class experiment_resume {
                JOIN {course_modules} cm ON cm.id = r.testcmid
                JOIN {adaptivequiz_attempt} aa ON aa.userid = p.moodleuserid AND aa.instance = cm.instance
               WHERE a.runid {$insql} AND a.status = :cancelled AND a.tries > 0
+                    AND NOT EXISTS (SELECT 1 FROM {local_catquizlab_retired} rt
+                                     WHERE rt.attemptid = a.id AND rt.engineattemptid = aa.id)
                     AND ((a.engineattemptid > 0 AND aa.id = a.engineattemptid)
                          OR ((a.engineattemptid IS NULL OR a.engineattemptid = 0)
                              AND (SELECT COUNT(1) FROM {adaptivequiz_attempt} n
-                                   WHERE n.userid = aa.userid AND n.instance = aa.instance) = 1))",
+                                   WHERE n.userid = aa.userid AND n.instance = aa.instance
+                                         AND NOT EXISTS (SELECT 1 FROM {local_catquizlab_retired} rn
+                                                          WHERE rn.attemptid = a.id AND rn.engineattemptid = n.id)) = 1))",
             $params + ['cancelled' => attempt_scheduler::STATUS_CANCELLED]
         );
         foreach ($rows as $row) {
             $out[(int) $row->runid][(int) $row->sittingid] = ['id' => (int) $row->engineid,
                 'complete' => (string) $row->attemptstate === 'complete'];
+        }
+        $rows->close();
+
+        return $out;
+    }
+
+    /**
+     * The sittings a stop closed that have two or more engine attempts of their person on the activity, none bound
+     * and none retired: ambiguous (#173 AK08).
+     *
+     * @param int[] $runids The runs.
+     * @return array<int, array<int, int>> Run id => sitting id => how many attempts.
+     */
+    protected static function ambiguous_sittings(array $runids): array {
+        global $DB;
+
+        $out = [];
+        if ($runids === [] || !$DB->get_manager()->table_exists('adaptivequiz_attempt')) {
+            return $out;
+        }
+        [$insql, $params] = $DB->get_in_or_equal($runids, SQL_PARAMS_NAMED, 'run');
+        $rows = $DB->get_recordset_sql(
+            "SELECT a.id AS sittingid, a.runid, COUNT(aa.id) AS candidates
+               FROM {local_catquizlab_attempt} a
+               JOIN {local_catquizlab_person} p ON p.id = a.personid
+               JOIN {local_catquizlab_run} r ON r.id = a.runid
+               JOIN {course_modules} cm ON cm.id = r.testcmid
+               JOIN {adaptivequiz_attempt} aa ON aa.userid = p.moodleuserid AND aa.instance = cm.instance
+              WHERE a.runid {$insql} AND a.status = :cancelled
+                    AND (a.engineattemptid IS NULL OR a.engineattemptid = 0)
+                    AND NOT EXISTS (SELECT 1 FROM {local_catquizlab_retired} rt
+                                     WHERE rt.attemptid = a.id AND rt.engineattemptid = aa.id)
+           GROUP BY a.id, a.runid
+             HAVING COUNT(aa.id) > 1",
+            $params + ['cancelled' => attempt_scheduler::STATUS_CANCELLED]
+        );
+        foreach ($rows as $row) {
+            $out[(int) $row->runid][(int) $row->sittingid] = (int) $row->candidates;
         }
         $rows->close();
 

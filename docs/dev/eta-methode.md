@@ -73,6 +73,12 @@ des Experiments fertig ist; dazu die eigene Restarbeit des ganzen Experiments.
      also am Ende ihres Experiments.
    - Bis 0.7.64 galt `nextruntime`, dann `timecreated`, dann `id` über alle Experimente: Das war die Reihenfolge des
      Claims, aber nicht die der Ausführungswarteschlange (#163).
+   - Seit 0.7.85 (#180) behält eine wartende Testbearbeitung ihren gebundenen Engine-Versuch und setzt ihn fort.
+     - Ihre behaltenen Antworten zählen in Einheiten von Testbearbeitungen von ihrer Gruppe ab
+       (`eta::queued_credit()` = behaltene Antworten / Fragen je Testbearbeitung).
+     - Das gilt ebenso für die eigene Arbeit und für die Arbeit, die vor einem Lauf liegt.
+     - Die Antworten kommen aus `question_progress` (gebundene Versuche, Eimer `queued`). Es gibt keinen zweiten
+       Zähler.
 2. **Kapazität** = Belegzeit im Messfenster / Fensterlänge, höchstens so viele Slots, wie Worker laufen (#160 AK07).
    - **Fenster:** max(10 min, 3 × mittlere Dauer), höchstens seit Beginn der Belegung im Fenster.
    - **Belegzeit:** Von einer Ausführung, die vor dem Fenster begann, zählt nur der Teil im Fenster. Laufende
@@ -196,3 +202,39 @@ möglicherweise veraltet (`eta:stale`), bevor nach drei Fehlern das Aktualisiere
     Anteil Enden in der Spanne.
 - **`tests/playwright/progress_time.spec.js`:** die getrennten Spalten, die Hilfe zu den Zeitbegriffen, Tastatur,
   kleiner Bildschirm. Poll und Seite zeigen dieselben Werte.
+
+## Stichproben, Tempo und beendete Läufe (#181, 0.7.85)
+
+Ausgangslage: CLARA, Run 121.
+- Die Seite zeigte bei 0 von 50 eingesammelten Bearbeitungen eine Schätzung „aus seinen eigenen 20 beendeten
+  Testbearbeitungen“. Diese 20 waren Ausführungen, die nach einem Verbindungs-Timeout abgebrochen waren.
+- Der Balken des Runs stand bei 0 %, obwohl schon etwa die Hälfte der Fragen beantwortet war.
+- Beendete Runs zeigten „Nichts mehr übrig“ auch dann, wenn eine Bearbeitung angehalten war.
+
+Was jetzt gilt:
+
+- **Dauer-Stichprobe** (`run_figures`, `sample`/`recent`): Sie besteht nur aus ganzen Bearbeitungen. Gemeint sind
+  Bearbeitungen, die
+  - in einer Ausführung regulär eingesammelt wurden, also höchstens einen Start in der Historie haben,
+  - eine Laufzeit haben,
+  - und deren Abschluss weder technisch noch unvollständig ist (Abschlussvertrag, #179).
+
+  Fehlgeschlagene oder abgebrochene Ausführungen und der letzte Teil einer wiederholten Bearbeitung sind keine
+  Stichprobe. Sie werden als `partial` gezählt.
+- **Tempo** (`pace_of`): Es misst die Antworten der laufenden Ausführungen seit ihrer Bindung, also die Antworten
+  abzüglich des Serverstands beim Binden (`flyingbaseline` aus dem Server-Snapshot der `bound`-Zeile), geteilt durch
+  ihre Laufzeit. Eine fortgesetzte Bearbeitung zählt ihre früheren Antworten nicht als jetzt gegebene. Fehlt einer
+  laufenden Bearbeitung der Snapshot, gibt es kein Tempo.
+- **Warteschlange:** Behaltene Antworten wartender Bearbeitungen werden abgezogen (#180, oben).
+- **Beendeter Lauf** (`FINAL`):
+  - Das Ende ist das `run_finished` des Run-Logs, sonst das Ende der letzten Ausführung. Die aktuelle Uhrzeit wird
+    nie eingesetzt, und ein unbekanntes Ende bleibt unbekannt.
+  - Die Dauer ist eingefroren: Ende minus erster Start.
+  - Es gibt keine Restzeit, kein Band und keine Grundlage.
+  - Endgültig fehlgeschlagene Bearbeitungen werden genannt („… ohne Ergebnis“).
+- **Angehaltene Bearbeitungen** (`RECOVERABLE`, neu): Es ist nichts mehr zu spielen, aber Bearbeitungen sind
+  angehalten und ihr Engine-Versuch ist offen. Dann zeigt die Seite „wartet auf eine Entscheidung“ statt „Nichts mehr
+  übrig“. Es gibt keine Prognose und kein Ende, für den Run wie für das Experiment.
+- **Balken des Runs:** Er zeigt die Fragen, wo ihre Gesamtzahl bekannt oder geschätzt ist (`barpercent`, `barkind`).
+  Wert-Text und Beschriftung nennen Fragen und die Art der Gesamtzahl. Die Bearbeitungen stehen daneben
+  („3 / 50 Bearbeitungen“). Seite und Poll verwenden dieselben Felder.

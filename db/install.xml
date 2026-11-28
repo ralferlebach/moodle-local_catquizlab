@@ -193,6 +193,8 @@
         <FIELD NAME="tries" TYPE="int" LENGTH="4" NOTNULL="true" DEFAULT="0" SEQUENCE="false" COMMENT="Number of times the attempt has been claimed/tried (for retry limiting)."/>
         <FIELD NAME="leaseowner" TYPE="char" LENGTH="100" NOTNULL="false" SEQUENCE="false" COMMENT="Worker instance holding the claim. A claim without an owner cannot be recovered deliberately, only by a timeout that guesses."/>
         <FIELD NAME="leaseexpires" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false" COMMENT="When the claim lapses. Recovery reads this rather than timemodified, which a long attempt keeps refreshing."/>
+        <FIELD NAME="executionid" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false" COMMENT="The execution holding the claim: the id of its STARTED history row (#173). Unique and never reused, unlike tries, which a reset clears; every call that changes the sitting on a worker's behalf has to name it."/>
+        <FIELD NAME="completionjson" TYPE="text" NOTNULL="false" SEQUENCE="false" COMMENT="How the sitting's engine attempt ended, by the completion contract: host state, technical end, trace, regular result or not, recovery, and who decided when (completion_contract)."/>
         <FIELD NAME="lasterror" TYPE="text" NOTNULL="false" SEQUENCE="false" COMMENT="The worker's own reason for the last failure, kept so the interface can show why an attempt is being retried."/>
         <FIELD NAME="nextruntime" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false" COMMENT="Earliest time the attempt may be (re)claimed; used for staggering and retry backoff."/>
         <FIELD NAME="timecreated" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
@@ -400,6 +402,7 @@
         <FIELD NAME="attemptid" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="false" COMMENT="The sitting."/>
         <FIELD NAME="runid" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="false" COMMENT="Its run, so a run's history reads without a join."/>
         <FIELD NAME="tryno" TYPE="int" LENGTH="4" NOTNULL="true" DEFAULT="0" SEQUENCE="false" COMMENT="Which execution this was."/>
+        <FIELD NAME="executionid" TYPE="int" LENGTH="10" NOTNULL="false" SEQUENCE="false" COMMENT="The execution's identity (local_catquizlab_attempt.executionid when it was recorded): try numbers repeat after a reset, this does not (#173, #176)."/>
         <FIELD NAME="outcome" TYPE="char" LENGTH="20" NOTNULL="true" SEQUENCE="false" COMMENT="started, collected, failed, requeued or abandoned."/>
         <FIELD NAME="workerid" TYPE="char" LENGTH="100" NOTNULL="false" SEQUENCE="false" COMMENT="Which worker played it."/>
         <FIELD NAME="engineattemptid" TYPE="int" LENGTH="10" NOTNULL="false" SEQUENCE="false" COMMENT="The engine attempt it produced."/>
@@ -441,6 +444,26 @@
       </KEYS>
       <INDEXES>
         <INDEX NAME="attemptid-decision" UNIQUE="false" FIELDS="attemptid, decision"/>
+      </INDEXES>
+    </TABLE>
+    <TABLE NAME="local_catquizlab_retired" COMMENT="Engine attempts an explicit recovery decision took out of a sitting (#173, re-audit 27.11.2026): no longer its own, never chosen, bound or collected for it again. One row per attempt and decision, never changed.">
+      <FIELDS>
+        <FIELD NAME="id" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="true"/>
+        <FIELD NAME="attemptid" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="false" COMMENT="The sitting (local_catquizlab_attempt)."/>
+        <FIELD NAME="engineattemptid" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="false" COMMENT="The engine attempt retired (adaptivequiz_attempt)."/>
+        <FIELD NAME="qubaid" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false" COMMENT="Its question usage when retired."/>
+        <FIELD NAME="state" TYPE="char" LENGTH="20" NOTNULL="false" SEQUENCE="false" COMMENT="Its attemptstate when retired."/>
+        <FIELD NAME="answered" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false" COMMENT="Its questionsattempted when retired."/>
+        <FIELD NAME="reason" TYPE="char" LENGTH="40" NOTNULL="true" SEQUENCE="false" COMMENT="Why: a code of the recovery decision (sitting_recovery)."/>
+        <FIELD NAME="note" TYPE="char" LENGTH="255" NOTNULL="false" SEQUENCE="false" COMMENT="The decision in a few words."/>
+        <FIELD NAME="userid" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false" COMMENT="Who decided."/>
+        <FIELD NAME="timecreated" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="false"/>
+      </FIELDS>
+      <KEYS>
+        <KEY NAME="primary" TYPE="primary" FIELDS="id"/>
+      </KEYS>
+      <INDEXES>
+        <INDEX NAME="attemptid-engineattemptid" UNIQUE="true" FIELDS="attemptid, engineattemptid"/>
       </INDEXES>
     </TABLE>
   </TABLES>

@@ -64,7 +64,7 @@ final class orphaned_engine_attempt_test extends \advanced_testcase {
         $DB->set_field('local_catquizlab_run', 'testcmid', $cmid, ['id' => $run->id]);
         $person = $generator->create_person(['runid' => $run->id, 'moodleuserid' => $user->id]);
         $attemptid = (int) $DB->insert_record('local_catquizlab_attempt', (object) ['runid' => $run->id,
-            'personid' => $person->id, 'status' => attempt_scheduler::STATUS_RUNNING, 'tries' => 1,
+            'personid' => $person->id, 'status' => attempt_scheduler::STATUS_RUNNING, 'tries' => 1, 'executionid' => 1,
             'leaseowner' => 'worker-gone', 'leaseexpires' => $leaseexpires,
             'timecreated' => time() - 900, 'timemodified' => time() - 900]);
         $engine = 0;
@@ -149,8 +149,8 @@ final class orphaned_engine_attempt_test extends \advanced_testcase {
     }
 
     /**
-     * A late "finished" for a sitting back in the queue, with a complete engine attempt, is accepted once.
-     * A late report of any other kind is recorded and ignored.
+     * A late report for a sitting back in the queue is recorded and not applied (#173): whatever it says, the server
+     * decides from its own state — a complete engine attempt of the sitting is collected from the server, once.
      *
      * @return void
      */
@@ -169,7 +169,7 @@ final class orphaned_engine_attempt_test extends \advanced_testcase {
         ));
 
         // An error report of the vanished execution: not applied.
-        $answer = job_complete::execute($attemptid, 'failed', 1000, 0, 'browser crashed', '{}', 'worker-gone');
+        $answer = job_complete::execute($attemptid, 'failed', 1000, 0, 'browser crashed', '{}', 'worker-gone', '', 1);
         $this->assertFalse($answer['acknowledged']);
         $this->assertSame(attempt_scheduler::STATUS_QUEUED, (int) $DB->get_field(
             'local_catquizlab_attempt',
@@ -178,10 +178,13 @@ final class orphaned_engine_attempt_test extends \advanced_testcase {
         ));
         $this->assertContains(attempt_history::STALE, $this->events($attemptid));
 
-        // The engine finished it after all: the late "finished" is a result, taken instead of a second sitting.
+        // The engine finished it after all: the late "finished" is not taken as such, but has the server collect its
+        // complete engine attempt instead of playing a second sitting.
         $DB->set_field('adaptivequiz_attempt', 'attemptstate', 'complete', ['id' => $engine]);
-        $answer = job_complete::execute($attemptid, 'finished', 1000, 0, '', '{}', 'worker-gone');
-        $this->assertTrue($answer['acknowledged']);
+        $answer = job_complete::execute($attemptid, 'finished', 1000, 0, '', '{}', 'worker-gone', '', 1);
+        $this->assertFalse($answer['acknowledged']);
+        $this->assertSame(\local_catquizlab\local\lease_fence::NOT_RUNNING, $answer['fence']);
+        $this->assertContains($answer['recovered'], ['collected', 'tracepending']);
         $row = $DB->get_record('local_catquizlab_attempt', ['id' => $attemptid]);
         $this->assertNotEquals(attempt_scheduler::STATUS_QUEUED, (int) $row->status, 'not played a second time');
         $this->assertSame($engine, (int) $row->engineattemptid);
@@ -288,7 +291,17 @@ final class orphaned_engine_attempt_test extends \advanced_testcase {
         // The worker continues the same engine attempt (worker/test/resume.test.js): three more questions, finished.
         $this->present($engine, [106, 107, 108]);
         $DB->set_field('adaptivequiz_attempt', 'attemptstate', 'complete', ['id' => $engine]);
-        $done = job_complete::execute($attemptid, 'finished', 2000, $engine, '', '{}', 'worker-new');
+        $done = job_complete::execute(
+            $attemptid,
+            'finished',
+            2000,
+            $engine,
+            '',
+            '{}',
+            'worker-new',
+            '',
+            (int) $claim['executionid']
+        );
         $this->assertTrue($done['acknowledged']);
         $row = $DB->get_record('local_catquizlab_attempt', ['id' => $attemptid]);
         $this->assertSame($engine, (int) $row->engineattemptid);

@@ -71,7 +71,7 @@ final class trace_integrity_test extends \advanced_testcase {
             'uniqueid' => 0, 'attemptstate' => 'complete', 'attemptstopcriteria' => '', 'questionsattempted' => 7,
             'timecreated' => time(), 'timemodified' => time()]);
         $attemptid = (int) $DB->insert_record('local_catquizlab_attempt', (object) ['runid' => $run->id,
-            'personid' => $person->id, 'status' => attempt_scheduler::STATUS_RUNNING, 'tries' => 1,
+            'personid' => $person->id, 'status' => attempt_scheduler::STATUS_RUNNING, 'tries' => 1, 'executionid' => 1,
             'leaseowner' => 'w-1', 'leaseexpires' => time() + 300, 'timecreated' => time(), 'timemodified' => time()]);
 
         return [$attemptid, $engine, (int) $run->id];
@@ -98,7 +98,7 @@ final class trace_integrity_test extends \advanced_testcase {
         $this->setAdminUser();
         [$attemptid, $engine, $runid] = $this->finished_without_data();
 
-        $answer = job_complete::execute($attemptid, 'finished', 3000, $engine, '', '{}', 'w-1');
+        $answer = job_complete::execute($attemptid, 'finished', 3000, $engine, '', '{}', 'w-1', '', 1);
         $this->assertTrue($answer['acknowledged']);
 
         $row = $DB->get_record('local_catquizlab_attempt', ['id' => $attemptid]);
@@ -141,8 +141,8 @@ final class trace_integrity_test extends \advanced_testcase {
         $this->setAdminUser();
         [$attemptid, $engine] = $this->finished_without_data();
 
-        job_complete::execute($attemptid, 'finished', 3000, $engine, '', '{}', 'w-1');
-        $second = job_complete::execute($attemptid, 'finished', 3000, $engine, '', '{}', 'w-1');
+        job_complete::execute($attemptid, 'finished', 3000, $engine, '', '{}', 'w-1', '', 1);
+        $second = job_complete::execute($attemptid, 'finished', 3000, $engine, '', '{}', 'w-1', '', 1);
         $this->assertFalse($second['acknowledged']);
         $this->assertSame(attempt_scheduler::STATUS_TRACEPENDING, (int) $DB->get_field(
             'local_catquizlab_attempt',
@@ -162,7 +162,7 @@ final class trace_integrity_test extends \advanced_testcase {
         $this->resetAfterTest();
         $this->setAdminUser();
         [$attemptid, $engine, $runid] = $this->finished_without_data();
-        job_complete::execute($attemptid, 'finished', 3000, $engine, '', '{}', 'w-1');
+        job_complete::execute($attemptid, 'finished', 3000, $engine, '', '{}', 'w-1', '', 1);
 
         // Not yet due: nothing happens.
         $this->assertSame(
@@ -208,7 +208,7 @@ final class trace_integrity_test extends \advanced_testcase {
         $this->resetAfterTest();
         $this->setAdminUser();
         [$attemptid, $engine, $runid] = $this->finished_without_data();
-        job_complete::execute($attemptid, 'finished', 3000, $engine, '', '{}', 'w-1');
+        job_complete::execute($attemptid, 'finished', 3000, $engine, '', '{}', 'w-1', '', 1);
 
         $none = static fn(int $id): ?array => null;
         $clock = time();
@@ -360,7 +360,7 @@ final class trace_integrity_test extends \advanced_testcase {
         [$attemptid, $engine, $runid] = $this->finished_without_data();
         $this->answered($engine, [9101 => 1.0, 9102 => 0.0, 9103 => 1.0]);
 
-        job_complete::execute($attemptid, 'finished', 2500, $engine, '', '{}', 'w-1');
+        job_complete::execute($attemptid, 'finished', 2500, $engine, '', '{}', 'w-1', '', 1);
         $row = $DB->get_record('local_catquizlab_attempt', ['id' => $attemptid]);
         $this->assertSame(attempt_scheduler::STATUS_TRACEPENDING, (int) $row->status);
         $this->assertNull($row->tracejson);
@@ -435,7 +435,7 @@ final class trace_integrity_test extends \advanced_testcase {
             $this->assertNotNull($held);
 
             // The report: not applied, said so, nothing written or recorded.
-            $answer = job_complete::execute($attemptid, 'finished', 3000, $engine, '', '{}', 'w-1');
+            $answer = job_complete::execute($attemptid, 'finished', 3000, $engine, '', '{}', 'w-1', '', 1);
             $this->assertFalse($answer['acknowledged']);
             $this->assertSame(get_string('job:busy', 'local_catquizlab'), $answer['message']);
             $row = $DB->get_record('local_catquizlab_attempt', ['id' => $attemptid]);
@@ -527,7 +527,7 @@ final class trace_integrity_test extends \advanced_testcase {
         $this->setAdminUser();
         [$attemptid, $engine, $runid] = $this->finished_without_data();
         \local_catquizlab\local\debug_trace::continue_correlation('wkr-correlation-138');
-        job_complete::execute($attemptid, 'finished', 3000, $engine, '', '{}', 'w-1');
+        job_complete::execute($attemptid, 'finished', 3000, $engine, '', '{}', 'w-1', '', 1);
 
         $none = static fn(int $id): ?array => null;
         $clock = time();

@@ -41,7 +41,7 @@ use local_catquizlab\local\trace_digest;
  * | C | every answer correct | invalid (fraction_all_correct) | invalid |
  * | D | in order by the rules, the engine disagrees | valid | invalid |
  * | E | the engine said nothing; the rules measured from the trace | valid | unknown |
- * | F | fewer questions than the minimum | invalid (min_questions); valid for the classical test, which has none | invalid |
+ * | F | fewer questions than the minimum | invalid (min_questions); classical: a broken form (0.7.85) | invalid |
  * | G | standard error above the maximum | invalid (se_max); valid for the classical test, which has none | invalid |
  * | H | a trace without items or answers, the engine said nothing | unknown | unknown |
  * | I | failed technically | not collected | not collected |
@@ -204,8 +204,9 @@ final class validity_matrix_test extends \advanced_testcase {
             foreach ($playable as $strategy) {
                 foreach (self::EXPECTED as $kind => [$uniform, $engine]) {
                     $state = $column === 0 ? $uniform : $engine;
-                    // The classical test has no minimum and no standard error to keep (strategy_catalog).
-                    if ($column === 0 && $strategy === 'classic' && in_array($kind, ['F', 'G'], true)) {
+                    // The classical test has no standard error to keep (strategy_catalog); five of its items are a form
+                    // broken off, not the design's end, whatever the host said (0.7.85: invalid, as before for others).
+                    if ($column === 0 && $strategy === 'classic' && $kind === 'G') {
                         $state = 'valid';
                     }
                     if ($state !== null) {
@@ -283,7 +284,7 @@ final class validity_matrix_test extends \advanced_testcase {
         $population = $package['analysis']['population'] ?? [];
         $this->assertEquals(
             ['planned' => 10 * $strategies, 'failed' => $strategies, 'evaluated' => 8 * $strategies,
-            'valid' => 3 * $strategies + 2, 'invalid' => 4 * $strategies - 2, 'unknown' => $strategies,
+            'valid' => 3 * $strategies + 1, 'invalid' => 4 * $strategies - 1, 'unknown' => $strategies,
             'tracepending' => $strategies],
             array_intersect_key(
                 $population['attempts'] ?? [],
@@ -360,8 +361,22 @@ final class validity_matrix_test extends \advanced_testcase {
             foreach ($tabs as $tab) {
                 results_query::reset_caches();
                 results_export::reset_caches();
-                $html = (new \local_catquizlab\output\results_page(new results_query($filter), $tab, $filter))
-                    ->render_tab();
+                // The success of the stop rules is of all collected sittings, invalid ones included (#118): an end
+                // before the design's — a fixed form broken off — is exactly a stop rule not met, and leaving such a
+                // sitting out must move it. Compared on its own below; here every rendering shows it as not available.
+                $query = new class ($filter) extends results_query {
+                    /**
+                     * Not shown in this comparison.
+                     *
+                     * @param string $level Unused.
+                     * @param string $key Unused.
+                     * @return float|null
+                     */
+                    public function stop_success(string $level = '', string $key = ''): ?float {
+                        return null;
+                    }
+                };
+                $html = (new \local_catquizlab\output\results_page($query, $tab, $filter))->render_tab();
                 // What differs on every rendering anyway: element ids and form keys, the time of the export, the
                 // embedded copies of a figure for download and their file names (the figure itself is compared
                 // inline). And the notes that name the sittings left out ("Not shown: 18 of 40 sittings …") and the
@@ -401,6 +416,16 @@ final class validity_matrix_test extends \advanced_testcase {
         };
         $before = $render();
         $this->assertNotEmpty($before['spread valid'] ?? [], 'the spread table is there');
+        $stops = static function () use ($filter, $playable): array {
+            results_query::reset_caches();
+            $query = new results_query($filter);
+            $by = [];
+            foreach ($playable as $strategy) {
+                $by[$strategy] = $query->stop_success('bystrategy', $strategy);
+            }
+            return $by;
+        };
+        $stopsbefore = $stops();
 
         // Sensitive: with every sitting selected, the far estimates do show.
         results_query::reset_caches();
@@ -412,6 +437,19 @@ final class validity_matrix_test extends \advanced_testcase {
         [$deletesql, $deleteparams] = $DB->get_in_or_equal(array_merge($notvalid, array_map('intval', $technical)));
         $DB->delete_records_select('local_catquizlab_attempt', "id $deletesql", $deleteparams);
         $after = $render();
+
+        // The success of the stop rules, of all collected sittings (#118): the classical test's form broken off after five
+        // of its items (F) is a stop rule not met, 7 of its 8 collected sittings; without the sittings that are not valid,
+        // all of them. The adaptive strategies' sittings all end on the maximum, no criterion: the same before and after.
+        $stopsafter = $stops();
+        foreach ($playable as $strategy) {
+            if ($strategy === 'classic') {
+                $this->assertEqualsWithDelta(87.5, $stopsbefore[$strategy], 0.001, $strategy . ' before');
+                $this->assertEqualsWithDelta(100.0, $stopsafter[$strategy], 0.001, $strategy . ' after');
+            } else {
+                $this->assertSame($stopsbefore[$strategy], $stopsafter[$strategy], $strategy);
+            }
+        }
 
         $this->assertNotEquals($before['spread all'], $after['spread all'], 'the rows "all collected" do show the far estimates');
         $this->assertSame($before['spread valid'], $after['spread valid'], 'the rows "valid only" do not');

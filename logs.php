@@ -60,6 +60,8 @@ $filter = [
     'attemptid'     => optional_param('attemptid', 0, PARAM_INT),
     // Which execution of the sitting (#176), and the sittings' and runs' records without the requests.
     'execution'     => optional_param('execution', 0, PARAM_INT),
+    // The execution's identity (#173): unique where try numbers repeat after a reset.
+    'executionid'   => optional_param('executionid', 0, PARAM_INT),
     'lifecycleonly' => optional_param('lifecycleonly', 0, PARAM_BOOL),
 ];
 
@@ -275,7 +277,7 @@ echo html_writer::empty_tag('input', [
 $advanced = $filter['from'] !== '' || $filter['to'] !== '' || $filter['action'] !== '' || $filter['correlationid'] !== ''
     || $filter['workerid'] !== '' || $filter['taskid'] > 0 || $filter['attemptno'] > 0 || $filter['attemptid'] > 0
     || $filter['severity'] !== '' || !empty($filter['newestfirst']) || $filter['execution'] > 0
-    || !empty($filter['lifecycleonly']);
+    || $filter['executionid'] > 0 || !empty($filter['lifecycleonly']);
 echo html_writer::empty_tag('input', [
     'type' => 'submit', 'class' => 'btn btn-secondary mr-3', 'value' => get_string('logs:apply', $component),
 ]);
@@ -294,10 +296,11 @@ $fields = [
     'attemptno'     => ['logs:attemptno', 'number'],
     'attemptid'     => ['logs:attemptid', 'number'],
     'execution'     => ['logs:execution', 'number'],
+    'executionid'   => ['logs:executionid', 'number'],
 ];
 foreach ($fields as $name => [$label, $type]) {
     $value = $name === 'logaction' ? $filter['action'] : ($filter[$name] ?? '');
-    if (in_array($name, ['taskid', 'attemptno', 'attemptid', 'execution'], true) && (int) $value === 0) {
+    if (in_array($name, ['taskid', 'attemptno', 'attemptid', 'execution', 'executionid'], true) && (int) $value === 0) {
         $value = '';
     }
     echo html_writer::label(get_string($label, $component), 'catquizlab-' . $name, true, ['class' => 'mr-2']);
@@ -352,7 +355,8 @@ if ($lines === []) {
     $latest = log_view::latest();
     $filtered = array_filter([$filter['channel'], $filter['search'], $filter['severity'], $filter['action'],
         $filter['correlationid'], $filter['workerid'], $filter['from'], $filter['to'], $filter['runid'],
-        $filter['attemptid'], $filter['taskid'], $filter['attemptno'], $filter['execution'], $filter['lifecycleonly']]);
+        $filter['attemptid'], $filter['taskid'], $filter['attemptno'], $filter['execution'], $filter['executionid'],
+        $filter['lifecycleonly']]);
     if ($latest === 0) {
         $message = get_string('logs:emptynothing', $component);
     } else if ($filtered !== []) {

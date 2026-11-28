@@ -165,19 +165,21 @@ final class run_recovery_test extends \advanced_testcase {
 
         $runid = $this->run_with(1, 0);
         $attemptid = (int) $DB->get_field('local_catquizlab_attempt', 'id', ['runid' => $runid]);
-        $DB->update_record('local_catquizlab_attempt', (object) ['id' => $attemptid,
+        $DB->update_record('local_catquizlab_attempt', (object) ['id' => $attemptid, 'tries' => 1, 'executionid' => 1,
             'status' => attempt_scheduler::STATUS_RUNNING, 'leaseowner' => 'w1', 'leaseexpires' => time() + 10]);
 
-        $this->assertTrue(attempt_scheduler::renew_lease('w1', $attemptid));
+        $this->assertTrue(attempt_scheduler::renew_lease('w1', $attemptid, 1));
         $expires = (int) $DB->get_field('local_catquizlab_attempt', 'leaseexpires', ['id' => $attemptid]);
         $this->assertGreaterThan(time() + 200, $expires);
-        $this->assertFalse(attempt_scheduler::renew_lease('w2', $attemptid), 'not another worker\'s');
+        $this->assertFalse(attempt_scheduler::renew_lease('w2', $attemptid, 1), 'not another worker\'s');
+        $this->assertFalse(attempt_scheduler::renew_lease('w1', $attemptid, 2), 'not another execution\'s (#173)');
+        $this->assertFalse(attempt_scheduler::renew_lease('w1', $attemptid, 0), 'not without the execution (#173)');
 
-        $reply = worker_heartbeat::execute('w1', $attemptid, 'working');
+        $reply = worker_heartbeat::execute('w1', $attemptid, 'working', '', 1);
         $this->assertFalse($reply['leaselost']);
         // The sitting went back to the queue: the worker learns it with its next heartbeat.
         $DB->set_field('local_catquizlab_attempt', 'status', attempt_scheduler::STATUS_QUEUED, ['id' => $attemptid]);
-        $lost = worker_heartbeat::execute('w1', $attemptid, 'working');
+        $lost = worker_heartbeat::execute('w1', $attemptid, 'working', '', 1);
         $this->assertTrue($lost['leaselost']);
         $this->assertSame('requeued', $lost['leasefate']);
         $this->assertFalse(worker_heartbeat::execute('w1', 0, 'waiting')['leaselost']);
@@ -222,19 +224,27 @@ final class run_recovery_test extends \advanced_testcase {
         $runid = $this->run_with(1, 0);
         $attemptid = (int) $DB->get_field('local_catquizlab_attempt', 'id', ['runid' => $runid]);
         // The second execution holds it now.
-        $DB->update_record('local_catquizlab_attempt', (object) ['id' => $attemptid, 'tries' => 2,
+        $DB->update_record('local_catquizlab_attempt', (object) ['id' => $attemptid, 'tries' => 2, 'executionid' => 2,
             'status' => attempt_scheduler::STATUS_RUNNING, 'leaseowner' => 'w2', 'leaseexpires' => time() + 300]);
 
-        $reply = job_complete::execute($attemptid, 'failed', 1000, 0, '[submit:http_5xx] late', '', 'w1');
+        $reply = job_complete::execute($attemptid, 'failed', 1000, 0, '[submit:http_5xx] late', '', 'w1', '', 1);
         $this->assertFalse($reply['acknowledged']);
         $sitting = $DB->get_record('local_catquizlab_attempt', ['id' => $attemptid]);
         $this->assertSame([attempt_scheduler::STATUS_RUNNING, 'w2', 2], [(int) $sitting->status, $sitting->leaseowner,
             (int) $sitting->tries], 'the second execution is untouched');
         $stale = $DB->get_record('local_catquizlab_attemptlog', ['attemptid' => $attemptid, 'outcome' => attempt_history::STALE]);
-        $this->assertStringContainsString('late report from w1 ignored (failed)', $stale->detail);
+        $this->assertStringContainsString('report of w1, execution #1 (failed), fenced (other-owner), not applied', $stale->detail);
 
-        // The holder's own report is applied as before; a worker before 0.7.38 sends no id and is taken as before.
-        $this->assertTrue(job_complete::execute($attemptid, 'failed', 1000, 0, 'real failure', '', 'w2')['acknowledged']);
+        // A report without the identity is not taken either (#173): before 0.7.85 one without a worker skipped the check.
+        $this->assertFalse(job_complete::execute($attemptid, 'failed', 1000, 0, 'no name')['acknowledged']);
+        $this->assertSame(attempt_scheduler::STATUS_RUNNING, (int) $DB->get_field(
+            'local_catquizlab_attempt',
+            'status',
+            ['id' => $attemptid]
+        ));
+
+        // The holder's own report is applied as before.
+        $this->assertTrue(job_complete::execute($attemptid, 'failed', 1000, 0, 'real failure', '', 'w2', '', 2)['acknowledged']);
         $this->assertSame(attempt_scheduler::STATUS_QUEUED, (int) $DB->get_field(
             'local_catquizlab_attempt',
             'status',

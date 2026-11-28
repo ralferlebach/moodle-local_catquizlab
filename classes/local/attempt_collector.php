@@ -124,6 +124,12 @@ class attempt_collector {
     /** @var string[] Why the last collect() stored nothing: the trace's defects (#138). */
     protected static array $lastdefects = [];
 
+    /** @var array|null The completion verdict of the last collection that reached the engine (completion_contract). */
+    protected static ?array $lastcompletion = null;
+
+    /** @var string The path collections are made on, for the verdict's provenance (set_source()). */
+    protected static string $completionsource = 'collector';
+
     /**
      * Whether a trace holds what a sitting administered (#138): at least one answered question, and items and
      * responses that describe the same questions.
@@ -203,6 +209,104 @@ class attempt_collector {
     }
 
     /**
+     * A technical end of the host as a lifecycle event of its own, once per engine attempt (#176 AK06): when the host
+     * closed it — its timefinished, null when it keeps none, never made up — and when the lab found it.
+     *
+     * @param int $attemptid The sitting.
+     * @param array $verdict The completion verdict.
+     * @return void
+     */
+    protected static function record_host_end(int $attemptid, array $verdict): void {
+        global $DB;
+
+        if ($verdict['class'] !== completion_contract::TECHNICAL) {
+            return;
+        }
+        $engine = (int) ($verdict['host']['engineattemptid'] ?? 0);
+        if (
+            $DB->record_exists('local_catquizlab_attemptlog', ['attemptid' => $attemptid,
+                'outcome' => attempt_history::HOST_CLOSED, 'engineattemptid' => $engine])
+        ) {
+            return;
+        }
+        $closedat = $verdict['host']['timefinished'] ?? null;
+        attempt_history::record($attemptid, attempt_history::HOST_CLOSED, [
+            'engineattemptid' => $engine,
+            'reasoncode' => (string) $verdict['technical'],
+            'executionid' => 0,
+            'detail' => get_string('history:hostclosed', 'local_catquizlab', (object) [
+                'why' => (string) $verdict['technical'],
+                'answered' => (int) ($verdict['host']['answered'] ?? 0),
+                'closed' => $closedat !== null ? gmdate('Y-m-d H:i:s', (int) $closedat) . 'Z'
+                    : get_string('history:hostclosedunknown', 'local_catquizlab'),
+            ]),
+            'extra' => ['hostend' => [
+                'technical' => (string) $verdict['technical'],
+                'stopcode' => $verdict['host']['stopcode'] ?? null,
+                'enginestatus' => $verdict['host']['enginestatus'] ?? null,
+                'closedat' => $closedat !== null ? gmdate('Y-m-d\TH:i:s\Z', (int) $closedat) : null,
+                'detectedat' => gmdate('Y-m-d\TH:i:s\Z'),
+                'detectedby' => (string) $verdict['source'],
+                'answered' => $verdict['host']['answered'] ?? null,
+                'startedat' => isset($verdict['host']['timecreated']) && $verdict['host']['timecreated'] !== null
+                    ? gmdate('Y-m-d\TH:i:s\Z', (int) $verdict['host']['timecreated']) : null,
+            ]],
+        ]);
+    }
+
+    /**
+     * The completion verdict of the last collect() that reached the engine, stored or not (completion_contract).
+     *
+     * @return array|null
+     */
+    public static function last_completion(): ?array {
+        return self::$lastcompletion;
+    }
+
+    /**
+     * The path the next collections are made on, for the verdict's provenance; 'collector' by default.
+     *
+     * @param string $source worker-report, late-report, lease-recovery, trace-pending, resume, recollect, …
+     * @return void
+     */
+    public static function set_source(string $source): void {
+        self::$completionsource = $source !== '' ? $source : 'collector';
+    }
+
+    /**
+     * What the completion contract needs of a run's design: strategy, minimum, maximum, the SE bound, and for a fixed
+     * form the question ids of the run's pool — the form as materialised for this run, not a number.
+     *
+     * @param int $runid The run.
+     * @return array
+     */
+    public static function design_of(int $runid): array {
+        global $DB;
+
+        $run = $DB->get_record('local_catquizlab_run', ['id' => $runid]);
+        $definition = $run ? run_registry::definition_for($run) : [];
+        $options = $definition === [] ? [] : test_provisioner::options_from_definition($definition);
+        $strategy = (string) ($definition['strategy'] ?? '');
+        $design = [
+            'strategy' => $strategy,
+            'minitems' => $options !== [] && $strategy !== '' && strategy_catalog::uses($strategy, 'globalmin')
+                ? (int) $options['minquestions'] : 0,
+            'maxitems' => $options !== [] ? (int) $options['maxquestions'] : 0,
+            'semin' => $definition['budgets']['se']['min'] ?? null,
+        ];
+        if ($strategy !== '' && strategy_catalog::fixed_form($strategy)) {
+            $design['form'] = array_map('intval', $DB->get_fieldset_select(
+                'local_catquizlab_item',
+                'questionid',
+                'runid = :runid',
+                ['runid' => $runid]
+            ));
+        }
+
+        return $design;
+    }
+
+    /**
      * Why the last collect() stored nothing.
      *
      * @return string[] Defect codes; empty after a collection that stored a trace.
@@ -238,6 +342,7 @@ class attempt_collector {
         global $DB;
 
         self::$lastdefects = [];
+        self::$lastcompletion = null;
         $attempt = $DB->get_record('local_catquizlab_attempt', ['id' => $attemptid], '*', MUST_EXIST);
         if ($engineattemptid > 0) {
             $attempt->engineattemptid = $engineattemptid;
@@ -360,9 +465,27 @@ class attempt_collector {
             'presented' => count((array) $trace['responses']),
         ];
         self::$lastdefects = self::defects($trace, $engine);
+        // How it ended, told apart before anything is stored or removed (P0 "[ENGINE-LIFECYCLE]", re-audit
+        // 27.11.2026): until 0.7.84 the end code was read after the trace was stored and the person parameters gone.
+        $design = self::design_of((int) $attempt->runid);
+        self::$lastcompletion = completion_contract::judge([
+            'state' => (string) $engine['attemptstate'],
+            'stopcode' => $engine['hoststopcode'] ?? null,
+            'enginestatus' => $engine['enginestatus'] ?? null,
+            'stopreason' => (string) $engine['stopreason'],
+            'answered' => (int) $engine['questionsattempted'],
+            'slots' => count((array) $engine['responses']),
+            'engineattemptid' => (int) $attempt->engineattemptid,
+            'qubaid' => (int) $engine['uniqueid'],
+            'timecreated' => $engine['timecreated'],
+            'timefinished' => $engine['timefinished'],
+        ], $trace, self::$lastdefects, $design, self::$completionsource);
+        self::record_host_end($attemptid, self::$lastcompletion);
         if (self::$lastdefects !== []) {
             return null;
         }
+        // The verdict travels with the trace: the figures read it from there (result_validity).
+        $trace['completion'] = self::$lastcompletion;
 
         $json = json_encode($trace, JSON_UNESCAPED_SLASHES);
         $DB->update_record('local_catquizlab_attempt', (object) (trace_digest::fields((string) $json) + [
@@ -372,6 +495,7 @@ class attempt_collector {
             // Its size beside it, for reading traces in batches bounded by bytes (#147).
             'tracebytes'      => strlen((string) $json),
             'engineattemptid' => (int) $attempt->engineattemptid,
+            'completionjson'  => json_encode(self::$lastcompletion, JSON_UNESCAPED_SLASHES),
             'timemodified'    => time(),
         ] + $set));
 
@@ -476,6 +600,10 @@ class attempt_collector {
             'attemptstate' => (string) ($aq->attemptstate ?? ''),
             'catquizrow' => (bool) $catquiz,
             'questionsattempted' => (int) ($aq->questionsattempted ?? 0),
+            // For the completion contract: its usage and times as the host has them; null where it has none.
+            'uniqueid' => (int) ($aq->uniqueid ?? 0),
+            'timecreated' => isset($aq->timecreated) ? (int) $aq->timecreated : null,
+            'timefinished' => isset($aq->timefinished) && (int) $aq->timefinished > 0 ? (int) $aq->timefinished : null,
             'finaltheta' => $finaltheta,
             'finalse'    => $finalse,
             'responses'  => self::read_responses((int) $aq->uniqueid),

@@ -59,7 +59,16 @@ class result_validity {
     public const UNKNOWN = 'unknown';
 
     /** @var string[] Reasons that say only that data is missing — under the uniform rule, unknown rather than invalid. */
-    public const DATA_MISSING = [engine_validity::NO_ENGINE_DATA, self::TRACE_INCOMPLETE];
+    public const DATA_MISSING = [engine_validity::NO_ENGINE_DATA, self::TRACE_INCOMPLETE, self::COMPLETION_UNKNOWN];
+
+    /** @var string The completion contract could not decide how the sitting ended: no regular result, not judged. */
+    public const COMPLETION_UNKNOWN = 'completion_unknown';
+
+    /** @var string The completion contract found a technical end (host time limit, engine error, closed by somebody). */
+    public const COMPLETION_TECHNICAL = 'completion_technical';
+
+    /** @var string The completion contract found an end before the design allowed one (form broken off, minimum). */
+    public const COMPLETION_INCOMPLETE = 'completion_incomplete';
 
     /** @var string No final ability, or not a number. */
     public const NO_FINAL_THETA = 'no_final_theta';
@@ -145,14 +154,22 @@ class result_validity {
         $minapplies = $strategy === '' || strategy_catalog::uses($strategy, 'globalmin');
         $required = $minapplies ? (int) ($facts['minitems'] ?? 0) : 0;
         $fixedform = $strategy !== '' && strategy_catalog::fixed_form($strategy);
-        // A time limit ends a test where it stands. Valid where the design
-        // allowed an end there; not where a form was left unfinished or the
-        // minimum not reached.
+        // A time limit is never an end of a lab design (re-audit 27.11.2026): the lab provisions every test without
+        // one (test_provisioner, catquiz_includetimelimit 0), so the host's time limit closes a lab sitting only
+        // through the engine's default for tests without one: a technical end, not a result, whatever was played.
+        // Until 0.7.84 a timeout above the minimum counted as valid.
         if ($endcode === 'timeout') {
-            $form = (int) ($facts['poolsize'] ?? 0);
-            if (($fixedform && $form > 0 && $played < $form) || ($required > 0 && $played < $required)) {
-                $reasons[] = 'timeout';
-            }
+            $reasons[] = 'timeout';
+        }
+        // The completion contract's verdict, where the sitting has one (collected from 0.7.85 on): only a regular end
+        // is a result; a technical, broken-off or undecided one is not, and an undecided one is not judged either.
+        $completion = isset($trace['completion']) && is_array($trace['completion']) ? $trace['completion'] : null;
+        if (completion_contract::regular($completion) === false) {
+            $reasons[] = match ((string) $completion['class']) {
+                completion_contract::TECHNICAL => self::COMPLETION_TECHNICAL,
+                completion_contract::INCOMPLETE => self::COMPLETION_INCOMPLETE,
+                default => self::COMPLETION_UNKNOWN,
+            };
         }
 
         if (!isset($trace['finaltheta']) || !is_numeric($trace['finaltheta'])) {

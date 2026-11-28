@@ -110,7 +110,7 @@ final class experiment_stop_test extends \advanced_testcase {
 
         return (int) $DB->insert_record('local_catquizlab_attempt', (object) [
             'runid' => $runid, 'personid' => 0, 'status' => attempt_scheduler::STATUS_RUNNING, 'tries' => 1,
-            'leaseowner' => $workerid, 'leaseexpires' => time() + 3600,
+            'executionid' => 1, 'leaseowner' => $workerid, 'leaseexpires' => time() + 3600,
             'nextruntime' => 0, 'timecreated' => time(), 'timemodified' => time(),
         ]);
     }
@@ -239,19 +239,19 @@ final class experiment_stop_test extends \advanced_testcase {
         $e = $this->experiment();
         $runid = $this->run_with($e, registry::STATUS_RUNNING);
         $sitting = $this->playing($runid, 'w2');
-        $this->assertTrue(attempt_scheduler::renew_lease('w2', $sitting), 'held before the stop');
+        $this->assertTrue(attempt_scheduler::renew_lease('w2', $sitting, 1), 'held before the stop');
 
         experiment_stop::stop($e);
 
         // What the heartbeat service answers: the lease is lost (the answer loop stops before its next answer)
         // and it is asked to stop (it exits after reporting).
-        $reply = \local_catquizlab\external\worker_heartbeat::execute('w2', $sitting, 'working');
+        $reply = \local_catquizlab\external\worker_heartbeat::execute('w2', $sitting, 'working', '', 1);
         $this->assertTrue($reply['leaselost']);
         $this->assertSame('closed', $reply['leasefate'], 'its log says the sitting was closed, not requeued');
         $this->assertTrue($reply['stop']);
 
         // What it reports afterwards is recorded as late and not applied: the sitting stays closed.
-        $done = \local_catquizlab\external\job_complete::execute($sitting, 'failed', 0, 0, 'lease lost', '', 'w2');
+        $done = \local_catquizlab\external\job_complete::execute($sitting, 'failed', 0, 0, 'lease lost', '', 'w2', '', 1);
         $this->assertFalse($done['acknowledged']);
         $this->assertSame(
             attempt_scheduler::STATUS_CANCELLED,

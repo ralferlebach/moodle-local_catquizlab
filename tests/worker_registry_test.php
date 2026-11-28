@@ -723,11 +723,12 @@ final class worker_registry_test extends \advanced_testcase {
     }
 
     /**
-     * Engine attempts that never got a first question are cleared up.
+     * Engine attempts without a question usage are counted and kept — never removed (#178): a start in progress has
+     * the same shape.
      *
      * @return void
      */
-    public function test_empty_engine_attempts_are_removed(): void {
+    public function test_empty_engine_attempts_are_counted_and_kept(): void {
         global $DB;
         $this->resetAfterTest();
 
@@ -762,10 +763,12 @@ final class worker_registry_test extends \advanced_testcase {
             'timecreated' => time(), 'timemodified' => time(),
         ]);
 
+        // Counted, never deleted (#178): a start in progress has the same shape.
         $this->assertSame(1, \local_catquizlab\local\engine_hygiene::count_empty_attempts());
-        $this->assertSame(1, \local_catquizlab\local\engine_hygiene::purge_empty_attempts());
-
-        $this->assertFalse($DB->record_exists('adaptivequiz_attempt', ['id' => $emptyid]));
+        $inventory = \local_catquizlab\local\engine_hygiene::inventory();
+        $this->assertSame([1, 'kept', $emptyid], [$inventory['count'], $inventory['rows'][0]['decision'],
+            $inventory['rows'][0]['attemptid']]);
+        $this->assertTrue($DB->record_exists('adaptivequiz_attempt', ['id' => $emptyid]));
         $this->assertTrue($DB->record_exists('adaptivequiz_attempt', ['id' => $realid]));
     }
 
@@ -792,7 +795,7 @@ final class worker_registry_test extends \advanced_testcase {
 
         // Same shape, not our person: a plugin that deletes rows it did not
         // create is worse than the defect it is cleaning up after.
-        $this->assertSame(0, \local_catquizlab\local\engine_hygiene::purge_empty_attempts());
+        $this->assertSame(0, \local_catquizlab\local\engine_hygiene::inventory()['count'], 'not counted as the lab\'s');
         $this->assertTrue($DB->record_exists('adaptivequiz_attempt', ['id' => $id]));
     }
 

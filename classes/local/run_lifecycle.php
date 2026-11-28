@@ -166,6 +166,8 @@ class run_lifecycle {
             'status'       => registry::STATUS_READY,
             'timemodified' => time(),
         ], 'provisioned');
+        // The host's time limit as it applies to this run's attempts, kept with it (P0 "[ENGINE-LIFECYCLE]" AK05).
+        host_time_limit::record($runid, 'provisioned');
         self::refresh_experiment($runid);
         // Its sittings can be played now: workers are started at once, not at the next scheduled tick (#151 AK8).
         \local_catquizlab\task\kick_pipeline::queue('run-ready');

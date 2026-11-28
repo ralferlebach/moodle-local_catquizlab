@@ -58,6 +58,7 @@ class log_redactor {
         'stratum', 'severity', 'validity', 'validityrule', 'hours', 'from', 'to', 'level', 'lines', 'limit', 'offset',
         'perpage', 'sort', 'dir', 'format', 'filter', 'profile', 'cellkey', 'state', 'status', 'kind', 'scope', 'view',
         'xpage', 'step', 'stage', 'workerid', 'after', 'attemptno', 'channel', 'correlationid', 'deep', 'download',
+        'executionid',
         'downloadjson', 'engineinfo', 'force', 'fromexperiment', 'groupby', 'logaction', 'metric', 'newestfirst',
         'rawpage', 'show', 'tail', 'taskid', 'classname', 'cmpattempts', 'cmpgroup', 'cmplayout', 'cmpmetric',
         'cmpscale', 'cmptemplate', 'cmptwin',

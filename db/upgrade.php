@@ -730,6 +730,36 @@ function xmldb_local_catquizlab_upgrade($oldversion): bool {
         upgrade_plugin_savepoint(true, 2026112102, 'local', 'catquizlab');
     }
 
+    if ($oldversion < 2026112701) {
+        // The execution's identity (#173, re-audit 27.11.2026): every call that changes a sitting names the execution
+        // holding its claim; the history keeps it. Try numbers are cleared by a reset — CLARA run 103 went 2, 3, 2 —
+        // so they cannot be it. Sittings of earlier versions have none (0): a call naming none is fenced, and a
+        // running sitting of an earlier version is handed back by the lease recovery as before.
+        $table = new xmldb_table('local_catquizlab_attempt');
+        $fields = [
+            new xmldb_field('executionid', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, '0', 'leaseexpires'),
+            new xmldb_field('completionjson', XMLDB_TYPE_TEXT, null, null, null, null, null, 'executionid'),
+        ];
+        foreach ($fields as $field) {
+            if (!$dbman->field_exists($table, $field)) {
+                $dbman->add_field($table, $field);
+            }
+        }
+        $log = new xmldb_table('local_catquizlab_attemptlog');
+        $field = new xmldb_field('executionid', XMLDB_TYPE_INTEGER, '10', null, null, null, null, 'tryno');
+        if (!$dbman->field_exists($log, $field)) {
+            $dbman->add_field($log, $field);
+        }
+        // Engine attempts an explicit recovery decision took out of a sitting.
+        if (!$dbman->table_exists('local_catquizlab_retired')) {
+            $dbman->install_one_table_from_xmldb_file(
+                $CFG->dirroot . '/local/catquizlab/db/install.xml',
+                'local_catquizlab_retired'
+            );
+        }
+        upgrade_plugin_savepoint(true, 2026112701, 'local', 'catquizlab');
+    }
+
     return true;
 }
 

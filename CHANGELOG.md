@@ -6,6 +6,164 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.7.85] — 2026-11-27 — Version 2026112701. One execution, one identity; a completion contract; nothing deleted behind a start; progress and forecast by identity (#172–#181)
+
+**Database:** two new fields and one new table.
+- `local_catquizlab_attempt.executionid` and `local_catquizlab_attempt.completionjson`;
+- `local_catquizlab_attemptlog.executionid`;
+- table `local_catquizlab_retired`.
+
+**Worker contract 2:** workers older than 0.7.85 are given no sitting. Strings are in EN and DE.
+
+**Triggers:**
+- the CLARA run 103 follow-up order of 27.11.2026: completion and host timeout, extensions of #172–#177;
+- #178: engine hygiene against starts in progress;
+- #179: completion and timeout;
+- #180: progress by identity.
+
+### Engine pins moved to the heads of 27.11.2026, 22:30 CET (`.github/engine-pins.env`; the 0.7.84 set is now `previous`)
+- **local_catquiz:**
+  - `53b809e2` → `78043b8f` (Moodle 4.5 line, 2026112703);
+  - `e7d07d78` → `284b538c` (Moodle 5.x line, 2026112704).
+  - New: the per-test expiry policy (local_catquiz #178), the clean-up task closing under the host's lock, and the
+    site default of 24 h when it is not set.
+- **mod_adaptivequiz:**
+  - `5a037404` → `f4ed4bef` (2026112700);
+  - `f587a1ee` → `772fe171` (2026112701).
+  - New: a reset and a deletion remove only the attempts they read, and the question page is bound to its own
+    attempt (`attemptlost`) (#27).
+- **Unchanged:** adaptivequizcatmodel_catquiz `4c081901` / `ed2fca18`, local_wunderbyte_table `3e4a0db6`.
+- **Checked:** every pin is the head of its branch (`git ls-remote`, 27.11.2026, 22:31 CET). The dev site and all
+  five gate mirrors run this set; a classical and an adaptive smoke run pass on it.
+
+### The lab's tests are kept open by the engine (`host_time_limit::keep_open()`)
+- **What it does:** at provisioning and at resume, the run's test gets the engine's per-test policy `none`. No time
+  limit is shown to the person, and no other test or site setting changes.
+- **Where the policy comes from:** it is read through the engine itself (`enginesource`) and kept in the manifest
+  (`keptopen`).
+- **Older pins:** without the policy, nothing is written.
+- **A host time-out that happens anyway** stays a technical end (#179).
+
+### #173 — an execution identity and fencing (`lease_fence`, `executionid`)
+- **Identity:** every claim's STARTED history row is that execution's identity. It is unique and never reused; a reset
+  of `tries` does not touch it.
+- **Where it travels:** the worker sends it with bind, heartbeat and report, and in the header
+  `X-CatQuizLab-Attempt: sitting.try.executionid`.
+- **When a call takes effect:** only while the sitting is running under the same lease owner and the same execution,
+  with the lease not expired.
+- **Fenced calls:** others are recorded (`stale`, with their reason) and change nothing.
+- **Recovery after a fenced report:** the server decides from its own state alone.
+  - A lapsed lease is reclaimed.
+  - A queued sitting whose own engine attempt is complete is collected.
+- **Generations:** `local_catquizlab_retired` holds the engine attempts an explicit decision took out of a sitting.
+  They are never resolved, bound or collected for it again.
+- **Ambiguous legacy sittings** (two or more unbound attempts) are held at resume (`[identity:ambiguous-engine-attempt]`).
+  Nothing is chosen automatically. `cli/sitting_recovery.php` decides bind, new generation or keep, with a note.
+- **Late commit:** the worker re-enters a sitting only after asking the server, and never starts a new attempt there.
+  The FINISH path is confirmed with `sitting_state`.
+
+### #179 — the completion contract (`completion_contract`)
+- **Classes:** every end is judged before anything is stored as regular, incomplete, technical, unknown or inprogress.
+- **What the verdict carries:** host state, technical reason, form, trace, recovery, source and time.
+- **Where it is kept:** `completionjson`, and `completion` in the trace.
+- **Validity:**
+  - a host time limit is never a result;
+  - a fixed form is judged by its form before any "maximum reached";
+  - `completion_technical`, `completion_incomplete` and `completion_unknown` are reasons of their own.
+- **Host time limit** (`host_time_limit`, `cli/time_limits.php`):
+  - the policy is analysed and kept in the manifest;
+  - the deadline of every open attempt is shown;
+  - the pipeline warns two hours ahead (`time_limit_near`).
+- **The host's end as a lifecycle event:** `hostclosed`, with the host's time or "unknown" and the time it was
+  detected.
+
+### #174 — isolation and a fail-closed audit
+- **Population guard:** no sitting is handed out while admissible abilities plus sittings being played in the run's
+  contexts reach the engine's threshold (50, read from the engine). The run log records `population_held`.
+- **`resume_integrity` (rules 2):**
+  - every sitting, engine attempt and resume, with denominators;
+  - unknown is unknown, never "none".
+- **`--mark`:** writes a history row once per finding and changes nothing else.
+
+### #176 — lifecycle
+- Execution id in requests, history and the lifecycle export; filters by execution.
+- The server's own snapshot with bind, report, collection and recovery.
+- Worker and server progress kept apart.
+
+### #178 — no tick deletes an engine attempt
+- The hygiene removed every lab attempt without a question usage, and with it a start between the host's insert and its
+  usage (CLARA run 120, sitting 46856). It now only counts them, in both ticks.
+- **Inventory:** state initialising or not played, executions, age, decision "kept".
+- The removal path and its operations action are gone.
+
+### #180 — questions by identity (`question_progress`, `cli/question_progress.php`)
+- **Counted once:** every engine attempt of the run's persons in its test, by the sitting it is bound to.
+- **Buckets:** collected, technical, running, queued, held, terminal.
+- **Not counted, said apart:**
+  - discarded: retired by a decision;
+  - unknown: owned by no sitting;
+  - foreign and missing bindings.
+- **Never chosen:** `MAX(id)` is no longer taken as the owner.
+- **Retries:** a requeued or held sitting keeps its answers, and the ETA's queued work is net of them.
+- **Fixed form:**
+  - the denominator is pool × sittings;
+  - `done + remaining + notahead = expected`;
+  - invariants such as doublebound, unaccounted and overcount are diagnosed, not hidden.
+- **One statement, one snapshot.** The query count is independent of runs and sittings.
+
+### #181 — samples, pace, the run's bar and finished runs (`run_figures`, `eta`, `live_progress`)
+- **Duration samples:** whole sittings only, meaning collected regularly in one execution, with a running time, and
+  not a technical or incomplete end. Broken-off, failed and retried executions count as `partial`. Until 0.7.84,
+  twenty executions broken off by a connection timeout were "its own 20 finished sittings".
+- **Pace:** the answers of the running executions since they bound their engine attempt (the server's count at the
+  bind, as baseline), over their running time. Without every baseline there is no pace.
+- **The run's bar:** shows questions where their total is exact, estimated or bounded (`barpercent`, `barkind`,
+  `bartext`). The sittings are said beside it (`sittingsshort`). Page and poll use the same fields.
+- **A finished run:**
+  - its end is the recorded `run_finished`, else the end of its last execution, never the clock;
+  - its time is frozen;
+  - it shows no forecast, band or basis;
+  - sittings failed for good are named.
+- **Held sittings:** nothing to play but sittings on hold gives the new state `recoverable`, "waiting for a decision"
+  instead of "Nothing left". Queue, status line and the "now" box count them apart from those failed for good.
+
+### #175 AK05 — a sitting's state in words
+The run's sitting list says on hold, failed for good, decided, or technical, incomplete or unknown end, in EN and DE
+(`attempt_scheduler::state_in_words()`). The status alone said "failed" or "collected" for each of these.
+
+### Fixed: the worker's report through the web service (found by the real 2502-item run)
+- **Symptom:** `job_complete` described `executionid` before `reason`, while `execute()` takes `reason` first. Moodle
+  passes parameters in the described order, so every report failed with "Argument #9 ($execution) must be of type int,
+  string given".
+- **Effect in the run:** the 2502-answer sitting was collected through the lease recovery, not the report.
+- **Fix:** the described order now matches the signature.
+- **New `external_parameter_order_test`:** checks every web service function of the plugin position by position, and
+  calls `job_complete` through Moodle's dispatcher.
+
+### #177 — the latency of a long sitting, measured
+- **The run:** a real 2502-item sitting on one worker, with telemetry.
+- **Findings:**
+  - every answer costs exactly one database query more than the one before (+1.001 per answer given);
+  - PHP's peak memory grows by 61 KB per answer, to 193 MB;
+  - the answer time grows by 0.54 ms per answer.
+- **Evidence:** raw data, the analysis script and the disturbances log are in the evidence package.
+
+### Tests
+- **New:**
+  - `completion_contract_test`, `host_timeout_test` (real engine), `run103_legacy_test`, `host_time_limit_test`;
+  - `large_log_test` (100.8 MB, 5200 events), `prior_isolation_test` (real engine);
+  - `engine_hygiene_test` (real engine, both ticks between the host's insert and the usage);
+  - `worker/test/late_commit.test.js`;
+  - `external_parameter_order_test`, `sitting_state_words_test`;
+  - `eta_test`: CLARA run 121 situation, a finished run, a held sitting.
+- **Extended:** engine_identity, lifecycle_export, question_progress (#180) and others.
+- **Gate find:** `engine_identity_test` compared a lease against a second `time()` call; on 5.3/MariaDB the clock
+  ticked between them (1 of 1285 red). The test now holds the instant once (two places); no plugin code changed.
+- **Red against 0.7.84:**
+  - hygiene: the start's attempt was deleted;
+  - progress: 300 kept answers showed as discarded, and a newer unbound attempt was taken for the sitting;
+  - late-commit worker: 4 of 4.
+
 ## [0.7.84] — 2026-11-27 — Version 2026112700. Long sittings, a bound engine identity, retries that keep the estimates (#172–#177)
 
 No database table changes. Changes for operators:

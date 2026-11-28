@@ -118,9 +118,18 @@ const watchModule = require('./sitting_watch.js');
 
 /**
  * The worker contract this worker speaks (#173): sent with every claim; a server of another contract hands out
- * nothing, and a worker given a sitting by a server that does not speak it plays nothing.
+ * nothing, and a worker given a sitting by a server that does not speak it plays nothing. Contract 2 (re-audit
+ * 27.11.2026): every call that changes a sitting — bind, heartbeat, report — carries the execution's identity the
+ * claim handed out (executionid: unique, never reused); the server applies it only for the execution that holds the
+ * lease.
  */
-const WORKER_CONTRACT = 1;
+const WORKER_CONTRACT = 2;
+
+/** startAttempt(): the page offers no attempt to continue, and a new one may not be started (#173). */
+const NO_CONTINUE = 'nocontinue';
+
+/** The fence reasons of a bind (lease_fence): the lease is not this execution's, whatever the identity. */
+const FENCE_REASONS = ['no-identity', 'not-running', 'other-owner', 'other-execution', 'lease-expired'];
 
 /** How often the server is asked about a sitting before the execution ends without an answer (#173). */
 const STATE_TRIES = 3;
@@ -239,7 +248,8 @@ let leaseLost = 0;
 let leaseFate = '';
 const LEASE_FATES = {
     requeued: 'its lease expired and it went back to the queue',
-    taken: 'its lease expired and another worker holds it now',
+    taken: 'its lease expired and another execution holds it now',
+    expired: 'its lease ran out before this execution renewed it; the server hands it back',
     closed: 'it was closed on the server (the experiment or run was stopped, or the sitting failed)',
     gone: 'it was deleted on the server',
 };
@@ -337,16 +347,64 @@ function askServer(wsfunction, params) {
 }
 
 /**
- * The server's view of a sitting as the report keeps it (#176).
+ * The server's view of a sitting as the report keeps it (#176): what sitting_state said, when, and on which path.
+ *
+ * Kept apart from the worker's own counts (progress.answered): these are the server's numbers, never the worker's.
  *
  * @param {object} server sitting_state or sitting_bind.
+ * @param {string} source Which call and moment it is from, e.g. "sitting_state:finish-page".
  * @returns {object}
  */
-function serverEnd(server) {
+function serverEnd(server, source = '') {
     const s = server || {};
-    return {at: new Date().toISOString(), found: Boolean(s.found), reason: s.reason || '', state: s.state || '',
+    return {at: new Date().toISOString(), source, found: Boolean(s.found), reason: s.reason || '', state: s.state || '',
         questionsattempted: Number(s.questionsattempted) || 0, slots: Number(s.slots) || 0,
         engineattemptid: Number(s.engineattemptid) || 0, qubaid: Number(s.qubaid) || 0};
+}
+
+/**
+ * Back into the sitting's engine attempt after an uncertain submission, without ever starting a new one (#173).
+ *
+ * The server is asked first: a sitting whose attempt is complete now is finished, one the server does not know is the
+ * end of the execution — neither is "not stored". In progress: through the activity page, continuing that attempt.
+ * A page that offers nothing to continue means it was completed in between; the server is asked once more.
+ *
+ * @param {object} page The page.
+ * @param {object} job The claim.
+ * @param {object} watch The sitting's watch (qubaid).
+ * @param {object} recorder The recorder.
+ * @param {object} deps askServer, gotoSettle, startAttempt (tests pass their own).
+ * @returns {Promise<{finished: boolean, server: ?object, state: ?string, source: string}>}
+ */
+async function reenter(page, job, watch, recorder, deps = {}) {
+    const ask = deps.askServer || askServer;
+    const go = deps.gotoSettle || gotoSettle;
+    const start = deps.startAttempt || startAttempt;
+    const params = {attemptid: job.attemptid, qubaid: watch.qubaid};
+    const first = await ask('local_catquizlab_sitting_state', params);
+    if (!first.found) {
+        throw new Error(`[identity:${first.reason || 'unknown'}] Before going back in, the server does not know this `
+            + `sitting's attempt (${first.reason || 'no answer'}): nothing started, nothing answered.`);
+    }
+    if (first.state === 'complete') {
+        return {finished: true, server: first, state: null, source: 'sitting_state:complete-before-reentry'};
+    }
+    if (first.state !== 'inprogress') {
+        throw new Error(`[identity:state-${first.state}] Before going back in, engine attempt ${first.engineattemptid} is `
+            + `${first.state}: nothing started, nothing answered.`);
+    }
+    await go(page, `${BASE_URL}/mod/adaptivequiz/view.php?id=${job.quizcmid}`);
+    const state = await start(page, recorder, false);
+    if (state !== NO_CONTINUE && state !== nav.STATE.FINISH) {
+        return {finished: false, server: first, state, source: ''};
+    }
+    const now = await ask('local_catquizlab_sitting_state', params);
+    if (now.found && now.state === 'complete') {
+        return {finished: true, server: now, state: null, source: 'sitting_state:complete-at-reentry'};
+    }
+    throw new Error(`[identity:no-attempt-to-continue] Back at the activity, engine attempt ${first.engineattemptid} `
+        + `was in progress and the page ${state === NO_CONTINUE ? 'offers none to continue' : 'shows a finish page'}; `
+        + `the server now: ${now.state || now.reason}. Nothing started, nothing answered.`);
 }
 
 /**
@@ -440,7 +498,7 @@ async function playAttempt(browser, job) {
             finishedOnServer = before;
             watch.begin({count: before.questionsattempted, qubaid: before.qubaid, engineattemptid: before.engineattemptid,
                 slot: before.slots + 1, source: 'complete-before-start'});
-            watch.serverend = serverEnd(before);
+            watch.serverend = serverEnd(before, 'sitting_state:complete-before-start');
             recorder.event('resume', `the engine attempt ${before.engineattemptid} is already complete `
                 + `(${before.questionsattempted} answered): collected, not started again`);
             state = nav.STATE.FINISH;
@@ -448,7 +506,22 @@ async function playAttempt(browser, job) {
             throw new Error(`[identity:${before.reason}] Before the start, the server does not know this sitting's `
                 + `engine attempt (${before.reason}): nothing answered.`);
         } else {
-            state = await startAttempt(page, recorder);
+            // A new attempt only where the sitting has none; one in progress is continued, never replaced (#173).
+            state = await startAttempt(page, recorder, !before.found);
+            if (state === NO_CONTINUE) {
+                const now = await askServer('local_catquizlab_sitting_state', {attemptid: job.attemptid});
+                if (now.found && now.state === 'complete') {
+                    finishedOnServer = now;
+                    watch.begin({count: now.questionsattempted, qubaid: now.qubaid, engineattemptid: now.engineattemptid,
+                        slot: now.slots + 1, source: 'complete-at-start'});
+                    watch.serverend = serverEnd(now, 'sitting_state:complete-at-start');
+                    state = nav.STATE.FINISH;
+                } else {
+                    throw new Error(`[identity:no-attempt-to-continue] The server has engine attempt `
+                        + `${before.engineattemptid} in progress, the activity page offers none to continue `
+                        + `(server now: ${now.state || now.reason}): nothing started, nothing answered.`);
+                }
+            }
         }
 
         // The first question binds the attempt the browser is in to the sitting, or checks the binding, and gives
@@ -458,7 +531,12 @@ async function playAttempt(browser, job) {
         if (state === nav.STATE.QUESTION) {
             const ref = await nav.withContextRetry(page, () => currentQuestionRef(page), 'read question', recorder);
             const bound = await askServer('local_catquizlab_sitting_bind', {attemptid: job.attemptid, qubaid: ref.qubaid,
-                workerid: WORKER_ID});
+                workerid: WORKER_ID, executionid: Number(job.executionid) || 0});
+            if (FENCE_REASONS.includes(bound.fence)) {
+                throw new Error(`[lease:lost] The server did not let execution ${Number(job.execution) || 0} `
+                    + `(#${Number(job.executionid) || 0}) of sitting ${job.attemptid} bind usage ${ref.qubaid}: `
+                    + `${bound.fence}. Nothing answered.`);
+            }
             const start = watchModule.baselineFrom(bound);
             if (!start.ok || start.state !== 'inprogress') {
                 throw new Error(`[identity:${start.ok ? 'state-' + start.state : start.reason}] The question usage `
@@ -506,7 +584,7 @@ async function playAttempt(browser, job) {
                 // Evidence before a verdict: the server's own word on the sitting.
                 const server = await askServer('local_catquizlab_sitting_state', {attemptid: job.attemptid,
                     qubaid: watch.qubaid});
-                watch.serverend = serverEnd(server);
+                watch.serverend = serverEnd(server, `sitting_state:guard-${why}`);
                 if (server.found && server.state === 'complete') {
                     finishedOnServer = server;
                     state = nav.STATE.FINISH;
@@ -604,7 +682,7 @@ async function playAttempt(browser, job) {
             if (verdict === 'finished') {
                 finishedOnServer = server;
                 watch.reconciled('stored');
-                watch.serverend = serverEnd(server);
+                watch.serverend = serverEnd(server, 'sitting_state:reconciliation');
                 answeredCount = watch.answered;
                 state = nav.STATE.FINISH;
                 break;
@@ -621,17 +699,42 @@ async function playAttempt(browser, job) {
             if (sessionlost) {
                 await login(page, job.userid, job.username, recorder);
             }
-            // Back in through the activity page, to whatever the engine presents
-            // now: the next question when the answer was stored, the same one
-            // again when it was not. Never the same answer twice.
-            await gotoSettle(page, `${BASE_URL}/mod/adaptivequiz/view.php?id=${job.quizcmid}`);
-            state = await startAttempt(page, recorder);
+            // Back in through the activity page, to whatever the engine presents now: the next question when the
+            // answer was stored, the same one again when it was not. Never the same answer twice — and never a new
+            // attempt (#173, re-audit 27.11.2026): the uncertain answer can be stored after the check above, and if it
+            // was the last one the engine has completed the attempt by now. The activity page then offers a new
+            // attempt, and 0.7.84 clicked it. reenter() asks the server before it goes in and again when the page
+            // has nothing to continue; complete is collected, not started again.
+            const back = await reenter(page, job, watch, recorder);
+            if (back.finished) {
+                const stored = Number(back.server.questionsattempted) || 0;
+                if (stored < answeredCount) {
+                    throw new Error(`${nav.describeSubmit(result.submit)} [reconcile:mismatch] back in, the engine attempt `
+                        + `is complete with ${stored} answer(s); the worker had ${answeredCount}.`);
+                }
+                if (verdict === 'notstored' && stored === answeredCount + 1) {
+                    watch.reconciled('storedlate');
+                    reconciliations.push({class: kind, verdict: 'storedlate', answered: answeredCount, usage: qubaid, slot,
+                        ...timing, askedagainat: new Date().toISOString(), session: sessionlost ? 'lost' : 'kept',
+                        server: {state: back.server.state || '', questionsattempted: stored,
+                            slots: back.server.slots || 0, reason: back.server.reason || ''}});
+                }
+                recorder.event('reconcile', `back in: the engine completed the attempt with ${stored} answer(s) `
+                    + 'meanwhile: collected, not started again');
+                finishedOnServer = back.server;
+                watch.serverend = serverEnd(back.server, back.source);
+                answeredCount = watch.answered;
+                state = nav.STATE.FINISH;
+                break;
+            }
+            state = back.state;
             // Asked again once back in (CI d23b39c0, 50 workers on four cores: 9 and 1 executions failed on
             // [reconcile:mismatch]). A submission the browser gave up on can still be running on the server — queued
             // or holding the session — when the first question is asked: "not stored" then, stored a moment later.
             // Back in through the activity page means behind it (the session's lock), so the server's count now is
             // the one to go on: one more than the worker's is that late answer, counted once; anything else is a real
-            // mismatch, and ends the execution as before.
+            // mismatch, and ends the execution as before. A server that does not know the sitting's attempt now
+            // (missing, ambiguous, another usage) is not "not stored" (#173): the execution ends, nothing answered.
             if (state === nav.STATE.QUESTION && verdict === 'notstored') {
                 const again = await askServer('local_catquizlab_sitting_state', {attemptid: job.attemptid,
                     qubaid: watch.qubaid});
@@ -645,6 +748,10 @@ async function playAttempt(browser, job) {
                         server: {state: again.state || '', questionsattempted: again.questionsattempted || 0,
                             slots: again.slots || 0, reason: again.reason || ''}});
                     recorder.event('reconcile', `back in: server ${again.questionsattempted}/${again.slots} → ${late}`);
+                } else if (late === 'unknown') {
+                    throw new Error(`${nav.describeSubmit(result.submit)} [identity:${again.reason || 'unknown'}] back `
+                        + `in, the server does not know this sitting's attempt (${again.reason || 'no answer'}); the `
+                        + `worker had ${answeredCount}: nothing more answered.`);
                 } else if (late === 'mismatch') {
                     throw new Error(`${nav.describeSubmit(result.submit)} [reconcile:mismatch] back in, server: `
                         + `${again.state || again.reason}, ${again.questionsattempted || 0} answered, `
@@ -689,6 +796,23 @@ async function playAttempt(browser, job) {
         if (!finishedOnServer && !(await onFinishPage(page))) {
             const detail = await describePage(page);
             throw new Error(`Attempt did not reach the finish page after ${answeredCount} answer(s). ${detail}`);
+        }
+        // The finish page is the browser's word; the server's state decides (#173, #176 AK02, re-audit 27.11.2026).
+        // Until 0.7.84 the regular end kept no server state at all — only the paths that asked the server did. Now
+        // every end is confirmed: this sitting's attempt, complete, and its numbers are the server's in the report.
+        if (!finishedOnServer) {
+            const final = await askServer('local_catquizlab_sitting_state', {attemptid: job.attemptid,
+                qubaid: watch.qubaid});
+            watch.serverend = serverEnd(final, 'sitting_state:finish-page');
+            const why = !final.found ? (final.reason || 'unknown')
+                : (final.state !== 'complete' ? 'engine-not-complete'
+                    : (engineAttemptId > 0 && Number(final.engineattemptid) !== engineAttemptId ? 'finish-page' : ''));
+            if (why !== '') {
+                throw new Error(`[identity:${why}] The finish page is shown; the server: ${final.state || final.reason}, `
+                    + `engine attempt ${final.engineattemptid}, ${final.questionsattempted} answered, ${final.slots} `
+                    + `presented. Not reported as finished.`);
+            }
+            engineAttemptId = Number(final.engineattemptid) || engineAttemptId;
         }
         status = 'finished';
 
@@ -737,7 +861,7 @@ async function playAttempt(browser, job) {
         // the transport error was left. Both are said, and kept beside the
         // artefacts; the lease then expires and the retry is recorded.
         try {
-            await callWs('local_catquizlab_job_complete', {
+            const reply = await callWs('local_catquizlab_job_complete', {
                 // The reason travels with the report. Without it the server sees a
                 // failed attempt and no explanation, and the retry count is all
                 // anyone has to go on. Cut visibly if it is long (#111).
@@ -753,7 +877,14 @@ async function playAttempt(browser, job) {
                 workerid: WORKER_ID,
                 // Why, as a code (#175): the server decides by it whether a retry can help.
                 reason,
+                // Which execution reports (#173): applied only while it holds the lease.
+                executionid: Number(job.executionid) || 0,
             });
+            // Fenced (#173): the server kept the report without applying it, and says what it did from its own state.
+            if (reply && reply.fence) {
+                console.error(`Sitting ${job.attemptid}: the report of execution #${Number(job.executionid) || 0} was not `
+                    + `applied (${reply.fence}); the server ${reply.recovered ? 'did: ' + reply.recovered : 'left it as it is'}.`);
+            }
         } catch (reportError) {
             const both = reportFailureMessage(job.attemptid, status, failure, reportError);
             console.error(both);
@@ -973,9 +1104,11 @@ async function loginFormReady(page, timeout = 20000) {
  * Click through to start / continue the adaptivequiz attempt.
  *
  * @param {object} page The Puppeteer page.
- * @returns {Promise<void>}
+ * @param {object} recorder The recorder.
+ * @param {boolean} mayStart Whether a new attempt may be started (only when the sitting has none, #173).
+ * @returns {Promise<string>} The state reached, or NO_CONTINUE.
  */
-async function startAttempt(page, recorder) {
+async function startAttempt(page, recorder, mayStart = true) {
     // Already on a question (a resumed attempt): nothing to start.
     if (await hasQuestion(page)) {
         return nav.STATE.QUESTION;
@@ -985,6 +1118,12 @@ async function startAttempt(page, recorder) {
     const resumable = Boolean(await page.$(RESTART_FORM));
     if (resumable && !(await page.$(CONTINUE_SELECTORS[0])) && !(await page.$(CONTINUE_SELECTORS[1]))) {
         throw new Error('The activity page offers only to start the attempt again, not to continue it.');
+    }
+    // Where the sitting has an engine attempt, only that one is continued (#173, re-audit 27.11.2026): a page that
+    // offers a new attempt instead means the attempt is no longer in progress — completed by an answer stored late —
+    // and starting one would give the person a second attempt. The caller asks the server what became of it.
+    if (!resumable && !mayStart) {
+        return NO_CONTINUE;
     }
     if (resumable && recorder) {
         recorder.event('resume', 'attempt in progress: continued, not restarted');
@@ -1369,7 +1508,8 @@ function traceHeaders(job) {
     }
     return {
         'X-CatQuizLab-Correlation': String(job.correlationid),
-        'X-CatQuizLab-Attempt': `${Number(job.attemptid) || 0}.${Number(job.execution) || 0}`,
+        // Sitting, try number and the execution's identity (#173, #176): a reset repeats try numbers, not identities.
+        'X-CatQuizLab-Attempt': `${Number(job.attemptid) || 0}.${Number(job.execution) || 0}.${Number(job.executionid) || 0}`,
     };
 }
 
@@ -1645,9 +1785,10 @@ async function collectZeroQuestionDiagnosis(page, engineAttemptId) {
  *
  * @param {number} attemptId The attempt being played, or 0 between jobs.
  * @param {string} state What the worker is doing.
+ * @param {number} execution The execution's identity the claim handed out (#173); 0 between jobs.
  * @returns {object} A handle with stop() and shouldStop().
  */
-function startHeartbeat(attemptId, state) {
+function startHeartbeat(attemptId, state, execution = 0) {
     let asked = false;
 
     const beat = async() => {
@@ -1656,6 +1797,8 @@ function startHeartbeat(attemptId, state) {
                 workerid: WORKER_ID,
                 attemptid: attemptId,
                 state: state,
+                // The lease renewed is only this execution's (#173).
+                executionid: attemptId > 0 ? execution : 0,
             });
             if (reply && reply.stop) {
                 asked = true;
@@ -1850,7 +1993,7 @@ async function main() {
 
             // Reports every few seconds for as long as this attempt takes, and
             // carries back whether somebody has asked this worker to stop.
-            const heart = startHeartbeat(job.attemptid, 'working');
+            const heart = startHeartbeat(job.attemptid, 'working', Number(job.executionid) || 0);
             try {
                 await playAttempt(browser, job);
             } finally {
@@ -2102,5 +2245,8 @@ module.exports = {
     askServerWith,
     reasonOf,
     serverEnd,
+    reenter,
+    NO_CONTINUE,
+    FENCE_REASONS,
     WORKER_CONTRACT,
 };

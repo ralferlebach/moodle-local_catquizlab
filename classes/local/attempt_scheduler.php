@@ -105,6 +105,54 @@ class attempt_scheduler {
      * @return int The number of attempts reclaimed (requeued or failed).
      */
     /**
+     * A sitting's state as a person needs it (#175 AK05): on hold (resumable once the cause is dealt with) apart from
+     * failed for good (its retries used up), and a technical or incomplete end (completion contract, #179) apart from
+     * a regular one. The status alone says "failed" or "collected" for both.
+     *
+     * @param \stdClass $sitting Its row: status, tries, lasterror, completionjson.
+     * @param array $history Its history (attempt_history::of_attempt()).
+     * @return array{code: string, label: string}
+     */
+    public static function state_in_words(\stdClass $sitting, array $history): array {
+        $status = (int) $sitting->status;
+        if ($status === self::STATUS_FAILED) {
+            // Held: an invariant was broken (#175), or the identity is in doubt (#173). Resumable once somebody dealt
+            // with the cause — the last word of the history after any requeue says so.
+            $last = '';
+            foreach ($history as $entry) {
+                if (
+                    in_array($entry['outcome'], [attempt_history::HELD, attempt_history::REQUEUED, attempt_history::RESUMED,
+                        attempt_history::FAILED, attempt_history::DECIDED], true)
+                ) {
+                    $last = $entry['outcome'];
+                }
+            }
+            if ($last === attempt_history::DECIDED) {
+                return ['code' => 'decided', 'label' => get_string('attemptstate:decided', 'local_catquizlab')];
+            }
+            $held = $last === attempt_history::HELD || strpos((string) ($sitting->lasterror ?? ''), '[identity:') === 0;
+            return $held
+                ? ['code' => 'held', 'label' => get_string('attemptstate:held', 'local_catquizlab')]
+                : ['code' => 'exhausted', 'label' => get_string(
+                    'attemptstate:exhausted',
+                    'local_catquizlab',
+                    (int) $sitting->tries
+                )];
+        }
+        if (in_array($status, [self::STATUS_COLLECTED, self::STATUS_VALIDATED, self::STATUS_TRACEPENDING], true)) {
+            $class = (string) ((json_decode((string) ($sitting->completionjson ?? ''), true) ?: [])['class'] ?? '');
+            if (
+                in_array($class, [completion_contract::TECHNICAL, completion_contract::INCOMPLETE,
+                    completion_contract::UNKNOWN], true)
+            ) {
+                return ['code' => $class, 'label' => get_string('attemptstate:' . $class, 'local_catquizlab')];
+            }
+        }
+
+        return ['code' => 'status' . $status, 'label' => self::status_label($status)];
+    }
+
+    /**
      * A sitting's status in words.
      *
      * @param int $status One of the STATUS_ constants.
@@ -171,6 +219,18 @@ class attempt_scheduler {
             return (int) ($bystatus[$status]->n ?? 0);
         };
 
+        // Of the failed, those on hold (#175 AK05, #181 AK06): their engine attempt still open, resumable after a
+        // decision — the projection's "held" (question_progress). The rest failed for good.
+        $heldsittings = (int) $DB->count_records_sql(
+            "SELECT COUNT(1)
+               FROM {local_catquizlab_attempt} a
+               JOIN {adaptivequiz_attempt} aa ON aa.id = a.engineattemptid
+              WHERE a.status = :failedheld AND aa.attemptstate = 'inprogress'"
+                . ($experimentid > 0 ? ' AND a.runid IN (SELECT id FROM {local_catquizlab_run} WHERE experimentid = :heldexp)'
+                    : ''),
+            ['failedheld' => self::STATUS_FAILED] + ($experimentid > 0 ? ['heldexp' => $experimentid] : [])
+        );
+
         $now = time();
         $counts = [
             'experimentid' => $experimentid,
@@ -184,7 +244,9 @@ class attempt_scheduler {
             'holder'    => execution_queue::next_holder(),
             'running'   => $count(self::STATUS_RUNNING),
             'collected' => $count(self::STATUS_COLLECTED),
-            'failed'    => $count(self::STATUS_FAILED),
+            // Failed for good; those on hold apart (heldsittings), never both.
+            'failed'    => $count(self::STATUS_FAILED) - $heldsittings,
+            'heldsittings' => $heldsittings,
             // Closed by an operator (#166): not failed.
             'cancelled' => $count(self::STATUS_CANCELLED),
             // Finished, waiting for its trace (#138): neither collected nor failed.
@@ -429,7 +491,9 @@ class attempt_scheduler {
             $collected = self::collect_or_hold(
                 (int) $attempt->id,
                 (string) ($attempt->leaseowner ?? ''),
-                (int) $state['engineattemptid']
+                (int) $state['engineattemptid'],
+                [],
+                'lease-recovery'
             );
             attempt_history::record((int) $attempt->id, $collected ? attempt_history::COLLECTED
                 : attempt_history::TRACE_PENDING, [
@@ -441,6 +505,7 @@ class attempt_scheduler {
                     'local_catquizlab',
                     (int) $state['questionsattempted']
                 ),
+                'extra' => ['server' => engine_identity::snapshot((int) $attempt->id, 'lease-recovery')],
             ]);
             run_lifecycle::attempt_finished((int) $attempt->runid);
             return;
@@ -461,6 +526,67 @@ class attempt_scheduler {
             self::LEASE_LAPSED
         );
         self::apply_retry((int) $attempt->id, (int) $attempt->tries, $now, $why);
+    }
+
+    /**
+     * What a fenced report leaves to be done, decided by the server alone (#173, re-audit 27.11.2026).
+     *
+     * A report from an execution that does not hold the lease (lease_fence) changes nothing it says: not the status,
+     * not the trace, not the binding. Two cases still need doing, and both are decided from the server's own state,
+     * exactly as the lease recovery decides them:
+     * - the sitting is still running on a lease that has run out: handed back now (reclaim_one()), collected when the
+     *   engine has completed its own attempt, retried otherwise;
+     * - the sitting went back to the queue, and its own engine attempt is complete on the server (the old execution's
+     *   last answer was stored after the recovery had looked): collected now, not played again — a second sitting of
+     *   the same person would be the double sitting of #134.
+     * Idempotent: a collected, waiting, held, failed or cancelled sitting, or one another execution holds on a lease
+     * that has not run out, is left as it is however often a report comes.
+     *
+     * Called with the sitting's lock held.
+     *
+     * @param int $attemptid The sitting.
+     * @param int $execution The identity of the execution whose report was fenced, for the record.
+     * @param int|null $now The clock.
+     * @return string 'reclaimed', 'collected', 'tracepending', or '' when there is nothing to do.
+     */
+    public static function recover_after_fenced_report(int $attemptid, int $execution, ?int $now = null): string {
+        global $DB;
+
+        $now = $now ?? time();
+        $sitting = $DB->get_record(
+            'local_catquizlab_attempt',
+            ['id' => $attemptid],
+            'id, runid, status, tries, leaseowner, leaseexpires'
+        );
+        if (!$sitting) {
+            return '';
+        }
+        if (lease_fence::lapsed($sitting, $now)) {
+            self::reclaim_one($sitting, $now);
+
+            return 'reclaimed';
+        }
+        if ((int) $sitting->status !== self::STATUS_QUEUED) {
+            return '';
+        }
+        $state = \local_catquizlab\external\sitting_state::state($attemptid);
+        if (!$state['found'] || $state['state'] !== 'complete') {
+            return '';
+        }
+        $collected = self::collect_or_hold($attemptid, '', (int) $state['engineattemptid'], [], 'late-report');
+        attempt_history::record($attemptid, $collected ? attempt_history::COLLECTED : attempt_history::TRACE_PENDING, [
+            'tryno' => (int) $sitting->tries,
+            'engineattemptid' => (int) $state['engineattemptid'],
+            'detail' => get_string('history:fencedrecovered', 'local_catquizlab', (object) [
+                'execution' => $execution,
+                'engine' => (int) $state['engineattemptid'],
+                'answered' => (int) $state['questionsattempted'],
+            ]),
+            'extra' => ['server' => engine_identity::snapshot($attemptid, 'fenced-report-recovery')],
+        ]);
+        run_lifecycle::attempt_finished((int) $sitting->runid);
+
+        return $collected ? 'collected' : 'tracepending';
     }
 
     /**
@@ -500,31 +626,37 @@ class attempt_scheduler {
      * "lease_expired" requeues. Every heartbeat now renews the lease of the
      * sitting its worker names — only while that worker still holds it.
      *
+     * Fenced (#173, re-audit 27.11.2026): renewed is only the lease of the execution that holds it — this worker, this
+     * execution, and a lease that has not run out. A lease that ran out is lost, also before the recovery hands the
+     * sitting back: renewing it would revive an execution the recovery may be collecting or requeuing at that moment.
+     * One conditional update, read back: a reclaim between the two is seen as a lost lease.
+     *
      * @param string $workerid The worker reporting.
      * @param int $attemptid The sitting it says it is playing.
+     * @param int $execution The execution's identity (the claim's "executionid").
+     * @param int|null $now The clock.
      * @return bool Whether it still holds it (and now for longer).
      */
-    public static function renew_lease(string $workerid, int $attemptid): bool {
+    public static function renew_lease(string $workerid, int $attemptid, int $execution, ?int $now = null): bool {
         global $DB;
 
-        if ($workerid === '' || $attemptid <= 0) {
+        if ($workerid === '' || $attemptid <= 0 || $execution <= 0) {
             return false;
         }
-        $held = $DB->record_exists_select(
-            'local_catquizlab_attempt',
-            'id = :id AND status = :running AND leaseowner = :owner',
-            ['id' => $attemptid, 'running' => self::STATUS_RUNNING, 'owner' => $workerid]
+        $now = $now ?? time();
+        $until = $now + worker_registry::HEARTBEAT_TIMEOUT;
+        $where = 'id = :id AND status = :running AND leaseowner = :owner AND executionid = :execution';
+        $params = ['id' => $attemptid, 'running' => self::STATUS_RUNNING, 'owner' => $workerid, 'execution' => $execution];
+        $DB->execute(
+            "UPDATE {local_catquizlab_attempt} SET leaseexpires = :until WHERE {$where} AND leaseexpires >= :now",
+            $params + ['until' => $until, 'now' => $now]
         );
-        if ($held) {
-            $DB->set_field(
-                'local_catquizlab_attempt',
-                'leaseexpires',
-                time() + worker_registry::HEARTBEAT_TIMEOUT,
-                ['id' => $attemptid]
-            );
-        }
 
-        return $held;
+        return $DB->record_exists_select(
+            'local_catquizlab_attempt',
+            "{$where} AND leaseexpires = :until",
+            $params + ['until' => $until]
+        );
     }
 
     /**
@@ -803,18 +935,32 @@ class attempt_scheduler {
      * @param string $workerid Who reported it, for the record.
      * @param int $engineattemptid The engine attempt, when the caller has just learnt it; 0 for the stored one.
      * @param array $set Further fields of the sitting to write with the new status (such as the runtime).
+     * @param string $source The path that collects, kept with the completion verdict (worker-report, late-report, …).
      * @return bool Whether it is collected now.
      */
     public static function collect_or_hold(
         int $attemptid,
         string $workerid = '',
         int $engineattemptid = 0,
-        array $set = []
+        array $set = [],
+        string $source = 'collector'
     ): bool {
         global $DB;
 
-        if (attempt_collector::collect($attemptid, $engineattemptid, $set) !== null) {
+        attempt_collector::set_source($source);
+        try {
+            $trace = attempt_collector::collect($attemptid, $engineattemptid, $set);
+        } finally {
+            attempt_collector::set_source('collector');
+        }
+        if ($trace !== null) {
             return true;
+        }
+        // The verdict on how it ended is kept also when the trace is not (completion_contract): a time limit closed
+        // it, the engine failed — said now, not only once a trace arrives.
+        $completion = attempt_collector::last_completion();
+        if ($completion !== null) {
+            $set['completionjson'] = json_encode($completion, JSON_UNESCAPED_SLASHES);
         }
         $engine = $engineattemptid > 0 ? $engineattemptid
             : (int) $DB->get_field('local_catquizlab_attempt', 'engineattemptid', ['id' => $attemptid]);
@@ -848,7 +994,14 @@ class attempt_scheduler {
         global $DB;
 
         $now = $now ?? time();
-        $collect = $collect ?? static fn(int $id): ?array => attempt_collector::collect($id);
+        $collect = $collect ?? static function (int $id): ?array {
+            attempt_collector::set_source('trace-pending');
+            try {
+                return attempt_collector::collect($id);
+            } finally {
+                attempt_collector::set_source('collector');
+            }
+        };
         $out = ['collected' => 0, 'waiting' => 0, 'givenup' => 0];
         $pending = $DB->get_records_select(
             'local_catquizlab_attempt',

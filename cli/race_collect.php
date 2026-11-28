@@ -80,6 +80,8 @@ if ($options['child'] !== '') {
                     }
                 } else if ($role === 'reporter') {
                     $engine = (int) $DB->get_field('local_catquizlab_attempt', 'engineattemptid', ['id' => $id]);
+                    // The racing worker's execution is the sitting's own (#173): its reports are the lease holder's.
+                    $execution = (int) $DB->get_field('local_catquizlab_attempt', 'tries', ['id' => $id]);
                     $answer = \local_catquizlab\external\job_complete::execute(
                         $id,
                         'finished',
@@ -87,7 +89,9 @@ if ($options['child'] !== '') {
                         $engine,
                         '',
                         '',
-                        $worker
+                        $worker,
+                        '',
+                        $execution
                     );
                     echo json_encode(['role' => $role, 'id' => $id, 'at' => microtime(true),
                         'acknowledged' => (bool) ($answer['acknowledged'] ?? false)]) . "\n";
