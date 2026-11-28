@@ -17,16 +17,21 @@
 /**
  * Real parallel writers and readers on the collection of real engine sittings (#138).
  *
- * Takes collected sittings whose engine attempt exists, and plays their end again under concurrency: the engine's
- * attempt is taken away (as when the engine has not persisted it yet), the sittings are set running, and then
+ * Takes collected sittings whose engine attempt exists, and plays their end again under concurrency: the engine
+ * attempt's answers are taken away (its question usage, as when the engine has not persisted what was answered yet),
+ * the sittings are set running, and then
  * separate PHP processes at once — workers reporting completion again and again (double complete), the pipeline
  * tick looking for missing traces, a run re-collection, the lease recovery — race for them, while a reader process
- * watches every sitting's row. After a delay the engine attempt reappears. Checked at the end, per sitting:
+ * watches every sitting's row. After a delay the answers reappear. Checked at the end, per sitting:
  *
- * - never "collected" before the engine attempt was there again (the reader's observations against the moment);
+ * - never "collected" before the answers were there again (the reader's observations against the moment);
  * - never "collected" without its trace or its engine attempt;
  * - collected in the end, exactly once in its history, with the same trace as before;
  * - the engine attempt not doubled.
+ *
+ * Since 0.7.85 the attempt row itself stays: every sitting is bound to its engine attempt (#173), and a report whose
+ * bound attempt is gone is an identity problem the server holds for a person — not a late trace. What may come late
+ * is what the engine stored of the answers; that is what is raced here.
  *
  * The sittings are put back as they were afterwards, also when a check fails; --restore=FILE puts them back from the
  * snapshot after an interrupted run. Development and CI only: it changes the sittings it plays with.
@@ -81,7 +86,7 @@ if ($options['child'] !== '') {
                 } else if ($role === 'reporter') {
                     $engine = (int) $DB->get_field('local_catquizlab_attempt', 'engineattemptid', ['id' => $id]);
                     // The racing worker's execution is the sitting's own (#173): its reports are the lease holder's.
-                    $execution = (int) $DB->get_field('local_catquizlab_attempt', 'tries', ['id' => $id]);
+                    $execution = (int) $DB->get_field('local_catquizlab_attempt', 'executionid', ['id' => $id]);
                     $answer = \local_catquizlab\external\job_complete::execute(
                         $id,
                         'finished',
@@ -131,7 +136,9 @@ $dir = make_writable_directory($CFG->dataroot . '/temp/catquizlab_race');
 function local_catquizlab_race_restore(array $snapshot): void {
     global $DB;
     foreach ($snapshot['engine'] as $row) {
-        if (!$DB->record_exists('adaptivequiz_attempt', ['id' => $row['id']])) {
+        if ($DB->record_exists('adaptivequiz_attempt', ['id' => $row['id']])) {
+            $DB->update_record('adaptivequiz_attempt', (object) $row);
+        } else {
             $DB->insert_record_raw('adaptivequiz_attempt', (object) $row, false, false, true);
         }
     }
@@ -194,12 +201,20 @@ file_put_contents($file, json_encode($snapshot));
 
 $report = ['db' => $DB->get_dbfamily(), 'sittings' => $ids, 'snapshot' => $file, 'checks' => [], 'events' => []];
 try {
-    // The end played again: running, leased to the racing worker, no trace; the engine's attempt gone for now.
+    // The end played again: running, leased to the racing worker, no trace; the engine's answers gone for now.
     foreach ($rows as $row) {
         $DB->update_record('local_catquizlab_attempt', (object) ['id' => $row->id, 'status' => attempt_scheduler::STATUS_RUNNING,
             'tracejson' => null, 'tracebytes' => null, 'digestjson' => null, 'digestbytes' => null, 'leaseowner' => $worker,
             'leaseexpires' => time() + 3600, 'nextruntime' => 0]);
-        $DB->delete_records('adaptivequiz_attempt', ['id' => $row->engineattemptid]);
+        // Handed to the racing worker as job_claim hands a sitting out (#173): a new execution, the STARTED row's id.
+        $execution = (int) attempt_history::record(
+            (int) $row->id,
+            attempt_history::STARTED,
+            ['workerid' => $worker, 'tryno' => (int) $row->tries + 1, 'executionid' => 0]
+        );
+        $DB->set_field('local_catquizlab_attempt', 'executionid', $execution, ['id' => $row->id]);
+        $DB->set_field('local_catquizlab_attemptlog', 'executionid', $execution, ['id' => $execution]);
+        $DB->set_field('adaptivequiz_attempt', 'uniqueid', 0, ['id' => $row->engineattemptid]);
     }
 
     $until = microtime(true) + (int) $options['seconds'];
@@ -219,14 +234,14 @@ try {
         $children[] = [$process, $pipes, $role];
     }
 
-    // The engine's attempt appears again, after the delay, while everything races.
+    // The engine's answers appear again, after the delay, while everything races.
     $restoreat = microtime(true) + (int) $options['delay'];
     $restored = null;
     $output = array_fill(0, count($children), '');
     while (true) {
         if ($restored === null && microtime(true) >= $restoreat) {
             foreach ($snapshot['engine'] as $engine) {
-                $DB->insert_record_raw('adaptivequiz_attempt', (object) $engine, false, false, true);
+                $DB->set_field('adaptivequiz_attempt', 'uniqueid', (int) $engine['uniqueid'], ['id' => (int) $engine['id']]);
             }
             $restored = microtime(true);
         }
@@ -274,6 +289,10 @@ try {
         'restoredafter' => round($restored - ($until - (int) $options['seconds']), 2),
     ];
 
+    $same = static fn(array $a, array $b): bool => array_map(
+        static fn($v) => is_numeric($v) ? round((float) $v, 6) : $v,
+        $a
+    ) === array_map(static fn($v) => is_numeric($v) ? round((float) $v, 6) : $v, $b);
     // A last look by the tick, as the pipeline would make after the race.
     attempt_scheduler::retry_pending_traces(time() + 7200);
 
@@ -288,12 +307,17 @@ try {
             'collectedintheend' => (int) $after->status === attempt_scheduler::STATUS_COLLECTED && $after->tracejson !== null,
             'collectedonce' => $DB->count_records('local_catquizlab_attemptlog', ['attemptid' => $id,
                 'outcome' => attempt_history::COLLECTED]) === $snapshot['history'][$id] + 1,
-            'sametrace' => [$trace['finaltheta'] ?? null, $trace['finalse'] ?? null, $trace['nitems'] ?? null,
-                count((array) ($trace['responses'] ?? []))] === $snapshot['reference'][$id],
+            // By value: a theta of exactly 3 is the float 3.0 collected here and the integer 3 read back from JSON.
+            'sametrace' => $same([$trace['finaltheta'] ?? null, $trace['finalse'] ?? null, $trace['nitems'] ?? null,
+                count((array) ($trace['responses'] ?? []))], $snapshot['reference'][$id]),
             'engineattemptkept' => (int) $after->engineattemptid === (int) $engine['id'],
             'enginenotdoubled' => $DB->count_records('adaptivequiz_attempt', ['userid' => $engine['userid'],
                 'instance' => $engine['instance']]) === $snapshot['engines'][$id],
             'leasereleased' => empty($after->leaseowner),
+            // What was compared, so that a difference says itself (finaltheta, finalse, nitems, responses).
+            'traceafter' => [$trace['finaltheta'] ?? null, $trace['finalse'] ?? null, $trace['nitems'] ?? null,
+                count((array) ($trace['responses'] ?? []))],
+            'tracereference' => $snapshot['reference'][$id],
             'history' => array_values($DB->get_fieldset_select(
                 'local_catquizlab_attemptlog',
                 'outcome',
@@ -310,7 +334,7 @@ try {
 $failed = 0;
 foreach ($report['checks'] as $checks) {
     foreach ($checks as $name => $ok) {
-        if ($name !== 'history' && $ok !== true) {
+        if (!in_array($name, ['history', 'traceafter', 'tracereference'], true) && $ok !== true) {
             $failed++;
         }
     }

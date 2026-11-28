@@ -91,10 +91,17 @@ $attemptid = (int) $DB->insert_record('local_catquizlab_attempt', (object) [
     'runid' => $runid, 'personid' => $personid, 'status' => attempt_scheduler::STATUS_RUNNING, 'tries' => 1,
     'leaseowner' => $worker, 'leaseexpires' => time() + 600, 'timecreated' => time(), 'timemodified' => time(),
 ]);
-attempt_history::record($attemptid, attempt_history::STARTED, ['workerid' => $worker, 'tryno' => 1]);
+// As job_claim hands it out (#173): the STARTED row's id is the execution, and every report names it.
+$execution = (int) attempt_history::record(
+    $attemptid,
+    attempt_history::STARTED,
+    ['workerid' => $worker, 'tryno' => 1, 'executionid' => 0]
+);
+$DB->set_field('local_catquizlab_attempt', 'executionid', $execution, ['id' => $attemptid]);
+$DB->set_field('local_catquizlab_attemptlog', 'executionid', $execution, ['id' => $execution]);
 
 // The worker's report, through the worker's own function.
-$result = job_complete::execute($attemptid, 'finished', 4200, $engine, '', '', $worker, '', 1);
+$result = job_complete::execute($attemptid, 'finished', 4200, $engine, '', '', $worker, '', $execution);
 $status = (int) $DB->get_field('local_catquizlab_attempt', 'status', ['id' => $attemptid]);
 if ($status !== attempt_scheduler::STATUS_TRACEPENDING) {
     cli_error("Expected the sitting to wait for its trace, found status {$status}: " . $result['message']);

@@ -25,7 +25,10 @@
  * check: it starts --processes copies of itself, each claiming --claims times
  * from the same instant, counts the sittings handed out more than once and
  * fails when there is one. The run's sittings are failed afterwards, so that no
- * real worker plays what the claimers took.
+ * real worker plays what the claimers took. Since 0.7.85 the population guard
+ * (#174 AK04) limits how many of a run's sittings are played at once (the
+ * engine's threshold, 50): the race is for that many, and every claim beyond is
+ * checked to have been refused by the guard.
  *
  * Options: --runid=N (a run with queued sittings, e.g. from e2e_prepare.php),
  * --processes=8, --claims=25. Internal: --child, --workerid, --start.
@@ -94,6 +97,13 @@ register_shutdown_function(static function () use ($experimentid): void {
     \local_catquizlab\local\execution_queue::release_front($experimentid, 'cli/claim_race.php ended');
 });
 
+// Simulated persons stay independent (#174 AK04): a run hands out no more sittings at once than keep the admissible
+// abilities in its contexts, plus those being played, below the engine's threshold. That many can be raced for, no
+// more; the rest must be refused by the guard, not lost — counted apart below.
+$guard = \local_catquizlab\local\population_guard::state($runid);
+$headroom = $guard['threshold'] === null ? PHP_INT_MAX : max(0, (int) $guard['threshold'] - $guard['admissible']
+    - $guard['running']);
+
 $start = microtime(true) + 2.0;
 $children = [];
 for ($p = 1; $p <= $processes; $p++) {
@@ -135,6 +145,9 @@ $fromrun = $handedout === [] ? 0 : $DB->count_records_select(
     ['runid' => $runid]
 );
 $twice = array_filter($counts, static fn(int $n): bool => $n > 1);
+// Every claim beyond the guard's headroom refused because of it: the guard blocks the run once the race has ended
+// (read before the sittings the claimers took are given back).
+$guardafter = \local_catquizlab\local\population_guard::state($runid);
 // What the claimers took is not for a real worker to play.
 \local_catquizlab\local\attempt_scheduler::abort($runid);
 
@@ -142,7 +155,7 @@ $twice = array_filter($counts, static fn(int $n): bool => $n > 1);
 // what it had queued; a claim not served must have found the queue empty or not due, never held to the end of its
 // retries. A run where most claims found the queue held and gave up is not a pass because the few it got were distinct
 // (#133 re-audit, 18.10.2026).
-$expected = min($queued, $processes * $claims);
+$expected = min($queued, $processes * $claims, $headroom);
 cli_writeln(sprintf(
     'Run %d: %d queued; %d claimers × %d claims at once: %d handed out (%d of this run, %d expected), %d distinct, '
         . '%d handed out more than once, %d not served (%s).',
@@ -162,6 +175,14 @@ cli_writeln(sprintf(
         $unserved
     ))
 ));
+cli_writeln(sprintf(
+    '  Population guard (#174 AK04): threshold %s, %d admissible, %d running before the race: room for %s; after it %s.',
+    $guard['threshold'] === null ? 'unknown' : (string) $guard['threshold'],
+    $guard['admissible'],
+    $guard['running'],
+    $headroom === PHP_INT_MAX ? 'any number' : (string) $headroom,
+    $guardafter['blocked'] ? 'blocked' : 'open'
+));
 foreach (array_slice($twice, 0, 10, true) as $id => $n) {
     cli_writeln(sprintf('  sitting %d handed out %d times', $id, $n));
 }
@@ -174,7 +195,12 @@ if ($handedout === []) {
 }
 $busy = (int) ($unserved['busy'] ?? 0);
 $pass = $twice === [] && $errors === [] && $busy === 0 && $fromrun >= $expected
-    && count($handedout) + array_sum($unserved) === $processes * $claims;
+    && count($handedout) + array_sum($unserved) === $processes * $claims
+    // Claims refused beyond the headroom only while the guard holds the run: never a sitting lost to the race.
+    && ($fromrun >= min($queued, $processes * $claims) || $guardafter['blocked']);
+if ($fromrun < min($queued, $processes * $claims) && !$guardafter['blocked']) {
+    cli_writeln('  claims were refused although the population guard does not hold the run.');
+}
 if ($fromrun < $expected) {
     cli_writeln(sprintf(
         '  %d claim(s) short: %d of this run\'s %d queued sittings handed out, %d expected.',

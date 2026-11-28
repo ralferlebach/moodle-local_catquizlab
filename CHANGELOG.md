@@ -6,6 +6,45 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.7.86] — 2026-11-28 — Version 2026112800. CI of 0.7.85: the end-to-end checks follow the population guard and the execution identity; a sitting waiting for its trace is not "collected"
+
+No database change. Found by the Worker CI and the Interface CI of 0.7.85 (28.11.2026); the local gate of 0.7.85 had
+not run the end-to-end workflows. This one does (Worker E2E, legacy).
+
+### Fixed
+- **Worker E2E, all six jobs — `cli/claim_race.php`.**
+  - The race expected 200 sittings handed out of 300. Since 0.7.85 the population guard (#174 AK04) lets no more of a
+    run's sittings be played at once than keep the admissible abilities plus those in play below the engine's
+    threshold (50). 50 were handed out, 150 claims refused; the check read that as lost claims.
+  - It now races for the guard's room, reads the guard before and after, and requires every claim beyond it to have
+    been refused while the guard holds the run. Never twice, never busy, as before.
+- **`cli/race_collect.php` (#138, the step after it).**
+  - The late trace was simulated by deleting the engine attempt. Since #173 every sitting is bound to its engine
+    attempt, and a report whose bound attempt is gone is an identity problem the server holds for a person — it was
+    held, not collected. Now the engine attempt stays and its answers (the question usage) come late, which is what a
+    late trace is. The racing reports carry the execution they were handed (#173), not the try number.
+  - The trace comparison compared types: a theta of exactly 3 was 3.0 collected and 3 read back from JSON. Now by
+    value; what was compared is in the report.
+- **Interface E2E, `trace_progress.spec.js`, all three stacks.**
+  - `cli/seed_vanished_trace.php` and `cli/seed_question_progress.php` reported and bound without the execution's
+    identity (#173): fenced. They now take it as `job_claim` hands it out, and the 625-question sitting is bound to its
+    engine attempt at its first question, so that the progress (#180) counts it and the pace (#181) runs from the bind.
+  - **The page:** a sitting waiting for its trace was shown as "Collected, its end not decidable" (0.7.85, #175/#179).
+    It is not collected. Only collected sittings take the completion's words; a sitting waiting for its trace stays
+    "finished, trace missing" (#138). `sitting_state_words_test` has the case.
+
+### Engine pins
+- Moved to the heads of 28.11.2026 morning (every delivery pins the newest heads): local_catquiz 662304e3 (2026112800,
+  1.2.2) and 46f42841 (2026112801, 1.3.2); mod_adaptivequiz f7287793 (2026112800) and a3309d8a (2026112801). Adapters
+  and wunderbyte_table unchanged. The previous set is the release set of 0.7.85.
+
+### Not changed
+- `sweep_levels.spec.js` red once, on legacy only (no row after "Add level"): green locally and on 5.x, the code
+  unchanged since 0.7.84, no cause in the log. Left as it is.
+- VoiceOver: one test flaky, green on its retry; the job was green.
+
+---
+
 ## [0.7.85] — 2026-11-27 — Version 2026112701. One execution, one identity; a completion contract; nothing deleted behind a start; progress and forecast by identity (#172–#181)
 
 **Database:** two new fields and one new table.

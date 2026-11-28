@@ -77,11 +77,21 @@ final class sitting_state_words_test extends \advanced_testcase {
             ['completionjson' => json_encode(['class' => 'regular'])]
         );
         $legacy = $sitting(attempt_scheduler::STATUS_COLLECTED, []);
+        // Waiting for its trace: never said "collected, …", also when its completion could not be judged yet (#138).
+        $waiting = $sitting(
+            attempt_scheduler::STATUS_TRACEPENDING,
+            [],
+            ['completionjson' => json_encode(['class' => 'unknown'])]
+        );
 
         $this->assertSame(
             ['held', 'exhausted', 'exhausted', 'held', 'decided', 'technical', 'incomplete',
-            'status' . attempt_scheduler::STATUS_COLLECTED, 'status' . attempt_scheduler::STATUS_COLLECTED],
-            array_map($words, [$held, $exhausted, $released, $identity, $decided, $technical, $incomplete, $regular, $legacy])
+            'status' . attempt_scheduler::STATUS_COLLECTED, 'status' . attempt_scheduler::STATUS_COLLECTED,
+            'status' . attempt_scheduler::STATUS_TRACEPENDING],
+            array_map(
+                $words,
+                [$held, $exhausted, $released, $identity, $decided, $technical, $incomplete, $regular, $legacy, $waiting]
+            )
         );
 
         // In both languages (read from the plugin's own files: a site need not have the German pack installed), and

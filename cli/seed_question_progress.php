@@ -99,14 +99,28 @@ $quba->set_preferred_behaviour('deferredfeedback');
 question_engine::save_questions_usage_by_activity($quba);
 $engine = (int) $DB->insert_record('adaptivequiz_attempt', (object) [
     'instance' => $instance, 'userid' => $user->id, 'uniqueid' => $quba->get_id(), 'attemptstate' => 'inprogress',
-    'attemptstopcriteria' => '', 'questionsattempted' => $answered, 'timecreated' => time(), 'timemodified' => time(),
+    'attemptstopcriteria' => '', 'questionsattempted' => 0, 'timecreated' => time(), 'timemodified' => time(),
 ]);
 $worker = 'catquizlab-exec-qprogress';
 $attemptid = (int) $DB->insert_record('local_catquizlab_attempt', (object) [
     'runid' => $runid, 'personid' => $personid, 'status' => attempt_scheduler::STATUS_RUNNING, 'tries' => 1,
     'leaseowner' => $worker, 'leaseexpires' => time() + 3600, 'timecreated' => time(), 'timemodified' => time(),
 ]);
-attempt_history::record($attemptid, attempt_history::STARTED, ['workerid' => $worker, 'tryno' => 1]);
+// As job_claim hands it out (#173): the STARTED row's id is the execution.
+$execution = (int) attempt_history::record(
+    $attemptid,
+    attempt_history::STARTED,
+    ['workerid' => $worker, 'tryno' => 1, 'executionid' => 0]
+);
+$DB->set_field('local_catquizlab_attempt', 'executionid', $execution, ['id' => $attemptid]);
+$DB->set_field('local_catquizlab_attemptlog', 'executionid', $execution, ['id' => $execution]);
+// Bound at its first question, as the worker binds it (#173): the progress counts the sitting's own engine attempt
+// (#180), and the pace the answers since the bind (#181). Then the engine has confirmed $answered answers.
+$bound = \local_catquizlab\local\engine_identity::bind($attemptid, (int) $quba->get_id(), $worker, $execution);
+if (empty($bound['found'])) {
+    cli_error('The sitting could not be bound to its engine attempt: ' . json_encode($bound));
+}
+$DB->set_field('adaptivequiz_attempt', 'questionsattempted', $answered, ['id' => $engine]);
 // Started ten minutes ago: a pace of six seconds a question at 100 answered.
 $DB->set_field('local_catquizlab_attemptlog', 'timecreated', time() - 600, ['attemptid' => $attemptid]);
 

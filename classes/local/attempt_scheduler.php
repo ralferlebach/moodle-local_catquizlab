@@ -139,7 +139,9 @@ class attempt_scheduler {
                     (int) $sitting->tries
                 )];
         }
-        if (in_array($status, [self::STATUS_COLLECTED, self::STATUS_VALIDATED, self::STATUS_TRACEPENDING], true)) {
+        // Only what is collected is said "collected, …": a sitting waiting for its trace stays "finished, trace missing"
+        // (#138), whatever its completion could be judged as so far — its trace may still come (UI E2E, 0.7.85).
+        if (in_array($status, [self::STATUS_COLLECTED, self::STATUS_VALIDATED], true)) {
             $class = (string) ((json_decode((string) ($sitting->completionjson ?? ''), true) ?: [])['class'] ?? '');
             if (
                 in_array($class, [completion_contract::TECHNICAL, completion_contract::INCOMPLETE,
